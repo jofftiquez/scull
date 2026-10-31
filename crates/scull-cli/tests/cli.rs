@@ -163,7 +163,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
         (&["approve", "p"], "(tracked in #108)"),
         (&["rules", "list"], "(not tracked yet)"),
         (&["init"], "(tracked in #57)"),
-        (&["status", "--short"], "(tracked in #58)"),
         (&["check"], "(tracked in #114)"),
         (&["insights"], "(tracked in #116)"),
         (&["agent", "install", "codex"], "(tracked in #110)"),

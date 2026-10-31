@@ -63,7 +63,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             issue: None,
         }),
         Command::Init => planned("init", 57),
-        Command::Status { .. } => planned("status", 58),
+        Command::Status { .. } => None,
         Command::Check => planned("check", 114),
         Command::Insights { action } => match action {
             None => planned("insights", 116),
@@ -124,6 +124,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             min_size,
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
+        Command::Status { short } => crate::cmd::status::run(ui, *short)?,
         _ => {}
     }
     cancel::check()
@@ -197,7 +198,6 @@ mod tests {
             (&["rules", "list"], "rules list", None),
             (&["rules", "validate"], "rules validate", None),
             (&["init"], "init", Some(57)),
-            (&["status", "--short"], "status", Some(58)),
             (&["check"], "check", Some(114)),
             (&["insights"], "insights", Some(116)),
             (&["insights", "export"], "insights export", Some(116)),
@@ -223,6 +223,7 @@ mod tests {
         assert_eq!(planned_of(&["completions", "bash"]), None);
         assert_eq!(planned_of(&["doctor"]), None);
         assert_eq!(planned_of(&["large-files", "."]), None);
+        assert_eq!(planned_of(&["status", "--short"]), None);
     }
 
     #[test]

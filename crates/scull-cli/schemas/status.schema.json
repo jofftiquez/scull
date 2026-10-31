@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "LastScanReport": {
+      "additionalProperties": false,
+      "description": "The latest usable scan.",
+      "properties": {
+        "age_secs": {
+          "description": "Seconds between the finish and `now` (0 if the clock went backwards).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidates": {
+          "description": "Candidates found.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "finished_at": {
+          "description": "Finish time (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "reclaimable_bytes": {
+          "description": "Reclaimable bytes of all candidates.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "safe_reclaimable_bytes": {
+          "description": "Reclaimable bytes of S0 (regenerable) candidates.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scan_id": {
+          "description": "Scan identifier.",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "Start time (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "description": "`completed` or `partial`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scan_id",
+        "started_at",
+        "finished_at",
+        "status",
+        "age_secs",
+        "candidates",
+        "reclaimable_bytes",
+        "safe_reclaimable_bytes"
+      ],
+      "type": "object"
+    },
+    "StatusReport": {
+      "additionalProperties": false,
+      "description": "`scull status` output.",
+      "properties": {
+        "detail": {
+          "description": "Why the status is unavailable, when it is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_scan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastScanReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The latest completed or partial scan."
+        },
+        "line": {
+          "description": "The human line (`scull status`), empty when there is nothing to show.",
+          "type": "string"
+        },
+        "now": {
+          "description": "When this report was produced (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "short": {
+          "description": "The prompt line (`scull status --short`), empty when there is nothing to show.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/StatusState",
+          "description": "Whether there is something to show."
+        },
+        "volumes": {
+          "description": "Latest free-space sample of every volume ever sampled.",
+          "items": {
+            "$ref": "#/$defs/VolumeReport"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "state",
+        "now",
+        "volumes",
+        "line",
+        "short"
+      ],
+      "type": "object"
+    },
+    "StatusState": {
+      "description": "Whether there is something to show.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "A usable scan is recorded.",
+          "type": "string"
+        },
+        {
+          "const": "no_scan",
+          "description": "The database exists but holds no completed or partial scan yet.",
+          "type": "string"
+        },
+        {
+          "const": "no_database",
+          "description": "No database yet (nothing was ever scanned).",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "The database can't be read by this command right now (newer schema, pending\nmigration, damaged, not a scull database, or the directories can't be located).",
+          "type": "string"
+        }
+      ]
+    },
+    "VolumeReport": {
+      "additionalProperties": false,
+      "description": "One volume's latest free-space sample.",
+      "properties": {
+        "free_bytes": {
+          "description": "Bytes available to the user.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sampled_at": {
+          "description": "When it was sampled (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "Volume size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "total_bytes",
+        "free_bytes",
+        "sampled_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/StatusReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/status@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/status@1",
+  "type": "object"
+}
