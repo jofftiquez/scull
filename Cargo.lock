@@ -1126,6 +1126,7 @@ version = "0.0.0"
 dependencies = [
  "schemars",
  "scull-core",
+ "scull-detectors",
  "scull-fixtures",
  "scull-platform",
  "serde",

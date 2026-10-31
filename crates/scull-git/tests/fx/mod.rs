@@ -166,3 +166,57 @@ pub fn paths(o: &Observed<scull_git::PathList>) -> Vec<String> {
         .paths
         .clone()
 }
+
+/// An [`scull_git::ArtifactMatcher`] backed by the bundled detector rules: an ignored folder
+/// is an artifact when a rule's name, marker and exclusion requirements hold for it, judged
+/// from the entry names around it (as the scanner would supply them).
+pub struct DetectorRules(pub scull_detectors::rules::RuleSet);
+
+impl DetectorRules {
+    pub fn bundled() -> Self {
+        Self(scull_detectors::rules::RuleSet::bundled().expect("bundled rules"))
+    }
+}
+
+fn names_in(dir: &Path) -> Option<Vec<String>> {
+    let it = std::fs::read_dir(dir).ok()?;
+    Some(
+        it.filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect(),
+    )
+}
+
+impl scull_git::ArtifactMatcher for DetectorRules {
+    fn match_ignored(&self, worktree: &Path, rel: &str) -> Option<String> {
+        use scull_detectors::rules::{MAX_UP, Surroundings};
+        // Only whole folders can be artifacts.
+        let rel = rel.strip_suffix('/')?;
+        let dir = rel
+            .split('/')
+            .fold(worktree.to_path_buf(), |p, c| p.join(c));
+        let name = dir.file_name()?.to_str()?.to_owned();
+        let mut s = Surroundings::new(name);
+        if let Some(inside) = names_in(&dir) {
+            s = s.with_inside(inside);
+        }
+        let mut ancestors = Vec::new();
+        let mut cur = dir.parent();
+        for level in 1..=MAX_UP {
+            let Some(p) = cur.filter(|p| p.starts_with(worktree)) else {
+                break;
+            };
+            if let Some(entries) = names_in(p) {
+                s = s.with_level(level, entries);
+            }
+            if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                ancestors.push(n.to_owned());
+            }
+            cur = p.parent();
+        }
+        let s = s.with_ancestor_names(ancestors);
+        self.0
+            .enabled()
+            .find(|r| r.check_markers(&s).matched().is_some())
+            .map(|r| r.id().to_owned())
+    }
+}

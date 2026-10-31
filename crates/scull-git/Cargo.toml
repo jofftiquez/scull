@@ -23,3 +23,4 @@ tempfile = "3"
 [dev-dependencies]
 serde_json.workspace = true
 scull-fixtures.workspace = true
+scull-detectors.workspace = true

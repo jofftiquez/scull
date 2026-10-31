@@ -15,10 +15,16 @@
 //!   tracked changes, untracked and ignored files, submodules, unpushed commits, merge status
 //!   and how it was determined, detached-HEAD reachability. Any Git failure makes the affected
 //!   fact [`Observed::Unknown`], never "clean". Never fetches.
+//! * [`classify_worktree`] / [`worktree_candidate`]: the GIT-03 removal decision table over a
+//!   [`WorktreeState`], an in-use signal and an [`ArtifactMatcher`]: tier, reasons,
+//!   whole-worktree action (S0 prune / S1 remove / S2 quarantine / S3 none) and whether
+//!   artifact-only cleanup is allowed. A present worktree is never S0 (GIT-04); branches are
+//!   never deleted.
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
 mod activity;
+mod classify;
 mod meta;
 mod refs;
 mod resolve;
@@ -28,6 +34,10 @@ mod status;
 mod worktree;
 
 pub use activity::{Activity, DEFAULT_ACTIVITY_SAMPLE, sample_activity};
+pub use classify::{
+    ArtifactCleanup, ArtifactMatcher, MatchedArtifact, NoArtifactRules, Tri, WORKTREE_RULE_ID,
+    WORKTREE_RULE_VERSION, WorktreeDecision, classify_worktree, worktree_candidate,
+};
 pub use state::{
     AnalyzeOptions, CommitList, HeadState, MergeStatus, Observed, ParentRepo, PathList,
     Reachability, Submodule, Upstream, WorktreeState, analyze_repo, analyze_worktree,
