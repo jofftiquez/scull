@@ -9,6 +9,8 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+pub mod engine;
+
 use scull_cleaner::measure::{
     FreeSpaceSource, ItemExecution, MeasureOptions, MeasuredDelta, PlatformFreeSpace, Tally,
     VolumeMeter,

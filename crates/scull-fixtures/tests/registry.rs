@@ -186,24 +186,36 @@ fn defines_custom_harness_test_needs_the_table_entry() {
     ));
 }
 
-/// Per-OS run status: `pending_ci` names only OSs the fixture runs on, only for fixtures with
-/// tests; the report lists, for every implemented or tracked fixture, where its tests ran green
-/// and where they wait for CI.
+/// Per-OS run status: `pending_ci` and `missing_os` name only OSs the fixture runs on (never the
+/// same one), `pending_ci` only for fixtures with tests, `missing_os` only for tracked ones; the
+/// report lists, for every implemented or tracked fixture, where its tests ran green, where they
+/// wait for CI and where none exists yet.
 #[test]
 fn per_os_status_is_consistent_and_reported() {
     let mut problems = Vec::new();
     for r in REGISTRY {
         let letters = r.os_letters();
-        for c in r.pending_ci.chars() {
-            if !letters.contains(&c) {
-                problems.push(format!(
-                    "{}: pending_ci {c:?} is not one of its OSs {:?}",
-                    r.id, r.os
-                ));
+        for (field, value) in [("pending_ci", r.pending_ci), ("missing_os", r.missing_os)] {
+            for c in value.chars() {
+                if !letters.contains(&c) {
+                    problems.push(format!(
+                        "{}: {field} {c:?} is not one of its OSs {:?}",
+                        r.id, r.os
+                    ));
+                }
             }
+        }
+        if let Some(c) = r.pending_ci.chars().find(|c| r.missing_os.contains(*c)) {
+            problems.push(format!("{}: {c:?} is both pending CI and missing", r.id));
         }
         if !r.pending_ci.is_empty() && r.status.tests().is_empty() {
             problems.push(format!("{}: pending_ci without any test", r.id));
+        }
+        if !r.missing_os.is_empty() && !matches!(r.status, Status::Tracked { .. }) {
+            problems.push(format!(
+                "{}: misses {:?} but is not tracked by an issue",
+                r.id, r.missing_os
+            ));
         }
         if r.status.tests().is_empty() {
             continue;
@@ -214,6 +226,7 @@ fn per_os_status_is_consistent_and_reported() {
             .map(|(c, run)| match run {
                 OsRun::Verified => format!("{c}:ran"),
                 OsRun::PendingCi => format!("{c}:pending-CI"),
+                OsRun::Missing => format!("{c}:MISSING"),
             })
             .collect();
         let kind = match r.status {

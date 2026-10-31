@@ -35,4 +35,5 @@ scull-cli = { path = "../scull-cli" }
 # FX-PHY/QC/RACE/EXEC: the real Executor, Quick Clean and measured delta (a dev-dependency:
 # scull-cleaner itself dev-depends on scull-fixtures; it does not enable `delete` here).
 scull-cleaner.workspace = true
+scull-engine.workspace = true
 serde_json.workspace = true

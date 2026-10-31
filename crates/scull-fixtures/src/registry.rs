@@ -11,12 +11,14 @@
 //!   issue number and a reason;
 //! * a registered test function does not exist in the file it names (a `#[test]` function, or
 //!   an entry of a custom harness's `TESTS` table);
-//! * a fixture's [`RegisteredFixture::pending_ci`] names an OS it doesn't run on.
+//! * a fixture's [`RegisteredFixture::pending_ci`] or [`RegisteredFixture::missing_os`] names
+//!   an OS it doesn't run on, or an implemented fixture misses an OS.
 //!
 //! Per-OS status ([`RegisteredFixture::os_status`]): the OSs whose runs are still pending CI
 //! (tests written and type-checked for every target, but not yet run green there, e.g. Phase 2
-//! fixtures written while the 3-OS CI was unavailable) are listed in `pending_ci`; every other
-//! OS of the fixture has run.
+//! fixtures written while the 3-OS CI was unavailable) are listed in `pending_ci`; the OSs no
+//! test covers yet in `missing_os` (tracked fixtures only); every other OS of the fixture has
+//! run.
 //!
 //! Test paths are relative to the workspace root, so a registry entry is also a pointer for a
 //! reader: `crates/scull-detectors/tests/rust_detector.rs` + `fx_cls_01_...`.
@@ -133,6 +135,10 @@ pub struct RegisteredFixture {
     /// a Windows- or macOS-only fixture written while CI was unavailable. Empty when every OS
     /// of the fixture has run. See [`RegisteredFixture::os_status`].
     pub pending_ci: &'static str,
+    /// OSs on which **no registered test covers the scenario yet** (e.g. Windows before its
+    /// quarantine moves exist). Only a [`Status::Tracked`] fixture may miss an OS; its reason
+    /// says why.
+    pub missing_os: &'static str,
 }
 
 /// Whether a fixture's tests have run green on one OS.
@@ -142,6 +148,8 @@ pub enum OsRun {
     Verified,
     /// Written, waiting for CI on this OS.
     PendingCi,
+    /// No test covers this OS yet.
+    Missing,
 }
 
 impl RegisteredFixture {
@@ -153,6 +161,12 @@ impl RegisteredFixture {
     /// Mark the tests as not yet run on the OSs in `os` (letters of `M`, `L`, `W`).
     pub const fn pending_ci(mut self, os: &'static str) -> Self {
         self.pending_ci = os;
+        self
+    }
+
+    /// Mark the OSs in `os` as not covered by any registered test yet.
+    pub const fn missing_os(mut self, os: &'static str) -> Self {
+        self.missing_os = os;
         self
     }
 
@@ -171,7 +185,9 @@ impl RegisteredFixture {
         self.os_letters()
             .into_iter()
             .map(|c| {
-                let run = if self.pending_ci.contains(c) {
+                let run = if self.missing_os.contains(c) {
+                    OsRun::Missing
+                } else if self.pending_ci.contains(c) {
                     OsRun::PendingCi
                 } else {
                     OsRun::Verified
@@ -183,7 +199,9 @@ impl RegisteredFixture {
 }
 
 /// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
-pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT", "FX-FS", "FX-PHY", "FX-QC", "FX-CFG"];
+pub const COVERED_SECTIONS: &[&str] = &[
+    "FX-CLS", "FX-GIT", "FX-FS", "FX-RACE", "FX-EXEC", "FX-PHY", "FX-QC", "FX-CFG",
+];
 
 const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
     TestRef { file, test_fn }
@@ -218,6 +236,16 @@ const QC: &str = "crates/scull-cleaner/tests/quickclean/main.rs";
 const CACHES: &str = "crates/scull-detectors/tests/cache_locator.rs";
 const ENGINE: &str = "crates/scull-engine/tests/pipeline.rs";
 const RULES: &str = "crates/scull-detectors/tests/rules_loader.rs";
+const E2E_RACE: &str = "crates/scull-fixtures/tests/fx_race.rs";
+const E2E_EXEC: &str = "crates/scull-fixtures/tests/fx_exec.rs";
+const EXEC_WIN: &str = "crates/scull-cleaner/tests/executor_windows.rs";
+const REVAL: &str = "crates/scull-cleaner/tests/revalidation.rs";
+const EXEC_LOCK: &str = "crates/scull-cleaner/tests/exec_lock.rs";
+/// Unix only (`#![cfg(unix)]`), like `quarantine.rs` and `restore.rs`.
+const JOURNAL: &str = "crates/scull-cleaner/tests/journal.rs";
+const QUAR: &str = "crates/scull-cleaner/tests/quarantine.rs";
+const RESTORE: &str = "crates/scull-cleaner/tests/restore.rs";
+const AUDIT: &str = "crates/scull-storage/tests/audit.rs";
 
 /// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
 /// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
@@ -237,6 +265,7 @@ const fn fx(
         mode,
         status,
         pending_ci: "",
+        missing_os: "",
     }
 }
 
@@ -956,6 +985,370 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             partial: &[],
         },
     ),
+    // §3.4 Races and crash recovery (FX-RACE)
+    fx(
+        "FX-RACE-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_RACE,
+                "fx_race_01_candidate_replaced_by_link_to_canary_skipped_audited",
+            ),
+            t(
+                REVAL,
+                "fx_race_01_candidate_replaced_by_symlink_skipped_canary_intact",
+            ),
+            t(EXEC_UNIX, "fx_race_01_candidate_replaced_by_symlink_is_refused"),
+            t(EXEC_WIN, "fx_race_01_candidate_replaced_by_junction_is_refused"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-RACE-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_UNIX,
+                "fx_race_02_subfolder_swapped_for_symlink_before_listing_only_link_removed",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_subfolder_swapped_for_symlink_between_stat_and_open_aborts",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
+            ),
+            t(EXEC_UNIX, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
+            t(EXEC_UNIX, "fx_race_02_directory_moved_out_during_walk_aborts"),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_directory_moved_after_listing_nothing_outside_deleted",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_02_subfolder_swapped_for_junction_before_listing_only_link_removed",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_02_subfolder_swapped_for_junction_after_listing_aborts",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
+            ),
+            t(EXEC_WIN, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
+            t(EXEC_WIN, "fx_race_02_entry_kind_changed_since_listing_aborts"),
+            t(
+                EXEC_WIN,
+                "fx_race_02_held_directory_cannot_be_moved_out_during_walk",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
+            ),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-RACE-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            REVAL,
+            "fx_race_03_new_untracked_file_in_worktree_raises_tier_item_skipped",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-RACE-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            REVAL,
+            "fx_race_04_build_started_after_scan_item_skipped_in_use",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-RACE-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_LOCK,
+                "fx_race_05_two_executors_start_at_once_second_exits_6",
+            ),
+            t(
+                EXEC_LOCK,
+                "fx_race_05_other_process_holds_lock_exit_6_then_released_on_death",
+            ),
+            t(
+                QUAR,
+                "fx_race_05_plan_invalidated_when_another_operation_touched_its_targets",
+            ),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-RACE-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 74,
+            reason: "cancel mid-execution, partial audit and a completing rerun are covered through the journal on Unix; the journal fixtures need quarantine moves, which Windows does not have yet",
+            partial: &[t(
+                JOURNAL,
+                "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-RACE-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 74,
+            reason: "a process killed during a quarantine move is reconciled by the journal on Unix; Windows has no quarantine moves yet, so there is nothing to kill there",
+            partial: &[t(
+                JOURNAL,
+                "fx_race_07_killed_during_quarantine_move_journal_reconciles",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    // §3.5 Executor, plans, quarantine, restore (FX-EXEC)
+    fx(
+        "FX-EXEC-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 76,
+            reason: "the S0 delete after a consumed approval and the reported measured delta are end-to-end with I-4 on the Executor's audit, but I-5 can't hold: Operation::finish always records measured_delta_bytes as None",
+            partial: &[t(
+                E2E_EXEC,
+                "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
+            )],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 71,
+            reason: "same-volume quarantine and the identical restored tree are covered on Unix; Windows quarantine moves (handle-based rename) are not implemented yet",
+            partial: &[
+                t(
+                    QUAR,
+                    "fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical",
+                ),
+                t(
+                    RESTORE,
+                    "fx_exec_02_quarantined_item_restored_tree_identical_and_idempotent",
+                ),
+            ],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-EXEC-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 71,
+            reason: "blocked-never-deleted is covered on Unix and the read-only parent Trash refusal on Linux; Windows quarantine is not implemented yet, so the fallback chain can't be staged there",
+            partial: &[
+                t(QUAR, "fx_exec_03_quarantine_impossible_blocked_never_deleted"),
+                t(
+                    TRASH,
+                    "fx_exec_03_read_only_parent_trash_refused_never_deleted",
+                ),
+            ],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-EXEC-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 72,
+            reason: "restore to a sibling path without overwriting is covered on Unix; Windows restore needs the Windows quarantine moves first",
+            partial: &[t(
+                RESTORE,
+                "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-EXEC-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 72,
+            reason: "a tampered folder manifest is refused and the database manifest wins on Unix; Windows restore needs the Windows quarantine moves first",
+            partial: &[t(
+                RESTORE,
+                "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-EXEC-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 71,
+            reason: "expired quarantine entries are purged with freed bytes recorded on Unix; Windows quarantine is not implemented yet",
+            partial: &[t(
+                QUAR,
+                "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx(
+        "FX-EXEC-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_07_plan_file_edited_to_add_a_path_rejected_exit_4",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-08",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(E2E_EXEC, "fx_exec_08_expired_plan_rejected_exit_4")]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-09",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_09_plan_from_another_machine_or_user_rejected_exit_4",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-10",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            REVAL,
+            "fx_exec_10_item_became_s3_since_planning_is_skipped_with_reason",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-11",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 77,
+            reason: "type-to-confirm and the --allow-permanent refusal for permanent S1 deletion are not implemented yet (P2-EXEC-11)",
+            partial: &[],
+        },
+    ),
+    fx(
+        "FX-EXEC-12",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 77,
+            reason: "the Executor's refusal to run elevated without --allow-root is not implemented yet (P2-EXEC-11; Quick Clean already refuses)",
+            partial: &[],
+        },
+    ),
+    fx(
+        "FX-EXEC-13",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_EXEC,
+                "fx_exec_13_normal_run_audit_append_only_one_outcome_per_item",
+            ),
+            t(
+                AUDIT,
+                "fx_exec_13_normal_run_records_one_outcome_per_item_and_verifies",
+            ),
+            t(AUDIT, "fx_exec_13_audit_is_append_only_at_the_sql_level"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-EXEC-14",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 68,
+            reason: "one of five items failing on permission denied (exit 3, four complete, failure explained in the report and the audit) is end-to-end on Unix; the Windows variant needs a deny-delete ACL injection",
+            partial: &[t(
+                E2E_EXEC,
+                "fx_exec_14_one_of_five_fails_exit_3_others_complete",
+            )],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
+    fx("FX-EXEC-15", Gate::V1x, "MLW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-EXEC-16",
+        Gate::Mvp,
+        "MLW",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 71,
+            reason: "the owner-only quarantine folder is checked on Unix in CI; reading it as another test user needs the nightly job, and Windows quarantine is not implemented yet",
+            partial: &[t(QUAR, "fx_exec_16_quarantine_folder_is_owner_only")],
+        },
+    )
+    .pending_ci("M")
+    .missing_os("W"),
     // §3.6 Physical reclaim accuracy (FX-PHY)
     fx(
         "FX-PHY-01",
