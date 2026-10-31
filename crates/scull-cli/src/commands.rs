@@ -67,11 +67,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             ScheduleAction::Enable => planned("schedule enable", 114),
             ScheduleAction::Disable => planned("schedule disable", 114),
         },
-        Command::Data { action } => match action {
-            DataAction::Show => planned("data show", 82),
-            DataAction::Export => planned("data export", 82),
-            DataAction::Purge => planned("data purge", 82),
-        },
+        Command::Data { .. } => None,
         Command::Doctor => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
@@ -143,6 +139,31 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Mcp {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
+        Command::Data {
+            action: DataAction::Show,
+        } => crate::cmd::data::run_show(ui)?,
+        Command::Data {
+            action: DataAction::Export { format, out },
+        } => crate::cmd::data::run_export(ui, *format, out.as_deref())?,
+        Command::Data {
+            action:
+                DataAction::Purge {
+                    older_than,
+                    confirm,
+                    include_quarantine,
+                    ..
+                },
+        } => {
+            let scope = match older_than {
+                Some(secs) => crate::cmd::data::PurgeScope::OlderThan(*secs),
+                None => crate::cmd::data::PurgeScope::All,
+            };
+            let opts = crate::cmd::data::PurgeOptions {
+                scope,
+                include_quarantine: *include_quarantine,
+            };
+            crate::cmd::data::run_purge(ui, &opts, *confirm)?;
+        }
         _ => {}
     }
     cancel::check()
@@ -210,9 +231,6 @@ mod tests {
             (&["agent", "install", "codex"], "agent install", Some(110)),
             (&["schedule", "enable"], "schedule enable", Some(114)),
             (&["schedule", "disable"], "schedule disable", Some(114)),
-            (&["data", "show"], "data show", Some(82)),
-            (&["data", "export"], "data export", Some(82)),
-            (&["data", "purge"], "data purge", Some(82)),
         ];
         for (args, name, issue) in table {
             assert_eq!(
@@ -233,6 +251,10 @@ mod tests {
             &["worktrees"],
             &["worktrees", "inspect", "."],
             &["caches"],
+            &["data", "show"],
+            &["data", "export"],
+            &["data", "purge", "--all"],
+            &["data", "purge", "--older-than", "30d"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }

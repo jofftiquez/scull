@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "DataExportReport": {
+      "additionalProperties": false,
+      "description": "`scull data export` output.",
+      "properties": {
+        "database": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Database exported."
+        },
+        "files": {
+          "description": "Files written.",
+          "items": {
+            "$ref": "#/$defs/ExportedFile"
+          },
+          "type": "array"
+        },
+        "format": {
+          "$ref": "#/$defs/ExportFormat",
+          "description": "Format written."
+        },
+        "out_dir": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Folder written to."
+        },
+        "rows": {
+          "description": "Rows written in total.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "description": "Its schema version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "out_dir",
+        "format",
+        "database",
+        "schema_version",
+        "files",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "ExportFormat": {
+      "description": "Export file format.",
+      "oneOf": [
+        {
+          "const": "json",
+          "description": "One JSON document (`scull-data.json`, schema `scull/data-dump@1`).",
+          "type": "string"
+        },
+        {
+          "const": "csv",
+          "description": "One CSV file per table.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExportedFile": {
+      "additionalProperties": false,
+      "description": "One file written by `scull data export`.",
+      "properties": {
+        "bytes": {
+          "description": "File size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it was written."
+        },
+        "rows": {
+          "description": "Rows written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "table": {
+          "description": "The table it holds (`null` for the JSON document, which holds all of them).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "rows",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/DataExportReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/data-export@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/data-export@1",
+  "type": "object"
+}

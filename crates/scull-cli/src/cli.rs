@@ -453,12 +453,40 @@ pub enum ScheduleAction {
 /// `scull data` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum DataAction {
-    /// Show what scull has recorded and where.
+    /// Show what scull has recorded and where (read-only).
     Show,
-    /// Export everything scull has recorded.
-    Export,
-    /// Delete everything scull has recorded.
-    Purge,
+    /// Export everything scull has recorded (JSON or CSV; Parquet is not built yet).
+    Export {
+        /// File format.
+        #[arg(long, value_enum, default_value_t = crate::cmd::data::ExportFormat::Json)]
+        format: crate::cmd::data::ExportFormat,
+        /// Folder to write to, created owner-only if missing (default:
+        /// `./scull-export-<unix time>`). Existing files are never overwritten.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
+    /// Delete scull's own files: the database, its backups and damaged copies, audit mirrors
+    /// and the MCP salt. Never anything else; the configuration and quarantine are kept.
+    Purge {
+        /// Delete every file scull has recorded (FX-DATA-04).
+        #[arg(
+            long,
+            conflicts_with = "older_than",
+            required_unless_present = "older_than"
+        )]
+        all: bool,
+        /// Delete only migration backups and damaged copies older than AGE (90m, 12h, 30d,
+        /// 2w).
+        #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age)]
+        older_than: Option<u64>,
+        /// Delete without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        confirm: bool,
+        /// Also purge quarantine contents (not available until the Executor's quarantine
+        /// purge, #71; refused).
+        #[arg(long)]
+        include_quarantine: bool,
+    },
 }
 
 /// `scull mcp` subcommands.

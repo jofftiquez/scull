@@ -27,6 +27,7 @@
 pub mod audit;
 mod backup;
 mod error;
+mod export;
 pub mod history;
 mod migrate;
 mod perms;
@@ -42,6 +43,7 @@ pub use audit::{
 };
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
+pub use export::{EXPORT_TABLES, ExportSink, QuarantineEntry, TableCount};
 pub use history::{
     Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, MaintenanceReport,
     RegrowthEvent, RetentionPolicy, RollupPoint, SIZE_CHANGE_FRACTION, SIZE_CHANGE_MIN_BYTES,

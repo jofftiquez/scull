@@ -76,14 +76,19 @@ fn only_the_cleaner_enables_the_delete_feature() {
     );
 }
 
-/// The shipped binaries do not compile the walker in: `cargo tree -e features` for `scull-cli`
-/// and `scull-mcp` (normal + build edges, every target) never shows `scull-platform`'s
-/// `delete` feature. Lifted for `scull-cli` only when P2-CLI-01 wires `scull clean` behind the
-/// Phase 2 safeguards.
+/// Interface crates that must never reach the walker. `scull-cli` is not listed: on the
+/// `phase2` branch (D-33) it depends on `scull-cleaner`, the single deletion path, for
+/// `scull data purge` (and later `scull clean`). On `main` the inspect-only alpha still forbids
+/// that; merging phase2 into main needs the alpha gate decision (packaging/check_inspect_only.py).
+const NO_WALKER: &[&str] = &["scull-mcp", "scull-engine"];
+
+/// The MCP server and the read-only engine do not compile the walker in: `cargo tree -e
+/// features` (normal + build edges, every target) never shows `scull-platform`'s `delete`
+/// feature or `scull-cleaner`.
 #[test]
-fn shipped_binaries_do_not_enable_the_delete_feature() {
+fn interface_crates_do_not_enable_the_delete_feature() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    for package in ["scull-cli", "scull-mcp", "scull-engine"] {
+    for package in NO_WALKER {
         let out = std::process::Command::new(&cargo)
             .current_dir(workspace_root())
             .args([
@@ -117,11 +122,61 @@ fn shipped_binaries_do_not_enable_the_delete_feature() {
     }
 }
 
-/// No source of the interface crates refers to the Executor (SAFE-10; until P2-CLI-01).
+/// The CLI reaches deletion only through `scull-cleaner` (never the walker directly), and
+/// only from the modules that delete: `scull data purge` so far.
+#[test]
+fn cli_deletes_only_through_the_cleaner() {
+    let src = workspace_root().join("crates/scull-cli/src");
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let text = std::fs::read_to_string(&p).unwrap();
+                let rel = p
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                assert!(
+                    !text.contains("scull_platform::remove"),
+                    "{rel} uses the walker directly"
+                );
+                if text.contains("scull_cleaner") {
+                    assert_eq!(rel, "cmd/data.rs", "{rel} refers to scull_cleaner");
+                }
+            }
+        }
+    }
+}
+
+/// Desktop app crates (`apps/*/src-tauri`), when they exist, do not depend on the cleaner yet.
+#[test]
+fn desktop_does_not_use_the_cleaner() {
+    let Ok(rd) = std::fs::read_dir(workspace_root().join("apps")) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let manifest = e.path().join("src-tauri/Cargo.toml");
+        if let Ok(text) = std::fs::read_to_string(&manifest) {
+            assert!(
+                !text
+                    .lines()
+                    .any(|l| l.trim_start().starts_with("scull-cleaner")),
+                "{} depends on scull-cleaner",
+                manifest.display()
+            );
+        }
+    }
+}
+
+/// No source of the MCP server or engine refers to the Executor (SAFE-10).
 #[test]
 fn interface_crates_do_not_use_the_cleaner() {
     let root = workspace_root();
-    for krate in ["scull-cli", "scull-mcp", "scull-engine"] {
+    for krate in NO_WALKER {
         let mut stack = vec![root.join("crates").join(krate).join("src")];
         let mut files = 0;
         while let Some(dir) = stack.pop() {
