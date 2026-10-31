@@ -5,6 +5,10 @@ Declarative, **data-only** rules for simple detection cases (PRD ยง8.1, CLS-01โ€
 in `crates/scull-detectors/`, not rules (CLS-02).
 
 - Loader: `scull_detectors::rules` (`parse_rules`, `RuleSet`, `Rule::check_markers`).
+- Detection: `scull_detectors::Detectors::bundled()` turns every enabled rule into a
+  `RuleDetector`, which lists the directory and the ancestor levels the rule needs through
+  `scull-platform` (no-follow), runs `check_markers` and returns a `DetectedArtifact`. Shared
+  Cargo target directories: `scull_detectors::cargo::SharedTargetDirs` (`rust.shared-target`).
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.

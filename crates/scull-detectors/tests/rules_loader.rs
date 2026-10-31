@@ -569,11 +569,14 @@ fn rule(id: &str) -> scull_detectors::rules::Rule {
 fn rust_target_with_manifest_and_lockfile_matches() {
     // FX-CLS-01 shape: target/ beside Cargo.toml and Cargo.lock.
     let r = rule("rust.target");
-    let s =
-        Surroundings::new("target").with_siblings(["Cargo.toml", "Cargo.lock", "src", "target"]);
+    let s = Surroundings::new("target")
+        .with_inside(["CACHEDIR.TAG", "debug"])
+        .with_siblings(["Cargo.toml", "Cargo.lock", "src", "target"])
+        .with_ancestor_names(["proj"]);
     let m = r.check_markers(&s);
     let m = m.matched().expect("matched");
     assert_eq!(m.markers[0].relative_path(), "../Cargo.toml");
+    assert_eq!(m.markers[1].relative_path(), "CACHEDIR.TAG");
     assert_eq!(
         m.lockfile.as_ref().unwrap().relative_path(),
         "../Cargo.lock"
@@ -581,14 +584,17 @@ fn rust_target_with_manifest_and_lockfile_matches() {
     assert!(!m.lockfile_missing);
 
     let ev = m.evidence(&r, Path::new("/proj/target"));
-    assert_eq!(ev.len(), 3);
+    assert_eq!(ev.len(), 4);
     assert!(
         matches!(&ev[0], Evidence::Marker { path } if path.to_path_buf() == Path::new("/proj").join("Cargo.toml"))
     );
     assert!(
-        matches!(&ev[1], Evidence::Lockfile { path } if path.to_path_buf() == Path::new("/proj").join("Cargo.lock"))
+        matches!(&ev[1], Evidence::Marker { path } if path.to_path_buf() == Path::new("/proj/target").join("CACHEDIR.TAG"))
     );
-    assert!(matches!(&ev[2], Evidence::KnownArtifact { .. }));
+    assert!(
+        matches!(&ev[2], Evidence::Lockfile { path } if path.to_path_buf() == Path::new("/proj").join("Cargo.lock"))
+    );
+    assert!(matches!(&ev[3], Evidence::KnownArtifact { .. }));
     assert!(r.evidence().contains(&EvidenceKind::KnownArtifact));
 }
 
@@ -596,7 +602,10 @@ fn rust_target_with_manifest_and_lockfile_matches() {
 fn target_without_cargo_toml_is_not_a_candidate() {
     // FX-CLS-02 shape: a folder named target/ full of photos, no Cargo.toml.
     let r = rule("rust.target");
-    let s = Surroundings::new("target").with_siblings(["target", "Photos", "notes.txt"]);
+    let s = Surroundings::new("target")
+        .with_inside(["IMG_0001.jpg", "IMG_0002.jpg"])
+        .with_siblings(["target", "Photos", "notes.txt"])
+        .with_ancestor_names(["me"]);
     assert_eq!(
         r.check_markers(&s),
         MarkerOutcome::MissingMarker {
@@ -604,8 +613,22 @@ fn target_without_cargo_toml_is_not_a_candidate() {
         }
     );
     // Marker names match case-sensitively: `cargo.toml` is not a Cargo marker.
-    let s = Surroundings::new("target").with_siblings(["target", "cargo.toml"]);
+    let s = Surroundings::new("target")
+        .with_inside(["CACHEDIR.TAG"])
+        .with_siblings(["target", "cargo.toml"])
+        .with_ancestor_names(["me"]);
     assert!(r.check_markers(&s).matched().is_none());
+    // A Cargo.toml beside it is not enough: Cargo didn't create this target/ (no CACHEDIR.TAG).
+    let s = Surroundings::new("target")
+        .with_inside(["IMG_0001.jpg"])
+        .with_siblings(["target", "Cargo.toml", "Cargo.lock"])
+        .with_ancestor_names(["me"]);
+    assert_eq!(
+        r.check_markers(&s),
+        MarkerOutcome::MissingMarker {
+            marker: "CACHEDIR.TAG".into()
+        }
+    );
 }
 
 #[test]
@@ -623,7 +646,10 @@ fn missing_lockfile_is_reported() {
 #[test]
 fn exclusions_apply_case_insensitively() {
     let r = rule("rust.target");
-    let s = Surroundings::new("target").with_siblings(["Cargo.toml", "Cargo.lock", "POM.XML"]);
+    let s = Surroundings::new("target")
+        .with_inside(["CACHEDIR.TAG"])
+        .with_siblings(["Cargo.toml", "Cargo.lock", "POM.XML"])
+        .with_ancestor_names(["proj"]);
     assert_eq!(
         r.check_markers(&s),
         MarkerOutcome::Excluded {
@@ -649,6 +675,12 @@ fn unknown_levels_are_incomplete_not_absent() {
     let r = rule("rust.target");
     assert_eq!(
         r.check_markers(&Surroundings::new("target")),
+        MarkerOutcome::Incomplete {
+            missing_level: Some(0)
+        }
+    );
+    assert_eq!(
+        r.check_markers(&Surroundings::new("target").with_inside(["CACHEDIR.TAG"])),
         MarkerOutcome::Incomplete {
             missing_level: Some(1)
         }

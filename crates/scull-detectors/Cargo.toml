@@ -15,5 +15,9 @@ workspace = true
 [dependencies]
 scull-core.workspace = true
 scull-platform.workspace = true
+scull-safety.workspace = true
 serde.workspace = true
 toml = "1"
+
+[dev-dependencies]
+scull-fixtures.workspace = true

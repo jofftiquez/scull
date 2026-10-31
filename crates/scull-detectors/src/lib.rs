@@ -1,8 +1,21 @@
 //! Ecosystem detectors and the data-only rule loader (CLS-01…05).
 //!
+//! * [`rules`]: the declarative rule format and loader.
+//! * [`Detector`], [`Detectors`], [`DetectedArtifact`]: deciding whether a directory the
+//!   scanner visited is an artifact, with evidence ([`detector`] module docs).
+//! * [`cargo`]: shared Cargo target directories (`CARGO_TARGET_DIR`, `[build] target-dir`).
+//!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
+pub mod cargo;
+pub mod detector;
 pub mod rules;
+
+pub use cargo::{SharedTargetDirs, TargetDirSource};
+pub use detector::{
+    CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detector, DetectorSignals,
+    Detectors, MAX_CONFIG_BYTES, RuleDetector,
+};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

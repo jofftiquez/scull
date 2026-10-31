@@ -1,11 +1,13 @@
 # Rust ecosystem rules. Format: rules/README.md.
-# Shared CARGO_TARGET_DIR and Cargo registry/git caches need a Rust detector (CLS-02), not a rule.
+# Shared CARGO_TARGET_DIR / `[build] target-dir` is a Rust detector (CLS-02), not a rule:
+# `scull_detectors::cargo::SharedTargetDirs` (rule ID `rust.shared-target`).
+# Cargo registry/git caches need a Rust detector too.
 
 schema_version = 1
 
 [[rule]]
 id = "rust.target"
-version = 1
+version = 2
 artifact = "Cargo build output"
 ecosystem = "rust"
 category = "project_artifact"
@@ -18,7 +20,9 @@ evidence = ["marker", "lockfile", "known_artifact"]
 names = ["target"]
 
 [rule.markers]
-all = ["../Cargo.toml"]
+# The manifest beside it, and the cache-directory tag Cargo writes into every target dir it
+# creates. A `target/` Cargo didn't create (no tag) is not a candidate (FX-CLS-02).
+all = ["../Cargo.toml", "CACHEDIR.TAG"]
 
 [rule.lockfiles]
 any = ["../Cargo.lock"]
@@ -26,6 +30,8 @@ any = ["../Cargo.lock"]
 [rule.exclude]
 # Another build tool also writes `target/` here; ownership is ambiguous, so leave it alone.
 markers = ["../pom.xml", "../build.sbt"]
+# A crate shipped inside an npm package belongs to that node_modules candidate.
+within = ["node_modules"]
 
 [rule.activity]
 processes = ["cargo", "rustc", "rust-analyzer"]
@@ -33,3 +39,6 @@ lock_files = ["debug/.cargo-lock", "release/.cargo-lock"]
 
 [rule.regeneration]
 instructions = "Run `cargo build` in the project to rebuild."
+# Rebuilt from the project's sources and Cargo.lock (FX-CLS-01: S0 with a lockfile).
+network = false
+long_build = false
