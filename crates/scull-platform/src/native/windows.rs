@@ -51,6 +51,10 @@ pub(crate) use security::{
     restrict_owner_only,
 };
 
+mod volumes;
+
+pub(super) use volumes::{free_space, volume_of, volumes};
+
 use crate::{
     Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, PlatformError, Result,
 };

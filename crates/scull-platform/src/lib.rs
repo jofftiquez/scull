@@ -51,6 +51,7 @@ mod error;
 mod native;
 pub mod owner_only;
 mod types;
+pub mod volumes;
 
 use std::path::Path;
 
@@ -62,6 +63,10 @@ pub use error::{ErrorKind, Operation, PlatformError};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
+pub use volumes::{
+    FsFeatures, ScanPolicy, VolumeInfo, VolumeKind, free_space, is_mount_boundary, mounts_within,
+    volume_of, volumes,
+};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

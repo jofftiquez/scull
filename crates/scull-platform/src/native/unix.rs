@@ -202,3 +202,46 @@ pub(super) fn elevation() -> crate::Elevation {
         crate::Elevation::NotElevated
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Volumes (P1-PLAT-03)
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub(super) use linux::{free_space, volume_of, volumes};
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub(super) use macos::{free_space, volume_of, volumes};
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod other_unix {
+    //! Other Unixes are not supported targets; volume queries report "unsupported" so callers
+    //! treat every boundary and size as unknown.
+    use std::io;
+    use std::path::Path;
+
+    fn unsupported() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "volume queries are implemented for Linux, macOS and Windows only",
+        )
+    }
+
+    pub(crate) fn volumes() -> io::Result<Vec<crate::VolumeInfo>> {
+        Err(unsupported())
+    }
+
+    pub(crate) fn volume_of(_path: &Path) -> io::Result<crate::VolumeInfo> {
+        Err(unsupported())
+    }
+
+    pub(crate) fn free_space(_path: &Path) -> io::Result<u64> {
+        Err(unsupported())
+    }
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) use other_unix::{free_space, volume_of, volumes};

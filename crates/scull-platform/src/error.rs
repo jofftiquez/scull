@@ -21,6 +21,12 @@ pub enum Operation {
     CreateFile,
     /// [`crate::ensure_owner_only`].
     CheckPermissions,
+    /// [`crate::volumes()`].
+    ListVolumes,
+    /// [`crate::volume_of`].
+    VolumeOf,
+    /// [`crate::free_space`].
+    FreeSpace,
 }
 
 impl fmt::Display for Operation {
@@ -32,6 +38,9 @@ impl fmt::Display for Operation {
             Operation::CreateDir => "create directory",
             Operation::CreateFile => "create file",
             Operation::CheckPermissions => "check permissions of",
+            Operation::ListVolumes => "list mounted volumes",
+            Operation::VolumeOf => "find the volume of",
+            Operation::FreeSpace => "query free space of",
         })
     }
 }
@@ -129,7 +138,11 @@ impl PlatformError {
 
 impl fmt::Display for PlatformError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot {} {}: ", self.op, self.path.display())?;
+        if self.path.as_os_str().is_empty() {
+            write!(f, "cannot {}: ", self.op)?;
+        } else {
+            write!(f, "cannot {} {}: ", self.op, self.path.display())?;
+        }
         match &self.kind {
             ErrorKind::NotFound(e) | ErrorKind::PermissionDenied(e) | ErrorKind::Io(e) => {
                 write!(f, "{e}")

@@ -97,3 +97,18 @@ pub(crate) fn elevation() -> crate::Elevation {
 pub(crate) fn known_folder(source: DirSource) -> Option<PathBuf> {
     os::known_folder(source)
 }
+
+/// Every mounted volume (see [`crate::volumes()`]).
+pub(crate) fn os_volumes() -> io::Result<Vec<crate::VolumeInfo>> {
+    os::volumes()
+}
+
+/// The volume holding `path` (see [`crate::volume_of`]).
+pub(crate) fn os_volume_of(path: &Path) -> io::Result<crate::VolumeInfo> {
+    os::volume_of(path)
+}
+
+/// Bytes available to the current user on the volume holding `path`.
+pub(crate) fn os_free_space(path: &Path) -> io::Result<u64> {
+    os::free_space(path)
+}
