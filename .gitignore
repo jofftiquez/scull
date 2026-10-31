@@ -4,3 +4,4 @@ node_modules/
 .DS_Store
 .claude/
 scripts/evidence/node_modules/
+.evidence/

@@ -3,6 +3,7 @@
 # container (no system browser libraries needed on the host).
 #
 #   scripts/evidence/web.sh <url-or-repo-relative-html> <out.png> [width] [height] [fullPage]
+# Write <out.png> under .evidence/<issue>/ (gitignored); post.py attaches it to the issue.
 #
 # Local files are mounted read-only at /work; use repo-relative paths or file:// URLs under the
 # repo. Uses host networking so http://localhost:<port> dev servers work.

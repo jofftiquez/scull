@@ -4,7 +4,8 @@
 #   scripts/evidence/term.sh <issue-number> <name> <command...>
 #
 # Runs <command> (through bash -c, with colors forced), echoes the command as a prompt line,
-# and renders the combined output with `freeze` to docs/evidence/<issue>/<name>.png.
+# and renders the combined output with `freeze` to .evidence/<issue>/<name>.png. That folder is
+# gitignored: screenshots are attached to the issue by post.py (`gh --attach`), never committed.
 # Output text is also saved next to it as <name>.txt for reviewers.
 set -uo pipefail
 if [ $# -lt 3 ]; then
@@ -14,7 +15,7 @@ fi
 issue=$1; name=$2; shift 2
 cmd="$*"
 root=$(git rev-parse --show-toplevel)
-out="$root/docs/evidence/$issue"
+out="$root/.evidence/$issue"
 mkdir -p "$out"
 export CARGO_TERM_COLOR=always CLICOLOR_FORCE=1 FORCE_COLOR=1
 txt="$out/$name.txt"
@@ -31,4 +32,4 @@ freeze --language ansi --window --padding 20 --margin 0 \
   --output "$out/$name.png" < "$txt" >/dev/null
 # strip ANSI codes in the saved text copy
 sed -i.bak -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g' "$txt" && rm -f "$txt.bak"
-echo "wrote docs/evidence/$issue/$name.png (command exit $status)"
+echo "wrote .evidence/$issue/$name.png (command exit $status)"

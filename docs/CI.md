@@ -14,7 +14,7 @@ Workflow: `.github/workflows/ci.yml`.
 
 - Docs/design/task-only changes skip CI (`paths-ignore`).
 - Superseded runs on the same branch are cancelled.
-- Commits that only add evidence images use `[skip ci]` in the commit message.
+- Evidence screenshots are attached to issue comments (`gh issue comment --attach`), never committed (D-31).
 - Windows runners enable `core.longpaths` and disable `autocrlf` so fixtures see real bytes.
 
 ## Branch protection (maintainer)
