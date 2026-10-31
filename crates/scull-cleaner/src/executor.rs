@@ -3,8 +3,8 @@
 use scull_core::{
     Action, ErrorKind, FileIdentity, FsPath, ItemId, PlanItem, ScullError, action_allowed_for,
 };
-use scull_platform::native_path_bytes;
 use scull_platform::remove::{self, RemoveError, RemoveReport, RemoveRequest, WalkEvent};
+use scull_platform::{EntryKind, native_path_bytes};
 use std::path::Path;
 
 /// Where a plan item lives on disk, in native form.
@@ -70,7 +70,7 @@ impl Executor {
         item: &PlanItem,
         target: &DeleteTarget<'_>,
     ) -> Result<DeleteReport, ScullError> {
-        self.run(item, target, None)
+        self.run(item, target, None, None)
     }
 
     /// [`Executor::delete`] with an observer called at each [`WalkEvent`], for fault-injection
@@ -81,13 +81,14 @@ impl Executor {
         target: &DeleteTarget<'_>,
         observer: &mut dyn FnMut(&WalkEvent<'_>),
     ) -> Result<DeleteReport, ScullError> {
-        self.run(item, target, Some(observer))
+        self.run(item, target, None, Some(observer))
     }
 
-    fn run(
+    pub(crate) fn run(
         &self,
         item: &PlanItem,
         target: &DeleteTarget<'_>,
+        expected_kind: Option<EntryKind>,
         observer: Option<&mut dyn FnMut(&WalkEvent<'_>)>,
     ) -> Result<DeleteReport, ScullError> {
         check_item(item)?;
@@ -102,8 +103,9 @@ impl Executor {
             // `PlanItem` records no kind, and its category does not imply one (a project
             // artifact or cache may be a directory or a single file; `LargeFile` items are
             // inspect-only and never planned). The identity already pins the object, whose
-            // type cannot change; the walker refuses hard-linked single files on its own.
-            expected_kind: None,
+            // type cannot change; revalidation passes the kind it observed so the walker
+            // refuses any other (SAFE-05). The walker refuses hard-linked single files itself.
+            expected_kind,
         };
         let result = match observer {
             Some(observer) => remove::remove_tree_observed(&req, observer),

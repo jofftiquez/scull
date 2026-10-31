@@ -18,7 +18,10 @@ scull-core.workspace = true
 # checked by tests/delete_feature.rs).
 scull-platform = { workspace = true, features = ["delete"] }
 scull-safety.workspace = true
+# Read-only pipeline, used to re-derive candidates at revalidation (SAFE-05, SAFE-11).
+scull-engine.workspace = true
 scull-storage.workspace = true
 
 [dev-dependencies]
 scull-fixtures.workspace = true
+scull-git.workspace = true

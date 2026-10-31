@@ -1251,7 +1251,9 @@ name = "scull-cleaner"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "scull-engine",
  "scull-fixtures",
+ "scull-git",
  "scull-platform",
  "scull-safety",
  "scull-storage",
