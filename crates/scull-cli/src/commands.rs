@@ -42,7 +42,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Worktrees {
             action: Some(WorktreesAction::Register { .. }),
             ..
-        } => planned("worktrees register", 111),
+        } => None,
         Command::Clean(args) => match args.action {
             None => planned("clean", 79),
             Some(CleanAction::Caches { .. }) => planned("clean caches", 80),
@@ -124,6 +124,10 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             action: Some(WorktreesAction::Inspect { path }),
             ..
         } => crate::cmd::worktrees::inspect(path, ui)?,
+        Command::Worktrees {
+            action: Some(WorktreesAction::Register { path, ttl }),
+            ..
+        } => crate::cmd::worktrees::register(path, ttl, ui)?,
         Command::Caches => crate::cmd::caches::run(ui)?,
         Command::LargeFiles {
             path,
@@ -186,11 +190,6 @@ mod tests {
     #[test]
     fn every_planned_command_names_its_issue() {
         let table: &[(&[&str], &str, Option<u32>)] = &[
-            (
-                &["worktrees", "register", ".", "--ttl", "7d"],
-                "worktrees register",
-                Some(111),
-            ),
             (&["clean"], "clean", Some(79)),
             (
                 &["clean", "--dry-run", "--output", "p.json"],
@@ -236,6 +235,7 @@ mod tests {
             &["projects", "inspect", "."],
             &["worktrees"],
             &["worktrees", "inspect", "."],
+            &["worktrees", "register", ".", "--ttl", "7d"],
             &["caches"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");

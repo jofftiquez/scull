@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "RegistrationReport": {
+      "additionalProperties": false,
+      "description": "`scull worktrees register` data.",
+      "properties": {
+        "expires_at": {
+          "description": "When the TTL runs out (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The registered worktree folder (canonical)."
+        },
+        "registered_at": {
+          "description": "When it was registered (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "registry": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The registry file it was recorded in."
+        },
+        "ttl": {
+          "description": "The TTL, human (`7d`).",
+          "type": "string"
+        },
+        "ttl_secs": {
+          "description": "Time to live, seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "ttl_secs",
+        "ttl",
+        "registered_at",
+        "expires_at",
+        "registry"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One line of `--ndjson` output with schema scull/worktree-registration@1: `type` selects the shape of `data`.",
+  "oneOf": [
+    {
+      "description": "The registration.",
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/RegistrationReport"
+        },
+        "type": {
+          "const": "registration",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "scull/worktree-registration@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version"
+  ],
+  "title": "scull/worktree-registration@1 (NDJSON line)",
+  "type": "object"
+}

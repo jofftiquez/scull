@@ -5,8 +5,11 @@
 //! read-only engine, and returns a bounded result: lists are capped at `max_results` (the
 //! smaller of the argument and `mcp.max_results`) and say whether they were truncated.
 //!
-//! There are no plan or execute tools in this version. Nothing here writes to disk: scans run
-//! without a history store, and the history database is opened read-only.
+//! There are no plan or execute tools in this version. Nothing here deletes, moves or changes
+//! the user's files: scans run without a history store and the history database is opened
+//! read-only. The one metadata-only tool, `register_worktree` (PRD §13.2, AI-03), appends a TTL
+//! reminder to scull's own registry file in its data directory ([`crate::registry`]); it never
+//! touches the worktree, and expiry never deletes anything.
 
 use crate::allowlist::{Allowlist, Refusal};
 use crate::history;
@@ -26,9 +29,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Every tool this server exposes, in listing order. All are read-only; there are no plan or
-/// execute tools in this version (PRD §13.2).
-pub const TOOL_NAMES: [&str; 11] = [
+/// Every tool this server exposes, in listing order. All are read-only except the
+/// metadata-only [`METADATA_TOOLS`]; there are no plan or execute tools in this version
+/// (PRD §13.2).
+pub const TOOL_NAMES: [&str; 13] = [
     "get_storage_overview",
     "scan_directory",
     "list_projects",
@@ -40,7 +44,20 @@ pub const TOOL_NAMES: [&str; 11] = [
     "get_cleanup_candidates",
     "get_cleanup_history",
     "get_status",
+    "check_capacity",
+    "register_worktree",
 ];
+
+/// Tools that record metadata in scull's own data directory (never in the user's files):
+/// annotated `readOnlyHint: false`, `destructiveHint: false`, and available without
+/// destructive mode (PRD §13.2).
+pub const METADATA_TOOLS: [&str; 1] = ["register_worktree"];
+
+/// Most expired registrations returned as review suggestions.
+pub const MAX_SUGGESTIONS: usize = 50;
+
+/// Most worktrees `check_capacity` plans for.
+pub const MAX_PLANNED_WORKTREES: u32 = 1000;
 
 /// How long a scan of the same roots is reused by later calls.
 pub const SCAN_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -280,6 +297,32 @@ pub struct HistoryArgs {
     pub item_id: Option<String>,
     /// Most points or events per list (capped by the server's `mcp.max_results`).
     pub max_results: Option<u32>,
+}
+
+/// `check_capacity` arguments: where, and how much room is needed.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CapacityArgs {
+    /// Absolute path (or `~/...`) inside an allowlisted root; omit for every root.
+    pub path: Option<String>,
+    /// How many more worktrees are planned (e.g. 3), at most 1000.
+    pub worktrees: Option<u32>,
+    /// Expected size of each planned worktree with its installs, bytes (default: the median
+    /// size of the linked worktrees found under `path`).
+    pub bytes_per_worktree: Option<u64>,
+    /// Total bytes needed, instead of `worktrees`.
+    pub needed_bytes: Option<u64>,
+}
+
+/// `register_worktree` arguments.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterArgs {
+    /// The linked Git worktree folder: absolute path (or `~/...`) inside an allowlisted root.
+    pub path: String,
+    /// Time to live: a whole number and a unit, `m`, `h`, `d` or `w` (e.g. `7d`), from 1m to
+    /// 366d.
+    pub ttl: String,
 }
 
 fn parse<T: DeserializeOwned>(args: JsonObject) -> Result<T, ToolError> {
@@ -618,7 +661,8 @@ pub struct ServerFacts {
     pub name: String,
     /// scull version.
     pub version: String,
-    /// Always true in this version: no tool can change anything on disk.
+    /// Always true in this version: no tool can delete, move or change the user's files. (The
+    /// metadata-only `register_worktree` records a reminder in scull's own data folder.)
     pub read_only: bool,
     /// The tools offered.
     pub tools: Vec<String>,
@@ -679,6 +723,123 @@ pub struct StatusOutput {
     pub volumes: Vec<VolumeSampleView>,
 }
 
+/// A worktree TTL registration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct RegistrationView {
+    /// The worktree folder.
+    pub path: String,
+    /// Time to live, seconds.
+    pub ttl_secs: u64,
+    /// When it was registered (Unix seconds).
+    pub registered_at: i64,
+    /// When the TTL runs out (Unix seconds).
+    pub expires_at: i64,
+    /// Whether the TTL has run out.
+    pub expired: bool,
+    /// Who registered it.
+    pub source: crate::registry::Source,
+}
+
+/// An expired registration: a suggestion to review the worktree. Never removed automatically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ReviewSuggestion {
+    /// The registration.
+    pub registration: RegistrationView,
+    /// Why it is suggested.
+    pub reason: String,
+}
+
+/// A forecast of when the volume runs low.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ForecastView {
+    /// `not_enough_history`, `not_filling`, `filling` or `below_reserve`.
+    pub state: scull_proactive::ForecastState,
+    /// `unknown`, `low`, `medium` or `high`.
+    pub confidence: scull_proactive::Confidence,
+    /// Whole days until free space drops below the reserve (0 when already below).
+    pub days_until_reserve: Option<u32>,
+    /// Free space lost per day by the trend, bytes (negative when growing).
+    pub fill_bytes_per_day: Option<f64>,
+}
+
+/// One volume holding allowlisted roots.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct CapacityVolume {
+    /// Mount point.
+    pub mount_point: String,
+    /// Size, bytes.
+    pub total_bytes: Option<u64>,
+    /// Available to the user now, bytes.
+    pub free_bytes: Option<u64>,
+    /// Free space scull treats as the floor (10 GiB by default).
+    pub reserve_bytes: u64,
+    /// S0 (regenerable) reclaimable bytes inside the allowlisted roots on this volume.
+    pub safe_reclaimable_bytes: u64,
+    /// S0 + S1 + S2 reclaimable bytes inside the allowlisted roots on this volume (S1 and S2
+    /// need review).
+    pub reclaimable_bytes: u64,
+    /// The disk-full forecast from scull's recorded free-space history, if available.
+    pub forecast: Option<ForecastView>,
+    /// Why there is no forecast, when there is none.
+    pub forecast_unavailable: Option<String>,
+    /// With a request: `fits` (stays above the reserve), `fits_after_cleanup` (only after
+    /// reclaiming S0 items), `does_not_fit`, or `unknown` (free space unknown). Absent without
+    /// a request.
+    pub verdict: Option<String>,
+    /// Free bytes left after the request (negative when short).
+    pub free_after_bytes: Option<i64>,
+}
+
+/// How the needed bytes were worked out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct CapacityRequest {
+    /// Planned worktrees, if given.
+    pub worktrees: Option<u32>,
+    /// Bytes per planned worktree, if known.
+    pub bytes_per_worktree: Option<u64>,
+    /// Total bytes needed, if known.
+    pub needed_bytes: Option<u64>,
+    /// `needed_bytes`, `bytes_per_worktree`, `median_of_existing_worktrees`, or `unknown`.
+    pub estimate_source: String,
+    /// Linked worktrees the median was taken from.
+    pub sampled_worktrees: u64,
+}
+
+/// `check_capacity`.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct CapacityOutput {
+    /// The checked directory, or every allowlisted root.
+    pub roots: Vec<String>,
+    /// The request, if any.
+    pub request: Option<CapacityRequest>,
+    /// Per volume.
+    pub volumes: Vec<CapacityVolume>,
+    /// Worktrees whose registered TTL ran out: review them (never removed automatically).
+    pub review_suggestions: Vec<ReviewSuggestion>,
+    /// Whether `review_suggestions` was cut.
+    pub suggestions_truncated: bool,
+    /// Always true: this tool changes nothing.
+    pub read_only: bool,
+    /// Whether the scan was cancelled (partial reclaimable numbers).
+    pub cancelled: bool,
+}
+
+/// `register_worktree`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct RegisterOutput {
+    /// What was recorded.
+    pub registration: RegistrationView,
+    /// The TTL, human (`7d`).
+    pub ttl: String,
+    /// Always true: only a reminder was recorded, in scull's data folder. Nothing is deleted
+    /// when the TTL runs out; the worktree becomes a review suggestion.
+    pub metadata_only: bool,
+    /// Other worktrees whose registered TTL ran out (review suggestions).
+    pub review_suggestions: Vec<ReviewSuggestion>,
+    /// Whether `review_suggestions` was cut.
+    pub suggestions_truncated: bool,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Definitions
 // ---------------------------------------------------------------------------------------------
@@ -697,6 +858,25 @@ fn tool<A: JsonSchema + 'static, O: JsonSchema + 'static>(
                 .read_only(true)
                 .destructive(false)
                 .idempotent(true)
+                .open_world(false),
+        )
+}
+
+/// A metadata-only tool: writes a reminder to scull's data folder, never the user's files.
+fn metadata_tool<A: JsonSchema + 'static, O: JsonSchema + 'static>(
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+) -> Tool {
+    Tool::new(name, description, JsonObject::new())
+        .with_input_schema::<A>()
+        .with_output_schema::<O>()
+        .with_title(title)
+        .with_annotations(
+            ToolAnnotations::with_title(title)
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
                 .open_world(false),
         )
 }
@@ -773,6 +953,24 @@ pub fn definitions() -> Vec<Tool> {
             "This server's allowlisted roots and settings, plus the latest recorded scan and \
              free space. Call this first to learn which paths are allowed. Read-only.",
         ),
+        tool::<CapacityArgs, CapacityOutput>(
+            "check_capacity",
+            "Check capacity",
+            "Is there room for more work? Free space of the volumes holding the allowlisted \
+             roots (or one directory), the regenerable bytes that could be reclaimed there, the \
+             disk-full forecast when scull has history, and, given `worktrees` (and optionally \
+             `bytes_per_worktree`) or `needed_bytes`, whether that fits above the reserve. Also \
+             lists worktrees whose registered TTL ran out, as review suggestions. Read-only.",
+        ),
+        metadata_tool::<RegisterArgs, RegisterOutput>(
+            "register_worktree",
+            "Register a worktree TTL",
+            "Record that a linked Git worktree you created (inside an allowlisted root) should \
+             be finished within `ttl` (e.g. `7d`). Metadata only: it writes a reminder to \
+             scull's own data folder and never touches the worktree. When the TTL runs out the \
+             worktree becomes a review suggestion for the user; nothing is ever deleted \
+             automatically. Registering again replaces the TTL.",
+        ),
     ]
 }
 
@@ -800,6 +998,8 @@ pub fn call(
         "get_cleanup_candidates" => parse(args).and_then(|a| candidates(ctx, allow, a, cancel)),
         "get_cleanup_history" => parse(args).and_then(|a| cleanup_history(ctx, allow, a)),
         "get_status" => parse::<NoArgs>(args).and_then(|_| status(ctx, allow)),
+        "check_capacity" => parse(args).and_then(|a| check_capacity(ctx, allow, a, cancel)),
+        "register_worktree" => parse(args).and_then(|a| register_worktree(ctx, allow, a)),
         _ => return None,
     };
     Some(r)
@@ -1470,6 +1670,317 @@ fn status(ctx: &Ctx, allow: &Allowlist) -> Result<Output, ToolError> {
     output(&out, summary)
 }
 
+fn registration_view(
+    reg: &crate::registry::Registration,
+    now: i64,
+    r: &Redactor,
+) -> RegistrationView {
+    RegistrationView {
+        path: r.path(&reg.path),
+        ttl_secs: reg.ttl_secs,
+        registered_at: reg.registered_at,
+        expires_at: reg.expires_at,
+        expired: reg.is_expired(now),
+        source: reg.source,
+    }
+}
+
+/// Expired registrations inside the allowlist, as review suggestions (capped).
+fn review_suggestions(
+    ctx: &Ctx,
+    allow: &Allowlist,
+    now: i64,
+    skip: Option<&str>,
+) -> (Vec<ReviewSuggestion>, bool) {
+    let Some(dir) = ctx.data_dir.as_deref() else {
+        return (Vec::new(), false);
+    };
+    let regs = crate::registry::Registry::in_data_dir(dir)
+        .load()
+        .unwrap_or_default();
+    let expired: Vec<_> = regs
+        .iter()
+        .filter(|g| g.is_expired(now) && Some(g.path.as_str()) != skip)
+        .filter(|g| allow.contains_canonical(Path::new(&g.path)))
+        .collect();
+    let cap = MAX_SUGGESTIONS.min(ctx.cap(None));
+    let out = expired
+        .iter()
+        .take(cap)
+        .map(|g| ReviewSuggestion {
+            registration: registration_view(g, now, &ctx.redactor),
+            reason: format!(
+                "its registered TTL ({}) ran out {} ago; review it with list_worktrees or \
+                 inspect_worktree and suggest the user clean it up with `scull clean` if it is \
+                 finished. scull never removes it automatically.",
+                crate::registry::human_duration(g.ttl_secs),
+                crate::registry::human_duration(u64::try_from(now - g.expires_at).unwrap_or(0))
+            ),
+        })
+        .collect::<Vec<_>>();
+    let truncated = expired.len() > out.len();
+    (out, truncated)
+}
+
+fn median(mut v: Vec<u64>) -> Option<u64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    let n = v.len();
+    Some(if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        v[n / 2 - 1] / 2 + v[n / 2] / 2
+    })
+}
+
+fn check_capacity(
+    ctx: &Ctx,
+    allow: &Allowlist,
+    a: CapacityArgs,
+    cancel: &CancelToken,
+) -> Result<Output, ToolError> {
+    if a.needed_bytes.is_some() && (a.worktrees.is_some() || a.bytes_per_worktree.is_some()) {
+        return Err(ToolError::new(
+            "invalid_arguments",
+            "give either needed_bytes or worktrees (with optional bytes_per_worktree), not both",
+        ));
+    }
+    if a.bytes_per_worktree.is_some() && a.worktrees.is_none() {
+        return Err(ToolError::new(
+            "invalid_arguments",
+            "bytes_per_worktree needs worktrees",
+        ));
+    }
+    if a.worktrees
+        .is_some_and(|n| n == 0 || n > MAX_PLANNED_WORKTREES)
+    {
+        return Err(ToolError::new(
+            "invalid_arguments",
+            format!("worktrees must be between 1 and {MAX_PLANNED_WORKTREES}"),
+        ));
+    }
+    let roots = ctx.targets(allow, a.path.as_deref())?;
+    let rep = ctx.scan(roots.clone(), cancel)?;
+    let r = &ctx.redactor;
+    let now = now_unix();
+
+    let request = match (a.needed_bytes, a.worktrees) {
+        (Some(n), _) => Some(CapacityRequest {
+            worktrees: None,
+            bytes_per_worktree: None,
+            needed_bytes: Some(n),
+            estimate_source: "needed_bytes".into(),
+            sampled_worktrees: 0,
+        }),
+        (None, Some(count)) => {
+            let sizes: Vec<u64> = rep
+                .worktrees
+                .iter()
+                .filter(|w| w.kind == scull_git::WorktreeKind::Linked)
+                .filter_map(|w| w.allocated)
+                .collect();
+            let sampled = sizes.len() as u64;
+            let (per, source) = match a.bytes_per_worktree {
+                Some(b) => (Some(b), "bytes_per_worktree"),
+                None => match median(sizes) {
+                    Some(m) => (Some(m), "median_of_existing_worktrees"),
+                    None => (None, "unknown"),
+                },
+            };
+            Some(CapacityRequest {
+                worktrees: Some(count),
+                bytes_per_worktree: per,
+                needed_bytes: per.map(|b| b.saturating_mul(u64::from(count))),
+                estimate_source: source.into(),
+                sampled_worktrees: if source == "median_of_existing_worktrees" {
+                    sampled
+                } else {
+                    0
+                },
+            })
+        }
+        (None, None) => None,
+    };
+    let needed = request.as_ref().and_then(|q| q.needed_bytes);
+
+    let policy = scull_proactive::ForecastPolicy::default();
+    let store = crate::history::open_read_only(ctx.data_dir.as_deref());
+    let mut volumes: Vec<(PathBuf, CapacityVolume, Vec<PathBuf>)> = Vec::new();
+    for root in &roots {
+        let Ok(v) = scull_platform::volume_of(root) else {
+            continue;
+        };
+        if let Some((_, _, rs)) = volumes.iter_mut().find(|(m, _, _)| *m == v.mount_point) {
+            rs.push(root.clone());
+            continue;
+        }
+        let id = v.mount_point.to_string_lossy().into_owned();
+        let (forecast, forecast_unavailable) = match &store {
+            Err(u) => (
+                None,
+                Some(r.text(&format!("forecast unavailable: {}", u.detail()))),
+            ),
+            Ok(s) => match scull_proactive::forecast_volume(s, &id, &[], now, &policy) {
+                Ok(f) => (
+                    Some(ForecastView {
+                        state: f.state,
+                        confidence: f.confidence,
+                        days_until_reserve: f.days_rounded(),
+                        fill_bytes_per_day: f.fill_bytes_per_day,
+                    }),
+                    None,
+                ),
+                Err(e) => (None, Some(r.text(&format!("forecast unavailable: {e}")))),
+            },
+        };
+        volumes.push((
+            v.mount_point.clone(),
+            CapacityVolume {
+                mount_point: r.path_of(&v.mount_point),
+                total_bytes: v.total_bytes,
+                free_bytes: v.free_bytes,
+                reserve_bytes: policy.reserve_bytes,
+                safe_reclaimable_bytes: 0,
+                reclaimable_bytes: 0,
+                forecast,
+                forecast_unavailable,
+                verdict: None,
+                free_after_bytes: None,
+            },
+            vec![root.clone()],
+        ));
+    }
+    for (_, vol, rs) in &mut volumes {
+        for c in &rep.candidates {
+            if !rs.iter().any(|root| within(c.path.as_str(), root)) {
+                continue;
+            }
+            let b = c.sizes.reclaimable.bytes;
+            match c.tier {
+                Tier::S0 => {
+                    vol.safe_reclaimable_bytes = vol.safe_reclaimable_bytes.saturating_add(b);
+                    vol.reclaimable_bytes = vol.reclaimable_bytes.saturating_add(b);
+                }
+                Tier::S1 | Tier::S2 => {
+                    vol.reclaimable_bytes = vol.reclaimable_bytes.saturating_add(b);
+                }
+                _ => {}
+            }
+        }
+        if request.is_some() {
+            let (verdict, after) = match (vol.free_bytes, needed) {
+                (Some(free), Some(need)) => {
+                    let after = i128::from(free) - i128::from(need);
+                    let reserve = i128::from(vol.reserve_bytes);
+                    let v = if after >= reserve {
+                        "fits"
+                    } else if after + i128::from(vol.safe_reclaimable_bytes) >= reserve {
+                        "fits_after_cleanup"
+                    } else {
+                        "does_not_fit"
+                    };
+                    (v, i64::try_from(after).ok())
+                }
+                _ => ("unknown", None),
+            };
+            vol.verdict = Some(verdict.into());
+            vol.free_after_bytes = after;
+        }
+    }
+    let (review_suggestions, suggestions_truncated) = review_suggestions(ctx, allow, now, None);
+    let out = CapacityOutput {
+        roots: roots.iter().map(|x| r.path_of(x)).collect(),
+        request,
+        volumes: volumes.into_iter().map(|(_, v, _)| v).collect(),
+        review_suggestions,
+        suggestions_truncated,
+        read_only: true,
+        cancelled: rep.cancelled,
+    };
+    let mut summary = String::new();
+    for v in &out.volumes {
+        summary.push_str(&format!(
+            "{}: {} free, {} regenerable (S0) reclaimable",
+            v.mount_point,
+            v.free_bytes.map_or_else(|| "unknown".into(), fmt_bytes),
+            fmt_bytes(v.safe_reclaimable_bytes)
+        ));
+        match (&v.forecast, &v.forecast_unavailable) {
+            (Some(f), _) => match f.days_until_reserve {
+                Some(d) => summary.push_str(&format!(
+                    ", below the reserve in ~{d} day(s) ({} confidence)",
+                    f.confidence.as_str()
+                )),
+                None => summary.push_str(", no disk-full forecast"),
+            },
+            (None, _) => summary.push_str(", forecast unavailable"),
+        }
+        if let Some(verdict) = &v.verdict {
+            summary.push_str(&format!("; request: {verdict}"));
+        }
+        summary.push_str(". ");
+    }
+    if !out.review_suggestions.is_empty() {
+        summary.push_str(&format!(
+            "{} worktree(s) past their registered TTL (review suggested; never removed \
+             automatically). ",
+            out.review_suggestions.len()
+        ));
+    }
+    summary.push_str("Read-only; nothing was changed.");
+    output(&out, summary)
+}
+
+fn register_worktree(ctx: &Ctx, allow: &Allowlist, a: RegisterArgs) -> Result<Output, ToolError> {
+    let path = allow.check(&a.path)?;
+    let ttl_secs = crate::registry::parse_ttl(&a.ttl)
+        .map_err(|e| ToolError::new("invalid_arguments", format!("ttl {e}")))?;
+    let r = &ctx.redactor;
+    let w = ctx
+        .engine
+        .inspect_worktree(&path)
+        .map_err(|e| ToolError::from_scull(&e, r))?;
+    let wt = w.path.to_path_buf();
+    if w.kind != scull_git::WorktreeKind::Linked || w.state.missing {
+        return Err(ToolError::new(
+            "not_a_linked_worktree",
+            "only an existing linked Git worktree can be registered (not a main or bare \
+             checkout)",
+        ));
+    }
+    if !allow.contains_canonical(&wt) {
+        return Err(Refusal::OutsideAllowlist.into());
+    }
+    let Some(dir) = ctx.data_dir.as_deref() else {
+        return Err(ToolError::new(
+            "unavailable",
+            "scull's data folder is unknown, so nothing can be registered",
+        ));
+    };
+    let now = now_unix();
+    let reg = crate::registry::Registry::in_data_dir(dir)
+        .record(&wt, ttl_secs, now, crate::registry::Source::Mcp)
+        .map_err(|e| ToolError::new("unavailable", r.text(&e.to_string())))?;
+    let (review_suggestions, suggestions_truncated) =
+        review_suggestions(ctx, allow, now, Some(&reg.path));
+    let out = RegisterOutput {
+        registration: registration_view(&reg, now, r),
+        ttl: crate::registry::human_duration(ttl_secs),
+        metadata_only: true,
+        review_suggestions,
+        suggestions_truncated,
+    };
+    let summary = format!(
+        "Registered {} with a TTL of {}. When it runs out the worktree becomes a review \
+         suggestion; scull never deletes it. Metadata only: nothing on disk outside scull's \
+         data folder changed.",
+        out.registration.path, out.ttl
+    );
+    output(&out, summary)
+}
+
 /// Human byte count (binary units).
 pub fn fmt_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -1498,7 +2009,8 @@ mod tests {
         assert_eq!(names, TOOL_NAMES);
         for t in &defs {
             let ann = t.annotations.as_ref().expect("annotations");
-            assert_eq!(ann.read_only_hint, Some(true), "{}", t.name);
+            let metadata = METADATA_TOOLS.contains(&t.name.as_ref());
+            assert_eq!(ann.read_only_hint, Some(!metadata), "{}", t.name);
             assert_eq!(ann.destructive_hint, Some(false), "{}", t.name);
             assert!(t.output_schema.is_some(), "{}", t.name);
             assert_eq!(
@@ -1508,6 +2020,13 @@ mod tests {
                 t.name
             );
         }
+    }
+
+    #[test]
+    fn medians() {
+        assert_eq!(median(vec![]), None);
+        assert_eq!(median(vec![5, 1, 3]), Some(3));
+        assert_eq!(median(vec![4, 2]), Some(3));
     }
 
     #[test]

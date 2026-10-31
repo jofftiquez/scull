@@ -143,10 +143,6 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
 fn stub_commands_exit_1_with_tracking_issue() {
     let cases: &[(&[&str], &str)] = &[
         (
-            &["worktrees", "register", ".", "--ttl", "7d"],
-            "(tracked in #111)",
-        ),
-        (
             &["clean"],
             "`scull clean` is not implemented yet (tracked in #79)",
         ),
