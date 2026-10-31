@@ -154,6 +154,16 @@ pub enum Command {
     LargeFiles {
         /// Directory to inspect.
         path: PathBuf,
+
+        /// Smallest allocated size to list (binary units: 500M, 1.5G, 2GiB).
+        #[arg(long, value_name = "SIZE", default_value = crate::large_files::DEFAULT_MIN_SIZE,
+              value_parser = crate::large_files::parse_size)]
+        min_size: u64,
+
+        /// List at most this many files (the largest).
+        #[arg(long, value_name = "N", default_value_t = crate::large_files::DEFAULT_TOP_ARG,
+              value_parser = crate::large_files::parse_top)]
+        top: usize,
     },
 
     /// Show past cleanup operations.

@@ -8,6 +8,7 @@
 //! * [`db`]: opening the database without creating or migrating it.
 //! * [`output`]: tables, byte and tier formatting, terminal escaping (SAFE-17), and the
 //!   versioned JSON/NDJSON envelopes (CLI-01).
+//! * [`large_files`]: `scull large-files`, the inspect-only large-files listing.
 //! * [`cancel`]: Ctrl-C handling (CLI-02).
 
 pub mod cancel;
@@ -15,4 +16,5 @@ pub mod cli;
 pub mod cmd;
 pub mod commands;
 pub mod db;
+pub mod large_files;
 pub mod output;

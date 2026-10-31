@@ -1,0 +1,1115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Envelope",
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "type": "object",
+  "properties": {
+    "data": {
+      "description": "The payload.",
+      "$ref": "#/$defs/LargeFilesData"
+    },
+    "schema": {
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "type": "string",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "The action proposed for a candidate.",
+      "oneOf": [
+        {
+          "description": "No action: the item is blocked (S3) or inspect-only.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Delete through the safe executor (S0 default, D-3). Restore path is regeneration.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "delete"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Atomic same-volume move into `.scull-quarantine/<operation-id>/` (S1/S2 default).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "quarantine"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Move to the platform Trash / Recycle Bin (fallback when quarantine isn't possible).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "trash"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Run a tool's own cleanup command (package caches, Docker; SAFE-06, QC-03).",
+          "type": "object",
+          "properties": {
+            "args": {
+              "description": "Structured arguments (no shell), e.g. `[\"cache\", \"verify\"]`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tool": {
+              "description": "Tool name, e.g. \"npm\".",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_command"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "tool",
+            "args"
+          ]
+        },
+        {
+          "description": "`git worktree remove` (never `--force` unless authorized per item).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "git_worktree_remove"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "`git worktree prune` for a stale registration.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "git_worktree_prune"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Candidate": {
+      "description": "A detected item with a risk tier and evidence. This is the unit the preview shows, plans\nreference and the executor revalidates.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Proposed action.",
+          "$ref": "#/$defs/Action"
+        },
+        "artifact": {
+          "description": "Human-readable artifact type, e.g. \"Cargo build output\".",
+          "type": "string"
+        },
+        "category": {
+          "description": "Category for grouping.",
+          "$ref": "#/$defs/Category"
+        },
+        "evidence": {
+          "description": "Detection evidence.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          }
+        },
+        "flags": {
+          "description": "Risk flags.",
+          "$ref": "#/$defs/Flags"
+        },
+        "id": {
+          "description": "Stable ID (identity + path).",
+          "$ref": "#/$defs/ItemId"
+        },
+        "identity": {
+          "description": "File identity at scan time; revalidation compares against it (SAFE-05).",
+          "$ref": "#/$defs/FileIdentity"
+        },
+        "path": {
+          "description": "Exact path.",
+          "$ref": "#/$defs/FsPath"
+        },
+        "project": {
+          "description": "Owning project, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasons": {
+          "description": "Every rubric row that fired.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TierReason"
+          }
+        },
+        "regeneration": {
+          "description": "Regeneration instructions and cost.",
+          "$ref": "#/$defs/Regeneration"
+        },
+        "rule": {
+          "description": "Rule that produced the candidate.",
+          "$ref": "#/$defs/RuleRef"
+        },
+        "sizes": {
+          "description": "Logical, allocated and reclaimable bytes.",
+          "$ref": "#/$defs/Sizes"
+        },
+        "tier": {
+          "description": "Tier: always the most protective of `reasons` (see [`Candidate::is_consistent`]).",
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "identity",
+        "category",
+        "artifact",
+        "rule",
+        "tier",
+        "reasons",
+        "evidence",
+        "sizes",
+        "flags",
+        "regeneration",
+        "action"
+      ]
+    },
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string",
+          "const": "project_artifact"
+        },
+        {
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string",
+          "const": "package_cache"
+        },
+        {
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string",
+          "const": "worktree"
+        },
+        {
+          "description": "ML/AI model or dataset cache.",
+          "type": "string",
+          "const": "ml_cache"
+        },
+        {
+          "description": "Docker / container data.",
+          "type": "string",
+          "const": "container"
+        },
+        {
+          "description": "Large file surfaced for inspection only.",
+          "type": "string",
+          "const": "large_file"
+        },
+        {
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string",
+          "const": "scull_data"
+        },
+        {
+          "description": "Anything else.",
+          "type": "string",
+          "const": "other"
+        }
+      ]
+    },
+    "Confidence": {
+      "description": "How confident the engine is in a reclaim estimate (PRD §9).",
+      "oneOf": [
+        {
+          "description": "No sharing, snapshots or clones could affect the result.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Minor uncertainty (e.g. compression we measured but can't fully attribute).",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Shared extents, clones or snapshots may pin some bytes.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "The engine can't estimate; only the measured delta will tell.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "Evidence": {
+      "description": "A fact observed about a candidate. Evidence is what the preview shows under \"why\".\n\nMissing evidence never counts as evidence of inactivity (PRD §8.4): when a signal can't be\nread, record [`Evidence::SignalUnavailable`] instead of omitting it.",
+      "oneOf": [
+        {
+          "description": "A project marker at the expected relative location (e.g. `Cargo.toml` beside `target/`).\nCLS-03: a directory name alone is never enough.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "marker"
+            },
+            "path": {
+              "description": "Path of the marker file.",
+              "$ref": "#/$defs/FsPath"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "A lockfile or manifest the artifact can be reproduced from.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "lockfile"
+            },
+            "path": {
+              "description": "Path of the lockfile.",
+              "$ref": "#/$defs/FsPath"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "The artifact type is known to a rule.",
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "description": "Human-readable artifact type, e.g. \"Cargo build output\".",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "known_artifact"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "artifact"
+          ]
+        },
+        {
+          "description": "Files inside the candidate are tracked by Git.",
+          "type": "object",
+          "properties": {
+            "files": {
+              "description": "Number of tracked files found (may be a lower bound).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "git_tracked"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "files"
+          ]
+        },
+        {
+          "description": "The path is inside a protected root (SAFE-03).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "protected_root"
+            },
+            "root": {
+              "description": "The protected root.",
+              "$ref": "#/$defs/FsPath"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "root"
+          ]
+        },
+        {
+          "description": "The user excluded this path in config.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "user_exclusion"
+            },
+            "rule": {
+              "description": "The exclusion entry that matched.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "rule"
+          ]
+        },
+        {
+          "description": "A `.scull-protect` marker covers this path.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "protect_marker"
+            },
+            "path": {
+              "description": "Path of the marker.",
+              "$ref": "#/$defs/FsPath"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "The candidate is in use right now.",
+          "type": "object",
+          "properties": {
+            "by": {
+              "description": "Process name or tool, if known.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "in_use"
+            },
+            "signal": {
+              "description": "What showed it, e.g. \"open handle\", \"process cwd\", \"cargo lock\".",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "signal"
+          ]
+        },
+        {
+          "description": "Newest modification inside the candidate, sampled with a bound.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "last_modified"
+            },
+            "newest_unix": {
+              "description": "Unix timestamp (seconds, UTC) of the newest observed mtime.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "sampled": {
+              "description": "Whether sampling hit its bound (the true newest may be later).",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "newest_unix",
+            "sampled"
+          ]
+        },
+        {
+          "description": "The candidate crosses a mount or volume boundary.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "crosses_mount"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Reached through a symlink or junction pointing outside the scan root.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "link_escape"
+            },
+            "target": {
+              "description": "Where the link points.",
+              "$ref": "#/$defs/FsPath"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ]
+        },
+        {
+          "description": "Cloud-sync placeholder or synced folder (iCloud, OneDrive, Dropbox). Never hydrated.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cloud_sync"
+            },
+            "provider": {
+              "description": "Provider name.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "provider"
+          ]
+        },
+        {
+          "description": "Hardlinks shared with something outside the candidate (e.g. pnpm store).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "hardlinked"
+            },
+            "shared_bytes": {
+              "description": "Bytes shared with other links.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "shared_bytes"
+          ]
+        },
+        {
+          "description": "A signal could not be read on this platform or with current permissions.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "signal_unavailable"
+            },
+            "reason": {
+              "description": "Why, e.g. \"needs Full Disk Access\".",
+              "type": "string"
+            },
+            "signal": {
+              "description": "Which signal, e.g. \"open files\".",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "signal",
+            "reason"
+          ]
+        },
+        {
+          "description": "Free-form note from a detector (shown, never used for tiering).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "note"
+            },
+            "text": {
+              "description": "The note.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ]
+        }
+      ]
+    },
+    "FileIdentity": {
+      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "Inode / file ID as lowercase hex.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{1,32}$"
+        },
+        "volume": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "volume",
+        "file"
+      ]
+    },
+    "Flags": {
+      "description": "Risk flags shown with every candidate (SAFE-01). `None` means \"not checked / unknown\",\nwhich is never treated as \"no\".",
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "In use by a process or tool.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cloud_placeholder": {
+          "description": "Is or contains a cloud-sync placeholder.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cross_mount": {
+          "description": "Crosses a mount/volume boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hardlinked": {
+          "description": "Contains hardlinks shared outside the candidate.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "symlink": {
+          "description": "Is or contains a symlink/junction.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "LargeFilesData": {
+      "description": "The `scull/large-files@1` document.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "The files, largest first: inspect-only candidates (`Category::LargeFile`, S2, no action).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          }
+        },
+        "summary": {
+          "description": "Totals.",
+          "$ref": "#/$defs/LargeFilesSummary"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "files"
+      ]
+    },
+    "LargeFilesSummary": {
+      "description": "Totals of a large-files run (`data.summary` in `--json`; the last `--ndjson` record).",
+      "type": "object",
+      "properties": {
+        "complete": {
+          "description": "Whether every part of the tree could be read (unreadable folders may hide files).",
+          "type": "boolean"
+        },
+        "issues": {
+          "description": "Entries that could not be read.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "matched": {
+          "description": "Files at or above the threshold (may exceed `files`).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "matched_bytes": {
+          "description": "Allocated bytes of all matched files.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root": {
+          "description": "The inspected directory (absolute).",
+          "$ref": "#/$defs/FsPath"
+        },
+        "threshold_bytes": {
+          "description": "`--min-size`: smallest allocated size listed, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top": {
+          "description": "`--top`: most files listed.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "truncated": {
+          "description": "Whether more files matched than are listed.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "threshold_bytes",
+        "top",
+        "matched",
+        "matched_bytes",
+        "truncated",
+        "complete",
+        "issues"
+      ]
+    },
+    "ProjectRef": {
+      "description": "The project or repository that owns a candidate.",
+      "type": "object",
+      "properties": {
+        "ecosystem": {
+          "description": "Ecosystem, e.g. \"rust\", \"node\".",
+          "type": "string"
+        },
+        "name": {
+          "description": "Display name (usually the directory name or manifest name).",
+          "type": "string"
+        },
+        "root": {
+          "description": "Project root directory.",
+          "$ref": "#/$defs/FsPath"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "name",
+        "ecosystem"
+      ]
+    },
+    "ReasonCode": {
+      "description": "Stable codes for tier reasons. Matches the rows of the rubric (PRD §8.3) and the worktree\ndecision table (GIT-03). New codes may be added; existing ones never change meaning.",
+      "oneOf": [
+        {
+          "description": "Contains Git-tracked files → S3.",
+          "type": "string",
+          "const": "git_tracked"
+        },
+        {
+          "description": "Inside a protected root → S3.",
+          "type": "string",
+          "const": "protected_root"
+        },
+        {
+          "description": "Matches a user exclusion → S3.",
+          "type": "string",
+          "const": "user_exclusion"
+        },
+        {
+          "description": "Covered by `.scull-protect` → S3.",
+          "type": "string",
+          "const": "protect_marker"
+        },
+        {
+          "description": "In use (open handles, process cwd, held lock) → S3 for this run.",
+          "type": "string",
+          "const": "in_use"
+        },
+        {
+          "description": "Crosses a mount/volume boundary → S3.",
+          "type": "string",
+          "const": "crosses_mount"
+        },
+        {
+          "description": "Reached via a link outside the scan root → S3.",
+          "type": "string",
+          "const": "link_escape"
+        },
+        {
+          "description": "Cloud placeholder or synced folder → S2.",
+          "type": "string",
+          "const": "cloud_sync"
+        },
+        {
+          "description": "Marker found but nothing to reproduce from → S2.",
+          "type": "string",
+          "const": "no_lockfile"
+        },
+        {
+          "description": "Modified within the activity window → one tier more protective.",
+          "type": "string",
+          "const": "recent_activity"
+        },
+        {
+          "description": "A required signal was unavailable, so the engine assumed the protective answer.",
+          "type": "string",
+          "const": "signal_unavailable"
+        },
+        {
+          "description": "Reproducible, but needs network or a long build → S1.",
+          "type": "string",
+          "const": "costly_to_regenerate"
+        },
+        {
+          "description": "Reproducible from local inputs or quickly → S0.",
+          "type": "string",
+          "const": "regenerable"
+        },
+        {
+          "description": "Worktree is locked → S3.",
+          "type": "string",
+          "const": "worktree_locked"
+        },
+        {
+          "description": "Worktree has uncommitted or untracked changes → S3.",
+          "type": "string",
+          "const": "worktree_dirty"
+        },
+        {
+          "description": "Worktree has ignored files not matched by an artifact rule → ≥ S2.",
+          "type": "string",
+          "const": "worktree_unique_ignored"
+        },
+        {
+          "description": "Commits not reachable from any remote-tracking ref and not provably merged → S3.",
+          "type": "string",
+          "const": "unpushed_commits"
+        },
+        {
+          "description": "Detached HEAD at a commit reachable from no ref → S3.",
+          "type": "string",
+          "const": "orphan_head"
+        },
+        {
+          "description": "Merge detected only heuristically → S2.",
+          "type": "string",
+          "const": "merge_unproven"
+        },
+        {
+          "description": "Clean, unlocked, everything pushed or merged → S1 (never S0).",
+          "type": "string",
+          "const": "worktree_clean"
+        },
+        {
+          "description": "Registered worktree whose directory is gone → S0 (metadata only).",
+          "type": "string",
+          "const": "stale_worktree_registration"
+        },
+        {
+          "description": "Package cache: re-downloadable → S1 (QC-02).",
+          "type": "string",
+          "const": "package_cache"
+        },
+        {
+          "description": "Large file surfaced for inspection only → S2.",
+          "type": "string",
+          "const": "inspect_only"
+        }
+      ]
+    },
+    "Reclaimable": {
+      "description": "Physically reclaimable bytes plus the confidence of that estimate.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Estimated bytes freed. With `Confidence::Unknown` this is a best guess, not a promise.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "confidence": {
+          "description": "How much to trust `bytes`.",
+          "$ref": "#/$defs/Confidence"
+        },
+        "shared_bytes": {
+          "description": "Bytes shared with something else (e.g. hardlinked into the pnpm store) that removing\nthis item will not free while the other links remain.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "confidence"
+      ]
+    },
+    "Regeneration": {
+      "description": "How to get an item back after removal, and roughly what it costs (D-5: \"unknown\" unless\nthere is evidence).",
+      "type": "object",
+      "properties": {
+        "cost": {
+          "description": "Estimated cost.",
+          "$ref": "#/$defs/RegenerationCost"
+        },
+        "instructions": {
+          "description": "Instructions, e.g. \"cargo build\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cost"
+      ]
+    },
+    "RegenerationCost": {
+      "description": "Estimated cost of regenerating an item.",
+      "oneOf": [
+        {
+          "description": "No evidence to estimate from (default, D-5).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "unknown"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "An estimate backed by evidence.",
+          "type": "object",
+          "properties": {
+            "network": {
+              "description": "Whether regeneration needs network access.",
+              "type": "boolean"
+            },
+            "seconds": {
+              "description": "Approximate seconds to regenerate.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "estimate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "seconds",
+            "network"
+          ]
+        },
+        {
+          "description": "Cannot be regenerated (unique data).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "not_regenerable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "RuleRef": {
+      "description": "Reference to the detector rule that produced a candidate (CLS-01).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Rule ID, e.g. `rust.target`.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Rule version; bumps whenever the rule's matching or tiering changes.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ]
+    },
+    "Sizes": {
+      "description": "The three size figures for an item.",
+      "type": "object",
+      "properties": {
+        "allocated": {
+          "description": "Blocks actually allocated on disk (accounts for sparse files and compression).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "logical": {
+          "description": "Sum of file lengths (`st_size` / end-of-file).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reclaimable": {
+          "description": "Estimated free-space increase if the item were removed now.",
+          "$ref": "#/$defs/Reclaimable"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "logical",
+        "allocated",
+        "reclaimable"
+      ]
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string",
+          "const": "S0"
+        },
+        {
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string",
+          "const": "S1"
+        },
+        {
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string",
+          "const": "S2"
+        },
+        {
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string",
+          "const": "S3"
+        }
+      ]
+    },
+    "TierReason": {
+      "description": "Why a candidate got (at least) a given tier. One per rubric row that fired (PRD §8.3); the\ncandidate's tier is the most protective of these.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Stable machine-readable code.",
+          "$ref": "#/$defs/ReasonCode"
+        },
+        "message": {
+          "description": "Short human explanation shown in the preview.",
+          "type": "string"
+        },
+        "tier": {
+          "description": "The minimum tier this reason imposes.",
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tier",
+        "code",
+        "message"
+      ]
+    }
+  }
+}

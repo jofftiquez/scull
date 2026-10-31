@@ -158,7 +158,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
             "`scull clean` is not implemented yet (tracked in #79)",
         ),
         (&["clean", "caches"], "(tracked in #80)"),
-        (&["large-files", "."], "(tracked in #43)"),
         (&["history"], "(tracked in #81)"),
         (&["restore", "op"], "(tracked in #81)"),
         (&["approve", "p"], "(tracked in #108)"),

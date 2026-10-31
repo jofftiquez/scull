@@ -1074,6 +1074,7 @@ dependencies = [
  "scull-cleaner",
  "scull-core",
  "scull-detectors",
+ "scull-fixtures",
  "scull-git",
  "scull-mcp",
  "scull-platform",

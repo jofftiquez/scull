@@ -51,7 +51,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             None => planned("clean", 79),
             Some(CleanAction::Caches { .. }) => planned("clean caches", 80),
         },
-        Command::LargeFiles { .. } => planned("large-files", 43),
+        Command::LargeFiles { .. } => None,
         Command::History => planned("history", 81),
         Command::Restore { .. } => planned("restore", 81),
         Command::Approve { .. } => planned("approve", 108),
@@ -116,8 +116,15 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
     if let Some(p) = planned_for(&cli.command) {
         return Err(not_implemented(p));
     }
-    if let Command::Doctor = cli.command {
-        crate::cmd::doctor::run(ui)?;
+    cancel::check()?;
+    match &cli.command {
+        Command::Doctor => crate::cmd::doctor::run(ui)?,
+        Command::LargeFiles {
+            path,
+            min_size,
+            top,
+        } => crate::large_files::run(path, *min_size, *top, ui)?,
+        _ => {}
     }
     cancel::check()
 }
@@ -184,7 +191,6 @@ mod tests {
                 Some(79),
             ),
             (&["clean", "caches"], "clean caches", Some(80)),
-            (&["large-files", "."], "large-files", Some(43)),
             (&["history"], "history", Some(81)),
             (&["restore", "op-1"], "restore", Some(81)),
             (&["approve", "plan-1"], "approve", Some(108)),
@@ -216,6 +222,7 @@ mod tests {
         }
         assert_eq!(planned_of(&["completions", "bash"]), None);
         assert_eq!(planned_of(&["doctor"]), None);
+        assert_eq!(planned_of(&["large-files", "."]), None);
     }
 
     #[test]

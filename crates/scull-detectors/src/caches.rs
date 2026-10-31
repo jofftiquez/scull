@@ -958,7 +958,9 @@ impl LocatedCache {
     /// * Recent activity is **not** a risk signal for a package cache (every install touches
     ///   it, and it holds no unique data), so [`CallerSignals::recent_activity`] is ignored; the
     ///   last use is recorded as evidence instead.
-    /// * An unrecognized layout raises it to S2; any [`CacheProblem`] or a missing file
+    /// * An unrecognized layout (or any other S2 reason, such as in-use unknown) raises it to
+    ///   S2, where tool commands are not allowed, so the action becomes [`Action::None`]: the
+    ///   tool is skipped and reported (QC-05). Any [`CacheProblem`] or a missing file
     ///   identity raises it to S3 (no action).
     /// * The action is the preferred native command ([`Action::ToolCommand`]); the wipe
     ///   alternative and the not-undoable note go into evidence and regeneration.

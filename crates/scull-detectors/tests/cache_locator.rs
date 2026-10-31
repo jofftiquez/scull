@@ -763,16 +763,16 @@ fn fx_qc_03_tool_running_is_skipped() {
     assert!(codes(&cand).contains(&ReasonCode::InUse));
     assert!(PlanItem::from_candidate(&cand).is_err(), "never in a plan");
 
-    // Unknown is not idle: S2 (still the native command, never preselected).
+    // Unknown is not idle: S2, where tool commands aren't allowed (only restorable moves), so
+    // the tool is skipped as well.
     let unknown = CallerSignals {
         in_use: Tri::Unknown,
         ..idle()
     };
     let cand2 = c.into_candidate(&unknown, None);
     assert_eq!(cand2.tier, expected(Tier::S2));
-    if identity_available() {
-        assert_eq!(cand2.action, tool_action("pnpm", &["store", "prune"]));
-    }
+    assert_eq!(cand2.action, Action::None);
+    assert!(PlanItem::from_candidate(&cand2).is_err());
     // Nothing observed at all: blocked.
     let blocked = the(&locate(&env(&fx, Os::Macos, &[])), CacheTool::Pnpm)
         .clone()
