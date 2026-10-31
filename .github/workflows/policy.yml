@@ -30,6 +30,19 @@ jobs:
           command: check
           arguments: --all-features
 
+  cli-deps:
+    # P1-REL-01 / HANDOVER §8.1 / PLT-05: `cargo build -p scull-cli` must not pull in Tauri or
+    # webview crates (the CLI and MCP install without the desktop). Metadata only, no build.
+    name: cli-deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: scull-cli has no Tauri/webview crates (all targets)
+        run: python3 packaging/check_inspect_only.py deps
+
   platform-boundary:
     # P1-CI-03 / PLT-11: no OS APIs outside crates/scull-platform.
     name: platform-boundary

@@ -42,3 +42,9 @@ tempfile = "3"
 [[bin]]
 name = "scull"
 path = "src/main.rs"
+
+# Release packaging (P1-REL-01): the workspace is `publish = false` (nothing goes to
+# crates.io), which cargo-dist reads as "not distributable" unless opted in here. Only this
+# crate ships a binary; config lives in dist-workspace.toml.
+[package.metadata.dist]
+dist = true

@@ -1,0 +1,5 @@
+# Release packaging (P1-REL-01). cargo-dist always builds with `--profile dist`; defining it
+# here keeps the workspace Cargo.toml (core lane) untouched. It is the release profile
+# (thin LTO, codegen-units = 1, stripped) under the name dist expects.
+[profile.dist]
+inherits = "release"

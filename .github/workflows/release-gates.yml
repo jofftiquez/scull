@@ -1,0 +1,90 @@
+name: Release gates
+
+# P1-REL-01: gates for the inspect-only alpha (PRD §22 Phase 1, HANDOVER §8.1).
+#
+# * Called by release.yml (dist `plan-jobs` in dist-workspace.toml) on a version tag. Every
+#   build job `needs:` this one, so a failing gate stops the release before anything is built
+#   or uploaded.
+# * Run by hand (Actions -> Release gates -> Run workflow) as a DRY RUN: the same gates plus
+#   `dist plan`, and optionally a local Linux build kept as a workflow artifact. A dry run never
+#   creates a tag, a GitHub release or an upload anywhere else.
+#
+# Linux only on purpose: the gates check what the binary wires up, which is the same on every
+# OS, and macOS minutes cost 10x. Per-OS smoke tests of the published binaries are a manual
+# step in RELEASING.md.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Also build the x86_64 Linux archive locally (kept as a workflow artifact, not released)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Keep in step with cargo-dist-version in dist-workspace.toml (checked below).
+  DIST_VERSION: "0.33.1"
+  DIST_SHA256: "da68e159d5fed1ee61b00284da444e719927dbd0b7d0e2c34e57a04414453cf9"
+
+jobs:
+  inspect-only:
+    name: inspect-only gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: scull-cli pulls in no Tauri/webview crates (HANDOVER §8.1)
+        run: python3 packaging/check_inspect_only.py deps
+      - name: Build the release binary
+        run: cargo build -p scull-cli --release --locked
+      - name: No destructive command or MCP tool is wired (alpha is inspect-only)
+        run: python3 packaging/check_inspect_only.py binary target/release/scull
+
+  dry-run:
+    name: dist plan (dry run)
+    if: github.event_name == 'workflow_dispatch'
+    needs: inspect-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Install dist (pinned, checksum-verified)
+        run: |
+          grep -qx "cargo-dist-version = \"${DIST_VERSION}\"" dist-workspace.toml \
+            || { echo "DIST_VERSION does not match dist-workspace.toml"; exit 1; }
+          curl -fsSLo "$RUNNER_TEMP/dist.tar.xz" \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-x86_64-unknown-linux-gnu.tar.xz"
+          echo "${DIST_SHA256}  $RUNNER_TEMP/dist.tar.xz" | sha256sum -c -
+          tar xJf "$RUNNER_TEMP/dist.tar.xz" -C "$RUNNER_TEMP"
+          install -m 755 "$RUNNER_TEMP/cargo-dist-x86_64-unknown-linux-gnu/dist" "$HOME/.cargo/bin/dist"
+          dist --version
+      - name: dist plan (also fails if release.yml is stale)
+        run: dist plan | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Local build (no upload)
+        if: inputs.build
+        run: dist build --artifacts=local --target x86_64-unknown-linux-gnu
+      - name: Keep the local archive as a workflow artifact
+        if: inputs.build
+        uses: actions/upload-artifact@v4
+        with:
+          name: scull-dry-run-x86_64-unknown-linux-gnu
+          path: |
+            target/distrib/*.tar.gz
+            target/distrib/*.sha256
+          retention-days: 7
