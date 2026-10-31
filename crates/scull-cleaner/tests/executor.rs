@@ -122,27 +122,7 @@ fn item_outside_the_anchor_or_the_anchor_itself_is_refused() {
             },
         )
         .unwrap_err();
-    assert!(
-        matches!(
-            e.kind,
-            ErrorKind::PlanInvalidated | ErrorKind::UnsupportedPlatform
-        ),
-        "{e:?}"
-    );
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated, "{e:?}");
     assert!(cand.join("sub/b.txt").exists());
-    check(&fx, &[], &[]);
-}
-
-/// Windows has no removal walker yet (P2-EXEC-02, #68): a valid S0 delete is refused with
-/// `UnsupportedPlatform` and nothing is removed.
-#[cfg(windows)]
-#[test]
-fn windows_delete_is_unsupported_and_removes_nothing() {
-    let mut fx = Fixture::new().unwrap();
-    tree(&mut fx);
-    let item = s0_delete(&fx, "cand");
-    let e = delete(&fx, &item, "cand").unwrap_err();
-    assert_eq!(e.kind, ErrorKind::UnsupportedPlatform, "{e:?}");
-    assert!(fx.root().join("cand/sub/b.txt").exists());
     check(&fx, &[], &[]);
 }

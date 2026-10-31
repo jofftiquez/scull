@@ -3,9 +3,11 @@
 //! See `docs/PRD.md` §10 and `HANDOVER.md` for responsibilities and boundaries.
 //!
 //! * [`Executor`]: takes one already verified and narrowed plan item
-//!   ([`scull_core::narrow`]) and deletes it through the platform's fd-relative, no-follow
-//!   removal walker (`scull_platform::remove`, SAFE-04, SAFE-05, SAFE-18). This crate is the
-//!   only one that enables `scull-platform`'s `delete` feature.
+//!   ([`scull_core::narrow`]) and deletes it through the platform's handle-relative, no-follow
+//!   removal walker (`scull_platform::remove`, SAFE-04, SAFE-05, SAFE-18): `openat`/`unlinkat`
+//!   on Unix (P2-EXEC-01), `NtCreateFile` relative opens and handle-based deletion on Windows
+//!   (P2-EXEC-02). This crate is the only one that enables `scull-platform`'s `delete`
+//!   feature.
 //! * [`Executor::execute_plan`]: verifies a plan, then for **each** item, immediately before
 //!   acting on it, revalidates it against the disk ([`Revalidation`], SAFE-05): a bounded,
 //!   fresh re-derivation of the item's parent directory with the read-only engine (Git
@@ -27,8 +29,7 @@
 //! * measured free-space delta (PHY-02): P2-EXEC-10, #76;
 //! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
 //!   P2-EXEC-11, #77;
-//! * quarantine, Trash and tool-native actions: P2-EXEC-05 #71, P2-EXEC-07 #73, P2-QC-01 #78;
-//! * the Windows walker: P2-EXEC-02, #68.
+//! * quarantine, Trash and tool-native actions: P2-EXEC-05 #71, P2-EXEC-07 #73, P2-QC-01 #78.
 
 mod execution;
 mod executor;

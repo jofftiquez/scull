@@ -1,5 +1,5 @@
-//! The removal walker: fd-relative, no-follow deletion of one verified tree (P2-EXEC-01,
-//! SAFE-04, SAFE-05, SAFE-18, T-10, T-11).
+//! The removal walker: handle-relative, no-follow deletion of one verified tree (P2-EXEC-01
+//! Unix, P2-EXEC-02 Windows; SAFE-04, SAFE-05, SAFE-18, T-10, T-11, T-12).
 //!
 //! **Only `scull-cleaner`'s Executor may call this** (SAFE-10). The module exists only with the
 //! `delete` cargo feature, which no other crate enables (checked by
@@ -81,10 +81,94 @@
 //! Both need write access to the candidate (or its parent) during the run; neither can make
 //! the walker follow a link or cross a mount.
 //!
-//! # Windows
+//! # What it does (Windows)
 //!
-//! Not implemented yet: [`remove_tree`] returns [`RemoveError::Unsupported`]. The handle-based
-//! Windows walker (`FILE_FLAG_OPEN_REPARSE_POINT`, long paths, locked files) is P2-EXEC-02, #68.
+//! The same contract, the same report types and the same abort-on-anomaly rule, on handles.
+//! **Nothing is ever deleted by path**: every entry is opened relative to a held directory
+//! handle and deleted through its own handle.
+//!
+//! 1. The anchor is opened as given (`CreateFileW` on its `\\?\` verbatim form, so long
+//!    paths work, PLT-02) and must be a directory with [`RemoveRequest::anchor_identity`] when
+//!    set. Every component below it is opened with `NtCreateFile` **relative to the parent's
+//!    handle** (`OBJECT_ATTRIBUTES.RootDirectory`), one plain name at a time, with
+//!    `FILE_OPEN_REPARSE_POINT` and `OBJ_DONT_REPARSE`: a junction, symlink or other reparse
+//!    point opens as *itself*, never its target, and an intermediate component that is one is
+//!    refused ([`RemoveError::PathNotTraversable`]). Names with `:` (alternate data streams),
+//!    separators or NUL are refused. No path length limit applies below the anchor.
+//! 2. The target is opened for attributes only and checked: volume serial number + file ID
+//!    (`FILE_ID_INFO`, the same identity `Platform::metadata` reports) against
+//!    [`RemoveRequest::expected`] (SAFE-05), kind, link count of a single non-directory, and
+//!    mount points: a target on another volume than its directory, or a volume mount point (a
+//!    mount-point reparse point whose target is a volume rather than a drive-letter directory),
+//!    is [`RemoveError::TargetIsMountPoint`]. It is then re-opened for deletion and the new
+//!    handle checked against the same identity ([`RemoveError::TargetChanged`] otherwise).
+//! 3. The tree is removed bottom-up, iteratively, relative to handles the walker holds:
+//!    * a directory is listed in full through its handle with `FileIdExtdDirectoryInfo`
+//!      (name, attributes, reparse tag and **file ID** of every entry), or
+//!      `FileFullDirectoryInfo` where the filesystem lacks file IDs in listings (FAT);
+//!    * every entry is opened by name relative to the directory handle, no-follow, with only
+//!      the access it needs and no data access (nothing is hydrated or read, and nothing is
+//!      opened for I/O, SAFE-18); the opened handle's volume must be the target's
+//!      ([`Anomaly::MountCrossing`]), its kind the listed kind ([`Anomaly::KindChanged`]) and
+//!      its file ID the listed one ([`Anomaly::IdentityChanged`]);
+//!    * files, symlinks, junctions and other reparse points are deleted **through that
+//!      handle** with `SetFileInformationByHandle(FileDispositionInfoEx,
+//!      FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS)` (classic
+//!      `FileDispositionInfo` where POSIX semantics are unsupported): a link is removed as the
+//!      link, so deleting a junction never touches its target's contents (FX-WIN-01, -02);
+//!    * a junction whose target is a volume (a volume mount point) is never removed or
+//!      crossed: the walk stops ([`Anomaly::VolumeMountPoint`]);
+//!    * sub-directories are opened with list access and **without `FILE_SHARE_DELETE`**, and
+//!      kept open while they are emptied: while the walker holds a directory nobody can
+//!      rename, move or delete it (renaming needs `DELETE` access to it, which the share mode
+//!      refuses), so the walker never empties a directory that was moved out of the
+//!      candidate. The handle has no `DELETE` access itself, so others can still rename
+//!      entries *into* the directory. Its place is still re-verified by identity, like on
+//!      Unix (before the first removal, after returning from a sub-directory, and every
+//!      [`VERIFY_EVERY`] entries), as defense in depth;
+//!    * an emptied directory's pinning handle is closed, its name re-opened in the parent with
+//!      delete access, and the new handle must have the identity recorded when the directory
+//!      was opened (and be a real directory) before it is deleted through it.
+//! 4. Entries are **kept and reported, never forced**:
+//!    * the read-only attribute ([`SkipReason::ReadOnlyAttribute`]): it is never cleared and
+//!      the OS is never asked to ignore it (no
+//!      `FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE`). A read-only directory is kept
+//!      whole (Windows would refuse to remove it anyway);
+//!    * cloud-sync placeholders and recall-on-access entries
+//!      ([`SkipReason::CloudPlaceholder`], PLT-04): never opened, hydrated or removed
+//!      (removing a placeholder would delete the file in the cloud too);
+//!    * locked entries ([`SkipReason::Busy`]): another process holds them open without
+//!      sharing delete access. A sharing violation is retried four times, 50 ms apart (antivirus
+//!      scanners such as Defender briefly open new files), then reported; for a file the
+//!      detail names the processes holding it, from Restart Manager (query only, nothing is
+//!      shut down; FX-WIN-03).
+//!
+//! An 8.3 short name in the request resolves, like any name, to an object whose identity is
+//! then compared: an alias of something else is refused as [`RemoveError::IdentityMismatch`]
+//! (SAFE-13, FX-WIN-05). Reserved names (`NUL`, `CON`) and trailing dots or spaces are plain
+//! names to the NT API and are removed as such (FX-WIN-10).
+//!
+//! ## Residual windows (Windows)
+//!
+//! Deletion is by handle, so the Unix "name re-pointed between check and unlink" window does
+//! not exist, and pinned directories close the "held directory moved elsewhere" window for
+//! every directory being emptied. What remains:
+//!
+//! * where listings carry no file IDs (FAT, exFAT, some network filesystems) an entry
+//!   replaced by another of the same kind between the listing and its open is removed
+//!   instead: only an entry someone placed inside the held candidate directory, never
+//!   followed;
+//! * between closing an emptied directory's pinning handle and re-opening it for deletion,
+//!   the directory is not pinned; the re-opened handle is identity-checked, so a swap there
+//!   aborts the walk, and a directory someone re-fills is kept (not empty);
+//! * kernel-mode components (filter drivers) can bypass share modes;
+//! * two volumes with the same serial number (cloned disks) are not told apart by the volume
+//!   check; crossing to one still needs a reparse point, which is never followed.
+//!
+//! [`RemoveReport::mount_ids_checked`] is always false on Windows (there are no mount IDs;
+//! volume mount points are recognized from their reparse data). Directory handles are never
+//! closed and re-opened ([`FD_BUDGET`] is a Unix limit; Windows handle limits are far higher),
+//! so the depth is bounded by [`MAX_DEPTH`] only.
 
 use crate::EntryKind;
 use scull_core::FileIdentity;
@@ -94,10 +178,16 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+mod windows;
+// Pure decision tables of the Windows walker; compiled for tests on every OS.
+#[cfg(any(windows, test))]
+mod win_rules;
 
-/// Directory handles the walker keeps open at once. Deeper levels have their handle closed and
-/// re-opened through `..` (identity-checked) when the walk climbs back, so very deep trees never
-/// exhaust the descriptor limit (macOS defaults to 256 per process).
+/// Directory handles the walker keeps open at once (Unix). Deeper levels have their handle closed
+/// and re-opened through `..` (identity-checked) when the walk climbs back, so very deep trees
+/// never exhaust the descriptor limit (macOS defaults to 256 per process). The Windows walker
+/// keeps every directory it is inside open (pinned; see the module docs).
 pub const FD_BUDGET: usize = 32;
 
 /// Deepest level the walker descends to below the target. Deeper directories are reported as
@@ -186,7 +276,8 @@ pub struct RemovedCounts {
     pub files: u64,
     /// Directories removed (including the target, when it was one).
     pub dirs: u64,
-    /// Symbolic links unlinked (the links themselves; targets untouched).
+    /// Symbolic links unlinked (the links themselves; targets untouched). On Windows also
+    /// junctions and other reparse points, removed as the links themselves.
     pub symlinks: u64,
     /// FIFOs, sockets and device nodes unlinked (never opened).
     pub special: u64,
@@ -206,7 +297,9 @@ pub enum SkipReason {
     PermissionDenied,
     /// The filesystem is mounted read-only.
     ReadOnlyFilesystem,
-    /// The entry is in use (`EBUSY`).
+    /// The entry is in use: Unix `EBUSY`; Windows a sharing or lock violation (another process
+    /// holds it open without sharing delete access). On Windows the detail names the holding
+    /// processes when Restart Manager can tell. Never forced.
     Busy,
     /// The directory was not empty when it was removed (entries appeared during the walk, or an
     /// entry below it was kept).
@@ -215,6 +308,12 @@ pub enum SkipReason {
     TooDeep,
     /// Any other OS error.
     Io,
+    /// Windows: the entry has the read-only attribute. The attribute is never cleared or
+    /// ignored; a read-only directory is kept with its contents.
+    ReadOnlyAttribute,
+    /// Windows: a cloud-sync placeholder or recall-on-access entry (PLT-04). Never opened,
+    /// hydrated or removed: removing it would delete the file in the cloud too.
+    CloudPlaceholder,
 }
 
 impl SkipReason {
@@ -227,6 +326,8 @@ impl SkipReason {
             SkipReason::NotEmpty => "not_empty",
             SkipReason::TooDeep => "too_deep",
             SkipReason::Io => "io",
+            SkipReason::ReadOnlyAttribute => "read_only_attribute",
+            SkipReason::CloudPlaceholder => "cloud_placeholder",
         }
     }
 }
@@ -284,6 +385,10 @@ pub enum Anomaly {
         /// The directory's mount ID.
         found_mount_id: u64,
     },
+    /// Windows: a volume mount point (a mount-point reparse point whose target is a volume, not
+    /// a drive-letter directory) inside the target. Removing it would unmount a volume, so it
+    /// is neither removed nor crossed.
+    VolumeMountPoint,
 }
 
 impl fmt::Display for Anomaly {
@@ -319,6 +424,9 @@ impl fmt::Display for Anomaly {
                 f,
                 "mount point on the same device (mount {found_mount_id}, target on {root_mount_id}); never crossed"
             ),
+            Anomaly::VolumeMountPoint => {
+                f.write_str("volume mount point: never removed or crossed")
+            }
         }
     }
 }
@@ -351,11 +459,13 @@ pub struct RemoveReport {
     pub aborted: Option<AbortReason>,
     /// Whether mount IDs were compared besides devices (Linux with `statx` `STATX_MNT_ID`,
     /// kernel ≥ 5.8). When false, a bind mount of the same filesystem is not detected by the
-    /// walker; the engine's mount checks (PRD §8.3) still classify such candidates S3.
+    /// walker; the engine's mount checks (PRD §8.3) still classify such candidates S3. Always
+    /// false on Windows, which has no mount IDs (volume mount points are recognized from their
+    /// reparse data instead).
     pub mount_ids_checked: bool,
 }
 
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 impl RemoveReport {
     fn new() -> Self {
         Self {
@@ -423,7 +533,8 @@ pub enum RemoveError {
         found: EntryKind,
     },
     /// The target is a mount point (or a Btrfs subvolume): another device than the directory
-    /// holding it or, on Linux, another mount ID (a bind mount). It is never emptied.
+    /// holding it or, on Linux, another mount ID (a bind mount); on Windows another volume, or
+    /// a volume mount point. It is never emptied or removed.
     TargetIsMountPoint {
         /// Device of the directory holding the target.
         parent_device: u64,
@@ -445,7 +556,7 @@ pub enum RemoveError {
         /// What changed.
         anomaly: Anomaly,
     },
-    /// This OS has no removal walker yet (Windows: P2-EXEC-02, #68).
+    /// This OS has no removal walker (only Unix and Windows have one).
     Unsupported,
 }
 
@@ -490,9 +601,7 @@ impl fmt::Display for RemoveError {
                 "target has {nlink} hard links: removing one name frees nothing; refused"
             ),
             RemoveError::TargetChanged { anomaly } => write!(f, "target changed: {anomaly}"),
-            RemoveError::Unsupported => {
-                f.write_str("removal is not implemented on this OS yet (P2-EXEC-02, #68)")
-            }
+            RemoveError::Unsupported => f.write_str("removal is not implemented on this OS"),
         }
     }
 }
@@ -530,7 +639,15 @@ fn imp(
     unix::remove_tree(req, observer, &unix::Tuning::default())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn imp(
+    req: &RemoveRequest<'_>,
+    observer: Option<&mut dyn FnMut(&WalkEvent<'_>)>,
+) -> Result<RemoveReport, RemoveError> {
+    windows::remove_tree(req, observer, &windows::Tuning::default())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn imp(
     _req: &RemoveRequest<'_>,
     _observer: Option<&mut dyn FnMut(&WalkEvent<'_>)>,
@@ -539,7 +656,7 @@ fn imp(
 }
 
 /// The relative path as plain names, or why it is not acceptable.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn plain_components(relative: &Path) -> Result<Vec<&std::ffi::OsStr>, RemoveError> {
     use std::path::Component;
     let mut out = Vec::new();

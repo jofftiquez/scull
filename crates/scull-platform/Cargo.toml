@@ -13,10 +13,17 @@ publish.workspace = true
 workspace = true
 
 [features]
-# The fd-relative, no-follow removal walker (`scull_platform::remove`, P2-EXEC-01). Off by
-# default: only `scull-cleaner` (the Executor) may enable it, so no other crate can even compile a
-# call to it (SAFE-10). Checked by `crates/scull-cleaner/tests/delete_feature.rs`.
-delete = ["dep:rustix"]
+# The handle-relative, no-follow removal walker (`scull_platform::remove`: P2-EXEC-01 Unix,
+# P2-EXEC-02 Windows). Off by default: only `scull-cleaner` (the Executor) may enable it, so no
+# other crate can even compile a call to it (SAFE-10). Checked by
+# `crates/scull-cleaner/tests/delete_feature.rs`. On Windows it adds the NT relative-open API
+# (`NtCreateFile` with a parent directory handle) and `DeviceIoControl` (reparse data).
+delete = [
+  "dep:rustix",
+  "windows-sys/Wdk_Foundation",
+  "windows-sys/Wdk_Storage_FileSystem",
+  "windows-sys/Win32_System_IO",
+]
 
 [dependencies]
 scull-core.workspace = true

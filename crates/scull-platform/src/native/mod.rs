@@ -15,7 +15,7 @@ mod unix;
 use unix as os;
 
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(windows)]
 use windows as os;
 

@@ -27,8 +27,9 @@
 //!   `scull doctor` (SAFE-14). [`Elevation::Unknown`] blocks destructive operations like
 //!   [`Elevation::Elevated`].
 //! * `remove` (only with the `delete` cargo feature, which only `scull-cleaner` enables,
-//!   SAFE-10): the fd-relative, no-follow removal walker the Executor deletes through
-//!   (SAFE-04, SAFE-05, SAFE-18; P2-EXEC-01). Unix only for now; Windows is #68.
+//!   SAFE-10): the handle-relative, no-follow removal walker the Executor deletes through
+//!   (SAFE-04, SAFE-05, SAFE-18): `openat`/`unlinkat` on Unix (P2-EXEC-01), `NtCreateFile`
+//!   relative opens and handle-based deletion on Windows (P2-EXEC-02).
 //! * `exec_lock` (same feature): the per-user execution lock, an OS file lock (`flock` /
 //!   `LockFileEx`) released by the OS when its holder exits (SAFE-09, P2-EXEC-04).
 //!

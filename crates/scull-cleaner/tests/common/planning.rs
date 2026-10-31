@@ -7,9 +7,7 @@ use scull_cleaner::{
     Skip,
 };
 use scull_core::config::Config;
-use scull_core::{
-    Action, Candidate, ErrorKind, ItemId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, Tier,
-};
+use scull_core::{Action, Candidate, ItemId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, Tier};
 use scull_engine::paths::canon;
 use scull_engine::{
     CancelToken, Engine, EngineConfig, InUseAnswer, InUseProbe, InUseSource, ScanReport,
@@ -241,26 +239,18 @@ pub fn skip_of<'a>(fx: &Fixture, r: &'a ExecutionReport, rel_path: &str) -> &'a 
     }
 }
 
-/// On Unix the walker removes the item; on Windows (walker: #68) it refuses with nothing
-/// removed. Either way the item passed revalidation.
+/// The item passed revalidation and the walker removed it (Unix: #67, Windows: #68).
 pub fn assert_executed(fx: &Fixture, r: &ExecutionReport, rel_path: &str) {
     let item = r
         .items
         .iter()
         .find(|i| rel(fx, &i.path.to_path_buf()) == rel_path)
         .unwrap();
-    if cfg!(unix) {
-        match &item.outcome {
-            ItemOutcome::Deleted(d) => assert_eq!(d.outcome, RemoveOutcome::Complete, "{d:#?}"),
-            other => panic!("{rel_path} was not deleted: {other:?}"),
-        }
-        assert!(!fx.root().join(rel_path).exists());
-    } else {
-        match &item.outcome {
-            ItemOutcome::Refused(e) => assert_eq!(e.kind, ErrorKind::UnsupportedPlatform),
-            other => panic!("{rel_path}: {other:?}"),
-        }
+    match &item.outcome {
+        ItemOutcome::Deleted(d) => assert_eq!(d.outcome, RemoveOutcome::Complete, "{d:#?}"),
+        other => panic!("{rel_path} was not deleted: {other:?}"),
     }
+    assert!(!fx.root().join(rel_path).exists());
 }
 
 /// Two Cargo projects with a `target/` each and a held-able Cargo lock file.

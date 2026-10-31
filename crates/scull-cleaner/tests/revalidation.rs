@@ -212,9 +212,7 @@ fn unchanged_items_pass_revalidation() {
     }
     assert_executed(&fx, &r, "app/target");
     assert_executed(&fx, &r, "lib/target");
-    if cfg!(unix) {
-        assert_eq!(r.error_kind(), None);
-    }
+    assert_eq!(r.error_kind(), None);
     check(&fx, &plan, &r, &["app/target", "lib/target"]);
 }
 

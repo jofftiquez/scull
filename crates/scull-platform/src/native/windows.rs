@@ -114,7 +114,25 @@ pub(super) fn capabilities() -> Capabilities {
 // ---------------------------------------------------------------------------------------------
 
 /// An owned Win32 file handle, closed on drop.
-struct Handle(HANDLE);
+pub(crate) struct Handle(HANDLE);
+
+impl Handle {
+    /// Takes ownership of `raw`.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must be a valid, open file handle that nothing else owns or closes.
+    #[cfg_attr(not(feature = "delete"), allow(dead_code))]
+    pub(crate) unsafe fn from_raw(raw: HANDLE) -> Self {
+        Handle(raw)
+    }
+
+    /// The raw handle, for calls that do not take ownership.
+    #[cfg_attr(not(feature = "delete"), allow(dead_code))]
+    pub(crate) fn as_raw(&self) -> HANDLE {
+        self.0
+    }
+}
 
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -167,7 +185,7 @@ fn open(path: &[u16], access: u32) -> io::Result<Handle> {
 ///
 /// `Self` must be the `#[repr(C)]` structure Windows writes for [`HandleInfo::CLASS`], and
 /// every bit pattern must be a valid `Self` (plain integers only).
-unsafe trait HandleInfo: Copy {
+pub(crate) unsafe trait HandleInfo: Copy {
     const CLASS: FILE_INFO_BY_HANDLE_CLASS;
 }
 
@@ -196,10 +214,10 @@ unsafe impl HandleInfo for FILE_COMPRESSION_INFO {
 /// uses Rust `bool`, for which a byte other than 0 or 1 would be undefined behavior.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct StandardInfo {
-    allocation_size: i64,
-    end_of_file: i64,
-    number_of_links: u32,
+pub(crate) struct StandardInfo {
+    pub(crate) allocation_size: i64,
+    pub(crate) end_of_file: i64,
+    pub(crate) number_of_links: u32,
     /// Layout only; not used.
     _delete_pending: u8,
     /// Layout only; the kind comes from the attributes.
@@ -212,7 +230,7 @@ unsafe impl HandleInfo for StandardInfo {
     const CLASS: FILE_INFO_BY_HANDLE_CLASS = FileStandardInfo;
 }
 
-fn query<T: HandleInfo>(handle: &Handle) -> io::Result<T> {
+pub(crate) fn query<T: HandleInfo>(handle: &Handle) -> io::Result<T> {
     let mut out = MaybeUninit::<T>::zeroed();
     let size = u32::try_from(size_of::<T>())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "info struct too large"))?;
@@ -246,7 +264,7 @@ fn legacy_info(handle: &Handle) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
 // ---------------------------------------------------------------------------------------------
 
 /// Kind from attributes and, for reparse points, the reparse tag. Never opens anything.
-fn kind_from(attributes: u32, reparse_tag: Option<u32>) -> EntryKind {
+pub(crate) fn kind_from(attributes: u32, reparse_tag: Option<u32>) -> EntryKind {
     if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         match reparse_tag {
             Some(IO_REPARSE_TAG_SYMLINK) => EntryKind::Symlink,
@@ -271,7 +289,7 @@ fn filetime_to_unix(ticks: i64) -> Option<i64> {
 
 /// Volume serial number + file ID. An ID of 0 or all ones is a filesystem saying "no stable
 /// ID", so it is reported as unknown rather than as a (colliding) identity.
-fn identity(handle: &Handle) -> Option<FileIdentity> {
+pub(crate) fn identity(handle: &Handle) -> Option<FileIdentity> {
     if let Ok(info) = query::<FILE_ID_INFO>(handle) {
         let file = u128::from_le_bytes(info.FileId.Identifier);
         if file != 0 && file != u128::MAX {
@@ -516,12 +534,12 @@ impl Iterator for WinReadDir {
 }
 
 /// The fields of one `FILE_FULL_DIR_INFO` record that a listing needs.
-struct Record {
-    next_entry_offset: u32,
-    attributes: u32,
+pub(crate) struct Record {
+    pub(crate) next_entry_offset: u32,
+    pub(crate) attributes: u32,
     /// `EaSize`; holds the reparse tag when the entry is a reparse point ([MS-FSCC] 2.4.14).
-    ea_size_or_tag: u32,
-    name: OsString,
+    pub(crate) ea_size_or_tag: u32,
+    pub(crate) name: OsString,
 }
 
 fn malformed() -> io::Error {
@@ -541,7 +559,7 @@ fn read_u32(bytes: &[u8], at: usize) -> io::Result<u32> {
 }
 
 /// Decodes the record at `offset` with bounds-checked byte reads (no pointer casts).
-fn parse_record(buf: &[u8], offset: usize) -> io::Result<Record> {
+pub(crate) fn parse_record(buf: &[u8], offset: usize) -> io::Result<Record> {
     let rec = buf.get(offset..).ok_or_else(malformed)?;
     let next_entry_offset = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, NextEntryOffset))?;
     let attributes = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?;
@@ -596,7 +614,7 @@ fn is_volume_guid(name: &OsStr) -> bool {
 }
 
 /// The NUL-terminated verbatim form of `path` (see the module docs).
-fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
+pub(crate) fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
     if path.as_os_str().is_empty() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "empty path"));
     }
