@@ -33,6 +33,7 @@
 mod execution;
 mod executor;
 mod lock;
+pub mod quickclean;
 mod revalidate;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
