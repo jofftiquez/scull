@@ -47,7 +47,7 @@
 mod security;
 
 pub(crate) use security::{
-    create_dir_owner_only, create_file_owner_only, known_folder, owner_only_exposures,
+    create_dir_owner_only, create_file_owner_only, elevation, known_folder, owner_only_exposures,
     restrict_owner_only,
 };
 
@@ -101,6 +101,7 @@ pub(super) fn capabilities() -> Capabilities {
         special_file_kinds: true,
         reparse_points: true,
         race_free_read_dir: true,
+        elevation_detection: true,
     }
 }
 

@@ -26,6 +26,7 @@ pub(super) fn capabilities() -> Capabilities {
         special_file_kinds: true,
         reparse_points: false,
         race_free_read_dir: false,
+        elevation_detection: true,
     }
 }
 
@@ -191,4 +192,13 @@ pub(super) fn owner_only_exposures(path: &Path) -> io::Result<Vec<crate::Exposur
 /// Known folders are a Windows concept.
 pub(super) fn known_folder(_source: crate::DirSource) -> Option<std::path::PathBuf> {
     None
+}
+
+/// Root is effective UID 0 (`sudo`, `su`, `doas`, setuid-root). Cannot fail.
+pub(super) fn elevation() -> crate::Elevation {
+    if effective_uid() == 0 {
+        crate::Elevation::Elevated
+    } else {
+        crate::Elevation::NotElevated
+    }
 }

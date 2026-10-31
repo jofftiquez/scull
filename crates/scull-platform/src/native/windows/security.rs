@@ -1,5 +1,6 @@
-//! Windows security and per-user folders (P1-PLAT-06): the process token's user SID,
-//! owner-only security descriptors, reading back an entry's owner and DACL, and known folders.
+//! Windows security and per-user folders: the process token's user SID and elevation
+//! (P1-PLAT-04), owner-only security descriptors, reading back an entry's owner and DACL, and
+//! known folders (P1-PLAT-06).
 //!
 //! See [`crate::owner_only`] for the DACL design and its justification.
 
@@ -28,8 +29,8 @@ use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetSecurityDescriptorControl,
     GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation,
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER,
-    TokenUser,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
+    TOKEN_USER, TokenElevation, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -157,6 +158,27 @@ pub(super) fn current_user_sid() -> io::Result<String> {
     unsafe {
         let user = buf.as_ptr().cast::<TOKEN_USER>().read();
         sid_string(user.User.Sid)
+    }
+}
+
+/// `TokenElevation` of the process token; [`Elevation::Unknown`](crate::Elevation::Unknown) if
+/// the token can't be opened or queried.
+pub(crate) fn elevation() -> crate::Elevation {
+    let query = || -> io::Result<bool> {
+        let token = process_token()?;
+        let buf = token_information(&token, TokenElevation)?;
+        if buf.len() * size_of::<u64>() < size_of::<TOKEN_ELEVATION>() {
+            return Err(io::Error::other("TOKEN_ELEVATION buffer too small"));
+        }
+        // SAFETY: the successful TokenElevation query wrote a TOKEN_ELEVATION (one u32) at the
+        // start of `buf`, which is large enough (checked) and suitably aligned.
+        let info = unsafe { buf.as_ptr().cast::<TOKEN_ELEVATION>().read() };
+        Ok(info.TokenIsElevated != 0)
+    };
+    match query() {
+        Ok(true) => crate::Elevation::Elevated,
+        Ok(false) => crate::Elevation::NotElevated,
+        Err(_) => crate::Elevation::Unknown,
     }
 }
 

@@ -87,6 +87,11 @@ pub(crate) fn owner_only_exposures(path: &Path) -> io::Result<Vec<Exposure>> {
     os::owner_only_exposures(path)
 }
 
+/// Whether this process is elevated (root / elevated administrator token).
+pub(crate) fn elevation() -> crate::Elevation {
+    os::elevation()
+}
+
 /// A Windows known folder (`RoamingAppData`, `LocalAppData`); `None` on other OSs, for other
 /// sources, or when the shell can't provide it.
 pub(crate) fn known_folder(source: DirSource) -> Option<PathBuf> {

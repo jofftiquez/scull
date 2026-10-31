@@ -162,4 +162,8 @@ pub struct Capabilities {
     /// outside the scan root; candidates are revalidated by identity before deletion (SAFE-05)
     /// and deletion uses its own handle-relative operations (SAFE-04).
     pub race_free_read_dir: bool,
+    /// [`crate::is_elevated`] can tell root/administrator from an ordinary user (SAFE-14).
+    /// True on every supported OS; when it is false, or the check returns
+    /// [`crate::Elevation::Unknown`], destructive operations are refused.
+    pub elevation_detection: bool,
 }

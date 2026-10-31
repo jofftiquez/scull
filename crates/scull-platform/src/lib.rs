@@ -22,6 +22,10 @@
 //!   check entries only the current user can access (Unix `0700`/`0600`; Windows protected
 //!   DACL for the user and SYSTEM), for the database and quarantine folders (DATA-04,
 //!   SAFE-16).
+//! * [`is_elevated`] / [`Privileges`]: whether scull runs as root or an elevated
+//!   administrator, and the invoking user under `sudo`, for the executor's refusal and
+//!   `scull doctor` (SAFE-14). [`Elevation::Unknown`] blocks destructive operations like
+//!   [`Elevation::Elevated`].
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -41,6 +45,7 @@
 //!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
 pub mod app_dirs;
+pub mod elevation;
 mod error;
 mod native;
 pub mod owner_only;
@@ -51,6 +56,7 @@ use std::path::Path;
 pub use app_dirs::{
     APP_NAME, AppDirs, AppDirsError, DirLayout, DirSource, HOME_OVERRIDE_ENV, app_dirs,
 };
+pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
