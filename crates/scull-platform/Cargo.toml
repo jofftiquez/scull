@@ -29,6 +29,11 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_SystemServices",
   "Win32_System_Threading",
   "Win32_UI_Shell",
+  # activity (process cwd from the PEB, Restart Manager): P1-SAFE-02
+  "Wdk_System_Threading",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_ProcessStatus",
+  "Win32_System_RestartManager",
 ] }
 
 [dev-dependencies]

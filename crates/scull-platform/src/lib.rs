@@ -44,6 +44,7 @@
 //!   placeholders, app execution aliases, ...). Long paths are sent as `\\?\` paths.
 //!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
+pub mod activity;
 pub mod app_dirs;
 pub mod elevation;
 mod error;
