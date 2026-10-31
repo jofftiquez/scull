@@ -11,7 +11,7 @@
 //! what it is for. Machine output: `scull/doctor@1` (schema in
 //! `crates/scull-cli/schemas/doctor.schema.json`).
 
-use super::{emit_machine, emit_text};
+use super::{emit_machine, emit_text, json_name, one_line};
 use crate::db::{self, NotOpened, Probe};
 use crate::output::json::SchemaId;
 use crate::output::style::Style;
@@ -981,29 +981,6 @@ pub fn render(r: &DoctorReport, color: bool) -> String {
     out
 }
 
-/// A multi-line parser message (e.g. TOML's, with a source excerpt and caret line) on one
-/// line: the excerpt is dropped and the remaining lines are joined with `: `.
-fn one_line(msg: &str) -> String {
-    msg.lines()
-        .map(str::trim)
-        .filter(|l| {
-            let excerpt = l.starts_with('|')
-                || l.split_once(" |")
-                    .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()));
-            !l.is_empty() && !excerpt
-        })
-        .collect::<Vec<_>>()
-        .join(": ")
-}
-
-/// The serde name of a unit enum variant.
-fn json_name<T: Serialize>(v: &T) -> String {
-    match serde_json::to_value(v) {
-        Ok(serde_json::Value::String(s)) => s,
-        _ => String::new(),
-    }
-}
-
 /// A config value on one line: strings bare, empty collections as `-`, others as JSON.
 fn compact_value(v: &serde_json::Value) -> String {
     use serde_json::Value;
@@ -1164,16 +1141,6 @@ mod tests {
         );
         let missing = config_report(Some(&dir.path().join("nope")), |_| None);
         assert_eq!(missing.file, ConfigFileState::Missing);
-    }
-
-    #[test]
-    fn parser_messages_fit_on_one_line() {
-        let msg = "invalid user config: TOML parse error at line 2, column 1\n  |\n2 | rootz = 1\n  | ^^^^^\nunknown field `rootz`";
-        assert_eq!(
-            one_line(msg),
-            "invalid user config: TOML parse error at line 2, column 1: unknown field `rootz`"
-        );
-        assert_eq!(one_line("plain"), "plain");
     }
 
     #[test]

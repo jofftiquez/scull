@@ -55,13 +55,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::History => planned("history", 81),
         Command::Restore { .. } => planned("restore", 81),
         Command::Approve { .. } => planned("approve", 108),
-        Command::Rules { action } => Some(Planned {
-            name: match action {
-                RulesAction::List => "rules list",
-                RulesAction::Validate { .. } => "rules validate",
-            },
-            issue: None,
-        }),
+        Command::Rules { .. } => None,
         Command::Init => planned("init", 57),
         Command::Status { .. } => None,
         Command::Check => planned("check", 114),
@@ -125,6 +119,12 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Rules {
+            action: RulesAction::List,
+        } => crate::cmd::rules::run_list(ui)?,
+        Command::Rules {
+            action: RulesAction::Validate { paths },
+        } => crate::cmd::rules::run_validate(ui, paths)?,
         _ => {}
     }
     cancel::check()
@@ -195,8 +195,6 @@ mod tests {
             (&["history"], "history", Some(81)),
             (&["restore", "op-1"], "restore", Some(81)),
             (&["approve", "plan-1"], "approve", Some(108)),
-            (&["rules", "list"], "rules list", None),
-            (&["rules", "validate"], "rules validate", None),
             (&["init"], "init", Some(57)),
             (&["check"], "check", Some(114)),
             (&["insights"], "insights", Some(116)),
@@ -224,6 +222,8 @@ mod tests {
         assert_eq!(planned_of(&["doctor"]), None);
         assert_eq!(planned_of(&["large-files", "."]), None);
         assert_eq!(planned_of(&["status", "--short"]), None);
+        assert_eq!(planned_of(&["rules", "list"]), None);
+        assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
     }
 
     #[test]

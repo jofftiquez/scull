@@ -1,0 +1,229 @@
+{
+  "$defs": {
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "RuleInfo": {
+      "additionalProperties": false,
+      "description": "One loaded rule.",
+      "properties": {
+        "applies_here": {
+          "description": "Whether it applies to the OS this binary runs on.",
+          "type": "boolean"
+        },
+        "artifact": {
+          "description": "Human-readable artifact type.",
+          "type": "string"
+        },
+        "base_tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "Tier when every check passes; the classifier only raises it."
+        },
+        "category": {
+          "$ref": "#/$defs/Category",
+          "description": "Candidate category."
+        },
+        "ecosystem": {
+          "description": "Ecosystem, e.g. `rust`.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether it runs (bundled: always; user: only when enabled in config).",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable namespaced ID, e.g. `rust.target`.",
+          "type": "string"
+        },
+        "origin": {
+          "description": "The file it was loaded from.",
+          "type": "string"
+        },
+        "platforms": {
+          "description": "Operating systems it applies to (`macos`, `linux`, `windows`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/Source",
+          "description": "Where it came from."
+        },
+        "strategy": {
+          "description": "`filesystem`, `tool_native` or `inspect_only`.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Rule version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "ecosystem",
+        "artifact",
+        "category",
+        "base_tier",
+        "strategy",
+        "platforms",
+        "applies_here",
+        "enabled",
+        "source",
+        "origin"
+      ],
+      "type": "object"
+    },
+    "RulesList": {
+      "additionalProperties": false,
+      "description": "`scull rules list` output.",
+      "properties": {
+        "problems": {
+          "description": "Problems found (invalid user rule files, enabled IDs that aren't loaded, config errors).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "description": "Loaded rules, bundled first, in load order.",
+          "items": {
+            "$ref": "#/$defs/RuleInfo"
+          },
+          "type": "array"
+        },
+        "user_rules_dir": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Directory searched for user rule files, if scull's directories could be located."
+        }
+      },
+      "required": [
+        "rules",
+        "problems"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "Where a rule came from.",
+      "oneOf": [
+        {
+          "const": "bundled",
+          "description": "Compiled into this binary.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "A user or community rule file (untrusted: capped at S1, disabled until enabled).",
+          "type": "string"
+        }
+      ]
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/RulesList",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/rules-list@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/rules-list@1",
+  "type": "object"
+}
