@@ -258,6 +258,16 @@ where
     best.map(|(i, _)| i)
 }
 
+/// Whether `path` is `base` or inside it, compared like [`mounts_within`] compares paths.
+pub(crate) fn path_starts_with(path: &Path, base: &Path) -> bool {
+    comparable(path).starts_with(&comparable(base))
+}
+
+/// Number of components of `path` as [`path_starts_with`] counts them.
+pub(crate) fn path_depth(path: &Path) -> usize {
+    comparable(path).len()
+}
+
 /// Path components in a form that compares like the OS compares mount points.
 fn comparable(path: &Path) -> Vec<String> {
     let mut out = Vec::new();
@@ -550,6 +560,7 @@ mod tests {
             readonly: false,
             file_attributes: None,
             reparse_tag: None,
+            bsd_flags: None,
         }
     }
 

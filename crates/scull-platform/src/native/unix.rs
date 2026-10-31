@@ -61,7 +61,21 @@ fn convert(md: &fs::Metadata) -> Metadata {
         readonly: md.permissions().readonly(),
         file_attributes: None,
         reparse_tag: None,
+        bsd_flags: bsd_flags(md),
     }
+}
+
+/// `st_flags` (macOS): `SF_DATALESS` and friends, read from the same `lstat`.
+#[cfg(target_os = "macos")]
+fn bsd_flags(md: &fs::Metadata) -> Option<u32> {
+    use std::os::macos::fs::MetadataExt as _;
+    Some(md.st_flags())
+}
+
+/// Linux has no BSD file flags in `stat`.
+#[cfg(not(target_os = "macos"))]
+fn bsd_flags(_md: &fs::Metadata) -> Option<u32> {
+    None
 }
 
 /// `lstat`: the final component is never followed and special files are never opened.

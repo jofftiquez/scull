@@ -114,6 +114,10 @@ pub struct Metadata {
     /// Windows only: the raw reparse tag (`IO_REPARSE_TAG_*`) when the entry is a reparse point,
     /// e.g. to classify cloud placeholders (PLT-04). `None` for ordinary entries and on Unix.
     pub reparse_tag: Option<u32>,
+    /// macOS only: the raw BSD file flags (`st_flags`, see `chflags(2)`), e.g. `SF_DATALESS`
+    /// on iCloud / File Provider files whose contents were evicted (PLT-04). `None` on Linux
+    /// and Windows.
+    pub bsd_flags: Option<u32>,
 }
 
 /// One entry of a directory listing.

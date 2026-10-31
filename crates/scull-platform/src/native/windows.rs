@@ -320,6 +320,7 @@ fn metadata_from_handle(handle: &Handle) -> io::Result<Metadata> {
         readonly: attributes & FILE_ATTRIBUTE_READONLY != 0,
         file_attributes: Some(attributes),
         reparse_tag,
+        bsd_flags: None,
     })
 }
 
@@ -343,6 +344,7 @@ fn metadata_from_std(path: &Path) -> io::Result<Metadata> {
         readonly: attributes & FILE_ATTRIBUTE_READONLY != 0,
         file_attributes: Some(attributes),
         reparse_tag: None,
+        bsd_flags: None,
     })
 }
 

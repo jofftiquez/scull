@@ -46,6 +46,7 @@
 
 pub mod activity;
 pub mod app_dirs;
+pub mod cloud;
 pub mod elevation;
 mod error;
 mod native;
@@ -58,6 +59,7 @@ use std::path::Path;
 pub use app_dirs::{
     APP_NAME, AppDirs, AppDirsError, DirLayout, DirSource, HOME_OVERRIDE_ENV, app_dirs,
 };
+pub use cloud::{CloudProvider, CloudState, SyncMechanism, SyncedRoot, SyncedRoots};
 pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
 pub use native::{Native, native_path_bytes};
