@@ -335,3 +335,169 @@ fn check_raises_budget_and_drop_alerts_from_config() {
         "{text}"
     );
 }
+
+/// Write the user config of `home`.
+fn write_config(home: &Path, toml: &str) {
+    let config = home.join("config");
+    std::fs::create_dir_all(&config).expect("config dir");
+    std::fs::write(config.join("config.toml"), toml).expect("config");
+}
+
+fn alert_keys(v: &Value) -> Vec<String> {
+    v["data"]["alerts"]
+        .as_array()
+        .expect("alerts")
+        .iter()
+        .filter_map(|a| a["key"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// `scull check` scans `scan.roots` and raises staleness, ecosystem/path budget and category
+/// spike alerts from it, and records every alert in history (P4-PRO-02 follow-up). Read-only:
+/// the fixture tree is unchanged (I-2/I-3).
+#[test]
+fn check_scans_roots_and_raises_stale_budget_and_spike_alerts() {
+    use scull_fixtures::{Fixture, InvariantInputs, days_ago};
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut fx = Fixture::new().expect("fixture");
+    fx.cargo_project("app", "app")
+        .expect("project")
+        .cargo_target("app", "app", 64 * 1024)
+        .expect("target")
+        .age("app", days_ago(45))
+        .expect("age");
+    fx.checkpoint().expect("checkpoint");
+    let root = scull_engine::paths::canon(fx.root());
+    let root_s = root.to_string_lossy().into_owned();
+    let app = root.join("app").to_string_lossy().into_owned();
+    write_config(
+        home.path(),
+        &format!(
+            "[scan]\nroots = ['{root_s}']\n\n[proactive]\nspike_gib = 0\nspike_percent = 10\n\
+             spike_min_gib = 0\n\n[[proactive.budgets]]\necosystem = \"rust\"\nmax_gib = 0\n\n\
+             [[proactive.budgets]]\npath = '{app}'\nmax_gib = 0\n"
+        ),
+    );
+
+    let o = scull_in(home.path(), &["check", "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate("check.schema.json", &v);
+    let scan = &v["data"]["scan"];
+    assert_eq!(scan["state"], "scanned", "{v:#}");
+    assert_eq!(scan["roots"][0], root_s.as_str());
+    let keys = alert_keys(&v);
+    assert!(keys.contains(&"stale:build_output".to_owned()), "{keys:?}");
+    assert!(
+        keys.contains(&"budget_exceeded:rust".to_owned()),
+        "{keys:?}"
+    );
+    assert!(keys.contains(&format!("budget_exceeded:{app}")), "{keys:?}");
+    // One scan of these roots: no baseline for a spike yet.
+    assert!(
+        !keys.iter().any(|k| k.starts_with("growth_spike:")),
+        "{keys:?}"
+    );
+    let stale = v["data"]["alerts"]
+        .as_array()
+        .expect("alerts")
+        .iter()
+        .find(|a| a["key"] == "stale:build_output")
+        .expect("stale");
+    assert_eq!(stale["severity"], "info");
+    assert!(
+        stale["paths"][0]
+            .as_str()
+            .is_some_and(|p| p.ends_with("target")),
+        "{stale:#}"
+    );
+
+    // A second project's build output appears: project artifacts grew within the spike window.
+    fx.cargo_project("lib", "lib")
+        .expect("project")
+        .cargo_target("lib", "lib", 256 * 1024)
+        .expect("target");
+    fx.checkpoint().expect("checkpoint");
+    // Scans are compared by finish time in seconds.
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let o = scull_in(home.path(), &["check", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate("check.schema.json", &v);
+    let spike = v["data"]["alerts"]
+        .as_array()
+        .expect("alerts")
+        .iter()
+        .find(|a| a["key"] == "growth_spike:project_artifact")
+        .unwrap_or_else(|| panic!("spike alert: {:?}", alert_keys(&v)));
+    assert_eq!(spike["kind"], "growth_spike");
+    assert!(
+        spike["paths"][0]
+            .as_str()
+            .is_some_and(|p| p.contains("lib")),
+        "largest item named first: {spike:#}"
+    );
+
+    // Every alert raised was recorded in the alert stream.
+    let store = Store::open(&db_path(home.path()), &DefaultPermissions).expect("open");
+    let recorded: Vec<String> = store
+        .alerts(0)
+        .expect("alerts")
+        .into_iter()
+        .map(|a| a.key)
+        .collect();
+    assert!(
+        recorded.contains(&"stale:build_output".to_owned()),
+        "{recorded:?}"
+    );
+    assert!(
+        recorded.contains(&"growth_spike:project_artifact".to_owned()),
+        "{recorded:?}"
+    );
+    drop(store);
+
+    // `--no-scan`: history only (no staleness: history keeps no modification times).
+    let o = scull_in(home.path(), &["check", "--no-scan", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate("check.schema.json", &v);
+    assert_eq!(v["data"]["scan"]["state"], "disabled");
+    assert!(!alert_keys(&v).contains(&"stale:build_output".to_owned()));
+    let text = String::from_utf8(scull_in(home.path(), &["check"]).stdout).expect("utf-8");
+    assert!(text.starts_with("scanned "), "{text}");
+    assert!(
+        text.contains("info: 1 build output of projects idle for more than 30 days"),
+        "{text}"
+    );
+
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// Roots `scull scan` would refuse are not scanned by an unattended check: it says why and
+/// uses recorded history.
+#[test]
+fn check_skips_roots_it_cannot_scan() {
+    let home = tempfile::tempdir().expect("tempdir");
+    write_config(home.path(), "[scan]\nroots = ['not/absolute']\n");
+    let o = scull_in(home.path(), &["check", "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate("check.schema.json", &v);
+    assert_eq!(v["data"]["scan"]["state"], "skipped");
+    assert!(
+        v["data"]["scan"]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("not an absolute path")),
+        "{v:#}"
+    );
+    let text = String::from_utf8(scull_in(home.path(), &["check"]).stdout).expect("utf-8");
+    assert!(text.starts_with("scan skipped: "), "{text}");
+}

@@ -23,7 +23,8 @@ pub mod stats;
 pub use alert::{Alert, AlertKind, Severity, forecast_alerts};
 pub use forecast::{Confidence, Forecast, ForecastPolicy, ForecastState, Release, forecast};
 pub use history::{
-    category_series, category_usage, forecast_all, forecast_volume, free_space_drop_alerts,
+    ScanInput, category_series, category_spike_alerts, category_usage, check_alerts, forecast_all,
+    forecast_volume, free_space_drop_alerts, latest_scan_roots,
 };
 pub use policy::{
     Activity, SeriesPoint, StaleKind, Usage, activity_from_candidate, budget_alerts,

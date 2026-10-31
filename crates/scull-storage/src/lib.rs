@@ -16,6 +16,9 @@
 //!   Retention and the storage budget for background maintenance: [`Store::maintain`]
 //!   ([`retention`], DATA-06, FX-DATA-02).
 //! * Typed reads behind local insights and their purge ([`insights`], INS-02/03).
+//! * Alerts and other events (INS-06): [`Store::record_alerts`], [`Store::alerts`],
+//!   [`Store::record_events`], [`Store::latest_event`]; each scan's roots:
+//!   [`Store::scan_roots`].
 //! * The database location is the caller's job: a local, **non-roaming** per-user data
 //!   directory (never `%APPDATA%\Roaming` on Windows; FX-WIN-12) joined with
 //!   [`DB_FILE_NAME`].
@@ -24,6 +27,7 @@
 
 mod backup;
 mod error;
+mod events;
 pub mod history;
 pub mod insights;
 mod migrate;
@@ -34,6 +38,7 @@ mod store;
 
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
+pub use events::{AlertEvent, Event, EventKind};
 pub use history::{
     Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, RegrowthEvent,
     RollupPoint, SIZE_CHANGE_FRACTION, SIZE_CHANGE_MIN_BYTES, ScanRecord, ScanRecorded,

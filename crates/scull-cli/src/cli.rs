@@ -205,7 +205,7 @@ pub enum Command {
     },
 
     /// Light scan plus forecast and alerts (run by the OS scheduler).
-    Check,
+    Check(CheckArgs),
 
     /// Local trends and insights from scull's own history (read-only).
     Insights {
@@ -277,6 +277,15 @@ pub struct ScanArgs {
     /// overlay (skipped by default, D-22; backup volumes are never scanned).
     #[arg(long)]
     pub allow_network_roots: bool,
+}
+
+/// Arguments for `scull check`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct CheckArgs {
+    /// Only sample free space and use recorded history: skip the scan of `scan.roots`
+    /// (staleness and ecosystem/path budgets need it and are not evaluated).
+    #[arg(long)]
+    pub no_scan: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.

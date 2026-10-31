@@ -54,7 +54,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
-        Command::Check => None,
+        Command::Check(_) => None,
         Command::Insights {
             action: Some(InsightsAction::Purge { .. }),
             ..
@@ -131,7 +131,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
-        Command::Check => crate::cmd::check::run(ui)?,
+        Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
