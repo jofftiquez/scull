@@ -127,6 +127,26 @@ SCULL_UPDATE_MOCKS=1 cargo test -p scull-desktop-bridge --test session   # re-re
 pnpm --filter @scull/desktop types
 ```
 
+## Screen stubs for calls the bridge doesn't have yet
+
+Some screens need calls that the core bridge doesn't offer yet. Each screen declares them in
+its own folder as a small interface with two implementations: a mock that answers in a plain
+browser (development, tests, screenshots), and a "pending" one used inside Tauri that reports
+the call isn't available yet. These stubs stay out of `ScullBridge`, so its command table, its
+parity tests and the SAFE-10 name check are unchanged. None of them deletes anything; when the
+real commands land they move into `ScullBridge`.
+
+| Screen | Stub | Calls | Planned command |
+|---|---|---|---|
+| Onboarding | `src/components/onboarding/bridge.ts` | `detect()`: the `scull init` probe (ONB-01). Inside Tauri it is derived from `projects()` and `caches()` for now. | `onboarding_detect` |
+| | | `saveProfile(profile)`: writes the profile and `scan.roots` like `scull init` (ONB-03). Inside Tauri it returns `saved: false` with the reason. | `onboarding_save_profile` |
+
+Onboarding opens at `#/onboarding`. The shell sends you there on first open, when `status()`
+reports `no_scan` or `no_database`. The route has `meta.bare`, so the sidebar is hidden. Scan
+roots follow CFG-04: a filesystem root, the home folder or a folder that contains it is never
+ticked by default. Ticking one asks for confirmation first, and only then does the scan send
+`allow_broad_roots`.
+
 ## Safety checks
 
 - `bridge/tests/safe10.rs` runs in the main workspace on every OS. It walks the manifests of the

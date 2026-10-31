@@ -56,5 +56,12 @@ export const routes: RouteRecordRaw[] = [
       meta: { item },
     }),
   ),
+  // First-run onboarding (P3-UI-03): full window, no sidebar.
+  {
+    path: '/onboarding',
+    name: 'onboarding',
+    component: () => import('./screens/Onboarding/OnboardingScreen.vue'),
+    meta: { bare: true },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
