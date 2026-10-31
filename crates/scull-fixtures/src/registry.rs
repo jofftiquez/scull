@@ -9,7 +9,14 @@
 //!   differs from the document;
 //! * an MVP-gated CI fixture is neither [`Status::Implemented`] nor [`Status::Tracked`] with an
 //!   issue number and a reason;
-//! * a registered test function does not exist in the file it names.
+//! * a registered test function does not exist in the file it names (a `#[test]` function, or
+//!   an entry of a custom harness's `TESTS` table);
+//! * a fixture's [`RegisteredFixture::pending_ci`] names an OS it doesn't run on.
+//!
+//! Per-OS status ([`RegisteredFixture::os_status`]): the OSs whose runs are still pending CI
+//! (tests written and type-checked for every target, but not yet run green there, e.g. Phase 2
+//! fixtures written while the 3-OS CI was unavailable) are listed in `pending_ci`; every other
+//! OS of the fixture has run.
 //!
 //! Test paths are relative to the workspace root, so a registry entry is also a pointer for a
 //! reader: `crates/scull-detectors/tests/rust_detector.rs` + `fx_cls_01_...`.
@@ -121,6 +128,20 @@ pub struct RegisteredFixture {
     pub mode: Mode,
     /// Implementation status.
     pub status: Status,
+    /// OSs (letters of `M`, `L`, `W`) on which the registered tests have **not yet run
+    /// green**: written (and type-checked for every target) but waiting for the 3-OS CI, e.g.
+    /// a Windows- or macOS-only fixture written while CI was unavailable. Empty when every OS
+    /// of the fixture has run. See [`RegisteredFixture::os_status`].
+    pub pending_ci: &'static str,
+}
+
+/// Whether a fixture's tests have run green on one OS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsRun {
+    /// The registered tests ran green on this OS.
+    Verified,
+    /// Written, waiting for CI on this OS.
+    PendingCi,
 }
 
 impl RegisteredFixture {
@@ -128,10 +149,41 @@ impl RegisteredFixture {
     pub fn is_mvp_ci(&self) -> bool {
         self.gate == Gate::Mvp && self.mode == Mode::Ci
     }
+
+    /// Mark the tests as not yet run on the OSs in `os` (letters of `M`, `L`, `W`).
+    pub const fn pending_ci(mut self, os: &'static str) -> Self {
+        self.pending_ci = os;
+        self
+    }
+
+    /// The OS letters (`M`, `L`, `W`, in that order) the fixture runs on, from its OS cell
+    /// (`MLW`, `MW`, `L (M via disk image)` → `L`, ...): the letters before any parenthesis.
+    pub fn os_letters(&self) -> Vec<char> {
+        let cell = self.os.split('(').next().unwrap_or("");
+        ['M', 'L', 'W']
+            .into_iter()
+            .filter(|c| cell.contains(*c))
+            .collect()
+    }
+
+    /// Per-OS run status of an implemented or partly implemented fixture.
+    pub fn os_status(&self) -> Vec<(char, OsRun)> {
+        self.os_letters()
+            .into_iter()
+            .map(|c| {
+                let run = if self.pending_ci.contains(c) {
+                    OsRun::PendingCi
+                } else {
+                    OsRun::Verified
+                };
+                (c, run)
+            })
+            .collect()
+    }
 }
 
 /// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
-pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT", "FX-FS"];
+pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT", "FX-FS", "FX-PHY", "FX-QC", "FX-CFG"];
 
 const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
     TestRef { file, test_fn }
@@ -156,6 +208,20 @@ const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
 const LARGE: &str = "crates/scull-detectors/tests/large_files.rs";
 const EXEC_UNIX: &str = "crates/scull-cleaner/tests/executor_unix.rs";
+const E2E_PHY: &str = "crates/scull-fixtures/tests/fx_phy.rs";
+const MEASURE: &str = "crates/scull-cleaner/tests/measure.rs";
+const MEASURE_UNIT: &str = "crates/scull-cleaner/src/measure.rs";
+const TRASH: &str = "crates/scull-cleaner/tests/trash.rs";
+const E2E_QC: &str = "crates/scull-fixtures/tests/fx_qc.rs";
+/// Custom harness (`harness = false`): tests are listed in its `TESTS` table, not `#[test]`.
+const QC: &str = "crates/scull-cleaner/tests/quickclean/main.rs";
+const CACHES: &str = "crates/scull-detectors/tests/cache_locator.rs";
+const ENGINE: &str = "crates/scull-engine/tests/pipeline.rs";
+const RULES: &str = "crates/scull-detectors/tests/rules_loader.rs";
+
+/// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
+/// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
+const PHASE2_PENDING: &str = "MW";
 
 const fn fx(
     id: &'static str,
@@ -170,6 +236,7 @@ const fn fx(
         os,
         mode,
         status,
+        pending_ci: "",
     }
 }
 
@@ -888,6 +955,268 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             reason: "a 1M-entry tree takes minutes; it belongs in the nightly job, which doesn't exist yet",
             partial: &[],
         },
+    ),
+    // §3.6 Physical reclaim accuracy (FX-PHY)
+    fx(
+        "FX-PHY-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_PHY,
+                "fx_phy_01_pnpm_hardlinked_node_modules_predicts_zero_measured_recorded",
+            ),
+            t(
+                MEASURE,
+                "fx_phy_01_hardlinked_node_modules_predicts_and_measures_zero",
+            ),
+            t(MEASURE, "fx_phy_01_prediction_explains_shared_bytes"),
+            t(
+                HARDLINKS,
+                "fx_phy_01_pnpm_node_modules_linked_to_store_frees_about_nothing",
+            ),
+            t(
+                MEASURE_UNIT,
+                "fx_phy_01_hardlinks_predict_zero_and_measured_zero_agrees",
+            ),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-PHY-02",
+        Gate::Mvp,
+        "M",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_PHY,
+                "fx_phy_02_apfs_clone_low_confidence_measured_and_explained",
+            ),
+            t(MEASURE_UNIT, "fx_phy_02_apfs_clone_low_confidence_explained"),
+        ]),
+    )
+    .pending_ci("M"),
+    fx("FX-PHY-03", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
+    fx("FX-PHY-04", Gate::V1_0, "L", Mode::Nightly, Status::Deferred),
+    fx(
+        "FX-PHY-05",
+        Gate::Mvp,
+        "MW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_PHY, "fx_phy_05_ntfs_compressed_file_uses_allocated_size"),
+            t(E2E_PHY, "fx_phy_05_apfs_compressed_file_uses_allocated_size"),
+            t(MEASURE_UNIT, "fx_phy_05_compression_uses_allocated_bytes"),
+        ]),
+    )
+    .pending_ci("MW"),
+    fx(
+        "FX-PHY-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 189,
+            reason: "a reference corpus of realistic projects measured against predictions (G3) is slow and belongs in the nightly job, which doesn't exist yet",
+            partial: &[],
+        },
+    ),
+    fx(
+        "FX-PHY-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(TRASH, "fx_phy_07_trashed_item_reported_moved_not_freed"),
+            t(
+                MEASURE_UNIT,
+                "fx_phy_07_trash_and_quarantine_are_moved_not_freed",
+            ),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    // §3.7 Quick Clean: package caches (FX-QC)
+    fx(
+        "FX-QC-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_QC,
+                "fx_qc_01_npm_cache_native_prune_measured_all_invariants",
+            ),
+            t(QC, "fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured"),
+            t(QC, "fx_qc_01_npm_wipe_only_when_requested"),
+            t(CACHES, "fx_qc_01_npm_cache_commands_and_wipe_alternative"),
+            t(CACHES, "fx_qc_01_npm_env_beats_npmrc_beats_default"),
+            t(CACHES, "fx_qc_01_default_layout_linux"),
+            t(CACHES, "fx_qc_01_default_layout_macos"),
+            t(CACHES, "fx_qc_01_default_layout_windows"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                QC,
+                "fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation",
+            ),
+            t(CACHES, "fx_qc_02_pnpm_store_prune_only_with_shared_bytes"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(QC, "fx_qc_03_tool_in_use_is_skipped_and_reported"),
+            t(QC, "fx_qc_03_in_use_at_run_time_is_skipped"),
+            t(QC, "fx_qc_03_real_process_inside_cache_is_detected"),
+            t(CACHES, "fx_qc_03_tool_running_is_skipped"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(QC, "fx_qc_04_symlinked_cache_is_skipped"),
+            t(
+                QC,
+                "fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped",
+            ),
+            t(CACHES, "fx_qc_04_cache_symlinked_to_unexpected_location"),
+            t(CACHES, "fx_qc_04_folder_above_cache_symlinked_elsewhere"),
+            t(CACHES, "fx_qc_04_cache_junction_to_unexpected_location"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 217,
+            reason: "QC-03 says remove the orphaned cache through the safe executor, but Delete is S0-only (D-28) and caches are S1; until decision D-36 (#217) is confirmed and implemented the tool is skipped as not installed and the folder reported for manual removal, never removed",
+            partial: &[t(
+                QC,
+                "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
+            )],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_QC, "fx_qc_06_planted_npm_never_runs_all_invariants"),
+            t(QC, "fx_qc_06_untrusted_npm_binaries_never_run"),
+            t(QC, "fx_qc_06_only_untrusted_binaries_means_not_installed"),
+            t(QC, "fx_qc_06_trusted_symlink_into_node_modules_is_rejected"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(QC, "fx_qc_07_project_npmrc_never_applies"),
+            t(QC, "fx_qc_07_user_npmrc_cache_at_home_is_refused"),
+            t(CACHES, "fx_qc_07_npmrc_cache_at_home_is_refused"),
+            t(CACHES, "fx_qc_07_env_redirects_to_home_or_root_are_refused"),
+            t(CACHES, "fx_qc_07_project_npmrc_is_never_read"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-QC-08",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(QC, "fx_qc_08_unticked_tools_are_not_cleaned")]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    // §3.8 Configuration and rules (FX-CFG)
+    fx(
+        "FX-CFG-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(ENGINE, "fx_cfg_01_03_repo_policy_only_adds_protection"),
+            t(
+                CORE_CFG,
+                "fx_cfg_01_repo_toml_lowering_tiers_to_s0_is_ignored_with_warning",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-CFG-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            CORE_CFG,
+            "fx_cfg_02_repo_adding_roots_or_enabling_rules_is_ignored_with_warning",
+        )]),
+    ),
+    fx(
+        "FX-CFG-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            CORE_CFG,
+            "fx_cfg_03_repo_protect_marker_and_config_add_protection_honored",
+        )]),
+    ),
+    fx(
+        "FX-CFG-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(ENGINE, "fx_cfg_04_user_protect_and_min_tier_are_honored"),
+            t(
+                CORE_CFG,
+                "fx_cfg_04_user_config_protected_path_survives_every_layer",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-CFG-05",
+        Gate::V1x,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            RULES,
+            "fx_cfg_05_user_rule_assigning_s0_is_rejected_at_load",
+        )]),
+    ),
+    fx(
+        "FX-CFG-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(RULES, "fx_cfg_06_command_fields_are_rejected_at_load"),
+            t(RULES, "fx_cfg_06_command_fields_rejected_anywhere_in_the_file"),
+        ]),
     ),
 ];
 
