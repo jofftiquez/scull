@@ -98,7 +98,15 @@ impl<'a> Tracking<'a> {
             return unknown("the folder was not measured, so Git tracking could not be decided");
         };
         if s.totals.files == 0 && s.totals.links == 0 {
-            // Git tracks files and links only; an empty folder holds nothing tracked.
+            // Git tracks files and links only; an empty folder holds nothing tracked. But "no
+            // files seen" is only "no files" when the scanner saw everything: an unreadable,
+            // timed-out or not-descended folder inside may hide tracked files.
+            if !s.complete || s.totals.boundaries > 0 {
+                return unknown(
+                    "part of the folder could not be read or was not descended, so Git \
+                     tracking could not be decided",
+                );
+            }
             return (GitTracking::NotTracked, Vec::new());
         }
         let changed = status

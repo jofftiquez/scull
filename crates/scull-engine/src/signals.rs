@@ -6,6 +6,7 @@
 //! (missing evidence never counts as evidence of inactivity).
 
 use scull_core::Evidence;
+use scull_platform::{PlatformError, VolumeInfo};
 use scull_safety::{ActivityProbe, GapPolicy, Tri, check_in_use};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,18 @@ pub trait InUseProbe: Send + Sync {
 
 /// Signal name used when no [`InUseProbe`] is configured.
 pub const IN_USE_SIGNAL: &str = "in_use";
+
+/// Signal name for a candidate whose subtree was not fully observed (a folder inside could not
+/// be read, timed out, or was not descended): what it holds is unknown (at least S2).
+pub const COMPLETENESS_SIGNAL: &str = "completeness";
+
+/// Signal name for a mounted-volume list that could not be read: a bind mount inside a
+/// candidate can't be ruled out, so it is treated as crossing a mount.
+pub const MOUNTS_SIGNAL: &str = "mounts";
+
+/// Signal name for a `scan.protect` / `scan.exclude` (or repository policy) entry that could
+/// not be resolved: candidates it might cover are protected.
+pub const PROTECTION_SIGNAL: &str = "protection";
 
 /// Why in-use is unknown without a probe.
 pub const IN_USE_UNAVAILABLE: &str = "open-file, process working directory and tool-lock checks \
@@ -93,5 +106,23 @@ impl InUseProbe for FixedInUse {
             in_use: self.0,
             evidence: Vec::new(),
         }
+    }
+}
+
+/// Where the engine gets the list of mounted volumes (mount points for the "crosses a mount"
+/// check, filesystem types for the reclaim estimate). Injectable so tests can simulate a
+/// failure; the real machine uses [`NativeVolumes`].
+pub trait VolumeSource: Send + Sync {
+    /// Every mounted volume, or why the list could not be read.
+    fn volumes(&self) -> Result<Vec<VolumeInfo>, PlatformError>;
+}
+
+/// The OS volume list ([`scull_platform::volumes()`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVolumes;
+
+impl VolumeSource for NativeVolumes {
+    fn volumes(&self) -> Result<Vec<VolumeInfo>, PlatformError> {
+        scull_platform::volumes()
     }
 }

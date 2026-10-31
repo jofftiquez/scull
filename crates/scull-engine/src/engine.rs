@@ -5,20 +5,23 @@ use crate::collect::{
 };
 use crate::git::{GIT_SIGNAL, Tracking, git_tri};
 use crate::id::new_scan_id;
-use crate::paths::{canon, is_within, overlaps};
+use crate::paths::{canon, canon_exact, is_within, overlaps};
 use crate::reader::FsConfigReader;
 use crate::report::{
     CachesReport, HistoryOutcome, IssueKind, ProjectSummary, RefusedCacheReport, RepoConfigWarning,
     ScanReport, SignalUnavailable, Totals, WorktreeProblemReport, WorktreeReport,
 };
-use crate::signals::{ActivityInUse, InUseAnswer, InUseProbe, InUseSource, in_use_unavailable};
+use crate::signals::{
+    ActivityInUse, COMPLETENESS_SIGNAL, InUseAnswer, InUseProbe, InUseSource, MOUNTS_SIGNAL,
+    NativeVolumes, PROTECTION_SIGNAL, VolumeSource, in_use_unavailable,
+};
 use scull_core::config::{
     Config, ConfigWarning, ConfigWarningCode, REPO_CONFIG_FILE, REPO_PROTECT_MARKER, RepoPolicy,
     RepoPolicyParse,
 };
 use scull_core::{
-    Candidate, Category, ErrorKind, Evidence, FileIdentity, FsPath, ItemId, ReasonCode, ScullError,
-    Sizes, Tier, TierBreakdown, TierReason,
+    Action, Candidate, Category, ErrorKind, Evidence, FileIdentity, FsPath, ItemId, ReasonCode,
+    ScullError, Sizes, Tier, TierBreakdown, TierReason,
 };
 use scull_detectors::{
     CacheEnv, CallerSignals, ConfigReader, DetectContext, Detectors, MAX_CONFIG_BYTES,
@@ -26,14 +29,18 @@ use scull_detectors::{
 };
 use scull_git::{
     Activity, AnalyzeOptions, DEFAULT_ACTIVITY_SAMPLE, GitRunner, Observed, RepoWorktrees,
-    WorktreeKind, analyze_repo, classify_worktree, discover, sample_activity, worktree_candidate,
+    WorktreeDecision, WorktreeKind, analyze_repo, classify_worktree, discover, sample_activity,
+    worktree_candidate,
 };
 use scull_platform::activity::Limits;
 use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo};
 use scull_safety::{
-    ActivityWindow, MtimeSample, NativeActivityProbe, ProtectedSet, Tri, recent_activity,
+    ActivityWindow, GitTracking, MtimeSample, NativeActivityProbe, ProtectedSet, Regen,
+    Signals as RubricSignals, Tri, classify, recent_activity,
 };
-use scull_scanner::{CancelToken, DirSummary, EstimateContext, Snapshots, VolumeFs, estimate};
+use scull_scanner::{
+    BoundaryReason, CancelToken, DirSummary, EstimateContext, Snapshots, VolumeFs, estimate,
+};
 use scull_storage::{
     ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store, VolumeSample,
     rollups_from_candidates,
@@ -68,6 +75,8 @@ pub struct EngineConfig {
     /// In-use detection. [`InUseSource::Unavailable`] makes every candidate "in use:
     /// unknown" (at least S2).
     pub in_use: InUseSource,
+    /// The mounted-volume list ([`NativeVolumes`] by default).
+    pub volumes: Arc<dyn VolumeSource>,
 }
 
 impl EngineConfig {
@@ -82,6 +91,7 @@ impl EngineConfig {
             allow_network_roots: false,
             explicit_target_dirs: Vec::new(),
             in_use: InUseSource::Unavailable,
+            volumes: Arc::new(NativeVolumes),
         }
     }
 }
@@ -137,8 +147,11 @@ pub struct Engine {
     allow_network_roots: bool,
     explicit_target_dirs: Vec<(PathBuf, String)>,
     in_use: InUseSource,
+    volume_source: Arc<dyn VolumeSource>,
     /// Mounted volumes, re-read at the start of each run.
     volumes: Mutex<Vec<VolumeInfo>>,
+    /// Why the last volume list could not be read, if it couldn't.
+    volumes_error: Mutex<Option<String>>,
 }
 
 /// The in-use probe for one run, if any.
@@ -181,7 +194,9 @@ impl Engine {
             allow_network_roots: cfg.allow_network_roots,
             explicit_target_dirs: cfg.explicit_target_dirs,
             in_use: cfg.in_use,
+            volume_source: cfg.volumes,
             volumes: Mutex::new(Vec::new()),
+            volumes_error: Mutex::new(None),
         })
     }
 
@@ -387,7 +402,7 @@ impl Engine {
             progress(EngineProgress::Analyzing {
                 what: "Git worktrees".into(),
             });
-            let (reports, problems, wt_candidates) = self.worktrees(&st, &roots, &probe);
+            let (reports, problems, wt_candidates) = self.worktrees(&mut post, &roots, &probe);
             worktrees = reports;
             worktree_problems = problems;
             candidates.extend(wt_candidates);
@@ -395,6 +410,7 @@ impl Engine {
 
         let candidates = dedupe(candidates);
         let projects = projects(&st, &candidates, &post.tracking);
+        let gaps = post.run_gaps();
         drop(post);
         for p in unmeasured {
             st.issue(
@@ -405,6 +421,9 @@ impl Engine {
         }
         let totals = Totals::of(&candidates);
         let mut signals_unavailable = signals_unavailable(&candidates);
+        for (signal, reason) in &gaps {
+            push_signal(&mut signals_unavailable, signal, reason, 0);
+        }
         if req.worktrees && self.git.is_none() && !st.git_roots.is_empty() {
             push_signal(
                 &mut signals_unavailable,
@@ -465,6 +484,7 @@ impl Engine {
                 st.repo_configs.extend(sub.repo_configs);
                 st.reparse_dirs.extend(sub.reparse_dirs);
                 st.other_volume.extend(sub.other_volume);
+                st.boundaries.extend(sub.boundaries);
                 st.git_roots
                     .extend(sub.git_roots.into_iter().filter(|g| g != d));
                 st.summaries.insert(d.clone(), s);
@@ -514,10 +534,16 @@ impl Engine {
     }
 
     /// Re-read the mounted volumes (once per run): filesystem types for the reclaim estimate
-    /// and mount points for the mount-boundary check.
+    /// and mount points for the mount-boundary check. A failure is remembered: without the
+    /// list a bind mount inside a candidate can't be ruled out (bind mounts keep the volume
+    /// ID, so the walk doesn't see them), which the protection step treats as a crossing.
     fn refresh_volumes(&self) {
-        let v = scull_platform::volumes().unwrap_or_default();
+        let (v, err) = match self.volume_source.volumes() {
+            Ok(v) => (v, None),
+            Err(e) => (Vec::new(), Some(e.to_string())),
+        };
         *lock(&self.volumes) = v;
+        *lock(&self.volumes_error) = err;
     }
 
     /// Sizes of a scanned directory with the PRD §9 reclaim estimate, using the filesystem
@@ -548,7 +574,7 @@ impl Engine {
     /// Analyse every repository the walk met (GIT-02) and classify its worktrees (GIT-03).
     fn worktrees(
         &self,
-        st: &State,
+        post: &mut Post<'_>,
         roots: &[PathBuf],
         probe: &RunProbe,
     ) -> (
@@ -564,6 +590,7 @@ impl Engine {
         let mut candidates = Vec::new();
         let mut seen_common: HashSet<PathBuf> = HashSet::new();
         let mut seen_wt: HashSet<PathBuf> = HashSet::new();
+        let st = post.st;
         let starts: BTreeSet<&PathBuf> = st
             .git_roots
             .iter()
@@ -585,7 +612,7 @@ impl Engine {
                 seen_wt.insert(canon(&w.path.to_path_buf()));
             }
             problems.extend(WorktreeProblemReport::of(&repo));
-            let (r, c) = self.analyze(runner, &repo, st, roots, probe);
+            let (r, c) = self.analyze(runner, &repo, post, roots, probe);
             reports.extend(r);
             candidates.extend(c);
         }
@@ -596,11 +623,12 @@ impl Engine {
         &self,
         runner: &GitRunner,
         repo: &RepoWorktrees,
-        st: &State,
+        post: &mut Post<'_>,
         roots: &[PathBuf],
         probe: &RunProbe,
     ) -> (Vec<WorktreeReport>, Vec<Candidate>) {
         let platform = self.platform.as_ref();
+        let st = post.st;
         let states = analyze_repo(
             runner,
             repo,
@@ -653,6 +681,11 @@ impl Engine {
             };
             let inside = within_any(&target, roots);
             let summary = st.summaries.get(&path);
+            // The same protection step as every other candidate; the GIT-03 table only knows
+            // what Git says. A stale registration (folder missing) has no subtree to observe.
+            let present = !state.missing;
+            let protect = post.protection(&target, summary.filter(|_| present), present);
+            protect_decision(&mut decision, &protect);
             let removable = state.kind == WorktreeKind::Linked;
             let mut candidate_id = None;
             if removable && inside {
@@ -666,6 +699,7 @@ impl Engine {
                     _ => Sizes::default(),
                 };
                 let mut c = worktree_candidate(&state, &decision, in_use, identity, sizes);
+                apply_protection(&mut c, &protect);
                 if missing_identity {
                     c.raise(TierReason::new(
                         Tier::S3,
@@ -703,9 +737,20 @@ impl Engine {
             ScullError::new(ErrorKind::NotFound, format!("not a Git worktree: {e}"))
                 .with_path(FsPath::from_path(path))
         })?;
-        let st = State::default();
+        // Walk the worktree (read-only) so the protection step sees what a scan would:
+        // markers and policies inside and above it, nested repositories, mounts, cloud
+        // placeholders and whether every folder could be read. A failed walk leaves it
+        // unmeasured, which the protection step treats as unknown (at least S2).
+        self.refresh_volumes();
+        let collector = Collector::new(Arc::clone(&self.platform), None, Arc::new(|_| {}));
+        if let Err(e) = collector.walk(&want, 0, &CancelToken::new()) {
+            lock(&collector.state).issue(&want, IssueKind::ReadError, e.to_string());
+        }
+        let st = std::mem::take(&mut *lock(&collector.state));
+        let policies = self.repo_policies(&st);
+        let mut post = Post::new(self, &st, &policies.0, now_unix());
         let parent = want.parent().map(Path::to_path_buf).unwrap_or(want.clone());
-        let (reports, _) = self.analyze(runner, &repo, &st, &[parent], &self.run_probe());
+        let (reports, _) = self.analyze(runner, &repo, &mut post, &[parent], &self.run_probe());
         reports
             .into_iter()
             .find(|r| canon(&r.path.to_path_buf()) == want)
@@ -776,11 +821,15 @@ impl Engine {
             }
         }
         let candidates = dedupe(candidates);
+        let mut unavailable = signals_unavailable(&candidates);
+        for (signal, reason) in post.run_gaps() {
+            push_signal(&mut unavailable, signal, &reason, 0);
+        }
         CachesReport {
             measured_at: now,
             cancelled,
             totals: Totals::of(&candidates),
-            signals_unavailable: signals_unavailable(&candidates),
+            signals_unavailable: unavailable,
             refused: located
                 .refused
                 .iter()
@@ -879,8 +928,83 @@ impl Engine {
 /// Caller signals for one candidate, plus what the engine adds on top of the rubric.
 struct Signals {
     caller: CallerSignals,
+    /// Facts behind the caller's Git, activity and in-use answers.
     evidence: Vec<Evidence>,
+    /// The engine-side protection signals, applied by [`apply_protection`].
+    protect: Protect,
+}
+
+/// The engine-side protection signals for one candidate path (PRD §8.3 checks the detectors,
+/// the Git table and the cache classifier can't observe themselves). Applied to every
+/// candidate the engine emits by [`apply_protection`] (and to a worktree's report by
+/// [`protect_decision`]): tiers only go up, and the action follows the tier (D-28).
+#[derive(Debug, Default)]
+struct Protect {
+    in_protected_root: bool,
+    user_excluded: bool,
+    protect_marker: bool,
+    /// Crosses a mount, or the mount table is unreadable (the protective answer).
+    crosses_mount: bool,
+    /// Cloud provider (or placeholder description) when synced or holding a placeholder.
+    cloud: Option<String>,
+    evidence: Vec<Evidence>,
+    /// Raises beyond the rubric rows: minimum tiers, nested repositories, completeness,
+    /// unresolved protection entries.
     raises: Vec<TierReason>,
+}
+
+impl Protect {
+    /// Every reason this protection implies: the PRD §8.3 rubric rows for the boolean signals
+    /// (the very reasons the rubric gives a detector-built candidate, so re-applying them to
+    /// one is a no-op) plus the engine's own raises. Git tracking, in-use and recent activity
+    /// are not here: each candidate's own classifier owns them (the rubric for artifacts, the
+    /// QC rule for caches, the GIT-03 table for worktrees).
+    fn reasons(&self) -> Vec<TierReason> {
+        let rows = RubricSignals {
+            git: GitTracking::NotTracked,
+            in_protected_root: self.in_protected_root,
+            user_excluded: self.user_excluded,
+            protect_marker: self.protect_marker,
+            in_use: Tri::No,
+            crosses_mount: self.crosses_mount,
+            link_escape: false,
+            cloud_sync: self.cloud.is_some(),
+            marker_present: true,
+            lockfile_present: true,
+            artifact_known: true,
+            regen: Regen::Local,
+            recent_activity: Tri::No,
+        };
+        classify(&rows)
+            .reasons()
+            .iter()
+            // The positive row only fires when nothing else did; it never protects anything.
+            .filter(|r| r.code != ReasonCode::Regenerable)
+            .chain(&self.raises)
+            .cloned()
+            .collect()
+    }
+}
+
+/// An unresolvable protection entry, with the paths it may be spelled as.
+struct UnresolvedEntry {
+    path: PathBuf,
+    reason: String,
+    /// The entry as configured, its canonical prefix with the rest kept lexically, and its
+    /// real path when that could be resolved after all.
+    forms: Vec<PathBuf>,
+    /// Whether its real location is known (then only overlapping candidates are affected).
+    decided: bool,
+}
+
+impl UnresolvedEntry {
+    fn why(&self) -> String {
+        format!(
+            "`{}` could not be resolved ({})",
+            self.path.display(),
+            self.reason
+        )
+    }
 }
 
 /// Classification context after the walk.
@@ -889,6 +1013,10 @@ struct Post<'a> {
     /// Built-in protected roots, user `scan.protect` / `scan.exclude` and repository
     /// policies, by file identity (SAFE-03, SAFE-13).
     protected: ProtectedSet,
+    /// Entries of `protected` that could not be resolved (never silently dropped).
+    unresolved: Vec<UnresolvedEntry>,
+    /// Why the mounted-volume list could not be read this run, if it couldn't.
+    mounts_unknown: Option<String>,
     /// `scan.min_tier` as given and in canonical form.
     min_tier: Vec<(PathBuf, PathBuf, Tier)>,
     st: &'a State,
@@ -911,9 +1039,26 @@ impl<'a> Post<'a> {
         for (dir, policy) in policies {
             protected.add_repo_policy(platform, dir, policy);
         }
+        let unresolved = protected
+            .unresolved()
+            .iter()
+            .map(|u| {
+                let real = canon_exact(&u.path);
+                let mut forms = vec![u.path.clone(), canon(&u.path)];
+                forms.extend(real.clone());
+                UnresolvedEntry {
+                    path: u.path.clone(),
+                    reason: u.reason.clone(),
+                    forms,
+                    decided: real.is_some(),
+                }
+            })
+            .collect();
         Self {
             engine,
             protected,
+            unresolved,
+            mounts_unknown: lock(&engine.volumes_error).clone(),
             min_tier: scan
                 .min_tier
                 .iter()
@@ -926,29 +1071,77 @@ impl<'a> Post<'a> {
         }
     }
 
-    fn signals(
-        &mut self,
+    /// Run-wide gaps for `signals_unavailable`, disclosed even when no candidate was hit.
+    fn run_gaps(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if let Some(e) = &self.mounts_unknown {
+            out.push((MOUNTS_SIGNAL, mounts_reason(e)));
+        }
+        for u in &self.unresolved {
+            out.push((
+                PROTECTION_SIGNAL,
+                format!(
+                    "protection entry {}: candidates it might cover are protected",
+                    u.why()
+                ),
+            ));
+        }
+        out
+    }
+
+    /// The engine-side protection signals for `path` (see [`Protect`]). `summary` is the
+    /// scanner's result for `path`; with `expect_summary` a missing or incomplete one makes the
+    /// candidate's contents unknown (at least S2).
+    fn protection(
+        &self,
         path: &Path,
         summary: Option<&DirSummary>,
-        in_use: InUseAnswer,
-    ) -> Signals {
-        let mut evidence = Vec::new();
-        let mut raises = Vec::new();
+        expect_summary: bool,
+    ) -> Protect {
+        let platform = self.engine.platform.as_ref();
+        let mut p = Protect::default();
 
-        let (git, ev) = self.tracking.of(path, summary);
-        evidence.extend(ev);
+        let prot = self.protected.check(path, platform);
+        p.in_protected_root = prot.in_protected_root;
+        p.user_excluded = prot.user_excluded;
+        p.protect_marker = prot.protect_marker;
+        p.evidence.extend(prot.evidence);
 
-        let prot = self.protected.check(path, self.engine.platform.as_ref());
-        let in_protected_root = prot.in_protected_root;
-        let user_excluded = prot.user_excluded;
-        let mut protect_marker = prot.protect_marker;
-        evidence.extend(prot.evidence);
-        for (p, c, t) in &self.min_tier {
+        // A protection entry that could not be resolved is never dropped: it protects by its
+        // path, and where its real location is unknown (it may be a link into this folder)
+        // every candidate is treated as possibly covered.
+        for u in &self.unresolved {
+            let why = u.why();
+            if u.forms.iter().any(|f| overlaps(path, f)) {
+                p.raises.push(TierReason::new(
+                    Tier::S3,
+                    ReasonCode::ProtectedRoot,
+                    format!("matches the protection entry {why}; protected by its path"),
+                ));
+            } else if !u.decided {
+                p.raises.push(TierReason::new(
+                    Tier::S2,
+                    ReasonCode::SignalUnavailable,
+                    format!(
+                        "protection entry {why}: it might cover this folder through a link, so \
+                         it is treated as possibly protected"
+                    ),
+                ));
+            } else {
+                continue;
+            }
+            p.evidence.push(Evidence::SignalUnavailable {
+                signal: PROTECTION_SIGNAL.into(),
+                reason: why,
+            });
+        }
+
+        for (given, c, t) in &self.min_tier {
             if *t > Tier::S0 && overlaps(path, c) {
-                raises.push(TierReason::new(
+                p.raises.push(TierReason::new(
                     *t,
                     ReasonCode::UserExclusion,
-                    format!("user config sets minimum tier {t} for {}", p.display()),
+                    format!("user config sets minimum tier {t} for {}", given.display()),
                 ));
             }
         }
@@ -956,47 +1149,50 @@ impl<'a> Post<'a> {
         // Markers above the candidate are found by the protected set; this also catches one
         // anywhere *inside* it (deleting the candidate would delete the protected folder).
         for dir in &self.st.protect_markers {
-            if overlaps(path, dir) && !protect_marker {
-                protect_marker = true;
-                evidence.push(Evidence::ProtectMarker {
+            if overlaps(path, dir) && !p.protect_marker {
+                p.protect_marker = true;
+                p.evidence.push(Evidence::ProtectMarker {
                     path: FsPath::from_path(&dir.join(REPO_PROTECT_MARKER)),
                 });
             }
         }
-        let mut window = self.engine.config.scan.activity_window.as_secs();
         for (dir, policy) in self.policies {
             let file = dir.join(REPO_CONFIG_FILE);
-            let relevant = overlaps(path, dir);
-            for (p, t) in policy.min_tier() {
-                if overlaps(path, &p.under(dir)) {
-                    raises.push(TierReason::new(
+            for (rel, t) in policy.min_tier() {
+                if overlaps(path, &rel.under(dir)) {
+                    p.raises.push(TierReason::new(
                         *t,
                         ReasonCode::ProtectMarker,
                         format!(
                             "{} sets minimum tier {t} for `{}`",
                             file.display(),
-                            p.as_str()
+                            rel.as_str()
                         ),
                     ));
                 }
             }
-            if relevant
-                && is_within(path, dir)
-                && let Some(w) = policy.activity_window()
-            {
-                window = window.max(w.as_secs());
-            }
         }
 
-        let crosses_mount = self.st.other_volume.iter().any(|b| is_within(b, path))
+        let crossing = self.st.other_volume.iter().any(|b| is_within(b, path))
             || self.engine.has_mount_inside(path);
-        if crosses_mount {
-            evidence.push(Evidence::CrossesMount);
+        if crossing {
+            p.evidence.push(Evidence::CrossesMount);
         }
+        if let Some(e) = &self.mounts_unknown {
+            p.evidence.push(Evidence::SignalUnavailable {
+                signal: MOUNTS_SIGNAL.into(),
+                reason: mounts_reason(e),
+            });
+        }
+        p.crosses_mount = crossing || self.mounts_unknown.is_some();
+
         // Metadata and paths only: a placeholder is never read (PLT-04).
-        let cloud = self
-            .engine
-            .platform
+        let placeholder = self
+            .st
+            .boundaries
+            .iter()
+            .find(|(b, r)| *r == BoundaryReason::CloudPlaceholder && is_within(b, path));
+        p.cloud = platform
             .metadata(path)
             .ok()
             .and_then(|md| self.engine.synced_roots.cloud_state(path, &md))
@@ -1007,13 +1203,111 @@ impl<'a> Post<'a> {
                     .iter()
                     .any(|d| is_within(d, path))
                     .then(|| "reparse point (possible cloud placeholder)".to_owned())
-            });
-        if let Some(provider) = &cloud {
-            evidence.push(Evidence::CloudSync {
+            })
+            .or_else(|| placeholder.map(|_| "online-only placeholder inside".to_owned()));
+        if let Some(provider) = &p.cloud {
+            p.evidence.push(Evidence::CloudSync {
                 provider: provider.clone(),
             });
         }
+        if let Some((b, _)) = placeholder {
+            p.evidence.push(Evidence::Note {
+                text: format!(
+                    "{} is an online-only cloud placeholder: not listed (nothing downloaded), \
+                     its contents are unknown",
+                    b.display()
+                ),
+            });
+        }
 
+        // Completeness: whatever the walk could not see (unreadable or timed-out folders,
+        // folders not descended) may hold tracked files, a nested repository or a
+        // `.scull-protect` marker. Unknown, never "nothing there" (PRD §8.4).
+        let mut gaps: Vec<String> = Vec::new();
+        if expect_summary {
+            match summary {
+                None => gaps.push("it could not be measured".into()),
+                Some(s) if !s.complete => gaps.push(
+                    "part of it could not be read (permission denied, I/O error or time-out)"
+                        .into(),
+                ),
+                Some(_) => {}
+            }
+        }
+        let inside = |b: &Path| b != path && is_within(b, path);
+        if let Some((b, r)) = self
+            .st
+            .boundaries
+            .iter()
+            .find(|(b, r)| *r != BoundaryReason::CloudPlaceholder && inside(b))
+        {
+            gaps.push(format!(
+                "{} inside was not descended ({})",
+                b.display(),
+                boundary_text(*r)
+            ));
+        }
+        if expect_summary && let Some(s) = summary {
+            // Backstop: the summary counts every boundary below it; any the walk didn't
+            // report to us is just as unknown.
+            let seen = self.st.other_volume.iter().filter(|b| inside(b)).count()
+                + self.st.boundaries.iter().filter(|(b, _)| inside(b)).count();
+            if s.totals.boundaries > seen as u64 {
+                gaps.push("some folders inside were not descended".into());
+            }
+        }
+        if !gaps.is_empty() {
+            let reason = format!(
+                "{}: what it holds (tracked files, nested repositories, protection markers) is \
+                 unknown",
+                gaps.join("; ")
+            );
+            p.raises.push(TierReason::new(
+                Tier::S2,
+                ReasonCode::SignalUnavailable,
+                format!("not fully observed: {reason}"),
+            ));
+            p.evidence.push(Evidence::SignalUnavailable {
+                signal: COMPLETENESS_SIGNAL.into(),
+                reason,
+            });
+        }
+
+        // A Git repository inside may hold unique, unpushed work.
+        for g in &self.st.git_roots {
+            if g != path && is_within(g, path) {
+                p.raises.push(TierReason::new(
+                    Tier::S3,
+                    ReasonCode::GitTracked,
+                    format!("contains a Git repository at {}", g.display()),
+                ));
+            }
+        }
+        p
+    }
+
+    /// Every signal for a detector-built candidate (artifact or cache): the protection step's,
+    /// plus Git tracking, recent activity and in-use.
+    fn signals(
+        &mut self,
+        path: &Path,
+        summary: Option<&DirSummary>,
+        in_use: InUseAnswer,
+    ) -> Signals {
+        let protect = self.protection(path, summary, true);
+        let mut evidence = Vec::new();
+
+        let (git, ev) = self.tracking.of(path, summary);
+        evidence.extend(ev);
+
+        let mut window = self.engine.config.scan.activity_window.as_secs();
+        for (dir, policy) in self.policies {
+            if is_within(path, dir)
+                && let Some(w) = policy.activity_window()
+            {
+                window = window.max(w.as_secs());
+            }
+        }
         // The scanner's newest mtime and completeness; an incomplete subtree only ever says
         // "recent" or "unknown", never "idle" (PRD §8.4).
         let sample = match summary {
@@ -1022,53 +1316,88 @@ impl<'a> Post<'a> {
         };
         let activity = recent_activity(ActivityWindow::from_secs(window), sample, self.now);
         evidence.push(activity.evidence);
-        let recent_activity = activity.recent_activity;
         evidence.extend(in_use.evidence);
-
-        // A Git repository inside an artifact may hold unique, unpushed work.
-        for g in &self.st.git_roots {
-            if g != path && is_within(g, path) {
-                raises.push(TierReason::new(
-                    Tier::S3,
-                    ReasonCode::GitTracked,
-                    format!("contains a Git repository at {}", g.display()),
-                ));
-            }
-        }
 
         Signals {
             caller: CallerSignals {
                 git,
-                in_protected_root,
-                user_excluded,
-                protect_marker,
+                in_protected_root: protect.in_protected_root,
+                user_excluded: protect.user_excluded,
+                protect_marker: protect.protect_marker,
                 in_use: in_use.in_use,
-                crosses_mount,
+                crosses_mount: protect.crosses_mount,
                 link_escape: false,
-                cloud_sync: cloud.is_some(),
-                recent_activity,
+                cloud_sync: protect.cloud.is_some(),
+                recent_activity: activity.recent_activity,
             },
             evidence,
-            raises,
+            protect,
         }
     }
 }
 
-/// Apply the engine's extra evidence, raises and sizes to a detector-built candidate.
+fn mounts_reason(e: &str) -> String {
+    format!(
+        "the mounted-volume list could not be read ({e}); a bind mount inside a candidate can't \
+         be ruled out, so every candidate is treated as crossing a mount (S3)"
+    )
+}
+
+fn boundary_text(r: BoundaryReason) -> &'static str {
+    match r {
+        BoundaryReason::MaxDepth => "depth limit",
+        BoundaryReason::Loop => "directory loop",
+        BoundaryReason::OtherVolume => "another volume",
+        BoundaryReason::CloudPlaceholder => "cloud placeholder",
+        _ => "not descended",
+    }
+}
+
+fn merge_evidence(into: &mut Vec<Evidence>, from: &[Evidence]) {
+    for e in from {
+        if !into.contains(e) {
+            into.push(e.clone());
+        }
+    }
+}
+
+/// **The** protection step: fold the engine-side protection signals into a candidate with
+/// [`Candidate::raise`] (tier only goes up, action constrained to it). Every candidate the
+/// engine emits goes through here: artifacts, shared target directories, caches, worktrees.
+fn apply_protection(c: &mut Candidate, p: &Protect) {
+    merge_evidence(&mut c.evidence, &p.evidence);
+    for r in p.reasons() {
+        if !c.reasons.contains(&r) {
+            c.raise(r);
+        }
+    }
+    c.flags.cross_mount = Some(p.crosses_mount || c.flags.cross_mount == Some(true));
+    c.flags.cloud_placeholder = Some(p.cloud.is_some() || c.flags.cloud_placeholder == Some(true));
+}
+
+/// The same protection applied to a worktree's GIT-03 decision, so the report (and
+/// `scull worktrees inspect`) agrees with the candidate built from it.
+fn protect_decision(d: &mut WorktreeDecision, p: &Protect) {
+    merge_evidence(&mut d.evidence, &p.evidence);
+    for r in p.reasons() {
+        if !d.reasons.contains(&r) {
+            d.tier = d.tier.max_protective(r.tier);
+            d.reasons.push(r);
+        }
+    }
+    let action = std::mem::replace(&mut d.action, Action::None);
+    d.action = action.constrained_to(d.tier);
+}
+
+/// Apply the engine's extra evidence, protection and sizes to a detector-built candidate.
 fn finish_candidate(
     c: &mut Candidate,
     sig: Signals,
     summary: Option<&DirSummary>,
     sizes: Option<Sizes>,
 ) {
-    for e in sig.evidence {
-        if !c.evidence.contains(&e) {
-            c.evidence.push(e);
-        }
-    }
-    for r in sig.raises {
-        c.raise(r);
-    }
+    merge_evidence(&mut c.evidence, &sig.evidence);
+    apply_protection(c, &sig.protect);
     if let Some(sizes) = sizes {
         c.sizes = sizes;
     }

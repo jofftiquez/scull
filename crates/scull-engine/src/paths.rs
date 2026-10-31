@@ -16,6 +16,11 @@ pub fn canon(p: &Path) -> PathBuf {
     }
 }
 
+/// The real path of `p` when every component of it resolves (no lexical tail), else `None`.
+pub fn canon_exact(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok().map(strip_verbatim)
+}
+
 /// `\\?\C:\x` → `C:\x` (UNC verbatim paths are kept as they are).
 fn strip_verbatim(p: PathBuf) -> PathBuf {
     let Some(s) = p.to_str() else {

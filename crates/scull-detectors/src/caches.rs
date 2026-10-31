@@ -956,8 +956,10 @@ impl LocatedCache {
     ///   (re-downloadable: needs the network), plus a [`ReasonCode::PackageCache`] reason: **S1**
     ///   when every check passes.
     /// * Recent activity is **not** a risk signal for a package cache (every install touches
-    ///   it, and it holds no unique data), so [`CallerSignals::recent_activity`] is ignored; the
-    ///   last use is recorded as evidence instead.
+    ///   it, and it holds no unique data), so [`CallerSignals::recent_activity`] = `Yes` is
+    ///   ignored; the last use is recorded as evidence instead. `Unknown` (part of the cache
+    ///   could not be measured) is missing evidence, not use: it is passed to the rubric, which
+    ///   bumps the S1 cache to **S2**, so the tool command is withheld (P1-SAFE-05).
     /// * An unrecognized layout (or any other S2 reason, such as in-use unknown) raises it to
     ///   S2, where tool commands are not allowed, so the action becomes [`Action::None`]: the
     ///   tool is skipped and reported (QC-05). Any [`CacheProblem`] or a missing file
@@ -1068,7 +1070,12 @@ impl LocatedCache {
             lockfile_present: true,
             artifact_known: true,
             regen: Regen::NetworkOrLong,
-            recent_activity: Tri::No,
+            // "Recently used" is ignored on purpose (#42): every install touches a cache.
+            // "Unknown" is missing evidence, not use, and stays protective (PRD §8.4).
+            recent_activity: match caller.recent_activity {
+                Tri::Unknown => Tri::Unknown,
+                Tri::Yes | Tri::No => Tri::No,
+            },
         };
         scull_safety::apply(&mut candidate, &signals);
         candidate.raise(TierReason::new(

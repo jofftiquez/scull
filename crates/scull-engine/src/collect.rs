@@ -88,6 +88,9 @@ pub(crate) struct State {
     pub reparse_dirs: BTreeSet<PathBuf>,
     /// Directories on another volume (counted, not descended).
     pub other_volume: Vec<PathBuf>,
+    /// Every other directory the walk did not descend (cloud placeholder, depth limit, loop):
+    /// whatever it holds is unknown, so a candidate containing one is not fully observed.
+    pub boundaries: Vec<(PathBuf, BoundaryReason)>,
     /// Problems worth reporting.
     pub issues: Vec<Issue>,
     /// Issues not listed.
@@ -224,6 +227,9 @@ impl Collector {
                     ),
                     _ => (IssueKind::NotDescended, "not descended"),
                 };
+                if b.reason != BoundaryReason::OtherVolume {
+                    st.boundaries.push((b.path.clone(), b.reason));
+                }
                 st.issue(&b.path, kind, what.to_owned());
             }
             ScanEvent::Issue(i) => {

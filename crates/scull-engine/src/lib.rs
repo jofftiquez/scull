@@ -21,8 +21,21 @@
 //!
 //! A signal the engine can't observe is never read as the safe answer (PRD §8.4): in-use
 //! without an [`InUseProbe`] is unknown (at least S2), Git tracking inside a repository
-//! without `git` is unknown (S2), and every such gap is listed in
-//! [`ScanReport::signals_unavailable`] and in the candidate's evidence.
+//! without `git` is unknown (S2), a subtree the scanner could not fully read (or a folder inside
+//! it that was not descended) is unknown (S2), an unreadable mount table counts as "crosses a
+//! mount" (S3), and an unresolvable protection entry protects every candidate it might cover.
+//! Every such gap is listed in [`ScanReport::signals_unavailable`] and in the candidate's
+//! evidence.
+//!
+//! # One protection step
+//!
+//! Every candidate the engine emits (project artifacts, shared Cargo target directories,
+//! package caches and Git worktrees, in [`Engine::scan`], [`Engine::caches`] and
+//! [`Engine::inspect_worktree`]) passes through the same protection step: protected roots,
+//! `scan.protect` / `scan.exclude`, repository policies, `.scull-protect` markers, minimum
+//! tiers, mount crossings, cloud sync (including placeholders inside the candidate), nested
+//! repositories and completeness. It only ever raises tiers, through
+//! [`scull_core::Candidate::raise`], so the action follows the tier (D-28).
 
 mod collect;
 mod engine;
@@ -46,7 +59,10 @@ pub use report::{
     WorktreeReport, WorktreeTotals,
 };
 pub use scull_scanner::CancelToken;
-pub use signals::{ActivityInUse, FixedInUse, IN_USE_SIGNAL, InUseAnswer, InUseProbe, InUseSource};
+pub use signals::{
+    ActivityInUse, COMPLETENESS_SIGNAL, FixedInUse, IN_USE_SIGNAL, InUseAnswer, InUseProbe,
+    InUseSource, MOUNTS_SIGNAL, NativeVolumes, PROTECTION_SIGNAL, VolumeSource,
+};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

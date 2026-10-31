@@ -741,6 +741,27 @@ fn last_use_and_sizes_come_from_the_scanner() {
     check(&fx, &plan_inputs(&[cand, cand2]));
 }
 
+/// P1-SAFE-05 gap 6 (#203): "recently used" is deliberately not a risk signal for a cache,
+/// but *unknown* activity (part of the cache could not be measured) is missing evidence and
+/// stays protective: S2, so the tool command is withheld.
+#[test]
+fn unknown_activity_is_not_ignored_like_recent_use() {
+    let mut fx = Fixture::new().unwrap();
+    npm_cache(&mut fx, "home/.npm/_cacache");
+    fx.checkpoint().unwrap();
+    let c = the(&locate(&env(&fx, Os::Macos, &[])), CacheTool::Npm).clone();
+    let unknown = CallerSignals {
+        recent_activity: Tri::Unknown,
+        ..idle()
+    };
+    let cand = c.into_candidate(&unknown, None);
+    assert!(cand.is_consistent());
+    assert_eq!(cand.tier, expected(Tier::S2), "{cand:#?}");
+    assert_eq!(cand.action, Action::None, "no tool command at S2");
+    assert!(codes(&cand).contains(&ReasonCode::SignalUnavailable));
+    check(&fx, &plan_inputs(&[cand]));
+}
+
 // ---------------------------------------------------------------------------------------------
 // FX-QC-03: tool running
 // ---------------------------------------------------------------------------------------------
