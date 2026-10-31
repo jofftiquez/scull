@@ -457,6 +457,8 @@ name = "scull-fixtures"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
