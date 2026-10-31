@@ -1,0 +1,28 @@
+[package]
+name = "scull-cli"
+description = "scull: a safe developer storage analyzer and cleanup tool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scull-core.workspace = true
+scull-platform.workspace = true
+scull-scanner.workspace = true
+scull-detectors.workspace = true
+scull-git.workspace = true
+scull-safety.workspace = true
+scull-storage.workspace = true
+scull-cleaner.workspace = true
+scull-mcp.workspace = true
+
+[[bin]]
+name = "scull"
+path = "src/main.rs"

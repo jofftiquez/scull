@@ -1,0 +1,21 @@
+[package]
+name = "scull-mcp"
+description = "Read-only MCP server for scull (stdio)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scull-core.workspace = true
+scull-scanner.workspace = true
+scull-detectors.workspace = true
+scull-git.workspace = true
+scull-safety.workspace = true
+scull-storage.workspace = true

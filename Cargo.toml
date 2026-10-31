@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# apps/desktop/src-tauri joins the workspace in P3-APP-01.
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jofftiquez/scull"
+authors = ["scull contributors"]
+publish = false
+
+[workspace.dependencies]
+scull-core = { path = "crates/scull-core" }
+scull-platform = { path = "crates/scull-platform" }
+scull-scanner = { path = "crates/scull-scanner" }
+scull-detectors = { path = "crates/scull-detectors" }
+scull-git = { path = "crates/scull-git" }
+scull-safety = { path = "crates/scull-safety" }
+scull-cleaner = { path = "crates/scull-cleaner" }
+scull-storage = { path = "crates/scull-storage" }
+scull-mcp = { path = "crates/scull-mcp" }
+scull-fixtures = { path = "crates/scull-fixtures" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

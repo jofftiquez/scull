@@ -1,0 +1,7 @@
+{
+  "name": "@scull/desktop",
+  "private": true,
+  "version": "0.0.0",
+  "description": "scull desktop app (Tauri 2 + Vue 3). Scaffolded in P3-APP-01.",
+  "license": "MIT OR Apache-2.0"
+}

@@ -1,0 +1,19 @@
+[package]
+name = "scull-cleaner"
+description = "The scull Executor: the only code that deletes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scull-core.workspace = true
+scull-platform.workspace = true
+scull-safety.workspace = true
+scull-storage.workspace = true
