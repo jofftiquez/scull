@@ -76,9 +76,10 @@ describe('Cleanup Review (desktop plan)', () => {
     await flushPromises();
     expect(exec).toHaveBeenCalledOnce();
     expect(exec.mock.calls[0]![0].items).toHaveLength(4);
-    await new Promise((r) => setTimeout(r, 500));
-    await flushPromises();
-    expect(w.find('[data-testid="done"]').exists()).toBe(true);
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.find('[data-testid="done"]').exists()).toBe(true);
+    }, { timeout: 10000, interval: 25 });
     expect(w.text()).toContain('freed');
     expect(w.text()).toContain('98% of the 38.6 GiB predicted');
     expect(w.get('[data-testid="confirm"]').text()).toBe('Done');

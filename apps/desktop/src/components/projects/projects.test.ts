@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
 import { BRIDGE_KEY, type ProjectSummary, type ScullBridge } from '../../bridge';
@@ -149,9 +149,10 @@ describe('projects screen', () => {
     await w.findAll('[data-testid="project-row"]')[1]!.trigger('click');
     expect(w.get('[data-testid="clean"]').text()).toBe('Clean regenerable · 12.8 GiB');
     await w.get('[data-testid="clean"]').trigger('click');
-    await new Promise((r) => setTimeout(r, 2000));
-    await flushPromises();
-    expect(w.get('[data-testid="toast"]').text()).toContain('Cleaned regenerable files in shop-api');
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.get('[data-testid="toast"]').text()).toContain('Cleaned regenerable files in shop-api');
+    }, { timeout: 10000, interval: 25 });
     expect(w.get('[data-testid="toast"]').text()).toContain('+12.8 GiB');
     expect(w.get('[data-testid="detail-reclaim"]').text()).toBe('0 B');
     expect(w.get('[data-testid="detail-total"]').text()).toBe('8.5 GiB');

@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
 import { BRIDGE_KEY, type CachesReport } from '../../bridge';
@@ -149,13 +149,15 @@ describe('caches screen', () => {
     expect(w.get('[data-testid="start"]').text()).toBe('Clean 4 caches · 14.9 GiB');
     expect(w.get('[data-testid="row-cmd"]').text()).toContain('/opt/homebrew/bin/npm cache verify');
     await w.get('[data-testid="start"]').trigger('click');
-    await new Promise((r) => setTimeout(r, 400));
-    await flushPromises();
-    const states = w.findAll('[data-testid="row-state"]').map((s) => s.text());
-    expect(states).toEqual(['cleaning…', 'queued', 'queued', 'queued']);
-    await new Promise((r) => setTimeout(r, 2800));
-    await flushPromises();
-    expect(w.get('[data-testid="done"]').text()).toContain('+14.9 GiB');
+    await vi.waitFor(async () => {
+      await flushPromises();
+      const states = w.findAll('[data-testid="row-state"]').map((s) => s.text());
+      expect(states).toEqual(['cleaning…', 'queued', 'queued', 'queued']);
+    }, { timeout: 10000, interval: 25 });
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.get('[data-testid="done"]').text()).toContain('+14.9 GiB');
+    }, { timeout: 10000, interval: 25 });
     expect(w.get('[data-testid="done"]').text()).toContain('freed from 4 caches');
     expect(w.findAll('[data-testid="row-state"]').map((s) => s.text())).toEqual(['cleaned ✓', 'cleaned ✓', 'cleaned ✓', 'cleaned ✓']);
   });

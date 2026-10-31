@@ -40,7 +40,7 @@ describe('app shell', () => {
     const { wrapper, router } = await mountApp('/');
     await router.push('/worktrees');
     await flushPromises();
-    expect(wrapper.get('[data-testid="placeholder"]').text()).toContain('Git Worktrees');
+    expect(wrapper.get('h1').text()).toContain('Git Worktrees');
   });
 
   it('shows drives from the bridge, unknown sizes as "size unknown"', async () => {

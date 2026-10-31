@@ -190,6 +190,13 @@ Selection rules (D-28: S0 preselected, S1/S2 opt-in, S2 only quarantine/Trash, S
 selectable) are in `src/components/review/plan.ts`; the approval state machine in
 `src/components/review/approval.ts`. Both are unit-tested.
 
+Git Worktrees removes a Removable worktree (`git worktree remove`, branch kept) through a
+one-item plan: `preparePlan({items: [candidate]})` then `executePlan`. Verdicts are the core's
+tiers; removal is offered only for linked worktrees inside the scan roots whose tier allows a
+Git action (D-28: S0/S1). In the browser the mock core bridge adds the design's six
+illustrative worktrees (`src/bridge/worktreesMock.ts`, real `WorktreeReport` shape, validated
+by the parity test) to the recorded ones, like `MOCK_DRIVES`.
+
 ## Safety checks
 
 - `bridge/tests/safe10.rs` runs in the main workspace on every OS. It walks the manifests of the

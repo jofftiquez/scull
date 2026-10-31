@@ -28,6 +28,7 @@ import cachesReport from './fixtures/caches-report.json';
 import status from './fixtures/status.json';
 import capabilities from './fixtures/capabilities.json';
 import progressEvents from './fixtures/progress-events.json';
+import { withDesignWorktrees } from './worktreesMock';
 
 const GiB = 1024 ** 3;
 
@@ -66,7 +67,8 @@ export const MOCK_DRIVES: readonly Drive[] = [
 export const MOCK_DATA = {
   scanReport: scanReport as unknown as ScanReport,
   projects: projects as unknown as ProjectsView,
-  worktrees: worktrees as unknown as WorktreesView,
+  // Recorded worktrees plus the design's illustrative ones (design 04), like MOCK_DRIVES.
+  worktrees: withDesignWorktrees(worktrees as unknown as WorktreesView),
   cachesReport: cachesReport as unknown as CachesReport,
   status: status as unknown as DesktopStatus,
   capabilities: capabilities as unknown as CapabilitiesReport,
