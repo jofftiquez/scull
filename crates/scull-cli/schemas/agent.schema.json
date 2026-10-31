@@ -1,0 +1,196 @@
+{
+  "$defs": {
+    "AgentReport": {
+      "additionalProperties": false,
+      "description": "`scull agent install|uninstall` data.",
+      "properties": {
+        "applied": {
+          "description": "Whether the changes were written.",
+          "type": "boolean"
+        },
+        "changes": {
+          "description": "Every file considered, in the order they are written.",
+          "items": {
+            "$ref": "#/$defs/Change"
+          },
+          "type": "array"
+        },
+        "client": {
+          "description": "Client id, e.g. `claude-code`.",
+          "type": "string"
+        },
+        "client_detected": {
+          "description": "Whether the client's folder exists (a read-only probe).",
+          "type": "boolean"
+        },
+        "client_name": {
+          "description": "Client name, e.g. `Claude Code`.",
+          "type": "string"
+        },
+        "disclosure": {
+          "description": "The MCP privacy disclosure (MCP-05); present for `install`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dry_run": {
+          "description": "`--dry-run`: changes were only shown.",
+          "type": "boolean"
+        },
+        "guidance": {
+          "description": "The guidance text (also for clients without an instruction file, to paste by hand).",
+          "type": "string"
+        },
+        "notes": {
+          "description": "Extra information for the user.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation",
+          "description": "Install or uninstall."
+        }
+      },
+      "required": [
+        "operation",
+        "client",
+        "client_name",
+        "client_detected",
+        "dry_run",
+        "applied",
+        "changes",
+        "guidance",
+        "notes"
+      ],
+      "type": "object"
+    },
+    "Change": {
+      "additionalProperties": false,
+      "description": "One file in the plan.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ChangeAction",
+          "description": "Create, update or unchanged."
+        },
+        "backup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the previous version was saved (after applying an update)."
+        },
+        "diff": {
+          "description": "Unified diff from the current content to the new content (empty when unchanged).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChangeKind",
+          "description": "What the file is for."
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The exact file path."
+        }
+      },
+      "required": [
+        "kind",
+        "path",
+        "action",
+        "diff"
+      ],
+      "type": "object"
+    },
+    "ChangeAction": {
+      "description": "What happens to the file.",
+      "oneOf": [
+        {
+          "const": "create",
+          "description": "The file does not exist yet and will be created.",
+          "type": "string"
+        },
+        {
+          "const": "update",
+          "description": "The file exists and will be edited.",
+          "type": "string"
+        },
+        {
+          "const": "unchanged",
+          "description": "Nothing to do: the file already has the right content (or no scull entry to remove).",
+          "type": "string"
+        }
+      ]
+    },
+    "ChangeKind": {
+      "description": "What a file is for.",
+      "oneOf": [
+        {
+          "const": "mcp_config",
+          "description": "The client's MCP server configuration.",
+          "type": "string"
+        },
+        {
+          "const": "guidance",
+          "description": "The client's user-level instructions (scull's guidance block).",
+          "type": "string"
+        },
+        {
+          "const": "scull_config",
+          "description": "scull's own config (`[mcp] enabled = true`).",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "Operation": {
+      "description": "Install or uninstall.",
+      "oneOf": [
+        {
+          "const": "install",
+          "description": "`scull agent install`.",
+          "type": "string"
+        },
+        {
+          "const": "uninstall",
+          "description": "`scull agent uninstall`.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/AgentReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/agent@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/agent@1",
+  "type": "object"
+}

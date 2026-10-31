@@ -26,7 +26,7 @@ scull-engine.workspace = true
 scull-proactive.workspace = true
 scull-insights.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 schemars.workspace = true
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
 clap_complete = "4.6"
@@ -34,6 +34,8 @@ ctrlc = "3.5"
 unicode-width = "0.2"
 
 toml = "1"
+# Format-preserving edits of client TOML configs (`scull agent install codex`).
+toml_edit = "0.25"
 
 [dev-dependencies]
 proptest.workspace = true

@@ -6,8 +6,8 @@
 
 use crate::cancel;
 use crate::cli::{
-    AgentAction, CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction,
-    RulesAction, ScheduleAction, WorktreesAction,
+    CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
+    ScheduleAction, WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -60,9 +60,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             ..
         } => Some(crate::cmd::insights::PURGE),
         Command::Insights { .. } => None,
-        Command::Agent {
-            action: AgentAction::Install { .. },
-        } => planned("agent install", 110),
+        Command::Agent { .. } => None,
         Command::Schedule { action } => match action {
             ScheduleAction::Enable => planned("schedule enable", 114),
             ScheduleAction::Disable => planned("schedule disable", 114),
@@ -144,6 +142,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Mcp {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
+        Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
@@ -213,7 +212,6 @@ mod tests {
                 "insights purge",
                 Some(266),
             ),
-            (&["agent", "install", "codex"], "agent install", Some(110)),
             (&["schedule", "enable"], "schedule enable", Some(114)),
             (&["schedule", "disable"], "schedule disable", Some(114)),
             (&["data", "show"], "data show", Some(82)),
@@ -248,6 +246,8 @@ mod tests {
         assert_eq!(planned_of(&["init", "--yes"]), None);
         assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
         assert_eq!(planned_of(&["mcp", "serve"]), None);
+        assert_eq!(planned_of(&["agent", "install", "codex"]), None);
+        assert_eq!(planned_of(&["agent", "uninstall", "cursor"]), None);
         for insights in [
             &["insights"][..],
             &["insights", "--since", "7d"],

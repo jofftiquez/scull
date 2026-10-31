@@ -13,6 +13,8 @@ Two checks, both stdlib-only so they run unchanged on Linux, macOS and Windows:
     * every command that would delete, move, restore or purge (``clean`` in all its forms,
       ``clean caches --confirm --wipe``, ``restore``, ``approve``, ``data purge``,
       ``insights purge``, ...) exits 1 with "is not implemented yet";
+    * ``scull agent install <client>`` without ``--yes`` (and without a terminal to confirm
+      on) refuses and leaves the home folder unchanged; ``--dry-run`` only shows the diff;
     * ``scull mcp serve --allow-destructive`` lists only tools annotated
       ``readOnlyHint: true`` and ``destructiveHint: false``;
     * a canary tree that every command is pointed at is byte-for-byte unchanged afterwards.
@@ -65,7 +67,17 @@ DESTRUCTIVE = [
     ["worktrees", "register", "tree", "--ttl", "1d"],
     ["schedule", "enable"],
     ["schedule", "disable"],
-    ["agent", "install", "claude-code"],
+]
+
+# Commands that edit an AI client's config only with explicit consent (P4-AI-01): `--yes`, or a
+# "y" typed at an interactive prompt. Run as the gate runs them (stdin is not a terminal, no
+# `--yes`), each must exit with the code given and leave the home folder byte-for-byte
+# unchanged. `--dry-run` only shows the diff. With no scull entry, uninstall has nothing to do.
+CONSENT_GATED = [
+    (["agent", "install", "claude-code"], 2),
+    (["agent", "install", "codex"], 2),
+    (["agent", "install", "claude-code", "--dry-run"], 0),
+    (["agent", "uninstall", "claude-code"], 0),
 ]
 
 
@@ -152,6 +164,26 @@ def check_destructive(scull: str, canary: Path, env: dict[str, str]) -> None:
         print(f"ok: `{shown}` -> exit 1, {p.stderr.strip().splitlines()[-1]}")
 
 
+def check_consent_gated(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None:
+    before = snapshot(home)
+    for args, code in CONSENT_GATED:
+        p = subprocess.run(
+            [scull, *args], cwd=canary, env=env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=60,
+        )
+        shown = "scull " + " ".join(args)
+        if p.returncode != code:
+            fail(
+                f"`{shown}` without consent must exit {code} "
+                f"(got exit {p.returncode}; stderr: {p.stderr.strip()!r})"
+            )
+        after = snapshot(home)
+        if after != before:
+            changed = sorted(set(before.items()) ^ set(after.items()))
+            fail(f"`{shown}` without consent changed the home folder: {changed}")
+        print(f"ok: `{shown}` -> exit {code}, home folder unchanged")
+
+
 def check_mcp(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None:
     config_dir = home / "scull-home" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -224,6 +256,7 @@ def check_binary(scull: str) -> None:
         ).stdout.strip()
         print(f"checking {version} ({scull})")
         check_destructive(scull, canary, env)
+        check_consent_gated(scull, canary, home, env)
         check_mcp(scull, canary, home, env)
         after = snapshot(canary)
         if after != before:

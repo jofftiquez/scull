@@ -155,7 +155,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
         (&["restore", "op"], "(tracked in #81)"),
         (&["approve", "p"], "(tracked in #108)"),
         (&["insights", "purge"], "(tracked in #266)"),
-        (&["agent", "install", "codex"], "(tracked in #110)"),
         (&["schedule", "enable"], "(tracked in #114)"),
         (&["data", "show"], "(tracked in #82)"),
     ];
