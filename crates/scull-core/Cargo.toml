@@ -13,3 +13,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true

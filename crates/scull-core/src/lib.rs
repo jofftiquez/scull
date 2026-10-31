@@ -1,14 +1,31 @@
-//! Core types, plan model and errors for scull. This crate performs no I/O.
+//! Core types for scull. This crate performs **no I/O**: no filesystem, network, process or
+//! clock access. Everything here is plain data with serde and JSON Schema support, shared by the
+//! CLI, desktop app and MCP server so the same input always gives the same classification
+//! (PRD principle 6).
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! * [`Tier`]: risk tiers S0–S3, ordered by protectiveness (PRD §8.2).
+//! * [`Candidate`]: a detected item with evidence, sizes, flags and a proposed [`Action`].
+//! * [`Evidence`] / [`TierReason`]: why a candidate got its tier (PRD §8.3).
+//! * [`Sizes`]: logical, allocated and reclaimable bytes with [`Confidence`] (PRD §9).
+//! * [`ItemId`], [`FileIdentity`], [`ScanId`], [`PlanId`], [`OperationId`]: identifiers.
+//!
+//! See `docs/ARCHITECTURE.md` for how these flow through the engine.
+
+mod action;
+mod candidate;
+mod evidence;
+mod id;
+mod path;
+mod sizes;
+mod tier;
+
+pub use action::{Action, Restorability};
+pub use candidate::{Candidate, Category, Flags, ProjectRef, Regeneration, RegenerationCost};
+pub use evidence::{Evidence, ReasonCode, TierReason};
+pub use id::{FileIdentity, ItemId, OperationId, PlanId, RuleRef, ScanId};
+pub use path::FsPath;
+pub use sizes::{Confidence, Reclaimable, SizeKind, Sizes};
+pub use tier::{Tier, TierBreakdown};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(super::CRATE_NAME, "scull-core");
-    }
-}
