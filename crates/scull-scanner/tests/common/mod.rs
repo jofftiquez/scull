@@ -1,6 +1,8 @@
 //! Shared helpers for scanner tests. Everything happens inside fresh temp directories.
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)] // test helpers: panics are failures
 
+pub mod graph;
+
 use scull_platform::{DirIter, Metadata, Native, Platform};
 use scull_scanner::{
     CancelToken, DirSummary, ScanError, ScanEvent, ScanOptions, ScanOutcome, Totals, scan,
@@ -231,4 +233,82 @@ pub fn temp_root() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     (dir, root)
+}
+
+/// Wraps a platform and records every directory the scanner lists. Before delegating, it
+/// checks the path's no-follow kind: listing anything but a real directory (a link, FIFO,
+/// socket or device: "opening" it, SAFE-18) is refused and recorded as a violation.
+pub struct Recording<P> {
+    pub inner: P,
+    reads: Mutex<Vec<PathBuf>>,
+    violations: Mutex<Vec<String>>,
+}
+
+impl<P: Platform> Recording<P> {
+    pub fn new(inner: P) -> Self {
+        Self {
+            inner,
+            reads: Mutex::default(),
+            violations: Mutex::default(),
+        }
+    }
+
+    /// Paths listed, in call order.
+    pub fn reads(&self) -> Vec<PathBuf> {
+        self.reads.lock().unwrap().clone()
+    }
+
+    /// Listings of anything that is not a real directory.
+    pub fn violations(&self) -> Vec<String> {
+        self.violations.lock().unwrap().clone()
+    }
+}
+
+impl<P: Platform> Platform for Recording<P> {
+    fn capabilities(&self) -> scull_platform::Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn metadata(&self, path: &Path) -> scull_platform::Result<Metadata> {
+        self.inner.metadata(path)
+    }
+
+    fn read_dir<'a>(&'a self, path: &Path) -> scull_platform::Result<DirIter<'a>> {
+        self.reads.lock().unwrap().push(path.to_path_buf());
+        let kind = self.inner.metadata(path)?.kind;
+        if kind != scull_platform::EntryKind::Dir {
+            self.violations
+                .lock()
+                .unwrap()
+                .push(format!("listed a {kind}: {}", path.display()));
+            return Err(scull_platform::PlatformError::not_a_directory(path, kind));
+        }
+        self.inner.read_dir(path)
+    }
+}
+
+/// Every path an event reports (listings and their entries, summaries, boundaries, issues).
+pub fn reported_paths(ev: &Events) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in &ev.0 {
+        match e {
+            ScanEvent::Listing(l) => {
+                out.push(l.path.clone());
+                out.extend(l.entries.iter().map(|en| l.path.join(&en.name)));
+            }
+            ScanEvent::DirDone(d) => out.push(d.path.clone()),
+            ScanEvent::Boundary(b) => out.push(b.path.clone()),
+            ScanEvent::Issue(i) => out.push(i.path.clone()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Create a FIFO with the `mkfifo` tool. `false` where there is none (Windows).
+pub fn make_fifo(path: &Path) -> bool {
+    std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .is_ok_and(|s| s.success())
 }

@@ -17,5 +17,6 @@ scull-core.workspace = true
 scull-platform.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 scull-fixtures.workspace = true
 tempfile = "3"

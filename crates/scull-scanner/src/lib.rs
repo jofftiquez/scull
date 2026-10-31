@@ -50,6 +50,23 @@
 //! with a [`DirSummary::reclaim_confidence`] that drops to low where the platform can't
 //! identify a multi-linked file. [`DirSummary::reclaimable`] packages these as a core
 //! [`scull_core::Reclaimable`].
+//!
+//! # Links, loops and special files (SAFE-04, SAFE-18, T-14, T-53)
+//!
+//! The scanner asks the platform for exactly two things: no-follow metadata of a path and the
+//! listing of a path whose no-follow kind is [`scull_platform::EntryKind::Dir`]. Hence:
+//!
+//! * **Symlinks, junctions and other reparse points** are counted once each as a link
+//!   ([`Totals::links`]) with their own size and never listed through, so symlink loops,
+//!   chains, dangling links and Windows junction loops cannot make a scan loop or escape.
+//! * **Directory loops** that don't involve a link (bind mounts, directory hard links: the same
+//!   directory identity reachable below itself) are detected by identity: the repeated
+//!   directory is reported once as a [`BoundaryReason::Loop`] boundary and not descended.
+//! * **FIFOs, sockets (Windows: AF_UNIX reparse points) and device nodes** are identified from
+//!   metadata, counted in [`Totals::specials`] (so the subtree containing them is flagged in
+//!   its [`DirSummary`]) and never listed or opened: a FIFO without a writer can't block a
+//!   scan, and opening a device can't have side effects.
+//! * A root that is a link or special file is refused with [`ScanError::RootNotADirectory`].
 
 mod cancel;
 mod links;
