@@ -11,6 +11,8 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+pub mod worktrees;
+
 use scull_core::config::{REPO_CONFIG_FILE, RepoPolicy};
 use scull_core::{Candidate, ItemId, Tier};
 use scull_detectors::rules::RuleSet;

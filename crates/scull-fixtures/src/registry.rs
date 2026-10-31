@@ -131,7 +131,7 @@ impl RegisteredFixture {
 }
 
 /// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
-pub const COVERED_SECTIONS: &[&str] = &["FX-CLS"];
+pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT"];
 
 const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
     TestRef { file, test_fn }
@@ -145,6 +145,11 @@ const ACTIVITY: &str = "crates/scull-safety/tests/activity.rs";
 const CORE_CFG: &str = "crates/scull-core/tests/config.rs";
 const HARDLINKS: &str = "crates/scull-scanner/tests/hardlinks.rs";
 const PROTECT: &str = "crates/scull-safety/tests/protect.rs";
+const E2E_GIT: &str = "crates/scull-fixtures/tests/fx_git.rs";
+const GIT_CLS: &str = "crates/scull-git/tests/classify_fixtures.rs";
+const GIT_STATE: &str = "crates/scull-git/tests/state.rs";
+const GIT_DISC: &str = "crates/scull-git/tests/discovery.rs";
+const GIT_HARD: &str = "crates/scull-git/tests/hardened.rs";
 
 const fn fx(
     id: &'static str,
@@ -356,6 +361,264 @@ pub const REGISTRY: &[RegisteredFixture] = &[
     ),
     fx("FX-CLS-13", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
     fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
+    // §3.2 Git worktrees (FX-GIT)
+    fx(
+        "FX-GIT-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_01_clean_merged_pushed_worktree_is_s1_branch_kept",
+            ),
+            t(
+                GIT_CLS,
+                "fx_git_01_clean_merged_pushed_worktree_is_s1_never_s0",
+            ),
+            t(
+                GIT_STATE,
+                "fx_git_01_merged_and_pushed_worktree_is_clean_and_proven_merged",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-GIT-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_02_modified_tracked_file_is_s3_artifacts_only",
+            ),
+            t(
+                GIT_CLS,
+                "fx_git_02_modified_tracked_file_is_s3_with_artifact_cleanup_allowed",
+            ),
+            t(GIT_STATE, "fx_git_02_modified_tracked_file_is_reported"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_03_untracked_file_is_s3"),
+            t(GIT_CLS, "fx_git_03_untracked_file_is_s3"),
+            t(GIT_STATE, "fx_git_03_untracked_file_is_reported"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_04_unique_ignored_files_are_s2_and_listed_by_name",
+            ),
+            t(
+                GIT_CLS,
+                "fx_git_04_unique_ignored_files_are_s2_and_listed_by_name",
+            ),
+            t(GIT_STATE, "fx_git_04_ignored_files_are_listed_by_name"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_05_unpushed_commits_are_s3"),
+            t(GIT_CLS, "fx_git_05_unpushed_commits_are_s3"),
+            t(GIT_STATE, "fx_git_05_unpushed_commits_are_counted"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_06_squash_merged_branch_is_s2_merge_unproven",
+            ),
+            t(
+                GIT_CLS,
+                "fx_git_06_squash_merge_without_forge_is_s2_merge_unproven",
+            ),
+            t(GIT_STATE, "fx_git_06_squash_merged_branch_is_patch_id_only"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_07_orphan_detached_head_is_s3"),
+            t(GIT_CLS, "fx_git_07_orphan_detached_head_is_s3"),
+            t(GIT_STATE, "fx_git_07_detached_head_reachable_from_no_ref"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-08",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_08_detached_head_on_pushed_commit_is_s1"),
+            t(
+                GIT_CLS,
+                "fx_git_08_detached_head_on_pushed_commit_clean_is_s1",
+            ),
+            t(
+                GIT_STATE,
+                "fx_git_08_detached_head_reachable_from_pushed_ref",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-GIT-09",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_09_locked_worktree_is_s3_with_reason"),
+            t(GIT_CLS, "fx_git_09_locked_worktree_is_s3_with_reason_shown"),
+            t(GIT_STATE, "fx_git_09_lock_and_reason_are_reported"),
+            t(GIT_DISC, "fx_git_09_locked_worktree"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-10",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_10_registration_without_folder_is_s0_prune"),
+            t(
+                GIT_CLS,
+                "fx_git_10_stale_registration_is_s0_prune_metadata_only",
+            ),
+            t(
+                GIT_STATE,
+                "fx_git_10_missing_folder_is_reported_as_missing_and_unknown",
+            ),
+            t(GIT_DISC, "fx_git_10_prunable_registration"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-11",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_11_no_upstream_local_only_commits_is_s3"),
+            t(GIT_CLS, "fx_git_11_no_upstream_local_only_commits_is_s3"),
+            t(GIT_STATE, "fx_git_11_no_upstream_and_local_only_commits"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-12",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_12_stale_remote_refs_are_protective_without_fetch",
+            ),
+            t(
+                GIT_CLS,
+                "fx_git_12_stale_remote_refs_classify_protectively_without_fetch",
+            ),
+            t(
+                GIT_STATE,
+                "fx_git_12_stale_remote_refs_are_used_as_is_and_nothing_is_fetched",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-GIT-13",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_13_dirty_submodule_is_s3"),
+            t(GIT_CLS, "fx_git_13_dirty_submodule_is_s3"),
+            t(GIT_STATE, "fx_git_13_dirty_submodule_is_reported"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-14",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_GIT, "fx_git_14_process_cwd_in_worktree_is_s3_in_use"),
+            t(ACTIVITY, "fx_git_14_process_cwd_inside_worktree_is_in_use"),
+            t(
+                GIT_CLS,
+                "fx_git_14_process_cwd_in_worktree_is_s3_in_use_for_this_run",
+            ),
+            t(
+                GIT_STATE,
+                "fx_git_14_analysis_works_while_a_process_has_its_cwd_in_the_worktree",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-GIT-15",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_15_malicious_fsmonitor_never_runs_and_scan_completes",
+            ),
+            t(GIT_HARD, "fx_git_15_fsmonitor_command_never_runs"),
+            t(GIT_HARD, "fx_git_15_hooks_never_run"),
+            t(GIT_HARD, "fx_git_15_filter_drivers_never_run"),
+            t(GIT_HARD, "fx_git_15_diff_drivers_never_run"),
+            t(GIT_HARD, "fx_git_15_included_config_never_runs"),
+            t(GIT_HARD, "fx_git_15_ssh_command_and_lazy_fetch_never_run"),
+            t(GIT_HARD, "fx_git_15_submodule_config_never_runs"),
+            t(GIT_HARD, "fx_git_15_untrusted_git_binaries_are_never_used"),
+            t(GIT_HARD, "fx_git_15_scan_leaves_repository_unchanged"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-16",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_GIT,
+                "fx_git_16_bare_repo_worktree_pointing_outside_scan_root",
+            ),
+            t(GIT_CLS, "fx_git_16_bare_repo_worktree_outside_scan_root"),
+            t(GIT_DISC, "fx_git_16_bare_repo_worktree_outside_scan_root"),
+            t(GIT_STATE, "fx_git_16_bare_repository_with_worktrees"),
+        ]),
+    ),
+    fx(
+        "FX-GIT-17",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_GIT,
+            "fx_git_17_sixty_agent_worktrees_in_mixed_states",
+        )]),
+    ),
 ];
 
 /// The registered fixture with this ID.
