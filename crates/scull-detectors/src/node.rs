@@ -420,7 +420,11 @@ fn declared_dependency(
     })
 }
 
-fn read_small(platform: &dyn Platform, reader: &dyn ConfigReader, path: &Path) -> Option<String> {
+pub(crate) fn read_small(
+    platform: &dyn Platform,
+    reader: &dyn ConfigReader,
+    path: &Path,
+) -> Option<String> {
     let md = platform.metadata(path).ok()?;
     if md.kind != EntryKind::File || md.logical_size > MAX_CONFIG_BYTES {
         return None;

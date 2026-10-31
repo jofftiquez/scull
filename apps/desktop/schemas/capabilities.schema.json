@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "ElevationView": {
+      "description": "Whether the process runs with root/administrator rights (SAFE-14).",
+      "oneOf": [
+        {
+          "const": "elevated",
+          "description": "Root or an elevated Windows token.",
+          "type": "string"
+        },
+        {
+          "const": "not_elevated",
+          "description": "An ordinary user.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Unknown (treated as elevated).",
+          "type": "string"
+        }
+      ]
+    },
+    "GitInfo": {
+      "additionalProperties": false,
+      "description": "Whether `git` can be used.",
+      "properties": {
+        "available": {
+          "description": "A trusted `git` was found.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "Why it isn't available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Its version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available"
+      ],
+      "type": "object"
+    },
+    "HistoryState": {
+      "description": "State of the history database.",
+      "oneOf": [
+        {
+          "const": "present",
+          "description": "The database exists.",
+          "type": "string"
+        },
+        {
+          "const": "not_created",
+          "description": "Not created yet (created by the first recorded scan).",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "History is off for this session.",
+          "type": "string"
+        }
+      ]
+    },
+    "Os": {
+      "description": "Operating system family.",
+      "oneOf": [
+        {
+          "const": "macos",
+          "description": "macOS.",
+          "type": "string"
+        },
+        {
+          "const": "windows",
+          "description": "Windows.",
+          "type": "string"
+        },
+        {
+          "const": "linux",
+          "description": "Linux.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "SignalView": {
+      "additionalProperties": false,
+      "description": "One safety signal and whether this build can observe it (PRD §8.4).",
+      "properties": {
+        "available": {
+          "description": "Observable here.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Stable name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "available"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/capabilities.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`capabilities`: what this machine and build can observe (doctor-like).",
+  "properties": {
+    "config_file": {
+      "description": "The config file read, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data_dir": {
+      "description": "scull's data directory.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "elevation": {
+      "$ref": "#/$defs/ElevationView",
+      "description": "Root/administrator."
+    },
+    "git": {
+      "$ref": "#/$defs/GitInfo",
+      "description": "`git`."
+    },
+    "history": {
+      "$ref": "#/$defs/HistoryState",
+      "description": "History database."
+    },
+    "in_use_probes": {
+      "description": "Native in-use probes are on (otherwise every candidate is \"in use: unknown\").",
+      "type": "boolean"
+    },
+    "os": {
+      "$ref": "#/$defs/Os",
+      "description": "Operating system."
+    },
+    "read_only": {
+      "description": "Always `true`: the desktop has no deletion path (SAFE-10). Cleanups go through the\nExecutor with a reviewed plan.",
+      "type": "boolean"
+    },
+    "signals": {
+      "description": "Filesystem facts the platform layer provides.",
+      "items": {
+        "$ref": "#/$defs/SignalView"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "scull version.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "os",
+    "elevation",
+    "signals",
+    "git",
+    "in_use_probes",
+    "history",
+    "read_only"
+  ],
+  "title": "CapabilitiesReport",
+  "type": "object"
+}

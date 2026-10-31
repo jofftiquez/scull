@@ -179,6 +179,10 @@ pub struct DetectedArtifact {
     pub activity_lock_files: Vec<PathBuf>,
     /// Process names whose open handles or cwd inside the artifact mean "in use".
     pub activity_processes: Vec<String>,
+    /// For a [`Strategy::ToolNative`] rule: the owning tool's command for this artifact
+    /// ([`Action::ToolCommand`]), chosen by Rust code keyed by rule ID (never by a rule file,
+    /// CLS-04). `None` means no command is known, and the candidate is blocked (S3).
+    pub tool_action: Option<Action>,
 }
 
 impl DetectedArtifact {
@@ -232,9 +236,10 @@ impl DetectedArtifact {
                 ..Flags::default()
             },
             regeneration: self.regeneration,
-            action: match self.strategy {
-                Strategy::Filesystem => Action::default_for(Tier::S0),
-                Strategy::ToolNative | Strategy::InspectOnly => Action::None,
+            action: match (self.strategy, &self.tool_action) {
+                (Strategy::Filesystem, _) => Action::default_for(Tier::S0),
+                (Strategy::ToolNative, Some(a @ Action::ToolCommand { .. })) => a.clone(),
+                (Strategy::ToolNative | Strategy::InspectOnly, _) => Action::None,
             },
         };
         scull_safety::apply(&mut candidate, &signals);
@@ -248,11 +253,15 @@ impl DetectedArtifact {
                 ReasonCode::InspectOnly,
                 "inspect-only rule; never offered for cleanup",
             )),
-            Strategy::ToolNative => candidate.raise(TierReason::new(
-                Tier::S3,
-                ReasonCode::InspectOnly,
-                "cleaned by the owning tool's own command, which is not available yet",
-            )),
+            Strategy::ToolNative => {
+                if !matches!(self.tool_action, Some(Action::ToolCommand { .. })) {
+                    candidate.raise(TierReason::new(
+                        Tier::S3,
+                        ReasonCode::InspectOnly,
+                        "cleaned by the owning tool's own command, which is not available yet",
+                    ));
+                }
+            }
         }
         if identity_missing {
             candidate.raise(TierReason::new(
@@ -490,6 +499,7 @@ pub(crate) fn artifact_from_match(
             .map(|l| l.split('/').fold(dir.to_path_buf(), |p, seg| p.join(seg)))
             .collect(),
         activity_processes: rule.activity().processes().to_vec(),
+        tool_action: None,
     }
 }
 
@@ -536,6 +546,8 @@ impl Detectors {
             .into_iter()
             .map(|r| {
                 crate::node::detector_for(r)
+                    .or_else(|| crate::python::detector_for(r))
+                    .or_else(|| crate::ml::detector_for(r))
                     .unwrap_or_else(|| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
             })
             .collect();
@@ -638,6 +650,7 @@ mod tests {
             contains_links: None,
             activity_lock_files: Vec::new(),
             activity_processes: Vec::new(),
+            tool_action: None,
         };
         let c = a.into_candidate(&CallerSignals::unobserved());
         assert_eq!(c.tier, Tier::S3);

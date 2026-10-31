@@ -1,0 +1,53 @@
+{
+  "config_file": null,
+  "data_dir": "/Users/ada/Library/Application Support/scull",
+  "elevation": "not_elevated",
+  "git": {
+    "available": true,
+    "detail": null,
+    "version": "2.43.0"
+  },
+  "history": "present",
+  "in_use_probes": false,
+  "os": "linux",
+  "read_only": true,
+  "signals": [
+    {
+      "available": true,
+      "name": "file_identity"
+    },
+    {
+      "available": true,
+      "name": "allocated_size"
+    },
+    {
+      "available": true,
+      "name": "link_count"
+    },
+    {
+      "available": true,
+      "name": "mtime"
+    },
+    {
+      "available": true,
+      "name": "no_follow_metadata"
+    },
+    {
+      "available": true,
+      "name": "special_file_kinds"
+    },
+    {
+      "available": false,
+      "name": "reparse_points"
+    },
+    {
+      "available": false,
+      "name": "race_free_read_dir"
+    },
+    {
+      "available": true,
+      "name": "elevation_detection"
+    }
+  ],
+  "version": "0.0.0"
+}

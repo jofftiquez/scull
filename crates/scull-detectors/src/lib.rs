@@ -4,10 +4,13 @@
 //! * [`Detector`], [`Detectors`], [`DetectedArtifact`]: deciding whether a directory the
 //!   scanner visited is an artifact, with evidence ([`detector`] module docs).
 //! * [`cargo`]: shared Cargo target directories (`CARGO_TARGET_DIR`, `[build] target-dir`).
-//! * [`caches`]: package-manager caches (npm, pnpm, Bun, Yarn) located per OS, without running
-//!   any tool (Quick Clean, QC-01…05).
+//! * [`caches`]: package-manager caches (npm, pnpm, Bun, Yarn, pip, uv, conda) located per OS,
+//!   without running any tool (Quick Clean, QC-01…05).
 //! * [`large_files`]: the inspect-only large-files listing (never a cleanup candidate).
+//! * [`ml`]: Hugging Face, Ollama and PyTorch Hub caches (scan rules plus a per-OS locator).
 //! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
+//! * [`python`]: virtual environments (lockfiles, pinned requirements) and `__pycache__` (every
+//!   module's source present); the tool caches are plain rules.
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
@@ -15,7 +18,9 @@ pub mod caches;
 pub mod cargo;
 pub mod detector;
 pub mod large_files;
+pub mod ml;
 pub mod node;
+pub mod python;
 pub mod rules;
 
 pub use caches::{
@@ -30,7 +35,9 @@ pub use detector::{
 pub use large_files::{
     FileKind, LargeFile, LargeFileOptions, LargeFileReport, LargeFiles, inspect_large_files,
 };
+pub use ml::{MlDetector, MlKind, MlRoot, MlRootKind, MlScan, RefusedMlRoot, locate_ml_caches};
 pub use node::{FrameworkDetector, NodeModulesDetector};
+pub use python::{PycacheDetector, VenvDetector, requirements_pinned};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

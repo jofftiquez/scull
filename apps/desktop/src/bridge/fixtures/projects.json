@@ -1,0 +1,156 @@
+{
+  "cancelled": false,
+  "issues": [],
+  "projects": [
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 102400
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "api",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 102400
+      },
+      "root": "/Users/ada/code/api",
+      "total_allocated": 122880
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 53248
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": "/Users/ada/code/app",
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "app",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 53248
+      },
+      "root": "/Users/ada/code/app",
+      "total_allocated": 335872
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "badge": null,
+      "candidates": 0,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": "/Users/ada/code/app-agent-1",
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "app-agent-1",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "root": "/Users/ada/code/app-agent-1",
+      "total_allocated": 28672
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 45056
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "vault",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 45056
+      },
+      "root": "/Users/ada/code/vault",
+      "total_allocated": 65536
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 28672
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "node"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "package.json"
+      ],
+      "name": "web",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 28672
+      },
+      "root": "/Users/ada/code/web",
+      "total_allocated": 40960
+    }
+  ],
+  "roots": [
+    "/Users/ada/code"
+  ],
+  "signals_unavailable": [
+    {
+      "affected": 5,
+      "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+      "signal": "in_use"
+    },
+    {
+      "affected": 1,
+      "reason": "in-use detection unavailable; re-checked before execution",
+      "signal": "in use"
+    }
+  ]
+}

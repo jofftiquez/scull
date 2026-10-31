@@ -1,0 +1,322 @@
+{
+  "$defs": {
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "Issue": {
+      "additionalProperties": false,
+      "description": "Something the scan could not read or did not descend into.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/IssueKind",
+          "description": "What kind of issue."
+        },
+        "message": {
+          "description": "Human explanation.",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where."
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "IssueKind": {
+      "description": "Kinds of [`Issue`].",
+      "oneOf": [
+        {
+          "const": "permission_denied",
+          "description": "Permission denied.",
+          "type": "string"
+        },
+        {
+          "const": "not_found",
+          "description": "Vanished while scanning.",
+          "type": "string"
+        },
+        {
+          "const": "timed_out",
+          "description": "Listing took too long.",
+          "type": "string"
+        },
+        {
+          "const": "read_error",
+          "description": "Another read error.",
+          "type": "string"
+        },
+        {
+          "const": "other_volume",
+          "description": "On another volume: counted, not descended.",
+          "type": "string"
+        },
+        {
+          "const": "loop",
+          "description": "A directory loop: not descended.",
+          "type": "string"
+        },
+        {
+          "const": "max_depth",
+          "description": "Depth limit: not descended.",
+          "type": "string"
+        },
+        {
+          "const": "cloud_placeholder",
+          "description": "A cloud-sync placeholder (iCloud/File Provider dataless, OneDrive recall-on-access):\nnever listed so nothing gets downloaded (PLT-04); counted from metadata only.",
+          "type": "string"
+        },
+        {
+          "const": "not_descended",
+          "description": "Not descended for another scanner reason.",
+          "type": "string"
+        },
+        {
+          "const": "git",
+          "description": "A Git operation failed.",
+          "type": "string"
+        },
+        {
+          "const": "outside_roots",
+          "description": "Something outside the scan roots that was not measured.",
+          "type": "string"
+        },
+        {
+          "const": "history",
+          "description": "History could not be recorded.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProjectSummary": {
+      "additionalProperties": false,
+      "description": "A project: a directory with a project marker (`Cargo.toml`, `package.json`, ...) or the\nowner of a detected artifact.",
+      "properties": {
+        "allocated": {
+          "$ref": "#/$defs/TierBreakdown",
+          "description": "Allocated bytes of those candidates per tier."
+        },
+        "badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Most protective tier among its candidates (parent badge, PRD §8.3); `null` without\ncandidates."
+        },
+        "candidates": {
+          "description": "Candidates attributed to this project (by their first project).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ecosystems": {
+          "description": "Ecosystems seen (`rust`, `node`, ...), sorted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "git_worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Git worktree the project lives in, if any."
+        },
+        "markers": {
+          "description": "Marker files found in the directory.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Display name (the directory name).",
+          "type": "string"
+        },
+        "newest_mtime": {
+          "description": "Newest modification time seen in the project (Unix seconds), when measured.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reclaimable": {
+          "$ref": "#/$defs/TierBreakdown",
+          "description": "Reclaimable bytes of those candidates per tier."
+        },
+        "root": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Project directory."
+        },
+        "total_allocated": {
+          "description": "Allocated size of the whole project directory, when measured.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "root",
+        "name",
+        "ecosystems",
+        "markers",
+        "candidates",
+        "allocated",
+        "reclaimable"
+      ],
+      "type": "object"
+    },
+    "SignalUnavailable": {
+      "additionalProperties": false,
+      "description": "A safety signal the run could not observe.",
+      "properties": {
+        "affected": {
+          "description": "How many candidates it affected.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why, and what scull did instead.",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Stable signal name (`in_use`, `git`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal",
+        "reason",
+        "affected"
+      ],
+      "type": "object"
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    },
+    "TierBreakdown": {
+      "description": "Bytes per tier, used to aggregate parent nodes for charts (PRD §8.3 \"Aggregation\").\n\nA parent's *badge* is the most protective tier that has any bytes; charts must never color a\nparent as safe when it contains S2/S3 bytes.",
+      "properties": {
+        "s0": {
+          "description": "Bytes classified S0.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s1": {
+          "description": "Bytes classified S1.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s2": {
+          "description": "Bytes classified S2.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s3": {
+          "description": "Bytes classified S3.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "s0",
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/projects.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`projects`: the projects of the last scan. Same shape as `scull projects --json` data.",
+  "properties": {
+    "cancelled": {
+      "description": "Whether the user cancelled (partial).",
+      "type": "boolean"
+    },
+    "issues": {
+      "description": "Places that could not be read.",
+      "items": {
+        "$ref": "#/$defs/Issue"
+      },
+      "type": "array"
+    },
+    "projects": {
+      "description": "Projects, by path.",
+      "items": {
+        "$ref": "#/$defs/ProjectSummary"
+      },
+      "type": "array"
+    },
+    "roots": {
+      "description": "The roots scanned.",
+      "items": {
+        "$ref": "#/$defs/FsPath"
+      },
+      "type": "array"
+    },
+    "signals_unavailable": {
+      "description": "Signals that could not be observed.",
+      "items": {
+        "$ref": "#/$defs/SignalUnavailable"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "roots",
+    "cancelled",
+    "projects",
+    "signals_unavailable",
+    "issues"
+  ],
+  "title": "ProjectsView",
+  "type": "object"
+}

@@ -1,0 +1,591 @@
+{
+  "$defs": {
+    "ColorChoice": {
+      "description": "When to use color in terminal output.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Color when writing to a terminal and `NO_COLOR` is unset.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "Always color.",
+          "type": "string"
+        },
+        {
+          "const": "never",
+          "description": "Never color.",
+          "type": "string"
+        }
+      ]
+    },
+    "Config": {
+      "additionalProperties": false,
+      "description": "The effective configuration after merging every source.",
+      "properties": {
+        "forge": {
+          "$ref": "#/$defs/ForgeConfig",
+          "default": {
+            "enabled": false
+          },
+          "description": "Git forge lookups."
+        },
+        "mcp": {
+          "$ref": "#/$defs/McpConfig",
+          "default": {
+            "destructive": false,
+            "enabled": false,
+            "hash_names": false,
+            "max_results": 1000,
+            "redact_home": true
+          },
+          "description": "The MCP server."
+        },
+        "output": {
+          "$ref": "#/$defs/OutputConfig",
+          "default": {
+            "color": "auto",
+            "units": "binary"
+          },
+          "description": "Terminal output."
+        },
+        "rules": {
+          "$ref": "#/$defs/RulesConfig",
+          "default": {
+            "enabled": []
+          },
+          "description": "Optional rules."
+        },
+        "scan": {
+          "$ref": "#/$defs/ScanConfig",
+          "default": {
+            "activity_window": "24h",
+            "exclude": [],
+            "low_resource": false,
+            "min_tier": {},
+            "protect": [],
+            "roots": [],
+            "threads": 0
+          },
+          "description": "What to scan and how."
+        }
+      },
+      "type": "object"
+    },
+    "ConfigFileState": {
+      "description": "State of the user config file.",
+      "oneOf": [
+        {
+          "const": "present",
+          "description": "Read and valid.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "Not there: every value is a default or from the environment.",
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "The file or a `SCULL_*` variable can't be used; `error` says why. Defaults are shown.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "No config location is known on this machine.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataInfo": {
+      "additionalProperties": false,
+      "description": "scull's own data (`scull data show`, without opening the database).",
+      "properties": {
+        "config_dir": {
+          "description": "Configuration directory (`config.toml`). Never purged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data_dir": {
+          "description": "Data directory (database, backups).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseInfo",
+          "description": "The database."
+        },
+        "files": {
+          "description": "scull's own files that exist.",
+          "items": {
+            "$ref": "#/$defs/OwnFile"
+          },
+          "type": "array"
+        },
+        "footprint_bytes": {
+          "description": "Their total size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "database",
+        "files",
+        "footprint_bytes"
+      ],
+      "type": "object"
+    },
+    "DatabaseInfo": {
+      "additionalProperties": false,
+      "description": "The database, from its header.",
+      "properties": {
+        "detail": {
+          "description": "Why it isn't usable, when it isn't.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Database file, when a data directory is known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Its schema version, when known.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/DbState",
+          "description": "How it looks."
+        },
+        "supported_schema_version": {
+          "description": "The schema version this build uses.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "supported_schema_version"
+      ],
+      "type": "object"
+    },
+    "DbState": {
+      "description": "How the database file looks (the same states as `scull data show`).",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "A scull database with the schema this build uses.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No file (nothing was ever recorded).",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "An empty file, or a SQLite file with no schema yet.",
+          "type": "string"
+        },
+        {
+          "const": "newer_schema",
+          "description": "A newer scull wrote it; this build doesn't read it.",
+          "type": "string"
+        },
+        {
+          "const": "needs_migration",
+          "description": "An older schema; the next `scull scan` in a terminal migrates it (with a backup).",
+          "type": "string"
+        },
+        {
+          "const": "not_scull",
+          "description": "Not a scull database (another application's, or not SQLite).",
+          "type": "string"
+        },
+        {
+          "const": "unreadable",
+          "description": "It can't be read (permissions, not a regular file, I/O error).",
+          "type": "string"
+        }
+      ]
+    },
+    "DurationSpec": {
+      "description": "A duration: a whole number followed by s, m, h, d or w (e.g. \"24h\").",
+      "pattern": "^\\s*[0-9]+[smhdw]\\s*$",
+      "type": "string"
+    },
+    "ForgeConfig": {
+      "additionalProperties": false,
+      "description": "Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether scull may query a forge API over the network.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "McpConfig": {
+      "additionalProperties": false,
+      "description": "MCP server settings (PRD §13).",
+      "properties": {
+        "destructive": {
+          "default": false,
+          "description": "Destructive tools; also needs the `--allow-destructive` launch flag. File-only setting.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Whether `scull mcp serve` may run at all.",
+          "type": "boolean"
+        },
+        "hash_names": {
+          "default": false,
+          "description": "Hash project and directory names in results.",
+          "type": "boolean"
+        },
+        "max_results": {
+          "default": 1000,
+          "description": "Maximum number of results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "redact_home": {
+          "default": true,
+          "description": "Replace the home directory prefix with `~` in results (on by default, PRD §13.5).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Origin": {
+      "description": "Where an effective config value came from.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The built-in default.",
+          "properties": {
+            "source": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user config file.",
+          "properties": {
+            "source": {
+              "const": "user_config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An environment variable.",
+          "properties": {
+            "source": {
+              "const": "env",
+              "type": "string"
+            },
+            "var": {
+              "description": "The variable name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "var"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A command-line flag.",
+          "properties": {
+            "source": {
+              "const": "cli",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OutputConfig": {
+      "additionalProperties": false,
+      "description": "Terminal output preferences.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/ColorChoice",
+          "default": "auto",
+          "description": "When to use color."
+        },
+        "units": {
+          "$ref": "#/$defs/SizeUnits",
+          "default": "binary",
+          "description": "How to print sizes."
+        }
+      },
+      "type": "object"
+    },
+    "OwnFile": {
+      "additionalProperties": false,
+      "description": "One of scull's own files.",
+      "properties": {
+        "bytes": {
+          "description": "Logical size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/OwnFileKind",
+          "description": "What it is."
+        },
+        "path": {
+          "description": "Where it is.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "OwnFileKind": {
+      "description": "What kind of file one of scull's own files is.",
+      "oneOf": [
+        {
+          "const": "database",
+          "description": "The database.",
+          "type": "string"
+        },
+        {
+          "const": "wal",
+          "description": "Its write-ahead log.",
+          "type": "string"
+        },
+        {
+          "const": "shm",
+          "description": "Its shared-memory index.",
+          "type": "string"
+        },
+        {
+          "const": "backup",
+          "description": "A backup taken before a migration.",
+          "type": "string"
+        },
+        {
+          "const": "damaged",
+          "description": "A damaged copy set aside.",
+          "type": "string"
+        }
+      ]
+    },
+    "RulesConfig": {
+      "additionalProperties": false,
+      "description": "Optional (user or community) rules. Disabled until enabled here (CLS-04).",
+      "properties": {
+        "enabled": {
+          "default": [],
+          "description": "IDs of optional rules the user turned on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "ScanConfig": {
+      "additionalProperties": false,
+      "description": "Scan settings.",
+      "properties": {
+        "activity_window": {
+          "$ref": "#/$defs/DurationSpec",
+          "default": "24h",
+          "description": "Items modified within this window are bumped one tier (default 24 h, D-8)."
+        },
+        "exclude": {
+          "default": [],
+          "description": "Paths never scanned (and so never candidates).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "low_resource": {
+          "default": false,
+          "description": "Low-resource mode: fewer threads and lower I/O priority.",
+          "type": "boolean"
+        },
+        "min_tier": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Tier"
+          },
+          "default": {},
+          "description": "Minimum tier for everything inside a path (e.g. `\"~/Projects/legacy\" = \"S2\"`).",
+          "type": "object"
+        },
+        "protect": {
+          "default": [],
+          "description": "Protected paths: everything inside is S3 (PRD §8.3).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "roots": {
+          "default": [],
+          "description": "Directories to scan. Empty by default: roots must be explicit (CFG-04).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threads": {
+          "default": 0,
+          "description": "Scanner threads; `0` picks automatically.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SizeUnits": {
+      "description": "How sizes are printed.",
+      "oneOf": [
+        {
+          "const": "binary",
+          "description": "Powers of 1024 (KiB, MiB, GiB).",
+          "type": "string"
+        },
+        {
+          "const": "decimal",
+          "description": "Powers of 1000 (kB, MB, GB).",
+          "type": "string"
+        }
+      ]
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/settings.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`settings`: the Settings screen's data.",
+  "properties": {
+    "builtin_protected": {
+      "description": "Folders protected on this OS whatever the config says (credentials, system folders\nunder home), with their contents.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "config": {
+      "$ref": "#/$defs/Config",
+      "description": "The effective configuration, paths as written (`~` not expanded)."
+    },
+    "config_error": {
+      "description": "Why it can't be used, when it can't (the CLI's message).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "config_file": {
+      "description": "The user config file, when a location is known.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "config_state": {
+      "$ref": "#/$defs/ConfigFileState",
+      "description": "Its state."
+    },
+    "data": {
+      "$ref": "#/$defs/DataInfo",
+      "description": "scull's own data."
+    },
+    "origins": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/Origin"
+        },
+        "type": "array"
+      },
+      "description": "For every config key (`scan.roots`, `mcp.redact_home`, ...): where the value came from,\nmost important first.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "config_state",
+    "config",
+    "origins",
+    "builtin_protected",
+    "data"
+  ],
+  "title": "SettingsView",
+  "type": "object"
+}
