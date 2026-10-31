@@ -1,0 +1,1 @@
+import{_ as e,c as t,f as n,m as r,p as i}from"./index-BB5JkSQ7.js";import{n as a,t as o}from"./PlaceholderTile-B6fjKW_T.js";var s=i({__name:`CachesScreen`,setup(i){return(i,s)=>(r(),t(a,null,{default:e(()=>[n(o,{title:`Caches`,issue:`P3-UI-08`,note:`Package-manager caches with Prune and Wipe per tool.`})]),_:1}))}});export{s as default};

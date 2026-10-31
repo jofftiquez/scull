@@ -1,0 +1,1 @@
+import{_ as e,c as t,f as n,m as r,p as i}from"./index-BB5JkSQ7.js";import{n as a,t as o}from"./PlaceholderTile-B6fjKW_T.js";var s=i({__name:`SettingsScreen`,setup(i){return(i,s)=>(r(),t(a,null,{default:e(()=>[n(o,{title:`Settings`,issue:`P3-UI-11`,note:`General, Drives, Safety, Alerts, AI agents, Data & privacy, About.`})]),_:1}))}});export{s as default};

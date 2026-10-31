@@ -34,6 +34,7 @@
 mod execution;
 mod executor;
 mod lock;
+pub mod measure;
 pub mod own_data;
 pub mod quickclean;
 mod revalidate;
