@@ -20,6 +20,17 @@ export interface CoreState {
 export const core = reactive<CoreState>({ status: null, scanning: false, progress: null, error: null, report: null });
 
 let controller: AbortController | null = null;
+/** Bumped by `resetCore`; a scan or refresh started before a reset never writes after it. */
+let generation = 0;
+
+/** Forget everything (aborting a running scan). Used when the session's data source changes and
+ *  by tests, so a late result from an earlier scan can't leak into the next view. */
+export function resetCore(): void {
+  generation += 1;
+  controller?.abort();
+  controller = null;
+  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null });
+}
 
 const total = (t: TierBreakdown) => t.s0 + t.s1 + t.s2 + t.s3;
 
@@ -58,9 +69,13 @@ function publish() {
 
 /** Read status, projects, worktrees and caches; fill the header and nav figures. */
 export async function refresh(bridge: ScullBridge): Promise<void> {
+  const gen = generation;
   try {
-    core.status = await bridge.status();
+    const status = await bridge.status();
+    if (gen !== generation) return;
+    core.status = status;
   } catch (e) {
+    if (gen !== generation) return;
     core.error = toBridgeError(e).message;
   }
   publish();
@@ -69,6 +84,7 @@ export async function refresh(bridge: ScullBridge): Promise<void> {
     bridge.worktrees(),
     bridge.caches(),
   ]);
+  if (gen !== generation) return;
   const counts = { ...shell.counts };
   if (projects.status === 'fulfilled' && projects.value.projects.length > 0) {
     counts.projects = String(projects.value.projects.length);
@@ -85,6 +101,7 @@ export async function refresh(bridge: ScullBridge): Promise<void> {
 /** Scan the configured roots with live progress in the header. */
 export async function rescan(bridge: ScullBridge): Promise<void> {
   if (core.scanning) return;
+  const gen = generation;
   controller = new AbortController();
   core.scanning = true;
   core.error = null;
@@ -101,13 +118,17 @@ export async function rescan(bridge: ScullBridge): Promise<void> {
         },
       },
     );
+    if (gen !== generation) return;
     if (!report.cancelled || !core.report) core.report = markRaw(report);
   } catch (e) {
+    if (gen !== generation) return;
     core.error = toBridgeError(e).message;
   } finally {
-    core.scanning = false;
-    core.progress = null;
-    controller = null;
+    if (gen === generation) {
+      core.scanning = false;
+      core.progress = null;
+      controller = null;
+    }
   }
   await refresh(bridge);
 }

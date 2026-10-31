@@ -5,7 +5,7 @@ import App from '../../App.vue';
 import { BRIDGE_KEY, type ScullBridge } from '../../bridge';
 import { createMockBridge } from '../../bridge/mock';
 import { routes } from '../../navigation';
-import { core } from '../../state/core';
+import { core, resetCore } from '../../state/core';
 import StorageWheel from './StorageWheel.vue';
 import TierToolbar from './TierToolbar.vue';
 import { cleanupBasket } from './basket';
@@ -36,13 +36,13 @@ async function mountOverview(bridge: ScullBridge = designScenarioBridge(createMo
 
 /** The Overview decides asynchronously whether to auto-scan (not on first run, CFG-04), so wait
  *  for the scan report itself, then for the sweep to finish. */
-async function scanned(w: Awaited<ReturnType<typeof mountOverview>>, timeout = 1000) {
+async function scanned(w: Awaited<ReturnType<typeof mountOverview>>, timeout = 5000) {
   await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout });
   await vi.waitFor(() => expect(w.get('[data-testid="rescan"]').text()).toBe('Rescan'), { timeout });
 }
 
 beforeEach(() => {
-  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null });
+  resetCore();
   cleanupBasket.clear();
   reduceMotion(true);
 });

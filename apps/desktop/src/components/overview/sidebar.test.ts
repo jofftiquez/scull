@@ -5,7 +5,7 @@ import App from '../../App.vue';
 import { BRIDGE_KEY, type ScullBridge, type VolumeSampleView } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
 import { routes } from '../../navigation';
-import { core } from '../../state/core';
+import { core, resetCore } from '../../state/core';
 import { shell } from '../../state/shell';
 import QuickCleanCard from './QuickCleanCard.vue';
 import { DESIGN_CANDIDATES, designScenarioBridge } from './designScenario';
@@ -33,7 +33,7 @@ function reduceMotion(on: boolean) {
 }
 
 beforeEach(() => {
-  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null });
+  resetCore();
   shell.wink = 0;
   reduceMotion(true);
 });

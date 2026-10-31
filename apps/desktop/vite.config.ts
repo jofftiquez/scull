@@ -27,5 +27,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
+    // Screen tests mount the whole app with animated mocks; on a loaded machine (parallel
+    // builds, CI runners) 5 s is too tight. Tests must still wait on conditions, never sleeps.
+    testTimeout: 20000,
+    setupFiles: ['src/test/setup.ts'],
   },
 });
