@@ -1,0 +1,29 @@
+[package]
+name = "scull-desktop-bridge"
+description = "The desktop app's read-only bridge to the scull core (no Tauri, no WebKit)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Read-only by construction (SAFE-10): never depends on scull-cleaner, and never enables
+# scull-platform's `delete` feature. Checked by tests/safe10.rs (main workspace, every OS) and by
+# apps/desktop/src-tauri/tests/safe10.rs (`cargo tree` of the app crate).
+#
+# This crate holds everything the Tauri commands do, so it builds and is tested in the main
+# workspace on every OS without WebKitGTK; apps/desktop/src-tauri only wraps it.
+[dependencies]
+scull-core.workspace = true
+scull-platform.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"

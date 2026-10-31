@@ -1298,6 +1298,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "scull-desktop-bridge"
+version = "0.0.0"
+dependencies = [
+ "schemars",
+ "scull-core",
+ "scull-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "scull-detectors"
 version = "0.0.0"
 dependencies = [

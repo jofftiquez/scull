@@ -1,0 +1,54 @@
+# The Tauri 2 app crate. Its own workspace (not a member of the root one): on Linux Tauri links
+# WebKitGTK, which the main workspace's builds and CI must not need. All logic lives in
+# scull-desktop-bridge (a root-workspace member, tested on every OS); this crate only wraps it
+# in Tauri commands. Build/test commands: apps/desktop/README.md.
+[workspace]
+
+[package]
+name = "scull-desktop"
+description = "scull desktop app (Tauri 2 shell over the read-only scull core)."
+# Keep in step with the root workspace's version (one tag releases CLI, MCP and desktop).
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jofftiquez/scull"
+authors = ["scull contributors"]
+publish = false
+
+[lib]
+name = "scull_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scull-desktop"
+path = "src/main.rs"
+
+# SAFE-10: no scull-cleaner, no scull-platform `delete` feature, no plugin with filesystem
+# write access. Checked by tests/safe10.rs here and by apps/desktop/bridge/tests/safe10.rs.
+[dependencies]
+scull-desktop-bridge = { path = "../bridge" }
+scull-core = { path = "../../../crates/scull-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Same lints as the root workspace (a separate workspace can't inherit them).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
