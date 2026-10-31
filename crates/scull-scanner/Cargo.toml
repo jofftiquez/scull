@@ -19,4 +19,5 @@ scull-platform.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 scull-fixtures.workspace = true
+serde_json.workspace = true
 tempfile = "3"

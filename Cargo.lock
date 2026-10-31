@@ -1181,6 +1181,7 @@ dependencies = [
  "scull-core",
  "scull-fixtures",
  "scull-platform",
+ "serde_json",
  "tempfile",
 ]
 

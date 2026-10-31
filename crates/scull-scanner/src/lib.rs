@@ -39,6 +39,23 @@
 //! # Ok::<(), scull_scanner::ScanError>(())
 //! ```
 //!
+//! # Reclaim estimate (PRD §9, PHY-01)
+//!
+//! [`estimate`] turns a [`DirSummary`] and caller-supplied volume facts ([`EstimateContext`]:
+//! filesystem type, snapshots) into core [`scull_core::Sizes`] whose reclaimable figure
+//! carries a [`scull_core::Confidence`]; [`assess`] adds the [`EstimateNote`]s behind it and
+//! [`ActionReclaim`] splits it into freed-now versus moved (quarantine, Trash). The confidence
+//! reaches JSON through `Candidate.sizes.reclaimable.confidence`, e.g. for a pnpm
+//! `node_modules` on APFS, hard-linked into the store:
+//!
+//! ```json
+//! "sizes": {
+//!   "logical": 412000000,
+//!   "allocated": 398000000,
+//!   "reclaimable": { "bytes": 1200000, "confidence": "low", "shared_bytes": 396800000 }
+//! }
+//! ```
+//!
 //! # Hard links (PHY-03)
 //!
 //! Sizes count every file once, however many hard links to it the scan meets (deduplicated
@@ -69,11 +86,16 @@
 //! * A root that is a link or special file is refused with [`ScanError::RootNotADirectory`].
 
 mod cancel;
+mod estimate;
 mod links;
 mod types;
 mod walk;
 
 pub use cancel::CancelToken;
+pub use estimate::{
+    ActionReclaim, CloneSupport, Estimate, EstimateContext, EstimateNote, Snapshots, VolumeFs,
+    assess, estimate,
+};
 pub use types::{
     Boundary, BoundaryReason, DirListing, DirSummary, EntryInfo, EventSink, IssueKind, IssueOp,
     NullSink, Progress, ScanError, ScanEvent, ScanIssue, ScanOptions, ScanOutcome, ScanStatus,
