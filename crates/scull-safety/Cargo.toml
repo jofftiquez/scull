@@ -16,3 +16,6 @@ workspace = true
 scull-core.workspace = true
 scull-platform.workspace = true
 scull-git.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

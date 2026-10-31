@@ -491,6 +491,7 @@ dependencies = [
 name = "scull-safety"
 version = "0.0.0"
 dependencies = [
+ "proptest",
  "scull-core",
  "scull-git",
  "scull-platform",
