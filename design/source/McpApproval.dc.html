@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — MCP approval</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#111}a:hover{color:#9C78FF}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #D6268A;outline-offset:2px}
+#approve-code::placeholder{letter-spacing:0;font-family:"DM Sans",system-ui,sans-serif;font-size:15px;color:#77717A}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shake{0%,100%{transform:none}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+
+<sc-if value="{{isApp}}" hint-placeholder-val="{{ true }}">
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">14.9 GB</span></a>
+    <a href="CleanupReview.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.dc.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">full in ~9 days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+        <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Cleanup Review</h1>
+        <span style="display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; background: #15121A; color: #FFFFFF; font-size: 12px; font-weight: 600"><span style="width: 8px; height: 8px; border-radius: 999px; background: #D6268A; animation: {{pillPulse}}"></span>Agent request</span>
+      </div>
+      <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{subline}}</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px">
+      <button type="button" style="height: 44px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Export plan</button>
+      <a href="#state=terminal" style="height: 44px; padding: 0 20px; display: inline-flex; align-items: center; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; text-decoration: none; font-weight: 500">Approve in terminal</a>
+    </div>
+  </header>
+
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+    <sc-if value="{{done}}" hint-placeholder-val="{{ false }}">
+    <section class="tile" aria-label="Cleanup complete" aria-live="polite" style="grid-column: span 12; position: relative; overflow: hidden; border-radius: 22px; background: #FFFFFF; padding: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 28px; animation: scull-rise 320ms ease-out">
+      <div style="position: absolute; left: 76px; top: 50%; width: 0; height: 0">
+        <sc-for list="{{particles}}" as="p" hint-placeholder-count="0">
+          <span style="position: absolute; left: -5px; top: -5px; width: {{p.size}}px; height: {{p.size}}px; border-radius: {{p.radius}}; background: {{p.color}}; opacity: 0; animation: {{p.anim}}"></span>
+        </sc-for>
+      </div>
+      <svg width="88" height="88" viewBox="0 0 88 88" role="img" aria-label="Done" style="flex: none">
+        <circle cx="44" cy="44" r="34" fill="none" stroke="#F2EFEA" stroke-width="8"></circle>
+        <circle cx="44" cy="44" r="34" fill="none" stroke="#7C4DFF" stroke-width="8" stroke-linecap="round" stroke-dasharray="214" stroke-dashoffset="214" transform="rotate(-90 44 44)" style="animation: scull-ring 700ms ease-out forwards"></circle>
+        <path d="M30 45 l9 9 l19 -20" fill="none" stroke="#15121A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="48" stroke-dashoffset="48" style="animation: scull-check 380ms 620ms ease-out forwards"></path>
+      </svg>
+      <div style="flex: 1 1 320px; display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 48px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; animation: scull-bounce 640ms 200ms cubic-bezier(.2,.9,.3,1.3) both">18.8 GB freed</span>
+        <span style="font-size: 16px; animation: scull-rise 420ms 700ms ease-out both">Measured <strong>18.8 GB</strong> of 19.1 GB predicted (98%) · <strong>18.0 GB</strong> moved to quarantine · 5 items</span>
+        <span style="font-size: 13px; color: #615B66; animation: scull-rise 420ms 900ms ease-out both">Run by Claude Code at 10:44:39 with your approval from {{approvedAt}}. The approval is spent; anything else needs a new plan and a new approval.</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; animation: scull-rise 420ms 1000ms ease-out both">
+        <button type="button" onClick="{{reset}}" style="min-height: 48px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Run demo again</button>
+        <a href="History.dc.html" style="border-radius: 12px; min-height: 48px; padding: 0 22px; display: inline-flex; align-items: center; background: #15121A; color: #FFFFFF; text-decoration: none; font-weight: 600">Open in History</a>
+      </div>
+    </section>
+    </sc-if>
+
+    <section class="tile" aria-label="Who is asking" style="grid-column: span 8; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; align-items: center; gap: 14px">
+        <span aria-hidden="true" style="flex: none; width: 48px; height: 48px; border-radius: 14px; background: #F2EFEA; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500">CC</span>
+        <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+          <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em">{{askTitle}}</span>
+          <span style="font-size: 13px; color: #615B66">Asked through MCP <span style="font-family: 'DM Mono', monospace">prepare_cleanup</span> at 10:42:06 · name reported by the client · scull mcp serve, pid 51022, started by <span style="font-family: 'DM Mono', monospace">claude</span> in ~/code/shop-api</span>
+        </div>
+      </div>
+      <div style="border-radius: 16px; background: #FAF9F7; border: 1px solid #E6E2DC; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 12px; font-weight: 600; color: #615B66">Agent's note · written by the agent, shown as-is</span>
+        <span style="font-family: 'DM Mono', monospace; font-size: 13px; overflow-wrap: anywhere">"Freeing space before the e2e run. These are build outputs and two old environments I found on this machine."</span>
+      </div>
+      <span style="font-size: 13px; color: #4A4450">{{consentNote}}</span>
+    </section>
+
+    <section class="tile" aria-label="Time left to decide" style="grid-column: span 4; border-radius: 22px; background: {{exp.bg}}; border: 1px solid {{exp.border}}; padding: 24px; display: flex; align-items: center; gap: 18px">
+      <svg width="88" height="88" viewBox="0 0 88 88" aria-hidden="true" style="flex: none">
+        <circle cx="44" cy="44" r="34" fill="none" stroke="{{exp.track}}" stroke-width="8"></circle>
+        <circle cx="44" cy="44" r="34" fill="none" stroke="{{exp.stroke}}" stroke-width="8" stroke-linecap="round" data-tick="ring" stroke-dasharray="{{exp.dash}} 214" transform="rotate(-90 44 44)"></circle>
+        <sc-if value="{{exp.check}}" hint-placeholder-val="{{ false }}">
+          <path d="M30 45 l9 9 l19 -20" fill="none" stroke="#15121A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="48" stroke-dashoffset="{{exp.checkOffset}}" style="animation: {{exp.checkAnim}}"></path>
+        </sc-if>
+      </svg>
+      <div data-tick="timer" role="timer" aria-live="off" aria-label="{{exp.aria}}" style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+        <span style="font-size: 13px; font-weight: 500; color: #615B66">{{exp.label}}</span>
+        <span style="font-size: 40px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; color: {{exp.color}}; animation: {{exp.anim}}" data-tick="{{exp.tickKey}}">{{exp.big}}</span>
+        <span style="font-size: 13px; color: #615B66">{{exp.sub}}</span>
+      </div>
+    </section>
+
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">In this plan</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1">37.1 GB</span>
+      <span style="font-size: 13px; color: #615B66">5 items · predicted reclaimable</span>
+    </section>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Delete · S0</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1; color: #7C4DFF">19.1 GB</span>
+      <span style="font-size: 13px; color: #615B66">Freed now · not undoable · rebuilt by your tools</span>
+    </section>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Quarantine · S1/S2</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1">18.0 GB</span>
+      <span style="font-size: 13px; color: #615B66">7-day undo · freed when purged</span>
+    </section>
+    <section class="tile" aria-label="Plan fingerprint" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+        <span style="font-size: 13px; font-weight: 500; color: #615B66">Plan fingerprint</span>
+        <span style="padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: {{fp.tagBg}}; color: {{fp.tagFg}}">{{fp.tag}}</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; opacity: {{fp.opacity}}">
+        <svg width="58" height="58" viewBox="0 0 58 58" role="img" aria-label="Visual fingerprint of the plan hash" style="flex: none">
+          <sc-for list="{{fp.cells}}" as="c" hint-placeholder-count="25"><rect x="{{c.x}}" y="{{c.y}}" width="10" height="10" rx="2" fill="{{c.fill}}"></rect></sc-for>
+        </svg>
+        <span style="font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; line-height: 1.5; text-decoration: {{fp.strike}}">9c41 e07b<br>5d2a 18f3</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">{{fp.sub}}</span>
+    </section>
+
+    <section class="tile" aria-label="Plan items" style="grid-column: span 12; border-radius: 22px; overflow: hidden; background: #FFFFFF; padding: 8px 0 0">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 24px 6px">
+        <span style="font-size: 15px; font-weight: 600">{{tableTitle}}</span>
+        <span aria-live="polite" style="font-size: 13px; color: #615B66">{{tableHint}}</span>
+      </div>
+      <div style="overflow-x: auto">
+        <div role="list" style="min-width: 980px">
+          <div style="display: grid; grid-template-columns: 112px minmax(280px, 2.4fr) 120px minmax(210px, 1.6fr) 100px 100px 140px; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 500; color: #615B66">
+            <span style="padding-left: 24px">{{firstCol}}</span><span>Item</span><span>Tier</span><span>Evidence</span><span>Action</span><span style="text-align: right; padding-right: 16px">Predicted</span><span>{{lastCol}}</span>
+          </div>
+          <sc-for list="{{items}}" as="item" hint-placeholder-count="5">
+            <div role="listitem" style="display: grid; grid-template-columns: 112px minmax(280px, 2.4fr) 120px minmax(210px, 1.6fr) 100px 100px 140px; align-items: center; min-height: 64px; border-top: 1px solid #E6E2DC; background: {{item.rowBg}}; opacity: {{item.opacity}}; animation: {{item.anim}}">
+              <sc-if value="{{item.showBox}}" hint-placeholder-val="{{ true }}">
+                <label style="display: flex; align-items: center; gap: 8px; height: 64px; padding-left: 24px; cursor: pointer; font-size: 12px; color: #4A4450"><input id="{{item.boxId}}" type="checkbox" checked="{{item.on}}" disabled="{{item.locked}}" onChange="{{item.toggle}}" aria-label="{{item.aria}}" style="width: 20px; height: 20px; margin: 0; accent-color: #15121A"><span aria-hidden="true">{{item.boxText}}</span></label>
+              </sc-if>
+              <sc-if value="{{item.showStatus}}" hint-placeholder-val="{{ false }}">
+                <span role="img" aria-label="{{item.statusAria}}" style="display: flex; align-items: center; height: 64px; padding-left: 24px">
+                  <span style="width: 24px; height: 24px; border-radius: 999px; display: flex; align-items: center; justify-content: center; background: {{item.dotBg}}; border: 2px solid {{item.dotBorder}}; animation: {{item.dotAnim}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="opacity: {{item.checkOpacity}}"><path d="M5 12l5 5 9-10"></path></svg></span>
+                </span>
+              </sc-if>
+              <span style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px 10px 0; min-width: 0"><span style="font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; overflow-wrap: anywhere">{{item.path}}</span><span style="font-size: 12px; color: {{item.subColor}}">{{item.sub}}</span></span>
+              <span><span style="border-radius: 999px; display: inline-block; padding: 4px 8px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; background: {{item.tierBg}}; color: {{item.tierFg}}">{{item.tier}}</span></span>
+              <span style="font-size: 13px; padding-right: 12px">{{item.evidence}}</span>
+              <span style="font-size: 13px; font-weight: 500">{{item.action}}</span>
+              <span style="font-family: 'DM Mono', monospace; text-align: right; padding-right: 16px">{{item.size}}</span>
+              <span style="font-size: 13px; color: {{item.lastColor}}; padding-right: 12px">{{item.last}}</span>
+            </div>
+          </sc-for>
+          <div style="padding: 16px 24px 8px; font-size: 13px; font-weight: 500; color: #615B66; border-top: 1px solid #E6E2DC">Left out by scull · not in this plan, can't be added</div>
+          <div style="display: grid; grid-template-columns: 112px minmax(280px, 2.4fr) 120px minmax(320px, 3fr); align-items: center; min-height: 56px; border-top: 1px solid #E6E2DC; color: #615B66"><span></span><span style="font-family: 'DM Mono', monospace; font-size: 13px">worktree agent/fix-auth-93</span><span><span style="border-radius: 999px; display: inline-block; padding: 4px 8px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; background: repeating-linear-gradient(135deg, #3B2A4F 0 3px, #5A4772 3px 6px); color: #FFFFFF">S3 Protected</span></span><span style="font-size: 13px">Claude Code asked for it · 2 uncommitted files · protected work is never offered</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tile" aria-label="What approving does" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">What approving does</span>
+      <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+        <span style="display: flex; gap: 10px"><span aria-hidden="true" style="flex: none; width: 22px; height: 22px; border-radius: 7px; background: #F3ECFF; color: #6B3FD9; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 11px">1×</span><span>Lets Claude Code run <strong>this exact plan once</strong>. After one run the approval is spent.</span></span>
+        <span style="display: flex; gap: 10px"><span aria-hidden="true" style="flex: none; width: 22px; height: 22px; border-radius: 7px; background: #F3ECFF; color: #6B3FD9; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 11px">#</span><span>Bound to fingerprint <span style="font-family: 'DM Mono', monospace">9c41·e07b</span>. If anything in the plan changes, the approval no longer matches and nothing runs.</span></span>
+        <span style="display: flex; gap: 10px"><span aria-hidden="true" style="flex: none; width: 22px; height: 22px; border-radius: 7px; background: #F3ECFF; color: #6B3FD9; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 11px">15</span><span>Lapses at 10:57:06, 15 minutes after the plan was made, if Claude Code hasn't used it.</span></span>
+        <span style="display: flex; gap: 10px"><span aria-hidden="true" style="flex: none; width: 22px; height: 22px; border-radius: 7px; background: #F3ECFF; color: #6B3FD9; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 11px">✕</span><span>The agent gets no token or code. It can only ask whether you approved, so it can't approve its own plan.</span></span>
+      </div>
+    </section>
+    <section class="tile" aria-label="Safety checks" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 8px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Right before each item is touched</span>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; font-size: 13px">
+        <span>Same folder as scanned (identity check)</span>
+        <span>Not tracked by Git</span>
+        <span>Not in use by any process</span>
+        <span>Never follows links outside the item</span>
+        <span>Tier hasn't gone up</span>
+        <span>Stays on the same disk</span>
+      </div>
+      <span style="font-size: 13px; color: #615B66">Items that fail are skipped and reported to you and to Claude Code. They are never cleaned "best effort".</span>
+    </section>
+
+    <sc-if value="{{showConfirm}}" hint-placeholder-val="{{ true }}">
+    <section class="tile" aria-label="Approve or deny" style="grid-column: span 12; border-radius: 22px; background: #FCEEF5; border: 1px solid #F3C9DE; color: #15121A; padding: 24px; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 18px; font-weight: 600">Approve 5 items · 37.1 GB for Claude Code</span>
+          <span style="font-size: 13px; color: #4A4450">Deleted S0 items can't be undone; rebuild them with your tools. Quarantined items can be restored for 7 days.</span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+          <button id="deny-btn" type="button" onClick="{{deny}}" style="min-height: 48px; padding: 0 22px; background: transparent; color: #15121A; border: 1px solid #4A4450; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Deny</button>
+          <button id="approve-btn" type="button" onClick="{{approve}}" disabled="{{approveDisabled}}" style="min-width: 220px; min-height: 48px; padding: 0 24px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; cursor: {{approveCursor}}; background: {{approveBg}}; color: {{approveFg}}">Approve 5 items</button>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; padding-top: 18px; border-top: 1px solid #F3C9DE">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span id="code-hint" style="font-size: 13px; font-weight: 500; color: #4A4450">Type this code to approve</span>
+          <span aria-label="{{codeAria}}" style="min-height: 52px; padding: 0 18px; display: inline-flex; align-items: center; border-radius: 12px; background: #FFFFFF; border: 1px solid #F3C9DE; font-family: 'DM Mono', monospace; font-size: 26px; font-weight: 500; letter-spacing: 0.18em">K7Q-4MP</span>
+        </div>
+        <label style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-size: 13px; font-weight: 500; color: #4A4450">Confirmation code</span>
+          <input id="approve-code" type="text" value="{{code}}" onInput="{{onCode}}" onKeydown="{{onKey}}" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" aria-describedby="code-hint approve-status" placeholder="Type the code" style="width: 220px; height: 52px; padding: 0 16px; border-radius: 12px; border: 2px solid {{codeBorder}}; background: #FFFFFF; color: #15121A; font-family: 'DM Mono', monospace; font-size: 22px; letter-spacing: 0.12em; outline: none; animation: {{codeAnim}}">
+        </label>
+        <div id="approve-status" aria-live="polite" style="flex: 1 1 260px; display: flex; flex-direction: column; gap: 6px; padding-bottom: 4px; font-size: 13px">
+          <span style="display: flex; align-items: center; gap: 8px; color: {{rv.color}}"><span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: {{rv.dot}}; color: #FFFFFF; font-size: 11px; font-weight: 700">{{rv.mark}}</span>{{rv.text}}</span>
+          <span style="display: flex; align-items: center; gap: 8px; color: {{cd.color}}"><span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: {{cd.dot}}; color: #FFFFFF; font-size: 11px; font-weight: 700">{{cd.mark}}</span>{{cd.text}}</span>
+        </div>
+      </div>
+    </section>
+    </sc-if>
+
+    <sc-if value="{{showApproved}}" hint-placeholder-val="{{ false }}">
+    <section class="tile" aria-label="Approved" aria-live="polite" style="grid-column: span 12; border-radius: 22px; background: #FFFFFF; border: 1px solid #DCCBFF; padding: 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 24px; animation: {{approvedAnim}}">
+      <svg width="64" height="64" viewBox="0 0 88 88" role="img" aria-label="Approved" style="flex: none">
+        <circle cx="44" cy="44" r="34" fill="none" stroke="#F3ECFF" stroke-width="8"></circle>
+        <circle cx="44" cy="44" r="34" fill="none" stroke="#7C4DFF" stroke-width="8" stroke-linecap="round" stroke-dasharray="214" stroke-dashoffset="{{ringOffset}}" transform="rotate(-90 44 44)" style="animation: {{ringAnim}}"></circle>
+        <path d="M30 45 l9 9 l19 -20" fill="none" stroke="#15121A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="48" stroke-dashoffset="{{checkOffset}}" style="animation: {{checkAnim}}"></path>
+      </svg>
+      <div style="flex: 1 1 300px; display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 22px; font-weight: 600; letter-spacing: -0.01em">{{apTitle}}</span>
+        <span style="font-size: 13px; color: #4A4450">{{apSub}}</span>
+      </div>
+      <ol aria-label="Progress" style="flex: 1 1 420px; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+        <sc-for list="{{steps}}" as="st" hint-placeholder-count="4">
+          <li style="display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; color: {{st.color}}">
+            <span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: {{st.dot}}; border: 2px solid {{st.ring}}; color: #FFFFFF; font-size: 10px; font-weight: 700; animation: {{st.anim}}">{{st.mark}}</span>
+            <span><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">{{st.sr}}</span>{{st.text}}</span>
+            <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{st.time}}</span>
+          </li>
+        </sc-for>
+      </ol>
+      <sc-if value="{{canRevoke}}" hint-placeholder-val="{{ true }}">
+        <button type="button" onClick="{{revoke}}" style="min-height: 48px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #4A4450; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Revoke approval</button>
+      </sc-if>
+    </section>
+    </sc-if>
+
+    <sc-if value="{{showClosed}}" hint-placeholder-val="{{ false }}">
+    <section class="tile" aria-label="{{closed.title}}" role="status" style="grid-column: span 12; border-radius: 22px; background: {{closed.bg}}; border: 1px solid {{closed.border}}; padding: 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; animation: scull-rise 320ms ease-out">
+      <div style="display: flex; align-items: center; gap: 16px; flex: 1 1 520px">
+        <span aria-hidden="true" style="flex: none; width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: {{closed.iconBg}}; color: {{closed.iconFg}}; font-family: 'DM Mono', monospace; font-size: {{closed.iconSize}}; font-weight: 500">{{closed.icon}}</span>
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 18px; font-weight: 600">{{closed.title}}</span>
+          <span style="font-size: 13px; color: #4A4450">{{closed.text}}</span>
+          <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{closed.log}}</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button type="button" onClick="{{reset}}" style="min-height: 48px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Run demo again</button>
+        <a href="Main.dc.html" style="border-radius: 12px; min-height: 48px; padding: 0 22px; display: inline-flex; align-items: center; background: #15121A; color: #FFFFFF; text-decoration: none; font-weight: 600">Dismiss</a>
+      </div>
+    </section>
+    </sc-if>
+  </div>
+  <nav aria-label="Design states" style="padding: 4px 8px 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870; text-align: center">design states · <sc-for list="{{stateLinks}}" as="l" hint-placeholder-count="9"><a href="{{l.href}}" aria-current="{{l.current}}" style="display: inline-block; padding: 12px 6px; color: {{l.color}}">{{l.label}}</a></sc-for></nav>
+</main>
+</div>
+</sc-if>
+
+<sc-if value="{{isNotify}}" hint-placeholder-val="{{ false }}">
+<div style="min-height: 100vh; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Agent request · notification</h1>
+      <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">shown by scull when an agent calls prepare_cleanup · opens Cleanup Review · never approves anything</span>
+    </div>
+    <a href="#state=pending" style="border-radius: 12px; min-height: 44px; padding: 0 20px; display: inline-flex; align-items: center; background: #15121A; color: #FFFFFF; text-decoration: none; font-weight: 600">Open the review</a>
+  </header>
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+    <section class="tile" aria-label="macOS notification" style="grid-column: span 7; position: relative; overflow: hidden; min-height: 360px; border-radius: 22px; background: #E9E4EF">
+      <div style="height: 34px; padding: 0 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; background: #F4F1F7; font-size: 13px; color: #15121A">
+        <span style="position: relative; display: inline-flex"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#F4F1F7"></path></svg><span style="position: absolute; right: -3px; top: -2px; width: 8px; height: 8px; border-radius: 999px; background: #D6268A"></span></span>
+        <span>Fri 31 Oct 10:42</span>
+      </div>
+      <span style="position: absolute; left: 24px; bottom: 20px; font-family: 'DM Mono', monospace; font-size: 12px; color: #4A4450">macOS · banner, stays until dismissed</span>
+      <div role="alert" aria-label="scull notification" style="position: absolute; top: 48px; right: 16px; width: 380px; max-width: calc(100% - 32px); border-radius: 18px; background: #FFFFFF; border: 1px solid #D8D3CB; padding: 14px; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; animation: scull-rise 420ms 200ms cubic-bezier(.2,.9,.3,1.2) both">
+        <span aria-hidden="true" style="width: 40px; height: 40px; border-radius: 10px; background: #F7F5F2; display: flex; align-items: center; justify-content: center"><svg width="28" height="28" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg></span>
+        <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: #615B66"><span>scull</span><span>now</span></div>
+          <span style="font-size: 14px; font-weight: 600">Claude Code wants to clean 37.1 GB</span>
+          <span style="font-size: 13px; color: #4A4450">5 items · plan 9c41·e07b · decide within 15 min. Nothing runs until you approve in scull.</span>
+          <div style="display: flex; gap: 8px; margin-top: 10px">
+            <a href="#state=pending" style="flex: 1; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: #15121A; color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 600">Review</a>
+            <button type="button" style="flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid #D8D3CB; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Later</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="tile" aria-label="Rules for the notification" style="grid-column: span 5; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">What the notification can and can't do</span>
+      <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px">
+        <span><strong>Review</strong> opens Cleanup Review in agent request mode, scrolled to the plan.</span>
+        <span><strong>No Approve or Deny button.</strong> Approving needs the full plan on screen, every item reviewed and the typed code.</span>
+        <span><strong>Posted by scull itself,</strong> never by the MCP client, so the agent can't write to this channel or change its wording.</span>
+        <span><strong>Later</strong> keeps the request in the menu bar widget until it expires. Do Not Disturb is respected; the 15-minute clock still runs.</span>
+        <span><strong>scull not running?</strong> The agent is told to ask you to run <span style="font-family: 'DM Mono', monospace">scull approve 9c41e07b</span> in your own terminal.</span>
+      </div>
+    </section>
+    <section class="tile" aria-label="Windows notification" style="grid-column: span 7; position: relative; overflow: hidden; min-height: 280px; border-radius: 22px; background: #E4E8EE">
+      <span style="position: absolute; left: 24px; top: 20px; font-family: 'DM Mono', monospace; font-size: 12px; color: #4A4450">Windows · toast, then Notification Center</span>
+      <div role="alert" aria-label="scull notification" style="position: absolute; right: 16px; bottom: 64px; width: 364px; max-width: calc(100% - 32px); border-radius: 16px; background: #FFFFFF; border: 1px solid #D8D3CB; padding: 14px; display: flex; flex-direction: column; gap: 6px; animation: scull-rise 420ms 400ms cubic-bezier(.2,.9,.3,1.2) both">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #615B66"><svg width="16" height="16" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path></svg><span>scull</span></div>
+        <span style="font-size: 14px; font-weight: 600">Claude Code wants to clean 37.1 GB</span>
+        <span style="font-size: 13px; color: #4A4450">5 items · plan 9c41·e07b · decide within 15 min.</span>
+        <div style="display: flex; gap: 8px; margin-top: 6px">
+          <a href="#state=pending" style="flex: 1; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: #15121A; color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 600">Review</a>
+          <button type="button" style="flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid #D8D3CB; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Later</button>
+        </div>
+      </div>
+      <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: #F3F5F8; display: flex; align-items: center; justify-content: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 8px; background: #D8DDE5"></span><span style="width: 28px; height: 28px; border-radius: 8px; background: #D8DDE5"></span><span style="width: 28px; height: 28px; border-radius: 8px; background: #15121A"></span><span style="width: 28px; height: 28px; border-radius: 8px; background: #D8DDE5"></span></div>
+    </section>
+    <section class="tile" aria-label="Menu bar widget badge" style="grid-column: span 5; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Waiting in the menu bar widget</span>
+      <div style="border-radius: 18px; background: #FCEEF5; border: 1px solid #F3C9DE; padding: 14px 16px; display: flex; align-items: center; gap: 14px">
+        <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true" style="flex: none"><circle cx="22" cy="22" r="18" fill="none" stroke="#F7D9E8" stroke-width="5"></circle><circle cx="22" cy="22" r="18" fill="none" stroke="#D6268A" stroke-width="5" stroke-linecap="round" stroke-dasharray="103 113" transform="rotate(-90 22 22)"></circle><text x="22" y="26" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="11" font-weight="700" fill="#15121A">14m</text></svg>
+        <span style="flex: 1; font-size: 13px; color: #3A3440"><strong style="color: #15121A">1 agent request.</strong> Claude Code · 37.1 GB · 14 min left.</span>
+        <a href="#state=pending" style="flex: none; min-height: 44px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 10px; background: #15121A; color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 600">Review</a>
+      </div>
+      <span style="font-size: 13px; color: #615B66">Requests that expire unseen are listed in History as "expired · nothing changed", with the agent's name and the plan fingerprint.</span>
+    </section>
+  </div>
+  <nav aria-label="Design states" style="padding: 4px 8px 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870; text-align: center">design states · <sc-for list="{{stateLinks}}" as="l" hint-placeholder-count="9"><a href="{{l.href}}" aria-current="{{l.current}}" style="display: inline-block; padding: 12px 6px; color: {{l.color}}">{{l.label}}</a></sc-for></nav>
+</div>
+</sc-if>
+
+<sc-if value="{{isTerminal}}" hint-placeholder-val="{{ false }}">
+<div style="min-height: 100vh; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">scull approve · in your terminal</h1>
+      <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">same plan, same rules · needs an interactive terminal · shows the full plan · type the code shown on screen</span>
+    </div>
+    <a href="#state=pending" style="height: 44px; padding: 0 20px; display: inline-flex; align-items: center; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; text-decoration: none; font-weight: 500">Back to the desktop review</a>
+  </header>
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+    <section class="tile" aria-label="Terminal: approving a plan" style="grid-column: span 7; border-radius: 22px; background: #15121A; overflow: hidden; display: flex; flex-direction: column">
+      <div style="height: 40px; padding: 0 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #2A2530"><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="margin-left: 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #A39DA8">~/code/shop-api — zsh</span></div>
+<pre style="margin: 0; padding: 18px 20px 22px; font-family: 'DM Mono', monospace; font-size: 12.5px; line-height: 1.7; color: #E8E3EE; white-space: pre-wrap; overflow-x: auto"><span style="color: #A39DA8">$</span> scull approve 9c41e07b
+
+<span style="color: #FFFFFF; font-weight: 500">Plan 9c41·e07b</span>  requested by <span style="color: #FFFFFF">Claude Code</span> (MCP, name reported by client)
+created 10:42:06 · <span style="color: #FF8CC6">expires in 13:42</span> · single use
+fingerprint sha256:9c41e07b 5d2a18f3 a0c6…
+
+  #  tier             action      predicted  undo     path
+  1  <span style="color: #B79CFF">S0 regenerable</span>   delete        12.4 GB  rebuild  ~/code/shop-api/node_modules
+  2  <span style="color: #B79CFF">S0 regenerable</span>   delete         1.9 GB  rebuild  ~/code/shop-api/.turbo
+  3  <span style="color: #B79CFF">S0 regenerable</span>   delete         4.8 GB  rebuild  3 worktree artifact folders
+  4  <span style="color: #DCCBFF">S1 costly</span>        quarantine     8.2 GB  7 days   ~/code/kart-game/Library
+  5  <span style="color: #FFC46B">S2 uncertain</span>     quarantine     9.8 GB  7 days   ~/code/ml-lab/.venv
+     <span style="color: #A39DA8">left out: worktree agent/fix-auth-93 (S3 protected · 2 uncommitted files)</span>
+
+  5 items · 37.1 GB predicted
+  19.1 GB deleted, <span style="color: #FFFFFF">not undoable</span> · 18.0 GB quarantined, 7-day undo
+  each item is re-checked right before it is touched
+
+To approve, type the code shown here: <span style="color: #FFFFFF; font-weight: 500; letter-spacing: 0.12em">W4N-R7C</span>
+<span style="color: #A39DA8">(type deny to deny · Ctrl-C leaves it pending)</span>
+<span style="color: #FF8CC6">›</span> w4n-r7c
+
+<span style="color: #B79CFF">✓</span> <span style="color: #FFFFFF">Approved plan 9c41·e07b</span> · single use · lapses at 10:57:06
+  Claude Code can now run it once. Nothing has been deleted yet.
+  <span style="color: #A39DA8">audit: approval #212 · method cli_tty · user joff</span></pre>
+    </section>
+    <section class="tile" aria-label="Terminal: refusals" style="grid-column: span 5; border-radius: 22px; background: #15121A; overflow: hidden; display: flex; flex-direction: column">
+      <div style="height: 40px; padding: 0 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #2A2530"><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="width: 12px; height: 12px; border-radius: 999px; background: #3A3440"></span><span style="margin-left: 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #A39DA8">when scull says no</span></div>
+<pre style="margin: 0; padding: 18px 20px 22px; font-family: 'DM Mono', monospace; font-size: 12.5px; line-height: 1.7; color: #E8E3EE; white-space: pre-wrap; overflow-x: auto"><span style="color: #A39DA8"># piped or run by an agent's shell tool</span>
+<span style="color: #A39DA8">$</span> echo W4N-R7C | scull approve 9c41e07b
+<span style="color: #FF8CC6">error[usage]</span> approve needs an interactive
+  terminal; stdin is not a TTY.
+  Approvals can't be piped or scripted.
+
+<span style="color: #A39DA8"># typo, then deny</span>
+<span style="color: #FF8CC6">›</span> W4M-R7C
+  code didn't match; nothing approved. Try again.
+<span style="color: #FF8CC6">›</span> deny
+<span style="color: #FF8CC6">denied</span> plan 9c41·e07b. Nothing changed.
+  The agent sees "denied by user".
+
+<span style="color: #A39DA8"># too late</span>
+<span style="color: #FF8CC6">error[plan_expired]</span> plan 9c41·e07b
+  expired at 10:57:06. Nothing changed.
+  Ask the agent to prepare a new plan.
+
+<span style="color: #A39DA8"># already used</span>
+<span style="color: #FF8CC6">error[usage]</span> plan 9c41·e07b was approved
+  at 10:44:31 and run at 10:44:39.
+  Approvals are single use.
+
+<span style="color: #A39DA8"># disk changed after the plan was made</span>
+<span style="color: #FF8CC6">error[plan_invalidated]</span> 1 target
+  changed since 10:42:06:
+  ~/code/shop-api/node_modules
+  Nothing changed. Ask for a new plan.</pre>
+    </section>
+    <section class="tile" aria-label="Why a terminal and a code" style="grid-column: span 12; border-radius: 22px; background: #FFFFFF; padding: 24px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; font-size: 13px">
+      <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600">Your terminal, not the agent's</span><span style="color: #615B66">The command refuses to run without an interactive TTY, so an agent's shell tool can't pipe an answer in.</span></div>
+      <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600">A fresh code every time</span><span style="color: #615B66">The code is made when the prompt opens, shown only on your screen, and never stored or sent over MCP.</span></div>
+      <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600">Same record as the desktop</span><span style="color: #615B66">Both write one approval: plan ID, fingerprint, method, time, expiry, single use. Deny and expiry are logged too.</span></div>
+    </section>
+  </div>
+  <nav aria-label="Design states" style="padding: 4px 8px 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870; text-align: center">design states · <sc-for list="{{stateLinks}}" as="l" hint-placeholder-count="9"><a href="{{l.href}}" aria-current="{{l.current}}" style="display: inline-block; padding: 12px 6px; color: {{l.color}}">{{l.label}}</a></sc-for></nav>
+</div>
+</sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1640}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = this.preset(this.hashState());
+  }
+  hashState() {
+    const m = /state=([a-z-]+)/.exec((typeof location !== 'undefined' && location.hash) || '');
+    return m ? m[1] : 'pending';
+  }
+  preset(name) {
+    const all = { nm: true, turbo: true, wt: true, lib: true, venv: true };
+    const base = { name: name, view: 'app', phase: 'pending', reviewed: {}, code: '', left: 822, approvedAt: '10:44:31', closedAt: '10:44:31', step: 0, auto: true, revoked: false, shake: false, fresh: false };
+    const p = {
+      pending: {},
+      ready: { reviewed: all, code: 'K7Q-4MP', left: 801 },
+      approved: { phase: 'approved', reviewed: all, code: 'K7Q-4MP', left: 755, auto: false },
+      running: { phase: 'running', reviewed: all, left: 747, step: 3, auto: false },
+      executed: { phase: 'done', reviewed: all, left: 745 },
+      expired: { phase: 'expired', reviewed: { nm: true, turbo: true }, left: 0, closedAt: '10:57:06' },
+      denied: { phase: 'denied', reviewed: { nm: true }, left: 790, closedAt: '10:43:56' },
+      changed: { phase: 'invalid', reviewed: { nm: true, turbo: true, wt: true }, left: 776, closedAt: '10:44:10' },
+      notification: { view: 'notify' },
+      terminal: { view: 'terminal' }
+    }[name];
+    return Object.assign(base, p || {});
+  }
+  setState(p) {
+    const a = typeof document !== 'undefined' ? document.activeElement : null;
+    const id = a && a.id;
+    const pos = id && typeof a.selectionStart === 'number' ? a.selectionStart : null;
+    super.setState(p);
+    this.ensureTick();
+    if (id) requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (el && document.activeElement !== el && !el.disabled) {
+        el.focus({ preventScroll: true });
+        if (pos != null && el.setSelectionRange) { try { el.setSelectionRange(pos, pos); } catch (e) {} }
+      }
+    });
+  }
+  componentDidMount() {
+    this.ensureTick();
+    window.addEventListener('hashchange', () => { this.clearRun(); this.setState(this.preset(this.hashState())); });
+  }
+  componentWillUnmount() { if (this.tick) clearInterval(this.tick); this.clearRun(); }
+  clearRun() { (this.runT || []).forEach((t) => clearTimeout(t)); this.runT = []; }
+  ensureTick() {
+    const want = this.state.view === 'app' && this.state.phase === 'pending' && this.state.left > 0;
+    if (want && !this.tick) {
+      this.tick = setInterval(() => {
+        const left = Math.max(0, this.state.left - 1);
+        if (left === 0) { this.setState({ left: 0, phase: 'expired', closedAt: '10:57:06', fresh: true }); return; }
+        if (left === 60) { this.setState({ left: left }); return; }
+        // Patch only the countdown in place: a full re-render every second would swap the
+        // buttons under the pointer and drop clicks.
+        this.state = Object.assign({}, this.state, { left: left });
+        const mmss = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+        document.querySelectorAll('[data-tick="mmss"]').forEach((n) => { n.textContent = mmss; });
+        document.querySelectorAll('[data-tick="ring"]').forEach((n) => n.setAttribute('stroke-dasharray', Math.round(left / 900 * 214) + ' 214'));
+        document.querySelectorAll('[data-tick="timer"]').forEach((n) => n.setAttribute('aria-label', mmss + ' left to decide'));
+      }, 1000);
+    } else if (!want && this.tick) { clearInterval(this.tick); this.tick = null; }
+  }
+  runFrom(step) {
+    this.clearRun();
+    const later = (ms, fn) => this.runT.push(setTimeout(fn, ms));
+    let t = 0;
+    for (let k = step; k <= 5; k++) {
+      const kk = k;
+      later(t, () => this.setState({ phase: 'running', step: kk }));
+      t += 700;
+    }
+    later(t + 300, () => this.setState({ phase: 'done' }));
+  }
+  renderVals() {
+    const s = this.state;
+    const tierDefs = {
+      S0: { label: 'S0 Regenerable', bg: '#7C4DFF', fg: '#FFFFFF' },
+      S1: { label: 'S1 Costly', bg: '#DCCBFF', fg: '#15121A' },
+      S2: { label: 'S2 Uncertain', bg: 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)', fg: '#15121A' }
+    };
+    const base = [
+      { id: 'nm', path: '~/code/shop-api/node_modules', sub: 'shop-api · idle 3 days · reinstall: npm ci, about 1 min', tier: 'S0', evidence: 'package.json + package-lock.json', action: 'Delete', gb: 12.4, undo: 'Reinstall', out: 'Freed 12.2 GB' },
+      { id: 'turbo', path: '~/code/shop-api/.turbo', sub: 'shop-api · build cache · refilled on next turbo run', tier: 'S0', evidence: 'turbo.json + lockfile', action: 'Delete', gb: 1.9, undo: 'Rebuild', out: 'Freed 1.9 GB' },
+      { id: 'wt', path: '3 worktree artifact folders', sub: 'agent/fix-auth-91, -92, -94 · merged · worktrees kept', tier: 'S0', evidence: 'Markers + lockfiles in each', action: 'Delete', gb: 4.8, undo: 'Rebuild', out: 'Freed 4.7 GB' },
+      { id: 'lib', path: '~/code/kart-game/Library', sub: 'kart-game · Unity re-import takes about 25 min', tier: 'S1', evidence: 'ProjectSettings/ present', action: 'Quarantine', gb: 8.2, undo: '7 days', out: 'Moved · 7-day undo' },
+      { id: 'venv', path: '~/code/ml-lab/.venv', sub: 'ml-lab · no lockfile, may not be reproducible', tier: 'S2', evidence: 'pyproject.toml, no lock', action: 'Quarantine', gb: 9.8, undo: '7 days', out: 'Moved · 7-day undo' }
+    ];
+    const phase = s.phase;
+    const pending = phase === 'pending';
+    const closed = phase === 'expired' || phase === 'denied' || phase === 'invalid';
+    const execView = phase === 'running' || phase === 'done';
+    const nReviewed = base.filter((b) => s.reviewed[b.id]).length;
+    const allReviewed = nReviewed === base.length;
+    const norm = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const codeOk = norm(s.code) === 'K7Q4MP';
+    const codeTyped = norm(s.code).length > 0;
+    const canApprove = pending && allReviewed && codeOk;
+    const clock = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, x = sec % 60; return h + ':' + String(m).padStart(2, '0') + ':' + String(x).padStart(2, '0'); };
+    const nowStr = clock(10 * 3600 + 57 * 60 + 6 - s.left);
+    const mmss = Math.floor(s.left / 60) + ':' + String(s.left % 60).padStart(2, '0');
+
+    const items = base.map((b, k) => {
+      const t = tierDefs[b.tier];
+      const on = !!s.reviewed[b.id];
+      const changed = phase === 'invalid' && b.id === 'nm';
+      let st = 'todo';
+      if (phase === 'done' || (phase === 'running' && k < s.step)) st = 'done';
+      else if (phase === 'running' && k === s.step) st = 'active';
+      const it = {
+        path: b.path, sub: changed ? 'Changed 40 s ago: npm install wrote 214 files · plan no longer matches the disk' : b.sub,
+        subColor: changed ? '#15121A' : '#615B66',
+        evidence: b.evidence, action: b.action, size: b.gb.toFixed(1) + ' GB',
+        tier: t.label, tierBg: t.bg, tierFg: t.fg,
+        boxId: 'review-' + b.id, on: on, locked: !pending,
+        boxText: on ? 'Seen' : 'Review',
+        aria: 'Reviewed ' + b.path,
+        toggle: () => { if (this.state.phase === 'pending') this.setState({ reviewed: Object.assign({}, this.state.reviewed, { [b.id]: !this.state.reviewed[b.id] }) }); },
+        showBox: !execView, showStatus: execView,
+        rowBg: changed ? 'repeating-linear-gradient(135deg, #FFF3DD 0 10px, #FFFAF0 10px 20px)' : (st === 'active' ? '#F3ECFF' : (pending && !on ? '#FAF9F7' : '#FFFFFF')),
+        opacity: (phase === 'expired' || phase === 'denied') ? '0.6' : '1',
+        anim: 'none',
+        last: b.undo, lastColor: '#615B66',
+        dotBg: st === 'done' ? '#7C4DFF' : '#FFFFFF', dotBorder: st === 'done' ? '#7C4DFF' : (st === 'active' ? '#D6268A' : '#D8D3CB'),
+        dotAnim: (st === 'done' && phase === 'running' && k === s.step - 1) ? 'scull-pop 340ms ease-out' : (st === 'active' ? 'scull-pulse 800ms ease-in-out infinite' : 'none'),
+        checkOpacity: st === 'done' ? '1' : '0',
+        statusAria: st === 'done' ? 'Done' : (st === 'active' ? 'Re-checking and cleaning' : 'Waiting')
+      };
+      if (phase === 'done') { it.last = b.out; it.lastColor = '#15121A'; }
+      else if (phase === 'running') { it.last = st === 'done' ? b.out : (st === 'active' ? 'Re-checking…' : 'Waiting'); it.lastColor = st === 'todo' ? '#615B66' : '#15121A'; }
+      if (changed) { it.last = 'Changed'; it.lastColor = '#15121A'; }
+      return it;
+    });
+
+    let tableTitle = 'Review each item';
+    let tableHint = nReviewed + ' of 5 reviewed · tick each one once you have looked at it';
+    if (phase === 'approved') { tableTitle = 'Approved plan'; tableHint = 'Locked: approval is bound to these 5 items'; }
+    if (phase === 'running') { tableTitle = 'Claude Code is running this plan'; tableHint = Math.min(s.step, 5) + ' of 5 done · each item re-checked first'; }
+    if (phase === 'done') { tableTitle = 'Result'; tableHint = '5 of 5 done · 0 skipped · measured, not estimated'; }
+    if (phase === 'expired') { tableTitle = 'Plan (expired)'; tableHint = 'Read-only · nothing was changed'; }
+    if (phase === 'denied') { tableTitle = 'Plan (denied)'; tableHint = 'Read-only · nothing was changed'; }
+    if (phase === 'invalid') { tableTitle = 'Plan (no longer valid)'; tableHint = '1 item changed after the plan was made'; }
+
+    const animateApproved = s.fresh && phase === 'approved';
+    const exp = { tickKey: pending ? 'mmss' : 'static', checkOffset: animateApproved ? '48' : '0', checkAnim: animateApproved ? 'scull-check 380ms 200ms ease-out forwards' : 'none', bg: '#FFFFFF', border: '#FFFFFF', track: '#F7D9E8', stroke: '#D6268A', dash: Math.round(s.left / 900 * 214), check: false, label: 'Time left to decide', big: mmss, color: '#15121A', anim: 'none', sub: 'Expires at 10:57:06. After that the plan is void.', aria: mmss + ' left to decide' };
+    if (pending && s.left <= 60) { exp.bg = '#FCEEF5'; exp.border = '#F3C9DE'; exp.color = '#B81E74'; exp.anim = 'scull-pulse 1000ms ease-in-out infinite'; exp.sub = 'Expiring now. Approve or deny.'; }
+    if (phase === 'approved' || phase === 'running') { Object.assign(exp, { track: '#F3ECFF', stroke: '#7C4DFF', dash: 214, check: true, label: 'Approved at ' + s.approvedAt, big: 'Ready', sub: 'Single use · lapses at 10:57:06 if unused', aria: 'Approved' }); }
+    if (phase === 'done') { Object.assign(exp, { track: '#F3ECFF', stroke: '#7C4DFF', dash: 214, check: true, label: 'Approval', big: 'Spent', sub: 'Used once at 10:44:39 · can\'t run again', aria: 'Approval spent' }); }
+    if (phase === 'expired') { Object.assign(exp, { track: '#F2EFEA', stroke: '#F2EFEA', dash: 0, label: 'Expired at 10:57:06', big: '0:00', color: '#615B66', sub: 'Nothing ran. The plan is void.', aria: 'Expired' }); }
+    if (phase === 'denied') { Object.assign(exp, { track: '#F2EFEA', stroke: '#F2EFEA', dash: 0, label: (s.revoked ? 'Revoked at ' : 'Denied at ') + s.closedAt, big: s.revoked ? 'Revoked' : 'Denied', sub: 'Nothing ran. The plan is closed.', aria: 'Denied' }); }
+    if (phase === 'invalid') { Object.assign(exp, { track: '#F2EFEA', stroke: '#F2EFEA', dash: 0, label: 'Void since ' + s.closedAt, big: 'Void', sub: 'A target changed on disk.', aria: 'Plan void' }); }
+
+    const hex = '9c41e07b5d2a18f3';
+    const pal = ['#F2EFEA', '#15121A', '#D6268A'];
+    const cells = [];
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) {
+      const fill = pal[parseInt(hex[(r * 3 + c) % 16], 16) % 3];
+      cells.push({ x: c * 12 + 0, y: r * 12, fill: fill });
+      if (c < 2) cells.push({ x: (4 - c) * 12, y: r * 12, fill: fill });
+    }
+    const fp = { cells: cells, tag: 'Matches', tagBg: '#F3ECFF', tagFg: '#6B3FD9', opacity: '1', strike: 'none', sub: 'Same as the plan ID Claude Code showed you. Any change voids approval.' };
+    if (phase === 'invalid') Object.assign(fp, { tag: 'Void', tagBg: '#FCEEF5', tagFg: '#B81E74', opacity: '0.45', strike: 'line-through', sub: 'The disk no longer matches this fingerprint.' });
+    if (phase === 'expired' || phase === 'denied') Object.assign(fp, { tag: 'Closed', tagBg: '#F2EFEA', tagFg: '#4A4450', opacity: '0.6', sub: 'This fingerprint can never be approved again.' });
+
+    let subline = 'plan 9c41·e07b · prepared by Claude Code 10:42:06 · single use · nothing runs until you approve';
+    if (phase === 'approved') subline = 'plan 9c41·e07b · approved by you at ' + s.approvedAt + ' · waiting for Claude Code · single use';
+    if (phase === 'running') subline = 'plan 9c41·e07b · Claude Code is running it · approved by you at ' + s.approvedAt;
+    if (phase === 'done') subline = 'plan 9c41·e07b · done at 10:44:52 · approval spent';
+    if (phase === 'expired') subline = 'plan 9c41·e07b · expired at 10:57:06 · nothing changed';
+    if (phase === 'denied') subline = 'plan 9c41·e07b · ' + (s.revoked ? 'approval revoked' : 'denied') + ' at ' + s.closedAt + ' · nothing changed';
+    if (phase === 'invalid') subline = 'plan 9c41·e07b · invalidated at ' + s.closedAt + ' · nothing changed';
+
+    const rv = allReviewed ? { color: '#15121A', dot: '#7C4DFF', mark: '✓', text: 'All 5 items reviewed' } : { color: '#4A4450', dot: '#77717A', mark: String(5 - nReviewed), text: 'Review ' + (5 - nReviewed) + ' more item' + (5 - nReviewed === 1 ? '' : 's') + ' in the list above' };
+    let cd = { color: '#4A4450', dot: '#77717A', mark: '·', text: 'Type the code shown on the left' };
+    if (codeOk) cd = { color: '#15121A', dot: '#7C4DFF', mark: '✓', text: 'Code matches' };
+    else if (codeTyped && norm(s.code).length >= 6) cd = { color: '#B81E74', dot: '#B81E74', mark: '!', text: 'That code doesn\'t match. Check each character.' };
+    else if (codeTyped) cd = { color: '#4A4450', dot: '#77717A', mark: '…', text: 'Keep typing: ' + norm(s.code).length + ' of 6 characters' };
+
+    const approve = () => {
+      const st = this.state;
+      if (st.phase !== 'pending') return;
+      const ok = base.every((b) => st.reviewed[b.id]) && norm(st.code) === 'K7Q4MP';
+      if (!ok) { this.setState({ shake: true }); return; }
+      this.setState({ phase: 'approved', approvedAt: nowStr, fresh: true, auto: true });
+      this.clearRun();
+      this.runT.push(setTimeout(() => { if (this.state.phase === 'approved') this.runFrom(0); }, 2600));
+    };
+    const deny = () => { if (this.state.phase === 'pending') this.setState({ phase: 'denied', closedAt: nowStr, revoked: false }); };
+    const revoke = () => { if (this.state.phase === 'approved') { this.clearRun(); this.setState({ phase: 'denied', closedAt: s.approvedAt.replace(/\d\d$/, (x) => String(Math.min(59, +x + 9)).padStart(2, '0')), revoked: true }); } };
+    const reset = () => { this.clearRun(); if (location.hash && location.hash !== '#state=pending') location.hash = 'state=pending'; this.setState(this.preset('pending')); };
+    const onCode = (e) => this.setState({ code: e.target.value.slice(0, 9), shake: false });
+    const onKey = (e) => { if (e.key === 'Enter') approve(); };
+
+    const steps = [
+      { text: 'Plan prepared by Claude Code', time: '10:42:06', state: 'done' },
+      { text: 'Approved by you in scull', time: s.approvedAt, state: 'done' },
+      { text: phase === 'approved' ? 'Waiting for Claude Code to run it' : 'Claude Code is running it · ' + Math.min(s.step, 5) + ' of 5', time: phase === 'approved' ? '' : '10:44:39', state: 'active' },
+      { text: 'Measured result, logged in History', time: '', state: 'todo' }
+    ].map((x) => ({
+      text: x.text, time: x.time,
+      sr: x.state === 'done' ? 'Done: ' : (x.state === 'active' ? 'In progress: ' : 'Next: '),
+      color: x.state === 'todo' ? '#615B66' : '#15121A',
+      dot: x.state === 'done' ? '#7C4DFF' : '#FFFFFF', ring: x.state === 'done' ? '#7C4DFF' : (x.state === 'active' ? '#D6268A' : '#D8D3CB'),
+      mark: x.state === 'done' ? '✓' : '',
+      anim: x.state === 'active' ? 'scull-pulse 1000ms ease-in-out infinite' : 'none'
+    }));
+
+    const closedInfo = {
+      expired: { title: 'This request expired · nothing changed', text: 'No one approved plan 9c41·e07b within 15 minutes, so it is void. Claude Code gets "expired" when it checks and can prepare a new plan if you still want one.', log: 'audit · 10:57:06 · plan 9c41·e07b · expired · 0 items touched', icon: '0:00', iconSize: '14px', iconBg: '#F2EFEA', iconFg: '#4A4450', bg: '#FFFFFF', border: '#E6E2DC' },
+      denied: { title: s.revoked ? 'Approval revoked · nothing changed' : 'You denied this request · nothing changed', text: s.revoked ? 'You took the approval back before Claude Code used it. The plan is closed and can\'t be approved again.' : 'Claude Code gets "denied by user" the next time it checks. It can\'t reopen this plan; a new request needs a new plan and a new review.', log: 'audit · ' + s.closedAt + ' · plan 9c41·e07b · ' + (s.revoked ? 'revoked' : 'denied') + ' via desktop · 0 items touched', icon: '✕', iconSize: '20px', iconBg: '#15121A', iconFg: '#FFFFFF', bg: '#FFFFFF', border: '#E6E2DC' },
+      invalid: { title: 'This plan changed since it was prepared', text: '~/code/shop-api/node_modules was modified after Claude Code made the plan, so the plan no longer matches the disk and can\'t be approved. Nothing was changed. Claude Code is told the plan was invalidated and can prepare a fresh one.', log: 'audit · ' + s.closedAt + ' · plan 9c41·e07b · invalidated (target changed) · 0 items touched', icon: '≠', iconSize: '22px', iconBg: '#FFB547', iconFg: '#15121A', bg: '#FFFFFF', border: '#E6E2DC' }
+    }[phase] || { title: '', text: '', log: '', icon: '', iconSize: '', iconBg: '', iconFg: '', bg: '', border: '' };
+
+    const colors = ['#D6268A', '#15121A', '#7C4DFF', '#FFB547', '#DCCBFF'];
+    const particles = [];
+    for (let i = 0; i < 20; i++) {
+      particles.push({
+        size: [8, 10, 12, 9][i % 4], radius: i % 3 === 0 ? '3px' : '50%', color: colors[i % colors.length],
+        anim: 'scull-b' + (i % 10) + ' ' + (800 + (i % 5) * 90) + 'ms ' + (500 + (i >= 10 ? 140 : 0)) + 'ms cubic-bezier(.15,.7,.3,1) both'
+      });
+    }
+    const links = [['pending', 'pending'], ['ready', 'ready to approve'], ['approved', 'approved'], ['running', 'agent running'], ['executed', 'executed'], ['expired', 'expired'], ['denied', 'denied'], ['changed', 'plan changed'], ['notification', 'notification'], ['terminal', 'terminal']];
+    let cur = s.view === 'notify' ? 'notification' : (s.view === 'terminal' ? 'terminal' : ({ approved: 'approved', running: 'running', done: 'executed', expired: 'expired', denied: 'denied', invalid: 'changed' }[phase] || (canApprove ? 'ready' : 'pending')));
+    const stateLinks = links.map((l) => ({ href: '#state=' + l[0], label: l[1], current: cur === l[0] ? 'page' : 'false', color: cur === l[0] ? '#B81E74' : '#4A4450' }));
+
+    return {
+      isApp: s.view === 'app', isNotify: s.view === 'notify', isTerminal: s.view === 'terminal',
+      subline: subline, pillPulse: pending ? 'scull-pulse 1600ms ease-in-out infinite' : 'none',
+      consentNote: pending ? 'An AI tool call is not your consent. Only you can approve this, here or in your own terminal. Claude Code never sees the code below.' : 'An AI tool call is not your consent. Every request, approval, denial and result is kept in History with the plan fingerprint.',
+      askTitle: phase === 'done' ? 'Claude Code cleaned 5 items with your approval' : (closed ? 'Claude Code asked to clean 5 items · 37.1 GB' : 'Claude Code wants to clean 5 items · 37.1 GB'),
+      exp: exp, fp: fp, items: items, tableTitle: tableTitle, tableHint: tableHint,
+      firstCol: execView ? 'Status' : 'Reviewed', lastCol: phase === 'done' ? 'Outcome' : (phase === 'running' ? 'Now' : 'Undo'),
+      showConfirm: pending, showApproved: phase === 'approved' || phase === 'running', showClosed: closed, done: phase === 'done',
+      approveDisabled: !canApprove, approveBg: canApprove ? '#15121A' : '#F2EFEA', approveFg: canApprove ? '#FFFFFF' : '#615B66', approveCursor: canApprove ? 'pointer' : 'not-allowed',
+      code: s.code, onCode: onCode, onKey: onKey, codeAria: 'Confirmation code: K 7 Q, dash, 4 M P',
+      codeBorder: codeOk ? '#7C4DFF' : ((codeTyped && norm(s.code).length >= 6) || s.shake ? '#B81E74' : '#D8D3CB'),
+      codeAnim: s.shake ? 'scull-shake 360ms ease-in-out' : 'none',
+      rv: rv, cd: cd, approve: approve, deny: deny, revoke: revoke, reset: reset,
+      approvedAt: s.approvedAt, steps: steps, canRevoke: phase === 'approved',
+      apTitle: phase === 'approved' ? 'Approved for one run' : 'Running with your approval',
+      apSub: phase === 'approved' ? 'Claude Code can now run plan 9c41·e07b once. It hasn\'t yet: nothing has been deleted. You can still revoke until it starts.' : 'Each item is re-checked right before it is touched. Anything that changed is skipped and reported.',
+      approvedAnim: animateApproved ? 'scull-rise 320ms ease-out' : 'none',
+      ringOffset: animateApproved ? '214' : '0', ringAnim: animateApproved ? 'scull-ring 700ms ease-out forwards' : 'none',
+      checkOffset: animateApproved ? '48' : '0', checkAnim: animateApproved ? 'scull-check 380ms 620ms ease-out forwards' : 'none',
+      closed: closedInfo, particles: particles, stateLinks: stateLinks
+    };
+  }
+}
+</script>
+</body>
+</html>

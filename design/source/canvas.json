@@ -4,7 +4,7 @@
     "v": 1,
     "at": "2026-10-31T08:05:00Z"
   },
-  "title": "scull — desktop UI",
+  "title": "scull \u2014 desktop UI",
   "launch": {
     "view": "canvas"
   },
@@ -107,6 +107,15 @@
       "title": "Settings",
       "expand": "fill",
       "is_interactive": true
+    },
+    "McpApproval.dc.html": {
+      "x": 0,
+      "y": 6720,
+      "w": 1440,
+      "h": 1720,
+      "title": "MCP approval (agent request)",
+      "expand": "fill",
+      "is_interactive": true
     }
   },
   "order": [
@@ -120,13 +129,14 @@
     "Explorer.dc.html",
     "Caches.dc.html",
     "History.dc.html",
-    "Settings.dc.html"
+    "Settings.dc.html",
+    "McpApproval.dc.html"
   ],
   "notes": {
     "title": {
       "x": 0,
       "y": -320,
-      "text": "scull — desktop UI v0.6 · every sidebar page · ink + magenta duotone",
+      "text": "scull \u2014 desktop UI v0.6 \u00b7 every sidebar page \u00b7 ink + magenta duotone",
       "kind": "title1",
       "maxW": 3420
     }

@@ -46,7 +46,17 @@ const SHOTS = [
   { file: 'Settings', name: '10b-settings-drives', act: async (p) => { await p.getByRole('tab', { name: 'Drives' }).click(); await wait(500); } },
   { file: 'Settings', name: '10c-settings-agents', act: async (p) => { await p.getByRole('tab', { name: 'AI agents' }).click(); await wait(500); } },
   { file: 'MenuBar', name: '11-menu-bar-widget', w: 380, h: 660 },
-  { file: 'MenuBar', name: '11b-menu-bar-quick-clean-done', w: 380, h: 660, act: async (p) => { await p.getByRole('button', { name: /^Quick Clean/ }).click(); await wait(3000); } }
+  { file: 'MenuBar', name: '11b-menu-bar-quick-clean-done', w: 380, h: 660, act: async (p) => { await p.getByRole('button', { name: /^Quick Clean/ }).click(); await wait(3000); } },
+  { file: 'McpApproval', name: '12-mcp-approval' },
+  { file: 'McpApproval', name: '12b-mcp-approval-notification', hash: '#state=notification' },
+  { file: 'McpApproval', name: '12c-mcp-approval-ready', hash: '#state=ready' },
+  { file: 'McpApproval', name: '12d-mcp-approval-approved', hash: '#state=approved' },
+  { file: 'McpApproval', name: '12e-mcp-approval-agent-running', hash: '#state=running' },
+  { file: 'McpApproval', name: '12f-mcp-approval-executed', hash: '#state=executed', act: async () => { await wait(1400); } },
+  { file: 'McpApproval', name: '12g-mcp-approval-expired', hash: '#state=expired' },
+  { file: 'McpApproval', name: '12h-mcp-approval-denied', hash: '#state=denied' },
+  { file: 'McpApproval', name: '12i-mcp-approval-plan-changed', hash: '#state=changed' },
+  { file: 'McpApproval', name: '12j-mcp-approval-terminal', hash: '#state=terminal' }
 ];
 
 (async () => {
@@ -56,7 +66,7 @@ const SHOTS = [
     const page = await browser.newPage({ viewport: { width: s.w || 1440, height: s.h || 900 }, deviceScaleFactor: 1, reducedMotion: 'no-preference' });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto('file://' + path.join(PAGES, s.file + '.dc.html'));
+    await page.goto('file://' + path.join(PAGES, s.file + '.dc.html') + (s.hash || ''));
     await page.waitForFunction(() => window.__dcRenders > 0, null, { timeout: 5000 }).catch(() => errors.push('never rendered'));
     await page.evaluate(() => document.fonts.ready);
     await wait(900);
