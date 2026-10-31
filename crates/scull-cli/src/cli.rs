@@ -363,7 +363,8 @@ pub enum WorktreesAction {
 }
 
 /// Arguments for `scull clean`. Without a subcommand this plans a cleanup (dry run by
-/// default); executing requires `--plan` plus `--confirm` (CLI-03).
+/// default); executing requires `--plan` plus `--confirm` (CLI-03), or answering the prompt
+/// on a terminal.
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct CleanArgs {
@@ -371,27 +372,52 @@ pub struct CleanArgs {
     #[command(subcommand)]
     pub action: Option<CleanAction>,
 
-    /// Only plan; never delete (the default).
+    /// Scan root; repeat for several (default: `scan.roots` from the config file; with
+    /// --plan, the roots the plan was made from).
+    #[arg(long = "root", value_name = "PATH")]
+    pub roots: Vec<PathBuf>,
+
+    /// Allow scanning a filesystem root, your home folder, or a folder that contains it
+    /// (refused by default, CFG-04).
+    #[arg(long)]
+    pub allow_broad_roots: bool,
+
+    /// Allow scan roots on network or virtual volumes such as NFS, SMB, FUSE, tmpfs or
+    /// overlay (skipped by default, D-22).
+    #[arg(long)]
+    pub allow_network_roots: bool,
+
+    /// Also plan S1 (costly to recreate) items; they are quarantined, not deleted.
+    #[arg(long, conflicts_with = "plan")]
+    pub include_s1: bool,
+
+    /// Plan exactly these items (item ID or path; repeat for several). The only way to plan
+    /// an S2 (uncertain) item.
+    #[arg(long = "item", value_name = "ID|PATH", conflicts_with_all = ["plan", "include_s1"])]
+    pub items: Vec<String>,
+
+    /// Only plan or review; never execute or ask (the default without a terminal).
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,
 
-    /// Write the plan to this file.
+    /// Write the plan to this file (owner-only).
     #[arg(long, value_name = "FILE", conflicts_with = "plan")]
     pub output: Option<PathBuf>,
 
-    /// Execute this reviewed plan file (requires --confirm).
+    /// Review or execute this plan file (made by `scull clean --output`).
     #[arg(long, value_name = "FILE")]
     pub plan: Option<PathBuf>,
 
-    /// Confirm execution of --plan.
+    /// Execute --plan without asking.
     #[arg(long, requires = "plan")]
     pub confirm: bool,
 
-    /// Allow permanent deletion of costly or uncertain items (elevated confirmation).
+    /// Confirm items that can't be undone at S1/S2 without typing their count (elevated
+    /// confirmation, SAFE-07; required for them without a terminal).
     #[arg(long, requires = "confirm")]
     pub allow_permanent: bool,
 
-    /// Allow running as root/administrator (refused by default).
+    /// Allow running as root/administrator (refused by default, SAFE-14).
     #[arg(long)]
     pub allow_root: bool,
 }

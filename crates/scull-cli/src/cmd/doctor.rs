@@ -34,11 +34,11 @@ pub const DOCTOR_SCHEMA: SchemaId = SchemaId::new("doctor", 1);
 /// File name of the user config inside the config directory (CFG-01).
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// What `doctor` reports for destructive operations when not blocked by elevation. This build
-/// is inspect-only (alpha): no cleanup command is wired yet (Phase 2, `scull clean`), and the
-/// release gate (`packaging/check_inspect_only.py`) enforces that. Update with P2-CLI-01.
+/// What `doctor` reports for destructive operations when not blocked by elevation (Phase 2:
+/// `scull clean` executes reviewed plans; the inspect-only alpha gate applies to `main` only,
+/// D-33).
 pub const DESTRUCTIVE_OPS_STATUS: &str =
-    "not available in this build (inspect-only); cleanup arrives with `scull clean` (Phase 2)";
+    "allowed after review: `scull clean --plan FILE --confirm` (or the prompt on a terminal)";
 
 /// Everything `scull doctor` reports.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]

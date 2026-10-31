@@ -1,0 +1,598 @@
+{
+  "$defs": {
+    "Action": {
+      "description": "The action proposed for a candidate.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No action: the item is blocked (S3) or inspect-only.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete through the safe executor (S0 default, D-3). Restore path is regeneration.",
+          "properties": {
+            "type": {
+              "const": "delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Atomic same-volume move into `.scull-quarantine/<operation-id>/` (S1/S2 default).",
+          "properties": {
+            "type": {
+              "const": "quarantine",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move to the platform Trash / Recycle Bin (fallback when quarantine isn't possible).",
+          "properties": {
+            "type": {
+              "const": "trash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a tool's own cleanup command (package caches, Docker; SAFE-06, QC-03).",
+          "properties": {
+            "args": {
+              "description": "Structured arguments (no shell), e.g. `[\"cache\", \"verify\"]`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tool": {
+              "description": "Tool name, e.g. \"npm\".",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree remove` (never `--force` unless authorized per item).",
+          "properties": {
+            "type": {
+              "const": "git_worktree_remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree prune` for a stale registration.",
+          "properties": {
+            "type": {
+              "const": "git_worktree_prune",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CleanRunReport": {
+      "additionalProperties": false,
+      "description": "`scull clean --plan FILE --confirm` result (`scull/clean-run@1`).",
+      "properties": {
+        "approver": {
+          "description": "Who approved it.",
+          "type": "string"
+        },
+        "cancelled": {
+          "description": "Whether Ctrl-C stopped it before every item was attempted.",
+          "type": "boolean"
+        },
+        "confirmation": {
+          "description": "How the run was confirmed: `flag` (`--confirm`) or `prompt`.",
+          "type": "string"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash",
+          "description": "Its content hash (what the audit log binds to)."
+        },
+        "elevated_confirmation": {
+          "description": "How the elevated confirmation was given, if needed: `typed` or `flag`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "description": "When it finished.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "items": {
+          "description": "One entry per plan item, in plan order.",
+          "items": {
+            "$ref": "#/$defs/RunItem"
+          },
+          "type": "array"
+        },
+        "measured": {
+          "$ref": "#/$defs/Measured",
+          "description": "Predicted and measured bytes (PHY-02)."
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "description": "The recorded operation (`scull history`, `scull restore`)."
+        },
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "The executed plan."
+        },
+        "restore_hint": {
+          "description": "How to restore quarantined items, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "When execution started (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "totals": {
+          "$ref": "#/$defs/RunTotals",
+          "description": "Totals."
+        }
+      },
+      "required": [
+        "plan_id",
+        "content_hash",
+        "operation_id",
+        "approver",
+        "confirmation",
+        "started_at",
+        "finished_at",
+        "cancelled",
+        "items",
+        "totals",
+        "measured"
+      ],
+      "type": "object"
+    },
+    "ContentHash": {
+      "description": "SHA-256 of the plan's canonical JSON, lowercase hex.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Explanation": {
+      "additionalProperties": false,
+      "description": "One explanation of a measured result.",
+      "properties": {
+        "code": {
+          "description": "Stable code.",
+          "type": "string"
+        },
+        "message": {
+          "description": "In words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "Measured": {
+      "additionalProperties": false,
+      "description": "Predicted and measured bytes of a run (PHY-02).",
+      "properties": {
+        "discrepancy_pct": {
+          "description": "`(measured - predicted) / predicted` in percent.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "exceeds_threshold": {
+          "description": "Predicted and measured differ by more than 10%.",
+          "type": "boolean"
+        },
+        "explanations": {
+          "description": "Explanations (always present when `exceeds_threshold`).",
+          "items": {
+            "$ref": "#/$defs/Explanation"
+          },
+          "type": "array"
+        },
+        "measured_delta_bytes": {
+          "description": "Measured free-space delta over the affected volumes (`None` if unmeasurable).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "moved_bytes": {
+          "description": "Bytes moved.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "predicted_freed_bytes": {
+          "description": "Predicted bytes freed when the run completes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "predicted_moved_bytes": {
+          "description": "Predicted bytes moved into quarantine.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed_bytes": {
+          "description": "Bytes removed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "within_resolution": {
+          "description": "The difference is below what free-space reporting resolves.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "predicted_freed_bytes",
+        "predicted_moved_bytes",
+        "removed_bytes",
+        "moved_bytes",
+        "exceeds_threshold",
+        "within_resolution",
+        "explanations"
+      ],
+      "type": "object"
+    },
+    "OperationId": {
+      "pattern": "^op_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "PlanId": {
+      "pattern": "^plan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "Restorability": {
+      "description": "How (or whether) an action can be undone. Shown in the preview (SAFE-01, SAFE-07).",
+      "oneOf": [
+        {
+          "const": "restorable",
+          "description": "`scull restore` brings it back (quarantine).",
+          "type": "string"
+        },
+        {
+          "const": "via_trash",
+          "description": "Restorable from the platform Trash, outside scull's control.",
+          "type": "string"
+        },
+        {
+          "const": "regenerate",
+          "description": "Not restorable, but regenerable (rebuild / reinstall).",
+          "type": "string"
+        },
+        {
+          "const": "not_restorable",
+          "description": "Not restorable. The preview must say so plainly.",
+          "type": "string"
+        },
+        {
+          "const": "not_applicable",
+          "description": "No action is taken.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunItem": {
+      "additionalProperties": false,
+      "description": "One item of a run.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The planned action."
+        },
+        "fresh_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Tier at revalidation, when re-derived."
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The item."
+        },
+        "message": {
+          "description": "Why, in words.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "moved_bytes": {
+          "description": "Bytes moved into quarantine.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/RunOutcome",
+          "description": "What happened."
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Its planned path."
+        },
+        "planned_tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "Tier at planning time."
+        },
+        "quarantine_entry": {
+          "description": "Its quarantine manifest entry.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "quarantine_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where a quarantined item is now."
+        },
+        "reason_code": {
+          "description": "Stable reason code when it did not fully succeed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed_bytes": {
+          "description": "Allocated bytes removed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restorability": {
+          "$ref": "#/$defs/Restorability",
+          "description": "How what was done can be undone."
+        }
+      },
+      "required": [
+        "item_id",
+        "path",
+        "planned_tier",
+        "action",
+        "outcome",
+        "removed_bytes",
+        "moved_bytes",
+        "restorability"
+      ],
+      "type": "object"
+    },
+    "RunOutcome": {
+      "description": "What happened to one item.",
+      "oneOf": [
+        {
+          "const": "deleted",
+          "description": "Deleted completely.",
+          "type": "string"
+        },
+        {
+          "const": "partly_deleted",
+          "description": "Partly deleted: some entries were kept (each with a reason) or the walk stopped.",
+          "type": "string"
+        },
+        {
+          "const": "quarantined",
+          "description": "Moved into quarantine (restorable).",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "Failed revalidation; nothing was touched.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "Refused by the Executor; nothing was removed.",
+          "type": "string"
+        },
+        {
+          "const": "blocked",
+          "description": "Its action is impossible here and there is no fallback; left in place.",
+          "type": "string"
+        },
+        {
+          "const": "not_run",
+          "description": "Not attempted (cancelled).",
+          "type": "string"
+        }
+      ]
+    },
+    "RunTotals": {
+      "additionalProperties": false,
+      "description": "Totals of a run.",
+      "properties": {
+        "blocked": {
+          "description": "Items blocked.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "moved_bytes": {
+          "description": "Bytes moved into quarantine.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "not_run": {
+          "description": "Items not attempted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "partial": {
+          "description": "Items partly deleted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "refused": {
+          "description": "Items refused.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed_bytes": {
+          "description": "Allocated bytes removed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "description": "Items skipped at revalidation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "succeeded": {
+          "description": "Items that fully succeeded.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "succeeded",
+        "partial",
+        "skipped",
+        "refused",
+        "blocked",
+        "not_run",
+        "removed_bytes",
+        "moved_bytes"
+      ],
+      "type": "object"
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/CleanRunReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/clean-run@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/clean-run@1",
+  "type": "object"
+}

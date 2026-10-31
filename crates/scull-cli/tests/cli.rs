@@ -146,10 +146,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
             &["worktrees", "register", ".", "--ttl", "7d"],
             "(tracked in #111)",
         ),
-        (
-            &["clean"],
-            "`scull clean` is not implemented yet (tracked in #79)",
-        ),
         (&["clean", "caches"], "(tracked in #80)"),
         (&["history"], "(tracked in #81)"),
         (&["restore", "op"], "(tracked in #81)"),

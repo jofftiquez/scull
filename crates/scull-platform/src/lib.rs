@@ -26,6 +26,9 @@
 //!   administrator, and the invoking user under `sudo`, for the executor's refusal and
 //!   `scull doctor` (SAFE-14). [`Elevation::Unknown`] blocks destructive operations like
 //!   [`Elevation::Elevated`].
+//! * [`current_user`] / [`machine_id`]: the account scull runs as (`uid:<n>` / the user SID)
+//!   and a random per-installation machine ID kept in the data directory, which plans are
+//!   bound to (SAFE-11, PRD §10.4).
 //! * `remove` (only with the `delete` cargo feature, which only `scull-cleaner` enables,
 //!   SAFE-10): the handle-relative, no-follow removal walker the Executor deletes through
 //!   (SAFE-04, SAFE-05, SAFE-18): `openat`/`unlinkat` on Unix (P2-EXEC-01), `NtCreateFile`
@@ -60,6 +63,7 @@ pub mod elevation;
 mod error;
 #[cfg(feature = "delete")]
 pub mod exec_lock;
+pub mod identity;
 mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]
@@ -79,6 +83,7 @@ pub use app_dirs::{
 pub use cloud::{CloudProvider, CloudState, SyncMechanism, SyncedRoot, SyncedRoots};
 pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
+pub use identity::{MACHINE_ID_FILE, current_user, machine_id};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
