@@ -30,7 +30,7 @@ describe('mock bridge', () => {
 
   it('never reports an unknown size as 0', () => {
     for (const d of MOCK_DRIVES) {
-      expect(d.total_bytes === null || d.total_bytes > 0).toBe(true);
+      expect(d.total_bytes == null || d.total_bytes > 0).toBe(true);
     }
   });
 

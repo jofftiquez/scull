@@ -1301,9 +1301,16 @@ dependencies = [
 name = "scull-desktop-bridge"
 version = "0.0.0"
 dependencies = [
+ "jsonschema",
  "schemars",
  "scull-core",
+ "scull-detectors",
+ "scull-engine",
+ "scull-fixtures",
+ "scull-git",
  "scull-platform",
+ "scull-safety",
+ "scull-storage",
  "serde",
  "serde_json",
  "tempfile",

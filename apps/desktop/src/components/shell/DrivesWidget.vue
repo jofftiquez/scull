@@ -59,7 +59,7 @@ function why(d: Drive): string {
           ></div>
         </div>
         <span class="text-caption text-text-strong-muted">{{
-          d.free_bytes === null ? 'size unknown' : `${formatBytes(d.free_bytes)} free`
+          d.free_bytes == null ? 'size unknown' : `${formatBytes(d.free_bytes)} free`
         }}</span>
       </div>
       <span v-for="d in notScanned" :key="d.mount_point" class="text-caption text-text-secondary" data-testid="drive-not-scanned">

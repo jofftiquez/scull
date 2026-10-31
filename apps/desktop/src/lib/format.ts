@@ -20,7 +20,7 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 /** Used share of a volume, 0–100, or `null` when either size is unknown. */
-export function usedPercent(total: number | null, free: number | null): number | null {
-  if (total === null || free === null || total <= 0 || free < 0 || free > total) return null;
+export function usedPercent(total: number | null | undefined, free: number | null | undefined): number | null {
+  if (total == null || free == null || total <= 0 || free < 0 || free > total) return null;
   return Math.round(((total - free) / total) * 100);
 }

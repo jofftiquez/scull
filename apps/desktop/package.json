@@ -9,9 +9,10 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "lint": "eslint . && vue-tsc --noEmit",
+    "lint": "eslint . && vue-tsc --noEmit && node scripts/gen-theme.mjs --check && node scripts/gen-types.mjs --check",
     "test": "vitest run",
     "tokens": "node scripts/gen-theme.mjs",
+    "types": "node scripts/gen-types.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -28,9 +29,11 @@
     "@types/node": "26.6.6",
     "@vitejs/plugin-vue": "6.0.10",
     "@vue/test-utils": "2.5.1",
+    "ajv": "8.20.0",
     "eslint": "10.14.0",
     "eslint-plugin-vue": "10.12.0",
     "jsdom": "30.1.3",
+    "json-schema-to-typescript": "16.0.0",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",

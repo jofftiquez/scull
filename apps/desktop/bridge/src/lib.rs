@@ -4,6 +4,21 @@
 //! the logic builds and is tested in the main workspace on every OS (no WebKit needed), and the
 //! app crate stays a shell.
 //!
+//! | Command | Here | Returns |
+//! |---|---|---|
+//! | `app_info` | [`app_info`] | [`AppInfo`] |
+//! | `drives` | [`drives()`] | `Vec<`[`Drive`]`>` |
+//! | `scan` | [`Session::scan`] | [`ScanReport`], with [`ProgressEvent`]s |
+//! | `cancel_operation` | [`Session::cancel`] | `bool` |
+//! | `projects` | [`Session::projects`] | [`ProjectsView`] (last scan) |
+//! | `worktrees` | [`Session::worktrees`] | [`WorktreesView`] (last scan) |
+//! | `caches` | [`Session::caches`] | [`CachesReport`], with [`ProgressEvent`]s |
+//! | `status` | [`Session::status`] | [`DesktopStatus`] |
+//! | `capabilities` | [`Session::capabilities`] | [`CapabilitiesReport`] |
+//!
+//! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
+//! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
+//!
 //! # Read-only by construction (SAFE-10)
 //!
 //! Nothing here can delete, move or modify a file. The crate doesn't depend on
@@ -12,8 +27,17 @@
 //! plan and a human approval, never through the desktop bridge.
 
 pub mod drives;
+pub mod schemas;
+pub mod session;
+pub mod views;
 
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
+pub use scull_core::ScullError;
+pub use scull_engine::{CachesReport, ScanReport, now_unix};
+pub use session::{Session, Setup};
+pub use views::{
+    CapabilitiesReport, DesktopStatus, OpId, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
+};
 
 use schemars::JsonSchema;
 use serde::Serialize;

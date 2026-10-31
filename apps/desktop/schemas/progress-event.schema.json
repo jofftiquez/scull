@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "OpId": {
+      "description": "Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,\nand `cancel_operation` takes it.",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Phase": {
+      "description": "Which stage an operation is in.",
+      "oneOf": [
+        {
+          "const": "scanning",
+          "description": "Walking a root.",
+          "type": "string"
+        },
+        {
+          "const": "analyzing",
+          "description": "Post-walk analysis (Git, classification).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/progress-event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The `scull://progress` event.",
+  "properties": {
+    "allocated_bytes": {
+      "description": "`scanning`: allocated bytes counted so far in this root.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "current": {
+      "description": "`scanning`: directory being listed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entries": {
+      "description": "`scanning`: entries counted so far in this root.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "op_id": {
+      "$ref": "#/$defs/OpId",
+      "description": "The operation this event belongs to."
+    },
+    "phase": {
+      "$ref": "#/$defs/Phase",
+      "description": "Stage."
+    },
+    "root": {
+      "description": "`scanning`: the root being walked.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "what": {
+      "description": "`analyzing`: what is being analysed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "op_id",
+    "phase"
+  ],
+  "title": "ProgressEvent",
+  "type": "object"
+}

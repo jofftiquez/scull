@@ -5,7 +5,7 @@ import { createMockBridge } from './mock';
 import { createTauriBridge } from './tauri';
 import type { ScullBridge } from './types';
 
-export type * from './types';
+export * from './types';
 
 /** Whether the page runs inside Tauri (`withGlobalTauri` / the IPC object is present). */
 export function insideTauri(w: unknown = globalThis): boolean {
@@ -14,7 +14,7 @@ export function insideTauri(w: unknown = globalThis): boolean {
 }
 
 export function selectBridge(w: unknown = globalThis): ScullBridge {
-  return insideTauri(w) ? createTauriBridge() : createMockBridge({ latencyMs: 120 });
+  return insideTauri(w) ? createTauriBridge() : createMockBridge({ latencyMs: 120, progressMs: 250 });
 }
 
 export const BRIDGE_KEY: InjectionKey<ScullBridge> = Symbol('scull-bridge');

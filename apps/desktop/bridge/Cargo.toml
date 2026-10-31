@@ -21,9 +21,16 @@ workspace = true
 [dependencies]
 scull-core.workspace = true
 scull-platform.workspace = true
+scull-engine.workspace = true
+scull-detectors.workspace = true
+scull-git.workspace = true
+scull-safety.workspace = true
+scull-storage.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+scull-fixtures.workspace = true
 tempfile = "3"
+jsonschema = { version = "0.60", default-features = false }

@@ -1,46 +1,101 @@
 // The desktop's view of the scull core. Every screen talks to a ScullBridge, never to Tauri
 // directly, so the UI runs in a plain browser with the mock bridge (development, screenshots,
-// tests) and inside Tauri with the real one. Field names match the Rust side (snake_case).
+// tests) and inside Tauri with the real one.
+//
+// Payload types are GENERATED from the Rust types the commands return (./generated.ts, from
+// apps/desktop/schemas). Shared types (ScanReport, Candidate, CachesReport, ScullError, ...) are
+// the CLI's: tests check the desktop schemas equal crates/scull-cli/schemas.
 //
 // The bridge is read-only by design (SAFE-10): it has no call that deletes, moves or modifies
-// a file. Cleanups go through the core Executor behind an approval, never through this
-// interface.
+// a file. Cleanups go through the core Executor behind a reviewed plan, never through here.
+import type {
+  AppInfo,
+  CachesReport,
+  CapabilitiesReport,
+  DesktopStatus,
+  Drive,
+  ProgressEvent,
+  ProjectsView,
+  ScanParams,
+  ScanReport,
+  ScullError,
+  WorktreesView,
+} from './generated';
 
-/** How scull treats a volume (D-22): scanned, scanned only on request, never scanned. */
-export type ScanPolicy = 'scan' | 'off_by_default' | 'never';
+export type * from './generated';
 
-/** What kind of storage a volume is (mirrors `scull_platform::VolumeKind`). */
-export type DriveKind = 'local' | 'removable' | 'network' | 'virtual' | 'backup';
-
-/** One mounted volume, for the drives widget. Unknown sizes are `null`, never 0. */
-export interface Drive {
-  /** Where it is mounted: `/`, `/Volumes/Dev SSD`, `C:\`. */
-  mount_point: string;
-  /** Short display name. */
-  label: string;
-  kind: DriveKind;
-  scan_policy: ScanPolicy;
-  /** The volume holding the user's home folder. Listed first. */
-  holds_home: boolean;
-  total_bytes: number | null;
-  /** Bytes available to the current user. */
-  free_bytes: number | null;
+/** Options of a long-running operation (scan, caches). */
+export interface OperationOptions {
+  /** Progress, throttled by the core (at most ~10 per second). */
+  onProgress?: (event: ProgressEvent) => void;
+  /** Aborting cancels the operation; it then resolves with a report marked `cancelled`. */
+  signal?: AbortSignal;
 }
 
-/** Which bridge is answering, and about what. */
-export interface AppInfo {
-  /** scull version of the core the bridge talks to. */
-  version: string;
-  /** `tauri` inside the app; `mock` in a plain browser. */
-  bridge: 'tauri' | 'mock';
-  /** The operating system the core runs on. */
-  os: 'macos' | 'windows' | 'linux' | 'unknown';
+/** Every bridge call rejects with this: the core's ScullError (same JSON as the CLI's). */
+export class BridgeError extends Error {
+  readonly error: ScullError;
+  constructor(error: ScullError) {
+    super(error.message);
+    this.name = 'BridgeError';
+    this.error = error;
+  }
+  get kind(): ScullError['kind'] {
+    return this.error.kind;
+  }
+}
+
+/** Whether a value is a ScullError payload. */
+export function isScullError(v: unknown): v is ScullError {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    typeof (v as { kind?: unknown }).kind === 'string' &&
+    typeof (v as { message?: unknown }).message === 'string'
+  );
+}
+
+/** Wrap anything thrown by a transport into a BridgeError. */
+export function toBridgeError(e: unknown): BridgeError {
+  if (e instanceof BridgeError) return e;
+  if (isScullError(e)) return new BridgeError(e);
+  return new BridgeError({ kind: 'internal', message: e instanceof Error ? e.message : String(e) });
 }
 
 export interface ScullBridge {
   readonly kind: 'tauri' | 'mock';
   appInfo(): Promise<AppInfo>;
-  /** Mounted volumes worth showing: local and removable drives first, then the ones scull
-   * does not scan (backup, network), each once. */
+  /** Mounted volumes worth showing: the home drive first, then other scanned drives, then
+   * the ones scull does not scan (backup, network), each once. */
   drives(): Promise<Drive[]>;
+  /** Scan and classify (read-only). Roots default to `scan.roots` from the config. */
+  scan(params: ScanParams, opts?: OperationOptions): Promise<ScanReport>;
+  /** Projects of the last complete scan (empty before the first). */
+  projects(): Promise<ProjectsView>;
+  /** Git worktrees of the last complete scan. */
+  worktrees(): Promise<WorktreesView>;
+  /** Package-manager caches (Quick Clean candidates). */
+  caches(opts?: OperationOptions): Promise<CachesReport>;
+  /** Last recorded scan and free-space samples. */
+  status(): Promise<DesktopStatus>;
+  /** What this machine and build can observe. */
+  capabilities(): Promise<CapabilitiesReport>;
 }
+
+/** Bridge methods and the Tauri command each calls (also used by the parity test). */
+export const COMMANDS = {
+  appInfo: 'app_info',
+  drives: 'drives',
+  scan: 'scan',
+  projects: 'projects',
+  worktrees: 'worktrees',
+  caches: 'caches',
+  status: 'status',
+  capabilities: 'capabilities',
+} as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
+
+/** The Tauri command that cancels an operation. */
+export const CANCEL_COMMAND = 'cancel_operation';
+
+/** The Tauri event carrying ProgressEvent payloads. */
+export const PROGRESS_EVENT = 'scull://progress';

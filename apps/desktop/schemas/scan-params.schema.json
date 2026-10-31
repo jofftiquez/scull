@@ -1,0 +1,31 @@
+{
+  "$id": "scull-desktop/scan-params.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`scan` parameters.",
+  "properties": {
+    "allow_broad_roots": {
+      "default": false,
+      "description": "The user confirmed a broad root (a filesystem root, the home folder or a folder\ncontaining it; CFG-04).",
+      "type": "boolean"
+    },
+    "record_history": {
+      "default": null,
+      "description": "Record the scan in history (default: on).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "roots": {
+      "default": [],
+      "description": "Absolute folders to scan; empty uses `scan.roots` from the configuration.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "ScanParams",
+  "type": "object"
+}

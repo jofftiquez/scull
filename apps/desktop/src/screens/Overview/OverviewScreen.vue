@@ -3,22 +3,45 @@
 // P3-UI-01 and the right sidebar in P3-UI-02.
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import PlaceholderTile from '../../components/PlaceholderTile.vue';
+import { useBridge } from '../../bridge';
+import { cancelScan, core, rescan } from '../../state/core';
+
+const bridge = useBridge();
 </script>
 
 <template>
   <ScreenLayout aside-label="Details">
     <template #actions>
       <button
+        v-if="core.scanning"
         type="button"
-        disabled
-        title="Scanning arrives with the core bridge (P3-APP-02)"
-        class="inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink"
+        class="inline-flex min-h-10 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
+        @click="cancelScan"
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        Cancel
+      </button>
+      <button
+        type="button"
+        :disabled="core.scanning"
+        class="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink disabled:cursor-progress"
+        data-testid="rescan"
+        @click="rescan(bridge)"
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"
+          :style="core.scanning ? 'animation: scull-spin 900ms linear infinite' : undefined"
+        >
           <path d="M20 11a8 8 0 1 0-2.3 5.7" />
           <path d="M20 5v6h-6" />
         </svg>
-        Rescan
+        {{ core.scanning ? 'Scanning' : 'Rescan' }}
       </button>
     </template>
 

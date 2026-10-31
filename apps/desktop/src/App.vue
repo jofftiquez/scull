@@ -5,6 +5,7 @@ import { onMounted } from 'vue';
 import AppSidebar from './components/shell/AppSidebar.vue';
 import { useBridge } from './bridge';
 import { shell } from './state/shell';
+import { refresh } from './state/core';
 
 const bridge = useBridge();
 onMounted(async () => {
@@ -13,6 +14,7 @@ onMounted(async () => {
   } catch {
     // The chip keeps its default; nothing else depends on it.
   }
+  await refresh(bridge);
 });
 </script>
 
