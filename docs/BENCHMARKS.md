@@ -41,11 +41,34 @@ machines are noisy: compare **min** and **median** over several runs, never a si
 | 1M | dua | 13.54 | 12.58 | 14.5 |
 | 1M | du | 5.83 | 5.57 | 2.1 |
 
-### macOS and Windows: GitHub-hosted runners
+### GitHub-hosted runners (Oct 31, 2026)
 
-The `Bench baseline` workflow (`.github/workflows/bench-baseline.yml`, manual dispatch) runs the
-same generator and runner on `ubuntu-latest`, `macos-latest` and `windows-latest`. Results are
-appended below when it has run.
+Run: [Bench baseline #41193392870](https://github.com/jofftiquez/scull/actions/runs/41193392870)
+(`.github/workflows/bench-baseline.yml`, manual dispatch). 2 runs each after one warm-up.
+
+| Runner | Reported hardware | Tree | gdu median / min s | gdu MB | dua median / min s | dua MB |
+|---|---|---|---|---|---|---|
+| `macos-latest` | macOS 26.6 arm64, 5 CPUs, 15 GB, APFS | 100K | 0.21 / 0.19 | 30.8 | 0.16 / 0.15 | 9.5 |
+| `macos-latest` | | 1M | 35.91 / 26.63 | 71.2 | 3.59 / 3.51 | 22.5 |
+| `windows-latest` | Windows Server 2025, 2 CPUs, 8.6 GB, NTFS, Defender on | 100K | 0.61 / 0.54 | 20.5 | 0.90 / 0.88 | 13.6 |
+| `windows-latest` | | 1M | 6.56 / 6.53 | 44.6 | 7.99 / 7.98 | 87.4 |
+| `ubuntu-latest` | Linux 7.0 (Azure), 2 CPUs, 8.3 GB, ext4 | 100K | 0.37 / 0.36 | 22.3 | 0.82 / 0.79 | 4.3 |
+| `ubuntu-latest` | | 1M | not run: runner disk too small for the 13 GB tree | | | |
+
+Notes:
+- gdu on macOS degrades sharply at 1M entries (27–36 s) while dua stays at ~3.5 s; the tool
+  matters more than the OS there. Per-entry work on APFS is not the bottleneck.
+- Windows with Defender is ~2× slower per entry than Linux at 1M for gdu, and dua's memory grows
+  on NTFS (87 MB).
+- Generating the 1M tree takes ~98 s on macOS and several minutes on Windows; the 1M Linux
+  runner case needs a smaller-payload tree (follow-up: `gen_tree.py --payload small`).
+
+### scull scanner (P1-SCAN-01, same 100K/1M trees, Linux dev VM)
+
+Release build of `crates/scull-scanner/examples/scan.rs`, 16 threads, warm cache:
+100K entries in 0.08–0.21 s; **1M entries in 1.1–2.1 s at ~3 MB peak RSS**; cancellation in
+0.5–13 ms; first directory summary after 1–60 ms. That beats gdu (2.8–4.4 s) on the same tree.
+Hardlink dedupe (#37) and detectors will add per-entry work; re-measure after them.
 
 ## Reference hardware (P0-PERF-01)
 
@@ -53,11 +76,11 @@ The PRD proposes an 8-core laptop, 16 GB RAM and NVMe SSD per OS. Until the main
 physical machines, the **reference machines are GitHub's hosted runners**, because anyone can
 reproduce a run and the workflow records the exact CPU/RAM it got:
 
-| OS | Runner | Spec (as reported by the workflow's Hardware step) |
+| OS | Runner | Spec (reported by the workflow, Oct 31, 2026) |
 |---|---|---|
-| Linux | `ubuntu-latest` | filled in from the first run |
-| macOS | `macos-latest` | filled in from the first run |
-| Windows | `windows-latest` | filled in from the first run (NTFS, Defender on) |
+| Linux | `ubuntu-latest` | 2 CPUs, 8.3 GB RAM, Azure VM, ext4 |
+| macOS | `macos-latest` | Apple Silicon arm64, 5 CPUs, 15 GB RAM, APFS |
+| Windows | `windows-latest` | 2 CPUs, 8.6 GB RAM, Windows Server 2025, NTFS, Defender on |
 
 Physical laptop numbers stay a maintainer task (needs real hardware).
 
@@ -69,6 +92,7 @@ Physical laptop numbers stay a maintainer task (needs real hardware).
 - **Peak memory, 1M entries: ≤ 400 MB.** gdu keeps the whole tree in memory at 75 MB; dua uses
   14.5 MB. 400 MB is generous; scull should aim for **≤ 150 MB** by aggregating per directory
   instead of holding every entry (it stores rollups, not per-file rows; DATA-02).
-- Windows (NTFS + Defender) is expected to be several times slower per entry; the runner numbers
-  will set its own target. Per-OS release gates are allowed (PRD §19.1).
+- Windows (NTFS + Defender, 2 CPUs): gdu 6.6 s for 1M. A ≤ 15 s Windows target is realistic on
+  runner-class hardware; per-OS release gates are allowed (PRD §19.1).
+- macOS: dua 3.6 s for 1M on 5 cores, so ≤ 15 s holds on Apple Silicon too.
 - Revisit these targets once the scull scanner (P1-SCAN-01) has numbers on the same trees.
