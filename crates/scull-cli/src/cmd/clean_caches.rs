@@ -16,7 +16,9 @@
 //!   (SAFE-09, exit 6), with a **fresh** activity probe, Quick Clean revalidates each tool
 //!   right before starting it (same cache identity, no link, same volume, not in use, same
 //!   binary) and runs it with a sanitized environment in a private sandbox created in an
-//!   owner-only folder under scull's state directory (not a shared `/tmp`).
+//!   owner-only folder under scull's state directory (not a shared `/tmp`). The run is one
+//!   recorded operation (SAFE-08, P2-EXEC-12): the confirmed preview is stored as a plan
+//!   (resolved binary and exact arguments per tool) and every tool gets one audit row.
 //! * **Result** per tool (QC-06): exit status, cache size before / after, the volume's measured
 //!   free-space delta, and for pnpm why a prune may free less than expected. A tool that was
 //!   planned but did not complete makes the exit code 3.
@@ -43,14 +45,15 @@ use scull_cleaner::quickclean::{
     CleanMode, Ended, NOT_UNDOABLE_NOTE, QuickClean, QuickCleanOptions, QuickCleanPlan,
     QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, ToolResult,
 };
-use scull_core::{ErrorKind, FsPath, ScullError};
+use scull_core::{ErrorKind, FsPath, PlanOrigin, PlanParams, ScanId, ScullError};
 use scull_detectors::caches::CacheTool;
 use scull_detectors::rules::Platform as RulesOs;
 use scull_detectors::{CacheEnv, DetectContext, locate_caches};
-use scull_engine::{FsConfigReader, SignalUnavailable};
+use scull_engine::{FsConfigReader, SignalUnavailable, now_unix};
 use scull_platform::Native;
 use scull_platform::activity::Limits;
 use scull_safety::NativeActivityProbe;
+use scull_storage::{ApprovalMethod, OperationEnd, OperationStart};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -231,6 +234,7 @@ fn skip_code(r: &SkipReason) -> &'static str {
         SkipReason::Elevated(_) => "elevated",
         SkipReason::Cancelled => "cancelled",
         SkipReason::Sandbox(_) => "sandbox",
+        SkipReason::NotApproved => "not_approved",
     }
 }
 
@@ -400,14 +404,50 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
 
     // SAFE-09: one executor at a time; reconcile interrupted operations first (SAFE-19).
     let mut store = exec::open_store()?;
-    let _executor = exec::lock_and_recover(&mut store, ui)?;
+    let executor = exec::lock_and_recover(&mut store, ui)?;
+    // SAFE-08 (P2-EXEC-12): the confirmed preview is recorded as a plan (resolved binary and
+    // exact arguments per tool) and run as one audited operation.
+    let who = exec::who()?;
+    let now = now_unix();
+    let audit_plan = plan.audit_plan(
+        &BTreeSet::new(),
+        PlanParams {
+            id: exec::new_plan_id(now)?,
+            scan_id: ScanId::from_suffix(&exec::new_id_suffix(now))
+                .map_err(|e| ScullError::new(ErrorKind::Internal, e))?,
+            created_unix: now,
+            ttl_secs: None,
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            origin: PlanOrigin::Cli,
+        },
+    )?;
+    store.insert_plan(&audit_plan)?;
+    let mut op = executor.begin_operation(
+        &mut store,
+        &audit_plan,
+        &OperationStart {
+            operation_id: exec::new_operation_id(now)?,
+            plan_id: audit_plan.id().clone(),
+            content_hash: audit_plan.content_hash().clone(),
+            approver: who.user.clone(),
+            method: ApprovalMethod::CliInteractive,
+            started_at: now,
+        },
+    )?;
     if ui.progress {
         ui.progress(&format!("running {} tool(s)...", plan.tools.len()));
     }
     let fresh = NativeActivityProbe::capture(Limits::default());
     let bridge = CancelBridge::start();
-    let ran: QuickCleanReport = qc.run(&plan, &fresh, bridge.token());
+    let ran: QuickCleanReport = qc.run(&mut op, &plan, &fresh, bridge.token())?;
     drop(bridge);
+    let end = if ran.cancelled {
+        OperationEnd::Cancelled
+    } else {
+        OperationEnd::Normal
+    };
+    op.finish(end, now_unix())?;
     let failed = apply_run(&mut report, &plan, &ran);
     emit(&report, ui)?;
 

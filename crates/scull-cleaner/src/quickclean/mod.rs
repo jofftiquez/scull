@@ -15,10 +15,13 @@
 //!    started).
 //! 2. The preview shows [`PlannedTool::command_line`] (the **resolved binary path**, SAFE-12),
 //!    [`NOT_UNDOABLE_NOTE`] and every skipped tool. One confirmation (QC-04).
-//! 3. [`QuickClean::run`] revalidates each tool right before starting it (same cache identity,
-//!    no link, same volume, not in use, same binary), runs it, and reports the exit status,
-//!    the escaped and capped output, the cache size and the volume's free space before and
-//!    after (QC-06), and for pnpm why a prune may free little.
+//! 3. The confirmed Quick Clean becomes a recorded plan ([`QuickCleanPlan::audit_plan`]) and
+//!    an [`Operation`] under the execution lock (see [Audit](#audit-safe-08-safe-19)).
+//! 4. [`QuickClean::run`] revalidates each tool right before starting it (same cache identity,
+//!    no link, same volume, not in use, same binary, still the approved command), runs it,
+//!    audits it, and reports the exit status, the escaped and capped output, the cache size and
+//!    the volume's free space before and after (QC-06), and for pnpm why a prune may free
+//!    little.
 //!
 //! # Which caches are planned
 //!
@@ -115,27 +118,69 @@
 //!   execution lock.
 //!
 //! Without that confirmation nothing is removed.
+//!
+//! # Audit (SAFE-08, SAFE-19)
+//!
+//! Every Quick Clean runs inside an [`Operation`] (P2-EXEC-12), like a cleanup plan:
+//!
+//! 1. [`QuickCleanPlan::audit_plan`] turns the confirmed preview into an immutable
+//!    [`Plan`]: one item per planned tool, whose action is the **resolved binary path and the
+//!    exact arguments** ([`Action::ToolCommand`], escaped and capped: [`MAX_AUDIT_ARG_CHARS`],
+//!    [`MAX_AUDIT_ARGS`]), with the candidate's predicted bytes; plus one item per orphaned
+//!    cache whose tool the user confirmed. The caller records it (`Store::insert_plan`) and
+//!    starts the operation ([`Executor::begin_operation`]: approver, method, plan hash).
+//! 2. [`QuickClean::run`] and [`QuickClean::remove_orphaned`] take that operation. They act only
+//!    on a tool or cache whose item is exactly one of the operation's plan items (what was
+//!    approved); anything else is skipped with [`SkipReason::NotApproved`] and not started.
+//!    Each item gets exactly one audit row:
+//!    * a tool that ran: `tool_run` (exit status 0) with the bytes the cache shrank by as
+//!      `freed_bytes`; otherwise `failed` (cache provably unchanged) or `partial`, with
+//!      `tool_exit:<code>`, `tool_killed`, `tool_timeout`, `cancelled` or `spawn_failed`;
+//!    * a tool or cache not started: `skipped` with [`SkipReason::code`] (`refused` for
+//!      `elevated`, `failed` for `sandbox_unavailable`);
+//!    * an orphaned cache: the removal walk is journaled first (intent with the cache's path,
+//!      identity, parent and tree fingerprint, so crash recovery can reconcile it, SAFE-19),
+//!      then audited as `removed` with the D-36 evidence summary as its reason
+//!      (`d36_orphaned:searched_<n>_dirs`), or `partial` / `failed` / `refused`.
+//!
+//!    Items not attempted because the run was cancelled get no row
+//!    ([`QuickCleanReport::cancelled`]): finish the operation with `OperationEnd::Cancelled`.
+//! 3. Both measure the free space of the caches' volumes around their work through the
+//!    operation's meter; [`Operation::finish`] records the sum as the measured delta next to the
+//!    predicted bytes (I-5).
+//!
+//! Residual gap: a tool run is not journaled (the journal has no step kind for it); if scull
+//! crashes while a tool runs, recovery records that tool as `skipped` / `interrupted`.
 
+mod audit;
 mod output;
 mod process;
 mod resolve;
 
+pub use audit::{MAX_AUDIT_ARG_CHARS, MAX_AUDIT_ARGS};
 pub use output::{CapturedOutput, escape_line, needs_escape};
 pub use process::Ended;
 pub use resolve::{Lookup, TrustedDirs};
 pub use scull_detectors::caches::NOT_UNDOABLE_NOTE;
 
 use crate::executor::{DeleteTarget, Executor};
+use crate::journal::{StepPoint, at, fingerprint};
+use crate::measure::{ItemExecution, Tally, planned_sizes};
+use crate::operation::Operation;
 use crate::orphaned::OrphanedCacheEvidence;
 use process::{Ran, Sandbox, Spec};
 use scull_core::{
-    Action, Candidate, Category, FileIdentity, FsPath, ItemId, PlanItem, ScullError, Tier,
+    Action, Candidate, Category, FileIdentity, FsPath, ItemId, Plan, PlanItem, PlanParams,
+    ScullError, Tier,
 };
 use scull_detectors::caches::{CacheProblem, CacheScan, CacheTool, LocatedCache, NativeCommand};
+use scull_engine::now_unix;
 use scull_platform::remove::RemoveReport;
 use scull_platform::{Elevation, Platform, free_space};
 use scull_safety::{ActivityProbe, ProbeResult, Tri, check_in_use};
+use scull_scanner::ActionReclaim;
 use scull_scanner::{CancelToken, NullSink, ScanOptions};
+use scull_storage::{ItemRecord, JournalAction, JournalIntent};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
@@ -272,6 +317,9 @@ pub struct PlannedTool {
     pub notes: Vec<String>,
     /// [`NOT_UNDOABLE_NOTE`].
     pub not_undoable: &'static str,
+    /// The plan item recorded for this tool ([`QuickCleanPlan::audit_plan`]): the candidate's,
+    /// with its action resolved to the binary and arguments above (escaped and capped).
+    pub item: PlanItem,
 }
 
 impl PlannedTool {
@@ -338,6 +386,9 @@ pub enum SkipReason {
     Cancelled,
     /// The private sandbox could not be created.
     Sandbox(String),
+    /// Not one of the items of the operation's plan: not approved, so never started and not
+    /// audited (see [Audit](self#audit-safe-08-safe-19)).
+    NotApproved,
 }
 
 impl fmt::Display for SkipReason {
@@ -388,6 +439,7 @@ impl fmt::Display for SkipReason {
             SkipReason::Elevated(e) => write!(f, "refusing to run tools while {e} (SAFE-14)"),
             SkipReason::Cancelled => f.write_str("cancelled"),
             SkipReason::Sandbox(e) => write!(f, "could not create the private sandbox: {e}"),
+            SkipReason::NotApproved => f.write_str("not part of the approved operation plan"),
         }
     }
 }
@@ -451,6 +503,30 @@ impl QuickCleanPlan {
     /// Sum of the planned tools' reclaimable estimates.
     pub fn total_reclaimable(&self) -> u64 {
         self.tools.iter().map(|t| t.reclaimable_bytes).sum()
+    }
+
+    /// The plan of record for this Quick Clean (SAFE-08): one item per planned tool
+    /// ([`PlannedTool::item`]: resolved binary and exact arguments) and one per orphaned cache
+    /// whose tool is in `confirmed_orphans` ([`OrphanedCache::item`]). Record it and start an
+    /// [`Operation`] for it before [`QuickClean::run`] / [`QuickClean::remove_orphaned`]. Fails
+    /// like [`Plan::new`] (e.g. an empty machine ID or user).
+    pub fn audit_plan(
+        &self,
+        confirmed_orphans: &BTreeSet<CacheTool>,
+        params: PlanParams,
+    ) -> Result<Plan, ScullError> {
+        let items = self
+            .tools
+            .iter()
+            .map(|t| t.item.clone())
+            .chain(
+                self.orphaned
+                    .iter()
+                    .filter(|o| confirmed_orphans.contains(&o.tool))
+                    .map(|o| o.item.clone()),
+            )
+            .collect();
+        Plan::new(params, items)
     }
 }
 
@@ -546,6 +622,12 @@ pub struct OrphanedReport {
     pub removed: Vec<OrphanedRemoval>,
     /// Confirmed caches not removed, with the reason (a check failed right before).
     pub skipped: Vec<SkippedTool>,
+    /// Whether caches were left unattempted because the run was cancelled (they have no audit
+    /// row: finish the operation as cancelled).
+    pub cancelled: bool,
+    /// The measured free-space delta of the caches' volumes around the removals, bytes
+    /// (added to the operation's measured delta).
+    pub measured_delta_bytes: Option<i64>,
 }
 
 /// What a Quick Clean run did.
@@ -557,6 +639,12 @@ pub struct QuickCleanReport {
     pub skipped: Vec<SkippedTool>,
     /// Every process started.
     pub spawned: Vec<Spawn>,
+    /// Whether tools were left unstarted because the run was cancelled (they have no audit
+    /// row: finish the operation as cancelled).
+    pub cancelled: bool,
+    /// The measured free-space delta of the caches' volumes around the tool runs, bytes
+    /// (added to the operation's measured delta).
+    pub measured_delta_bytes: Option<i64>,
 }
 
 /// The Quick Clean runner. See the module docs.
@@ -728,6 +816,9 @@ impl QuickClean {
             );
         }
         let (args, env) = tool_invocation(c.tool, cmd, &location);
+        let item = PlanItem::from_candidate(cand)
+            .map_err(|_| SkipReason::NotEligible { tier: cand.tier })?;
+        let item = audit::tool_item(item, &binary, &args);
         Ok(PlannedTool {
             tool: c.tool,
             item_id: cand.id.clone(),
@@ -743,6 +834,7 @@ impl QuickClean {
             reclaimable_bytes: cand.sizes.reclaimable.bytes,
             notes,
             not_undoable: NOT_UNDOABLE_NOTE,
+            item,
         })
     }
 
@@ -818,43 +910,88 @@ impl QuickClean {
 
     /// D-36: remove the orphaned caches of `plan` whose tool the user confirmed, one by one,
     /// each right after gathering fresh evidence ([`OrphanedCacheEvidence`]), through
-    /// [`Executor::delete_orphaned_cache`] (needs `exec` to hold the execution lock). Tools not
-    /// in `confirmed` are left alone. Not undoable ([`NOT_UNDOABLE_NOTE`]). Stops at `cancel`.
+    /// [`Executor::delete_orphaned_cache`] (`exec` must hold the execution lock: the one `op`
+    /// was started with). Tools not in `confirmed` are left alone, and so is a cache whose item
+    /// is not in `op`'s plan ([`SkipReason::NotApproved`]). Not undoable ([`NOT_UNDOABLE_NOTE`]).
+    /// Stops at `cancel`.
+    ///
+    /// Each removal is journaled before the walk and audited after it in `op` (SAFE-19,
+    /// SAFE-08; see [Audit](self#audit-safe-08-safe-19)); every other confirmed cache gets a
+    /// `skipped` or `refused` row. `Err` means the journal or the audit could not be written:
+    /// the cache it was for was not touched, and nothing after it was attempted.
     pub fn remove_orphaned(
         &self,
         exec: &Executor,
+        op: &mut Operation<'_>,
         plan: &QuickCleanPlan,
         confirmed: &BTreeSet<CacheTool>,
         probe: &dyn ActivityProbe,
         cancel: &CancelToken,
-    ) -> OrphanedReport {
+    ) -> Result<OrphanedReport, ScullError> {
         let mut report = OrphanedReport::default();
-        for o in plan.orphaned.iter().filter(|o| confirmed.contains(&o.tool)) {
+        let chosen: Vec<&OrphanedCache> = plan
+            .orphaned
+            .iter()
+            .filter(|o| confirmed.contains(&o.tool))
+            .collect();
+        let anchors: Vec<PathBuf> = chosen.iter().map(|o| o.anchor.clone()).collect();
+        let baseline = if chosen.is_empty() {
+            None
+        } else {
+            op.measure_before(&anchors)
+        };
+        let mut tally = Tally::new();
+        for o in chosen {
             let skip = |reason| SkippedTool {
                 tool: o.tool,
                 path: Some(o.cache.clone()),
                 reason,
             };
+            if !op.approved(&o.item) {
+                report.skipped.push(skip(SkipReason::NotApproved));
+                continue;
+            }
+            let predicted = ActionReclaim::for_action(&planned_sizes(&o.item), &o.item.action);
+            let not_done = |report: &mut OrphanedReport,
+                            tally: &mut Tally,
+                            op: &mut Operation<'_>,
+                            reason: SkipReason|
+             -> Result<(), ScullError> {
+                tally.add(&predicted, &[], ItemExecution::NotExecuted);
+                if reason == SkipReason::Cancelled {
+                    report.cancelled = true;
+                } else {
+                    op.record(&reason.audit_record(o.item.item_id.clone(), now_unix()))?;
+                }
+                report.skipped.push(skip(reason));
+                Ok(())
+            };
             if cancel.is_cancelled() {
-                report.skipped.push(skip(SkipReason::Cancelled));
+                not_done(&mut report, &mut tally, op, SkipReason::Cancelled)?;
                 continue;
             }
             if self.elevation.blocks_destructive() && !self.opts.allow_elevated {
-                report
-                    .skipped
-                    .push(skip(SkipReason::Elevated(self.elevation)));
+                not_done(
+                    &mut report,
+                    &mut tally,
+                    op,
+                    SkipReason::Elevated(self.elevation),
+                )?;
                 continue;
             }
             let evidence =
                 match self.gather_evidence(o.tool, &o.cache, &o.anchor, o.identity, probe) {
                     Ok(e) => e,
                     Err(reason) => {
-                        report.skipped.push(skip(reason));
+                        not_done(&mut report, &mut tally, op, reason)?;
                         continue;
                     }
                 };
             let free_before = free_space(&o.anchor).ok();
             let size_before = self.measure(&o.cache);
+            let searched = evidence.directories_searched();
+            let id = &o.item.item_id;
+            journal_removal(op, exec, o, &evidence)?;
             let target = DeleteTarget {
                 anchor: &o.anchor,
                 anchor_identity: Some(evidence.anchor_identity()),
@@ -863,6 +1000,19 @@ impl QuickClean {
             let outcome = exec
                 .delete_orphaned_cache(&o.item, &target, evidence)
                 .map(|d| d.report);
+            let recorded_at = now_unix();
+            let (rec, done) = match &outcome {
+                Ok(walk) => audit::removal_record(id.clone(), walk, searched, recorded_at),
+                Err(e) => (
+                    ItemRecord::from_error(id.clone(), recorded_at, e),
+                    ItemExecution::NotExecuted,
+                ),
+            };
+            tally.add(&predicted, &[], done);
+            op.journal_close(Some(&rec), recorded_at)?;
+            at(exec.hook(), StepPoint::AfterClose(id));
+            op.record(&rec)?;
+            at(exec.hook(), StepPoint::AfterAudit(id));
             report.removed.push(OrphanedRemoval {
                 tool: o.tool,
                 cache: o.cache.clone(),
@@ -873,7 +1023,10 @@ impl QuickClean {
                 not_undoable: NOT_UNDOABLE_NOTE,
             });
         }
-        report
+        report.measured_delta_bytes = op
+            .measure_after(baseline, &tally)
+            .and_then(|d| d.measured_delta_bytes());
+        Ok(report)
     }
 
     /// Runs `yarn --version` (sandboxed) and checks the major version against the cache.
@@ -929,55 +1082,92 @@ impl QuickClean {
         }
     }
 
-    /// Run `plan`: revalidate each tool, run it, measure. Stops starting tools once `cancel`
-    /// is set (a running tool is killed). `probe` should be a fresh view of running processes.
+    /// Run `plan` inside `op` (started for [`QuickCleanPlan::audit_plan`]; see
+    /// [Audit](self#audit-safe-08-safe-19)): revalidate each tool, run it, measure it, audit
+    /// it. A tool whose item is not in `op`'s plan is never started
+    /// ([`SkipReason::NotApproved`]). Stops starting tools once `cancel` is set (a running tool
+    /// is killed). `probe` should be a fresh view of running processes.
+    ///
+    /// `Err` means an audit row could not be written; no tool is started after that.
     pub fn run(
         &self,
+        op: &mut Operation<'_>,
         plan: &QuickCleanPlan,
         probe: &dyn ActivityProbe,
         cancel: &CancelToken,
-    ) -> QuickCleanReport {
+    ) -> Result<QuickCleanReport, ScullError> {
         let mut report = QuickCleanReport {
             results: Vec::new(),
             skipped: plan.skipped.clone(),
             spawned: Vec::new(),
+            cancelled: false,
+            measured_delta_bytes: None,
         };
-        let skip_all = |report: &mut QuickCleanReport, reason: SkipReason| {
-            for t in &plan.tools {
+        let mut approved = Vec::new();
+        for t in &plan.tools {
+            if op.approved(&t.item) {
+                approved.push(t);
+            } else {
                 report.skipped.push(SkippedTool {
                     tool: t.tool,
                     path: Some(t.cache.clone()),
-                    reason: reason.clone(),
+                    reason: SkipReason::NotApproved,
                 });
             }
-        };
-        if plan.tools.is_empty() {
-            return report;
         }
-        if self.elevation.blocks_destructive() && !self.opts.allow_elevated {
-            skip_all(&mut report, SkipReason::Elevated(self.elevation));
-            return report;
+        if approved.is_empty() {
+            return Ok(report);
         }
-        let sb = match Sandbox::new(self.opts.sandbox_base.as_deref()) {
-            Ok(sb) => sb,
-            Err(e) => {
-                skip_all(&mut report, SkipReason::Sandbox(e.to_string()));
-                return report;
+        let anchors: Vec<PathBuf> = approved.iter().map(|t| t.anchor.clone()).collect();
+        let baseline = op.measure_before(&anchors);
+        let mut tally = Tally::new();
+        let predicted =
+            |t: &PlannedTool| ActionReclaim::for_action(&planned_sizes(&t.item), &t.item.action);
+        let not_started = |report: &mut QuickCleanReport,
+                           tally: &mut Tally,
+                           op: &mut Operation<'_>,
+                           t: &PlannedTool,
+                           reason: SkipReason|
+         -> Result<(), ScullError> {
+            tally.add(&predicted(t), &[], ItemExecution::NotExecuted);
+            if reason == SkipReason::Cancelled {
+                report.cancelled = true;
+            } else {
+                op.record(&reason.audit_record(t.item.item_id.clone(), now_unix()))?;
             }
-        };
-        let base_env = self.base_env(&sb);
-        for t in &plan.tools {
-            let skip = |reason| SkippedTool {
+            report.skipped.push(SkippedTool {
                 tool: t.tool,
                 path: Some(t.cache.clone()),
                 reason,
-            };
+            });
+            Ok(())
+        };
+        let sandbox = if self.elevation.blocks_destructive() && !self.opts.allow_elevated {
+            Err(SkipReason::Elevated(self.elevation))
+        } else {
+            Sandbox::new(self.opts.sandbox_base.as_deref())
+                .map_err(|e| SkipReason::Sandbox(e.to_string()))
+        };
+        let sb = match sandbox {
+            Ok(sb) => sb,
+            Err(reason) => {
+                for t in approved {
+                    not_started(&mut report, &mut tally, op, t, reason.clone())?;
+                }
+                report.measured_delta_bytes = op
+                    .measure_after(baseline, &tally)
+                    .and_then(|d| d.measured_delta_bytes());
+                return Ok(report);
+            }
+        };
+        let base_env = self.base_env(&sb);
+        for t in approved {
             if cancel.is_cancelled() {
-                report.skipped.push(skip(SkipReason::Cancelled));
+                not_started(&mut report, &mut tally, op, t, SkipReason::Cancelled)?;
                 continue;
             }
             if let Err(reason) = self.revalidate(t, probe) {
-                report.skipped.push(skip(reason));
+                not_started(&mut report, &mut tally, op, t, reason)?;
                 continue;
             }
             let free_before = free_space(&t.anchor).ok();
@@ -1016,9 +1206,15 @@ impl QuickClean {
                 explanation: None,
             };
             result.explanation = pnpm_explanation(&result);
+            let (rec, done) = audit::tool_record(t.item.item_id.clone(), &result, now_unix());
+            tally.add(&predicted(t), &[], done);
             report.results.push(result);
+            op.record(&rec)?;
         }
-        report
+        report.measured_delta_bytes = op
+            .measure_after(baseline, &tally)
+            .and_then(|d| d.measured_delta_bytes());
+        Ok(report)
     }
 
     /// SAFE-05-style checks right before starting a tool.
@@ -1151,6 +1347,40 @@ impl QuickClean {
         }
         env
     }
+}
+
+/// Journals the intent of an orphaned cache's removal walk (SAFE-19), exactly like a plan
+/// item's: path, identity, kind, parent identity and the tree's fingerprint, so crash recovery
+/// can tell an untouched cache from a partly removed one.
+fn journal_removal(
+    op: &mut Operation<'_>,
+    exec: &Executor,
+    o: &OrphanedCache,
+    evidence: &OrphanedCacheEvidence,
+) -> Result<(), ScullError> {
+    let id = &o.item.item_id;
+    at(exec.hook(), StepPoint::BeforeIntent(id));
+    let parent = o
+        .cache
+        .parent()
+        .and_then(|p| scull_platform::Native.metadata(p).ok())
+        .and_then(|m| m.identity);
+    let intent = JournalIntent {
+        operation_id: op.id().clone(),
+        item_id: id.clone(),
+        action: JournalAction::Delete,
+        source_path: FsPath::from_path(&o.cache),
+        source_identity: evidence.identity(),
+        source_kind: scull_platform::EntryKind::Dir.as_str().to_owned(),
+        source_parent: parent,
+        destination: None,
+        destination_dir: None,
+        tree: Some(fingerprint(&o.cache)),
+        recorded_at: now_unix(),
+    };
+    op.journal_intent(&intent)?;
+    at(exec.hook(), StepPoint::AfterIntent(id));
+    Ok(())
 }
 
 /// The folder handed to the tool as its location (see the module docs table).
@@ -1361,6 +1591,19 @@ mod tests {
             reclaimable_bytes: 0,
             notes: Vec::new(),
             not_undoable: NOT_UNDOABLE_NOTE,
+            item: PlanItem {
+                item_id: ItemId::derive(FileIdentity::new(1, 2), b"/c"),
+                identity: FileIdentity::new(1, 2),
+                path: FsPath::from("/c"),
+                category: Category::PackageCache,
+                rule: scull_core::RuleRef {
+                    id: CacheTool::Bun.rule_id().into(),
+                    version: 1,
+                },
+                tier: Tier::S1,
+                action: Action::None,
+                reclaimable_bytes: 0,
+            },
         };
         assert_eq!(
             t.command_line(),

@@ -7,10 +7,10 @@
 //! quarantines into its folder (D-3). [`Operation::finish`] closes the audit.
 
 use crate::executor::Executor;
-use crate::measure::{FreeSpaceSource, Meter, VolumeMeter};
+use crate::measure::{Baseline, FreeSpaceSource, MeasuredDelta, Meter, Tally, VolumeMeter};
 use crate::quarantine::{QuarantineFolder, QuarantineSettings};
 use crate::trash::TrashLocations;
-use scull_core::{ErrorKind, OperationId, Plan, ScullError};
+use scull_core::{ErrorKind, OperationId, Plan, PlanItem, ScullError};
 use scull_engine::PlatformOwnerOnly;
 use scull_storage::{
     ItemRecord, OperationAudit, OperationEnd, OperationFinish, OperationStart, OperationSummary,
@@ -33,8 +33,12 @@ pub struct Operation<'s> {
     pub(crate) trash: Option<TrashLocations>,
     /// Measures the free-space delta around `execute_plan` (PHY-02, I-5).
     pub(crate) meter: Option<Box<dyn Meter>>,
-    /// The measured delta of the last `execute_plan`, recorded by [`Operation::finish`].
+    /// The measured delta of the last `execute_plan` (or the sum of the Quick Clean runs'),
+    /// recorded by [`Operation::finish`].
     pub(crate) measured: Option<i64>,
+    /// The items of the plan the operation was started for: Quick Clean acts only on an item
+    /// that is exactly one of these (what was approved and is audited, SAFE-08).
+    pub(crate) plan_items: Vec<PlanItem>,
 }
 
 impl Operation<'_> {
@@ -85,6 +89,30 @@ impl Operation<'_> {
     pub fn without_measurement(mut self) -> Self {
         self.meter = None;
         self
+    }
+
+    /// Whether `item` is, field for field, one of the items of the operation's plan.
+    pub(crate) fn approved(&self, item: &PlanItem) -> bool {
+        self.plan_items.iter().any(|i| i == item)
+    }
+
+    /// Free space of the volumes holding `paths`, before a step (`None` without a meter).
+    pub(crate) fn measure_before(&self, paths: &[std::path::PathBuf]) -> Option<Baseline> {
+        self.meter.as_ref().map(|m| m.before(paths))
+    }
+
+    /// Free space after a step measured from `baseline`; adds the delta to what
+    /// [`Operation::finish`] records (several Quick Clean steps add up).
+    pub(crate) fn measure_after(
+        &mut self,
+        baseline: Option<Baseline>,
+        tally: &Tally,
+    ) -> Option<MeasuredDelta> {
+        let delta = self.meter.as_ref()?.after(baseline?, tally);
+        if let Some(d) = delta.measured_delta_bytes() {
+            self.measured = Some(self.measured.unwrap_or(0).saturating_add(d));
+        }
+        Some(delta)
     }
 
     /// Record one item outcome in the audit log.
@@ -205,6 +233,7 @@ impl Executor {
             trash: None,
             meter: Some(Box::new(VolumeMeter::platform_quick())),
             measured: None,
+            plan_items: plan.items().to_vec(),
         })
     }
 }

@@ -607,7 +607,55 @@ fn run_report_with_observable_activity() {
     assert!(text.contains("Not undoable."), "{text}");
     println!("{text}");
 
-    let ran = qc.run(&plan, &Idle, &scull_scanner::CancelToken::new());
+    // Run as one audited operation (SAFE-08, P2-EXEC-12), as `scull clean caches` does; the
+    // store and the lock live beside the fixture root.
+    let now = scull_engine::now_unix();
+    let audit_plan = plan
+        .audit_plan(
+            &std::collections::BTreeSet::new(),
+            scull_core::PlanParams {
+                id: scull_core::PlanId::from_suffix("QC1").unwrap(),
+                scan_id: scull_core::ScanId::from_suffix("QC1").unwrap(),
+                created_unix: now,
+                ttl_secs: None,
+                machine_id: "qc-machine".into(),
+                user: "tester".into(),
+                origin: scull_core::PlanOrigin::Cli,
+            },
+        )
+        .unwrap();
+    let mut store = scull_storage::Store::open(
+        &env.fx.base().join("data").join("scull.db"),
+        &scull_engine::PlatformOwnerOnly,
+    )
+    .unwrap();
+    store.insert_plan(&audit_plan).unwrap();
+    let executor = scull_cleaner::Executor::acquire(&scull_cleaner::LockOptions::at(
+        env.fx.base().join("state").join("execution.lock"),
+    ))
+    .unwrap();
+    let op_id = scull_core::OperationId::from_suffix("QC1").unwrap();
+    let mut op = executor
+        .begin_operation(
+            &mut store,
+            &audit_plan,
+            &scull_storage::OperationStart {
+                operation_id: op_id.clone(),
+                plan_id: audit_plan.id().clone(),
+                content_hash: audit_plan.content_hash().clone(),
+                approver: "tester".into(),
+                method: scull_storage::ApprovalMethod::CliInteractive,
+                started_at: now,
+            },
+        )
+        .unwrap();
+    let ran = qc
+        .run(&mut op, &plan, &Idle, &scull_scanner::CancelToken::new())
+        .unwrap();
+    op.finish(scull_storage::OperationEnd::Normal, now + 1)
+        .unwrap();
+    assert!(store.verify_chain(&op_id).unwrap().is_intact());
+    assert_eq!(store.audit_items(&op_id).unwrap().len(), 2);
     let failed = apply_run(&mut report, &plan, &ran);
     assert_eq!(failed, 0, "{report:#?}");
     assert_eq!(report.results.len(), 2);

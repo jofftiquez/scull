@@ -46,6 +46,12 @@
 //!   gathers right before ([`quickclean::QuickClean::remove_orphaned`]) and a per-tool
 //!   confirmation. `Action::allowed_for` is unchanged: no other path deletes at S1.
 //!
+//! * Quick Clean is audited like any operation (SAFE-08, P2-EXEC-12): the confirmed preview is
+//!   recorded as a plan ([`quickclean::QuickCleanPlan::audit_plan`]: resolved binary and exact
+//!   arguments per tool) and [`quickclean::QuickClean::run`] /
+//!   [`quickclean::QuickClean::remove_orphaned`] run inside its [`Operation`], one audit row per
+//!   tool run or orphaned removal; orphaned removals are journaled first (SAFE-19).
+//!
 //! # Not wired into any interface yet
 //!
 //! **Do not call the Executor from the CLI, desktop app or MCP server** until the remaining

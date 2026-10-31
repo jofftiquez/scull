@@ -1,6 +1,8 @@
-//! End-to-end FX-QC fixtures (docs/FIXTURES.md §3.7) with every invariant, including I-5
-//! (each tool's predicted reclaim and its volume's measured free-space delta) and I-7 (every
-//! process Quick Clean started is an allowlisted tool from the trusted folder).
+//! End-to-end FX-QC fixtures (docs/FIXTURES.md §3.7) with every invariant, including I-4 (the
+//! Quick Clean ran inside an audited operation, P2-EXEC-12: every tool run has exactly one audit
+//! row, consistent with the disk, and the hash chain verifies), I-5 (the operation records the
+//! predicted bytes and the measured free-space delta; so does each tool's result) and I-7
+//! (every process Quick Clean started is an allowlisted tool from the trusted folder).
 //!
 //! **No real package manager runs.** The fake tools are small `/bin/sh` scripts installed in a
 //! trusted folder beside the root (Unix only: on Windows Quick Clean runs only real
@@ -15,16 +17,22 @@
 use scull_cleaner::quickclean::{
     QuickClean, QuickCleanOptions, QuickCleanReport, QuickCleanRequest,
 };
-use scull_core::Candidate;
+use scull_cleaner::{Executor, LockOptions};
+use scull_core::{Action, Candidate, OperationId, PlanId, PlanOrigin, PlanParams, ScanId};
 use scull_detectors::caches::CacheScan;
 use scull_detectors::rules::Platform as Os;
 use scull_detectors::{CacheEnv, CallerSignals, ConfigReader, DetectContext, locate_caches};
+use scull_engine::{PlatformOwnerOnly, now_unix};
 use scull_fixtures::{
     Fixture, InvariantId, InvariantInputs, InvariantReport, Outcome, PlanEntry, SpawnRecord,
 };
 use scull_platform::{Elevation, Native, Platform};
 use scull_safety::{ActivityProbe, GitTracking, ProbeResult, Tri};
 use scull_scanner::{CancelToken, NullSink, ScanOptions};
+use scull_storage::{
+    ApprovalMethod, ItemOutcome, OperationEnd, OperationStart, OperationStatus, Store,
+};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -178,17 +186,107 @@ fn identity_available() -> bool {
     Native::new().capabilities().file_identity
 }
 
-/// Plan, run, and check every invariant: I-1 on the planned candidates, I-3 allowing only the
-/// cache, I-5 per tool run (planned reclaimable bytes vs measured free-space delta), I-7 on
-/// every process started while planning and running.
+/// Plan, run inside an audited operation (P2-EXEC-12), and check every invariant: I-1 on the
+/// planned candidates, I-3 allowing only the cache, I-4 on the operation's audit, I-5 on the
+/// operation's totals and per tool run (planned reclaimable bytes vs measured free-space
+/// delta), I-7 on every process started while planning and running. The audit's hash chain
+/// must verify, and each tool must have one `tool_run` row holding its predicted and measured
+/// bytes, with the resolved binary and exact arguments in the plan of record.
 fn plan_run_check(fx: &Fixture, q: &QuickClean) -> (QuickCleanReport, InvariantReport) {
     let (scan, cands) = locate(fx);
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Idle);
     assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
     assert_eq!(plan.tools.len(), 1, "{plan:?}");
     println!("preview: {}", plan.tools[0].command_line());
-    let report = q.run(&plan, &Idle, &CancelToken::new());
+
+    // The confirmed preview becomes the plan of record and an operation (SAFE-08).
+    let now = now_unix();
+    let audit_plan = plan
+        .audit_plan(
+            &BTreeSet::new(),
+            PlanParams {
+                id: PlanId::from_suffix("QC01").unwrap(),
+                scan_id: ScanId::from_suffix("QC01").unwrap(),
+                created_unix: now,
+                ttl_secs: None,
+                machine_id: "fx-machine".into(),
+                user: "tester".into(),
+                origin: PlanOrigin::Cli,
+            },
+        )
+        .unwrap();
+    let mut store =
+        Store::open(&fx.base().join("data").join("scull.db"), &PlatformOwnerOnly).unwrap();
+    store.insert_plan(&audit_plan).unwrap();
+    let op_id = OperationId::from_suffix("QC01").unwrap();
+    let exec = Executor::acquire(&LockOptions::at(
+        fx.base().join("state").join("execution.lock"),
+    ))
+    .unwrap();
+    let mut op = exec
+        .begin_operation(
+            &mut store,
+            &audit_plan,
+            &OperationStart {
+                operation_id: op_id.clone(),
+                plan_id: audit_plan.id().clone(),
+                content_hash: audit_plan.content_hash().clone(),
+                approver: "tester".into(),
+                method: ApprovalMethod::CliInteractive,
+                started_at: now,
+            },
+        )
+        .unwrap();
+    let report = q.run(&mut op, &plan, &Idle, &CancelToken::new()).unwrap();
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert!(!report.cancelled);
+    let summary = op.finish(OperationEnd::Normal, now_unix()).unwrap();
+    drop(exec);
+    assert_eq!(summary.status, OperationStatus::Completed, "{summary:?}");
+    let chain = store.verify_chain(&op_id).unwrap();
+    assert!(chain.is_intact(), "{chain:?}");
+    println!(
+        "audit {op_id}: {} | predicted {} B, freed {} B, measured delta {:?} B | chain intact \
+         ({} rows)",
+        summary.status.as_str(),
+        summary.totals.predicted_bytes,
+        summary.totals.freed_bytes,
+        summary.totals.measured_delta_bytes,
+        chain.rows
+    );
+    let rows = store.audit_items(&op_id).unwrap();
+    assert_eq!(rows.len(), plan.tools.len(), "{rows:#?}");
+    for (t, row) in plan.tools.iter().zip(&rows) {
+        println!(
+            "  {} {} [{}] predicted {} B, freed {:?} B",
+            row.outcome.as_str(),
+            row.path,
+            row.action,
+            row.predicted_bytes,
+            row.freed_bytes
+        );
+        assert_eq!(row.item_id, t.item_id);
+        assert_eq!(row.outcome, ItemOutcome::ToolRun);
+        assert_eq!(row.predicted_bytes, t.reclaimable_bytes);
+        assert!(row.freed_bytes.is_some_and(|b| b > 0), "{row:?}");
+        let recorded = audit_plan
+            .items()
+            .iter()
+            .find(|i| i.item_id == t.item_id)
+            .unwrap();
+        let expected_args: Vec<String> = t
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            recorded.action,
+            Action::ToolCommand {
+                tool: t.binary.to_string_lossy().into_owned(),
+                args: expected_args,
+            }
+        );
+    }
 
     let mut inputs = InvariantInputs::new()
         .plan(
@@ -204,7 +302,9 @@ fn plan_run_check(fx: &Fixture, q: &QuickClean) -> (QuickCleanReport, InvariantR
                 .chain(&report.spawned)
                 .map(|s| SpawnRecord::new(&s.binary, s.args.clone())),
         )
-        .trusted_dir(tools(fx));
+        .trusted_dir(tools(fx))
+        .audit(&store, &op_id)
+        .operation_bytes(&store, &op_id);
     for r in &report.results {
         let planned = plan.tools.iter().find(|t| t.tool == r.tool).unwrap();
         let measured = r.free_space_delta().and_then(|d| i64::try_from(d).ok());
@@ -227,6 +327,7 @@ fn plan_run_check(fx: &Fixture, q: &QuickClean) -> (QuickCleanReport, InvariantR
         InvariantId::I1,
         InvariantId::I2,
         InvariantId::I3,
+        InvariantId::I4,
         InvariantId::I5,
         InvariantId::I7,
     ] {

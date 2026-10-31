@@ -10,8 +10,15 @@
 //! Every test builds its fake home folder with `scull-fixtures` (canary beside the root),
 //! locates caches with `scull_detectors::locate_caches` exactly as the engine does, and checks
 //! the invariants afterwards: I-1 on the planned candidates, I-2 canary untouched, I-3 nothing
-//! in the root changed except the caches the plan cleaned, and I-7 (only allowlisted tools,
-//! spawned from the trusted folder) through the report's spawn records.
+//! in the root changed except the caches the plan cleaned, I-4 (every tool run and orphaned
+//! removal has exactly one audit row, consistent with the disk), I-5 (each audited operation
+//! records its predicted bytes and the measured free-space delta) and I-7 (only allowlisted
+//! tools, spawned from the trusted folder) through the plan's and report's spawn records.
+//!
+//! Every run happens inside an audited operation (P2-EXEC-12, SAFE-08): the confirmed preview
+//! becomes a recorded plan ([`QuickCleanPlan::audit_plan`]), the operation is started under the
+//! execution lock, and its hash chain is verified after it finished. The store lives beside the
+//! fixture root.
 //!
 //! The harness is custom (`harness = false`) because the executable must decide in `main`
 //! whether it is a fake tool; tests run sequentially and print libtest-style lines.
@@ -20,25 +27,33 @@
 mod fake;
 
 use scull_cleaner::quickclean::{
-    CleanMode, Ended, NOT_UNDOABLE_NOTE, QuickClean, QuickCleanOptions, QuickCleanPlan,
-    QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, Spawn, needs_escape,
+    CleanMode, Ended, NOT_UNDOABLE_NOTE, OrphanedReport, QuickClean, QuickCleanOptions,
+    QuickCleanPlan, QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, Spawn,
+    needs_escape,
 };
-use scull_cleaner::{Executor, LockOptions, RemoveOutcome};
-use scull_core::{Candidate, Tier};
+use scull_cleaner::{Executor, LockOptions, Operation, RemoveOutcome};
+use scull_core::{Action, Candidate, OperationId, PlanId, PlanOrigin, PlanParams, ScanId, Tier};
 use scull_detectors::caches::{CacheProblem, CacheScan, CacheTool};
 use scull_detectors::rules::Platform as Os;
 use scull_detectors::{CacheEnv, CallerSignals, ConfigReader, DetectContext, locate_caches};
-use scull_fixtures::{Fixture, InvariantId, InvariantInputs, PlanEntry};
+use scull_engine::{PlatformOwnerOnly, now_unix};
+use scull_fixtures::{Fixture, InvariantId, InvariantInputs, PlanEntry, SpawnRecord};
 use scull_platform::{Capabilities, DirIter, Elevation, Metadata, Native, Platform};
 use scull_safety::{ActivityProbe, GitTracking, Holder, ProbeResult, Tri, Unavailable};
 use scull_scanner::CancelToken;
+use scull_storage::{
+    ApprovalMethod, ItemAudit, ItemOutcome, JournalAction, MirrorStatus, OperationEnd,
+    OperationStart, OperationStatus, Store,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
+use std::ops::Deref;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------------------------
@@ -145,6 +160,10 @@ const TESTS: &[Test] = &[
     (
         "cancelled_before_start_runs_nothing",
         cancelled_before_start_runs_nothing,
+    ),
+    (
+        "p2_exec_12_unapproved_command_never_runs",
+        p2_exec_12_unapproved_command_never_runs,
     ),
 ];
 
@@ -475,35 +494,65 @@ fn planned_tools(plan: &QuickCleanPlan) -> Vec<CacheTool> {
     plan.tools.iter().map(|t| t.tool).collect()
 }
 
-/// I-7: every spawned process is an allowlisted tool from the trusted folder.
-fn assert_spawns_allowlisted(fx: &Fixture, spawned: &[Spawn]) {
-    let trusted = canonical(&tools(fx));
-    for s in spawned {
-        let stem = s.binary.file_stem().unwrap().to_str().unwrap();
-        assert!(fake::TOOLS.contains(&stem), "not allowlisted: {s:?}");
-        assert_eq!(
-            s.binary.parent(),
-            Some(trusted.as_path()),
-            "untrusted: {s:?}"
-        );
-    }
+fn spawn_records(spawned: &[Spawn]) -> Vec<SpawnRecord> {
+    spawned
+        .iter()
+        .map(|s| SpawnRecord::new(&s.binary, s.args.clone()))
+        .collect()
 }
 
 /// Run the invariants: I-1 on the candidates of planned tools, I-3 allowing only `allowed`
-/// (relative to the root). I-2, I-3 must have run and nothing may fail.
-fn check(fx: &Fixture, plan: &QuickCleanPlan, cands: &[Candidate], allowed: &[PathBuf]) {
+/// (relative to the root), I-4 on the audit of every operation in `ops`, I-5 on every one of
+/// them that had plan items, I-7 on every process started while planning and in `ops`. Every
+/// applicable invariant must have run, and nothing may fail.
+fn check(
+    fx: &Fixture,
+    plan: &QuickCleanPlan,
+    cands: &[Candidate],
+    allowed: &[PathBuf],
+    ops: &[&OpRecord],
+) {
     let entries: Vec<PlanEntry> = cands
         .iter()
         .filter(|c| plan.tools.iter().any(|t| t.item_id == c.id))
         .map(PlanEntry::from)
         .collect();
-    let mut inputs = InvariantInputs::new().plan(entries);
+    let mut inputs = InvariantInputs::new()
+        .plan(entries)
+        .spawned(spawn_records(&plan.spawned))
+        .trusted_dir(tools(fx));
     for a in allowed {
         inputs = inputs.allow(a.clone());
     }
+    let store = (!ops.is_empty()).then(|| open_store(fx));
+    let mut with_items = false;
+    if let Some(store) = &store {
+        for o in ops {
+            inputs = inputs
+                .audit(store, &o.op)
+                .spawned(spawn_records(&o.spawned));
+            if o.items > 0 {
+                with_items = true;
+                inputs = inputs.operation_bytes(store, &o.op);
+            }
+        }
+    }
     let report = fx.check_invariants(&inputs);
+    print!("{report}");
     report.assert_ok();
-    for id in [InvariantId::I1, InvariantId::I2, InvariantId::I3] {
+    let mut must_run = vec![
+        InvariantId::I1,
+        InvariantId::I2,
+        InvariantId::I3,
+        InvariantId::I7,
+    ];
+    if !ops.is_empty() {
+        must_run.push(InvariantId::I4);
+    }
+    if with_items {
+        must_run.push(InvariantId::I5);
+    }
+    for id in must_run {
         assert!(report.outcome(id).ran(), "{id} did not run: {report}");
     }
 }
@@ -569,8 +618,194 @@ fn path_arg(p: &Path) -> OsString {
     p.as_os_str().to_owned()
 }
 
-fn run_ok(q: &QuickClean, plan: &QuickCleanPlan) -> QuickCleanReport {
-    q.run(plan, &Probe::idle(), &CancelToken::new())
+/// One audited operation, for the invariants and the audit assertions.
+#[derive(Debug, Clone)]
+struct OpRecord {
+    op: OperationId,
+    /// Items of its plan.
+    items: usize,
+    /// Processes it started.
+    spawned: Vec<Spawn>,
+}
+
+/// A Quick Clean step's result, with the operation it ran in.
+struct Audited<R> {
+    out: R,
+    rec: OpRecord,
+}
+
+impl<R: std::fmt::Debug> std::fmt::Debug for Audited<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.out.fmt(f)
+    }
+}
+
+impl<R> Deref for Audited<R> {
+    type Target = R;
+
+    fn deref(&self) -> &R {
+        &self.out
+    }
+}
+
+/// The store, beside the fixture root.
+fn open_store(fx: &Fixture) -> Store {
+    Store::open(&fx.base().join("data").join("scull.db"), &PlatformOwnerOnly).unwrap()
+}
+
+/// Every operation of a test gets its own plan and start time, ten seconds after the previous
+/// one: an operation refuses a plan created before another operation touched the same items
+/// (SAFE-09), and two runs in one test can fall in the same second.
+fn next_time() -> i64 {
+    static CLOCK: AtomicI64 = AtomicI64::new(0);
+    let _ = CLOCK.compare_exchange(0, now_unix(), Ordering::SeqCst, Ordering::SeqCst);
+    CLOCK.fetch_add(10, Ordering::SeqCst) + 10
+}
+
+/// Records the audit plan of `plan` (with `confirmed` orphaned caches), starts its operation
+/// under `exec`, runs `step` in it, finishes it (cancelled if `step` says so) and verifies the
+/// hash chain and the NDJSON mirror. Prints the operation's audit rows.
+fn in_operation<R>(
+    fx: &Fixture,
+    exec: &Executor,
+    plan: &QuickCleanPlan,
+    confirmed: &BTreeSet<CacheTool>,
+    step: impl FnOnce(&mut Operation<'_>) -> (R, bool, Vec<Spawn>),
+) -> Audited<R> {
+    let t = next_time();
+    let suffix = format!("QC{t}");
+    let audit_plan = plan
+        .audit_plan(
+            confirmed,
+            PlanParams {
+                id: PlanId::from_suffix(&suffix).unwrap(),
+                scan_id: ScanId::from_suffix("QC").unwrap(),
+                created_unix: t,
+                ttl_secs: None,
+                machine_id: "qc-machine".into(),
+                user: "tester".into(),
+                origin: PlanOrigin::Cli,
+            },
+        )
+        .unwrap();
+    let mut store = open_store(fx);
+    store.insert_plan(&audit_plan).unwrap();
+    let op_id = OperationId::from_suffix(&suffix).unwrap();
+    let start = OperationStart {
+        operation_id: op_id.clone(),
+        plan_id: audit_plan.id().clone(),
+        content_hash: audit_plan.content_hash().clone(),
+        approver: "tester".into(),
+        method: ApprovalMethod::CliInteractive,
+        started_at: t,
+    };
+    let mut op = exec
+        .begin_operation(&mut store, &audit_plan, &start)
+        .unwrap();
+    let (out, cancelled, spawned) = step(&mut op);
+    let end = if cancelled {
+        OperationEnd::Cancelled
+    } else {
+        OperationEnd::Normal
+    };
+    let summary = op.finish(end, t + 1).unwrap();
+    let chain = store.verify_chain(&op_id).unwrap();
+    assert!(chain.is_intact(), "{chain:?}");
+    let mirror = store.verify_mirror(&op_id).unwrap();
+    assert_eq!(mirror.status, MirrorStatus::Matches, "{mirror:?}");
+    println!(
+        "  audit {op_id}: {} | {} item(s), predicted {} B, freed {} B, measured delta {:?} B | \
+         chain intact ({} rows)",
+        summary.status.as_str(),
+        summary.totals.items_planned,
+        summary.totals.predicted_bytes,
+        summary.totals.freed_bytes,
+        summary.totals.measured_delta_bytes,
+        chain.rows
+    );
+    for row in store.audit_items(&op_id).unwrap() {
+        println!(
+            "    {} {} [{}] reason={} predicted={} freed={:?}",
+            row.outcome.as_str(),
+            row.path,
+            row.action,
+            row.reason.as_deref().unwrap_or("-"),
+            row.predicted_bytes,
+            row.freed_bytes
+        );
+    }
+    Audited {
+        out,
+        rec: OpRecord {
+            op: op_id,
+            items: audit_plan.items().len(),
+            spawned,
+        },
+    }
+}
+
+/// `plan` run in its own audited operation, under a freshly acquired execution lock.
+fn run_audited(
+    fx: &Fixture,
+    q: &QuickClean,
+    plan: &QuickCleanPlan,
+    probe: &dyn ActivityProbe,
+    cancel: &CancelToken,
+) -> Audited<QuickCleanReport> {
+    let exec = locked_executor(fx);
+    in_operation(fx, &exec, plan, &BTreeSet::new(), |op| {
+        let r = q.run(op, plan, probe, cancel).expect("audited run");
+        let (cancelled, spawned) = (r.cancelled, r.spawned.clone());
+        (r, cancelled, spawned)
+    })
+}
+
+fn run_ok(fx: &Fixture, q: &QuickClean, plan: &QuickCleanPlan) -> Audited<QuickCleanReport> {
+    run_audited(fx, q, plan, &Probe::idle(), &CancelToken::new())
+}
+
+/// The confirmed orphaned caches of `plan` removed in their own audited operation.
+fn orphans_audited(
+    fx: &Fixture,
+    exec: &Executor,
+    q: &QuickClean,
+    plan: &QuickCleanPlan,
+    confirmed: &BTreeSet<CacheTool>,
+    probe: &dyn ActivityProbe,
+    cancel: &CancelToken,
+) -> Audited<OrphanedReport> {
+    in_operation(fx, exec, plan, confirmed, |op| {
+        let r = q
+            .remove_orphaned(exec, op, plan, confirmed, probe, cancel)
+            .expect("audited removal");
+        let cancelled = r.cancelled;
+        (r, cancelled, Vec::new())
+    })
+}
+
+/// The audit rows of `rec`'s operation.
+fn rows(fx: &Fixture, rec: &OpRecord) -> Vec<ItemAudit> {
+    open_store(fx).audit_items(&rec.op).unwrap()
+}
+
+/// The one audit row of `rec`'s operation, with its outcome and reason.
+fn only_row(fx: &Fixture, rec: &OpRecord, outcome: ItemOutcome, reason: Option<&str>) -> ItemAudit {
+    let rows = rows(fx, rec);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    let row = rows.into_iter().next().unwrap();
+    assert_eq!(row.outcome, outcome, "{row:#?}");
+    assert_eq!(row.reason.as_deref(), reason, "{row:#?}");
+    row
+}
+
+fn status(fx: &Fixture, rec: &OpRecord) -> OperationStatus {
+    open_store(fx)
+        .operation(&rec.op)
+        .unwrap()
+        .unwrap()
+        .finished
+        .unwrap()
+        .status
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -621,7 +856,7 @@ fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
             .ends_with(&format!("--cache {}", location.display()))
     );
 
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     let r = &report.results[0];
     assert!(r.succeeded(), "{r:?}");
@@ -680,8 +915,36 @@ fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
     assert!(r.free_before.is_some() && r.free_after.is_some());
     assert!(r.free_space_delta().is_some());
     assert_eq!(r.explanation, None);
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    // Audited (P2-EXEC-12): one `tool_run` row with the predicted and the measured bytes; the
+    // plan of record holds the resolved binary and the exact arguments.
+    let row = only_row(&fx, &report.rec, ItemOutcome::ToolRun, None);
+    assert_eq!(row.item_id, t.item_id);
+    assert_eq!(row.action, "tool_command");
+    assert_eq!(row.predicted_bytes, t.reclaimable_bytes);
+    assert_eq!(
+        row.freed_bytes,
+        r.cache_bytes_freed().map(|b| u64::try_from(b).unwrap())
+    );
+    let store = open_store(&fx);
+    let record = store.operation(&report.rec.op).unwrap().unwrap();
+    assert_eq!(record.approver, "tester");
+    let fin = record.finished.unwrap();
+    assert_eq!(fin.status, OperationStatus::Completed);
+    assert!(fin.totals.measured_delta_bytes.is_some(), "{fin:?}");
+    let recorded = store.get_plan(&record.plan_id).unwrap().unwrap();
+    assert_eq!(
+        recorded.items()[0].action,
+        Action::ToolCommand {
+            tool: canonical(&npm).to_string_lossy().into_owned(),
+            args: vec![
+                "cache".into(),
+                "verify".into(),
+                "--cache".into(),
+                location.to_string_lossy().into_owned(),
+            ],
+        }
+    );
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 fn fx_qc_01_npm_wipe_only_when_requested() {
@@ -712,7 +975,7 @@ fn fx_qc_01_npm_wipe_only_when_requested() {
         ]
         .concat()
     );
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results[0].succeeded());
     assert_eq!(
         only_call(&fx, "npm").argv,
@@ -725,8 +988,7 @@ fn fx_qc_01_npm_wipe_only_when_requested() {
         ]
     );
     assert_eq!(files_below(&cache), [fake::GUARD]);
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -778,7 +1040,7 @@ fn fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation() {
     );
     assert!(t.notes.iter().any(|n| n.contains("never removed directly")));
 
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     let r = &report.results[0];
     assert!(r.succeeded(), "{r:?}");
     assert_eq!(
@@ -798,8 +1060,7 @@ fn fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation() {
     assert!(after.shared_allocated >= 3 * 32 * 1024, "{after:?}");
     let why = r.explanation.as_deref().expect("partial reclaim explained");
     assert!(why.contains("no project references"), "{why}");
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &store)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &store)], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -840,7 +1101,7 @@ fn fx_qc_03_tool_in_use_is_skipped_and_reported() {
         SkipReason::ActivityUnknown(_)
     ));
 
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert_eq!(report.results.len(), 1);
     assert!(matches!(
         skip_reason(&report.skipped, CacheTool::Bun),
@@ -848,8 +1109,7 @@ fn fx_qc_03_tool_in_use_is_skipped_and_reported() {
     ));
     assert!(fake::calls(&tools(&fx), "bun").is_empty(), "bun never ran");
     assert!(files_below(&bun).contains(&"a1b2c3.npm".to_owned()));
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &npm)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &npm)], &[&report.rec]);
 }
 
 fn fx_qc_03_in_use_at_run_time_is_skipped() {
@@ -867,7 +1127,7 @@ fn fx_qc_03_in_use_at_run_time_is_skipped() {
     assert_eq!(planned_tools(&plan), [CacheTool::Npm]);
     // Between preview and confirmation an `npm install` started.
     let busy = Probe::holding(npm.join("index-v5/1a/2b/3c4d"));
-    let report = q.run(&plan, &busy, &CancelToken::new());
+    let report = run_audited(&fx, &q, &plan, &busy, &CancelToken::new());
     assert!(report.results.is_empty());
     assert!(matches!(
         skip_reason(&report.skipped, CacheTool::Npm),
@@ -875,7 +1135,8 @@ fn fx_qc_03_in_use_at_run_time_is_skipped() {
     ));
     assert!(report.spawned.is_empty());
     assert!(!fake::ran_in(&tools(&fx)));
-    check(&fx, &plan, &cands, &[]);
+    only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("in_use"));
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 /// A real process with its working directory inside the cache, seen by the native probe.
@@ -911,7 +1172,7 @@ fn fx_qc_03_real_process_inside_cache_is_detected() {
         SkipReason::InUse(by) => assert!(by.iter().any(|b| b.contains("process cwd")), "{by:?}"),
         r => panic!("{r:?}"),
     }
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -943,10 +1204,10 @@ fn fx_qc_04_symlinked_cache_is_skipped() {
         skip_reason(&plan.skipped, CacheTool::Npm),
         SkipReason::Problem(CacheProblem::Link { .. })
     ));
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results.is_empty() && report.spawned.is_empty());
     assert!(!fake::ran_in(&tools(&fx)));
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 fn fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped() {
@@ -969,10 +1230,10 @@ fn fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped() {
     fs::rename(&npm_dir, &moved).unwrap();
     if !fx.symlink("home/.npm", &moved).unwrap().is_created() {
         fs::rename(&moved, &npm_dir).unwrap();
-        check(&fx, &plan, &cands, &[]);
+        check(&fx, &plan, &cands, &[], &[]);
         return;
     }
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results.is_empty(), "{report:?}");
     assert!(report.spawned.is_empty());
     let reason = skip_reason(&report.skipped, CacheTool::Npm);
@@ -995,7 +1256,7 @@ fn fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped() {
         .unwrap();
     fs::rename(&moved, &npm_dir).unwrap();
     let _ = cache;
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 /// A platform that reports everything under `under` as being on another volume.
@@ -1048,11 +1309,10 @@ fn qc_05_cache_on_other_volume_is_skipped() {
         skip_reason(&plan.skipped, CacheTool::Bun),
         SkipReason::Problem(CacheProblem::OtherVolume { .. })
     ));
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert_eq!(report.results.len(), 1);
     assert!(fake::calls(&tools(&fx), "bun").is_empty());
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &npm)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &npm)], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1083,10 +1343,10 @@ fn fx_qc_05_uninstalled_tool_cache_is_reported_not_removed() {
         }
     );
     assert!(reason.to_string().contains("manual removal"));
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results.is_empty() && report.spawned.is_empty());
     assert!(bun.join("a1b2c3.npm").is_file());
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1147,8 +1407,10 @@ fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
 
     let exec = locked_executor(&fx);
     // No confirmation: nothing happens.
-    let none = q.remove_orphaned(
+    let none = orphans_audited(
+        &fx,
         &exec,
+        &q,
         &plan,
         &confirmed(&[]),
         &Probe::idle(),
@@ -1157,8 +1419,10 @@ fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
     assert!(none.removed.is_empty() && none.skipped.is_empty());
     assert!(bun.join("a1b2c3.npm").is_file());
     // Confirming another tool doesn't remove Bun's cache.
-    let other = q.remove_orphaned(
+    let other = orphans_audited(
+        &fx,
         &exec,
+        &q,
         &plan,
         &confirmed(&[CacheTool::Pnpm]),
         &Probe::idle(),
@@ -1167,8 +1431,10 @@ fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
     assert!(other.removed.is_empty());
     assert!(bun.is_dir());
 
-    let report = q.remove_orphaned(
+    let report = orphans_audited(
+        &fx,
         &exec,
+        &q,
         &plan,
         &confirmed(&[CacheTool::Bun]),
         &Probe::idle(),
@@ -1194,7 +1460,41 @@ fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
         npm.join("index-v5").is_dir(),
         "only the confirmed tool's cache"
     );
-    check(&fx, &plan, &cands, &[rel(&fx, &bun)]);
+    // P2-EXEC-12: nothing confirmed, nothing planned or audited; the removal is audited as
+    // `removed` with the D-36 evidence summary, its predicted and freed bytes, and was
+    // journaled (intent before the walk, closed after it).
+    assert_eq!((none.rec.items, other.rec.items), (0, 0));
+    assert!(rows(&fx, &none.rec).is_empty() && rows(&fx, &other.rec).is_empty());
+    let row = only_row(
+        &fx,
+        &report.rec,
+        ItemOutcome::Removed,
+        Some("d36_orphaned:searched_1_dirs"),
+    );
+    assert_eq!(row.item_id, o.item.item_id);
+    assert_eq!(row.predicted_bytes, o.reclaimable_bytes);
+    assert_eq!(row.freed_bytes, Some(walk.removed.allocated_bytes));
+    assert_eq!(status(&fx, &report.rec), OperationStatus::Completed);
+    let steps = open_store(&fx).journal_steps(&report.rec.op).unwrap();
+    assert_eq!(steps.len(), 1, "{steps:#?}");
+    assert_eq!(steps[0].intent.action, JournalAction::Delete);
+    assert_eq!(steps[0].intent.item_id, o.item.item_id);
+    assert!(steps[0].intent.tree.is_some_and(|t| t.entries > 1));
+    assert_eq!(
+        steps[0]
+            .close
+            .as_ref()
+            .and_then(|c| c.outcome.as_ref())
+            .map(|r| r.outcome),
+        Some(ItemOutcome::Removed)
+    );
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &bun)],
+        &[&none.rec, &other.rec, &report.rec],
+    );
 }
 
 /// D-36: every condition is re-checked right before the removal. A cache that is in use, was
@@ -1214,6 +1514,7 @@ fn d36_orphaned_cache_rechecked_right_before_removal() {
     let q = quick(options(&fx, &[tools(&fx)]));
     let exec = locked_executor(&fx);
     let bun_only = confirmed(&[CacheTool::Bun]);
+    let mut ops = Vec::new();
 
     // In use at planning: not offered.
     let held = Probe::holding(bun.join("a1b2c3.npm"));
@@ -1224,32 +1525,54 @@ fn d36_orphaned_cache_rechecked_right_before_removal() {
     assert_eq!(plan.orphaned.len(), 1);
 
     // In use at removal time.
-    let r = q.remove_orphaned(&exec, &plan, &bun_only, &held, &CancelToken::new());
+    let r = orphans_audited(&fx, &exec, &q, &plan, &bun_only, &held, &CancelToken::new());
     assert!(r.removed.is_empty());
     assert!(matches!(
         skip_reason(&r.skipped, CacheTool::Bun),
         SkipReason::InUse(_)
     ));
+    only_row(&fx, &r.rec, ItemOutcome::Skipped, Some("in_use"));
+    ops.push(r.rec.clone());
     // Activity unknown counts as in use.
     let unknown = Probe {
         held: Vec::new(),
         unknown: true,
     };
-    let r = q.remove_orphaned(&exec, &plan, &bun_only, &unknown, &CancelToken::new());
+    let r = orphans_audited(
+        &fx,
+        &exec,
+        &q,
+        &plan,
+        &bun_only,
+        &unknown,
+        &CancelToken::new(),
+    );
     assert!(matches!(
         skip_reason(&r.skipped, CacheTool::Bun),
         SkipReason::ActivityUnknown(_)
     ));
+    only_row(&fx, &r.rec, ItemOutcome::Skipped, Some("activity_unknown"));
+    ops.push(r.rec.clone());
     assert!(bun.join("a1b2c3.npm").is_file());
 
     // The tool was installed meanwhile: its own command is the way.
     fake::install(&tools(&fx), "bun");
-    let r = q.remove_orphaned(&exec, &plan, &bun_only, &Probe::idle(), &CancelToken::new());
+    let r = orphans_audited(
+        &fx,
+        &exec,
+        &q,
+        &plan,
+        &bun_only,
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
     assert!(r.removed.is_empty());
     assert!(matches!(
         skip_reason(&r.skipped, CacheTool::Bun),
         SkipReason::Changed(_)
     ));
+    only_row(&fx, &r.rec, ItemOutcome::Skipped, Some("changed"));
+    ops.push(r.rec.clone());
     fs::remove_file(tools(&fx).join(exe("bun"))).unwrap();
 
     // Swapped for a link to the canary after planning.
@@ -1261,19 +1584,36 @@ fn d36_orphaned_cache_rechecked_right_before_removal() {
         .unwrap()
         .is_created();
     if linked {
-        let r = q.remove_orphaned(&exec, &plan, &bun_only, &Probe::idle(), &CancelToken::new());
+        let r = orphans_audited(
+            &fx,
+            &exec,
+            &q,
+            &plan,
+            &bun_only,
+            &Probe::idle(),
+            &CancelToken::new(),
+        );
         assert!(r.removed.is_empty(), "{r:#?}");
         assert!(matches!(
             skip_reason(&r.skipped, CacheTool::Bun),
             SkipReason::Problem(CacheProblem::Link { .. }) | SkipReason::Changed(_)
         ));
+        let row = rows(&fx, &r.rec).remove(0);
+        assert_eq!(row.outcome, ItemOutcome::Skipped);
+        assert!(
+            matches!(row.reason.as_deref(), Some("link" | "changed")),
+            "{row:?}"
+        );
+        assert!(open_store(&fx).journal_steps(&r.rec.op).unwrap().is_empty());
+        ops.push(r.rec.clone());
         fs::remove_file(&bun)
             .or_else(|_| fs::remove_dir(&bun))
             .unwrap();
     }
     fs::rename(&moved, &bun).unwrap();
     assert!(bun.join("a1b2c3.npm").is_file());
-    check(&fx, &plan, &cands, &[]);
+    let ops: Vec<&OpRecord> = ops.iter().collect();
+    check(&fx, &plan, &cands, &[], &ops);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1326,14 +1666,13 @@ fn fx_qc_06_untrusted_npm_binaries_never_run() {
         t.command_line()
             .contains(&*canonical(&npm).to_string_lossy())
     );
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results[0].succeeded());
     for d in &untrusted {
         assert!(!fake::ran_in(d), "sentinel in {}", d.display());
     }
     assert_eq!(fake::calls(&tools(&fx), "npm").len(), 1);
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 fn fx_qc_06_only_untrusted_binaries_means_not_installed() {
@@ -1355,12 +1694,12 @@ fn fx_qc_06_only_untrusted_binaries_means_not_installed() {
             manual_removal: cache
         }
     );
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.spawned.is_empty());
     for d in &untrusted {
         assert!(!fake::ran_in(d), "sentinel in {}", d.display());
     }
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 /// A symlink in a trusted folder pointing at a project's `node_modules/.bin/npm` is rejected
@@ -1391,10 +1730,10 @@ fn fx_qc_06_trusted_symlink_into_node_modules_is_rejected() {
         skip_reason(&plan.skipped, CacheTool::Npm),
         SkipReason::NotInstalled { .. }
     ));
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.spawned.is_empty());
     assert!(!fake::ran_in(evil.parent().unwrap()));
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1422,7 +1761,7 @@ fn fx_qc_07_project_npmrc_never_applies() {
     let scan = locate(&fx);
     let cands = candidates(&scan);
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results[0].succeeded());
     let call = only_call(&fx, "npm");
     assert_ne!(call.cwd, fx.root().join("proj"));
@@ -1436,7 +1775,7 @@ fn fx_qc_07_project_npmrc_never_applies() {
             .keys()
             .any(|k| k.eq_ignore_ascii_case("npm_config_cache"))
     );
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 /// A user `.npmrc` with `cache=<home>` is refused by the locator: npm is skipped and reported.
@@ -1456,10 +1795,10 @@ fn fx_qc_07_user_npmrc_cache_at_home_is_refused() {
         SkipReason::Refused(r) => assert!(r.contains("home folder"), "{r}"),
         r => panic!("{r:?}"),
     }
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.spawned.is_empty());
     assert!(!fake::ran_in(&tools(&fx)));
-    check(&fx, &plan, &cands, &[]);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1501,7 +1840,7 @@ fn fx_qc_08_unticked_tools_are_not_cleaned() {
     );
     let pnpm_before = files_below(&pnpm);
     let bun_before = files_below(&bun);
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert_eq!(report.results.len(), 2);
     assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
     assert!(fake::calls(&tools(&fx), "pnpm").is_empty());
@@ -1510,9 +1849,13 @@ fn fx_qc_08_unticked_tools_are_not_cleaned() {
     assert_eq!(files_below(&bun), bun_before);
     assert_eq!(files_below(&yarn), [fake::GUARD]);
     // The yarn version probe plus the two tools: all allowlisted, all trusted.
-    assert_spawns_allowlisted(&fx, &plan.spawned);
-    assert_spawns_allowlisted(&fx, &report.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &npm), rel(&fx, &yarn)]);
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &npm), rel(&fx, &yarn)],
+        &[&report.rec],
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1552,7 +1895,7 @@ fn bun_and_yarn_location_variables_target_the_located_cache() {
         plan.tools[1].env,
         [("YARN_CACHE_FOLDER".to_owned(), path_arg(&yarn))]
     );
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
     let bun_call = only_call(&fx, "bun");
     assert_eq!(bun_call.argv, ["pm", "cache", "rm"]);
@@ -1572,7 +1915,13 @@ fn bun_and_yarn_location_variables_target_the_located_cache() {
     );
     assert_eq!(files_below(&bun), [fake::GUARD]);
     assert_eq!(files_below(&yarn), [fake::GUARD]);
-    check(&fx, &plan, &cands, &[rel(&fx, &bun), rel(&fx, &yarn)]);
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &bun), rel(&fx, &yarn)],
+        &[&report.rec],
+    );
 }
 
 fn yarn_version_must_match_the_cache() {
@@ -1608,11 +1957,10 @@ fn yarn_version_must_match_the_cache() {
         t.env,
         [("YARN_GLOBAL_FOLDER".to_owned(), path_arg(&global))]
     );
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results[0].succeeded(), "{report:?}");
     assert_eq!(files_below(&berry), [fake::GUARD]);
-    assert_spawns_allowlisted(&fx, &plan.spawned);
-    check(&fx, &plan, &cands, &[rel(&fx, &berry)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &berry)], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1643,7 +1991,7 @@ fn timeout_kills_the_tool() {
     let q = quick(o);
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
     let started = Instant::now();
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     let r = &report.results[0];
     assert_eq!(r.ended, Ended::TimedOut(Duration::from_millis(700)));
     assert!(!r.succeeded());
@@ -1658,7 +2006,10 @@ fn timeout_kills_the_tool() {
         !tools(&fx).join("npm.finished").exists(),
         "the tool kept running"
     );
-    check(&fx, &plan, &cands, &[]);
+    // Killed before it touched the cache: `failed`, not `partial`.
+    only_row(&fx, &report.rec, ItemOutcome::Failed, Some("tool_timeout"));
+    assert_eq!(status(&fx, &report.rec), OperationStatus::Failed);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 fn output_is_escaped_and_capped() {
@@ -1671,7 +2022,7 @@ fn output_is_escaped_and_capped() {
     o.max_output = 4096;
     let q = quick(o);
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     let r = &report.results[0];
     assert!(r.succeeded(), "{r:?}");
     assert_eq!(r.stdout.lines[0], "ok\\x1b[2Jcleared\\u{202e}txt.exe");
@@ -1682,7 +2033,7 @@ fn output_is_escaped_and_capped() {
     for l in r.stdout.lines.iter().chain(&r.stderr.lines) {
         assert!(!l.chars().any(needs_escape), "{l:?}");
     }
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 fn failing_tool_reports_its_exit_status() {
@@ -1693,11 +2044,18 @@ fn failing_tool_reports_its_exit_status() {
     let (cache, scan, cands) = fx_npm_planned(&mut fx, &[("exit", "3")]);
     let q = quick(options(&fx, &[tools(&fx)]));
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     let r = &report.results[0];
     assert_eq!(r.ended, Ended::Exited(Some(3)));
     assert!(!r.succeeded());
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    // It pruned, then failed: `partial`, with what the cache shrank by.
+    let row = only_row(&fx, &report.rec, ItemOutcome::Partial, Some("tool_exit:3"));
+    assert!(row.freed_bytes.is_some_and(|b| b > 0), "{row:?}");
+    assert_eq!(
+        status(&fx, &report.rec),
+        OperationStatus::CompletedWithErrors
+    );
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1731,9 +2089,10 @@ fn d28_s2_cache_gets_no_tool_action() {
     // No candidate at all: not classified, not run.
     let plan = q.plan(&scan, &[], &QuickCleanRequest::default(), &Probe::idle());
     assert!(plan.tools.is_empty());
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.spawned.is_empty());
-    check(&fx, &plan, &cands, &[]);
+    assert_eq!(report.rec.items, 0, "nothing planned, nothing to audit");
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 fn elevated_process_refuses_unless_allowed() {
@@ -1744,19 +2103,30 @@ fn elevated_process_refuses_unless_allowed() {
     let (cache, scan, cands) = fx_npm_planned(&mut fx, &[]);
     let q = quick(options(&fx, &[tools(&fx)])).with_elevation(Elevation::Elevated);
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results.is_empty());
     assert_eq!(
         skip_reason(&report.skipped, CacheTool::Npm),
         SkipReason::Elevated(Elevation::Elevated)
     );
     assert!(!fake::ran_in(&tools(&fx)));
+    only_row(&fx, &report.rec, ItemOutcome::Refused, Some("elevated"));
+    let refused = report.rec.clone();
     let mut o = options(&fx, &[tools(&fx)]);
     o.allow_elevated = true;
     let q = quick(o).with_elevation(Elevation::Elevated);
-    let report = run_ok(&q, &plan);
+    let report = run_ok(&fx, &q, &plan);
     assert!(report.results[0].succeeded());
-    check(&fx, &plan, &cands, &[rel(&fx, &cache)]);
+    only_row(&fx, &report.rec, ItemOutcome::ToolRun, None);
+    // The refused operation's chain is intact too; I-4 runs on the last operation only (the
+    // first one's "unchanged" was true before the second run cleaned the cache).
+    assert!(
+        open_store(&fx)
+            .verify_chain(&refused.op)
+            .unwrap()
+            .is_intact()
+    );
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
 }
 
 fn cancelled_before_start_runs_nothing() {
@@ -1769,12 +2139,61 @@ fn cancelled_before_start_runs_nothing() {
     let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
     let cancel = CancelToken::new();
     cancel.cancel();
-    let report = q.run(&plan, &Probe::idle(), &cancel);
+    let report = run_audited(&fx, &q, &plan, &Probe::idle(), &cancel);
     assert!(report.results.is_empty() && report.spawned.is_empty());
     assert_eq!(
         skip_reason(&report.skipped, CacheTool::Npm),
         SkipReason::Cancelled
     );
     assert!(!fake::ran_in(&tools(&fx)));
-    check(&fx, &plan, &cands, &[]);
+    // Not attempted: no audit row, and the operation is closed as cancelled.
+    assert!(report.cancelled);
+    assert!(rows(&fx, &report.rec).is_empty());
+    assert_eq!(status(&fx, &report.rec), OperationStatus::Cancelled);
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// P2-EXEC-12: only the approved command runs
+// ---------------------------------------------------------------------------------------------
+
+/// The operation was started for the prune; a preview that asks for the wipe is a different
+/// command (another plan item), so it is never started and not audited: the operation's item
+/// gets no outcome and the run is reported `not_approved`.
+fn p2_exec_12_unapproved_command_never_runs() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let (_cache, scan, cands) = fx_npm_planned(&mut fx, &[]);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let approved = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    let wipe = QuickCleanRequest {
+        wipe: BTreeSet::from([CacheTool::Npm]),
+        ..QuickCleanRequest::default()
+    };
+    let swapped = q.plan(&scan, &cands, &wipe, &Probe::idle());
+    assert_eq!(approved.tools[0].item_id, swapped.tools[0].item_id);
+    assert_ne!(approved.tools[0].item, swapped.tools[0].item);
+    let exec = locked_executor(&fx);
+    let audited = in_operation(&fx, &exec, &approved, &BTreeSet::new(), |op| {
+        let r = q
+            .run(op, &swapped, &Probe::idle(), &CancelToken::new())
+            .unwrap();
+        // The approved item has no outcome: end as cancelled (nothing was touched).
+        (r, true, Vec::new())
+    });
+    assert!(audited.results.is_empty() && audited.spawned.is_empty());
+    assert_eq!(
+        skip_reason(&audited.skipped, CacheTool::Npm),
+        SkipReason::NotApproved
+    );
+    assert!(!fake::ran_in(&tools(&fx)));
+    assert!(rows(&fx, &audited.rec).is_empty());
+    // Nothing was started, so nothing was measured: I-4 and I-7 apply, I-5 does not.
+    let nothing_run = OpRecord {
+        items: 0,
+        ..audited.rec.clone()
+    };
+    check(&fx, &approved, &cands, &[], &[&nothing_run]);
 }
