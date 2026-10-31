@@ -23,6 +23,64 @@ pub fn parse_identity_key(s: &str) -> Option<FileIdentity> {
     ))
 }
 
+/// What a [`QuarantineLogEntry`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum QuarantineEvent {
+    /// Moved back out of quarantine (to its original path or a sibling).
+    Restored,
+    /// A restore of an entry that was already restored (idempotent no-op).
+    RestoreNoop,
+    /// A restore was refused (integrity check, recorded paths, parent directory).
+    RestoreRefused,
+    /// Removed by a purge; `bytes` were freed.
+    Purged,
+    /// A purge kept the entry (it changed, or could not be removed completely).
+    PurgeKept,
+}
+
+impl QuarantineEvent {
+    /// Stable string stored in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QuarantineEvent::Restored => "restored",
+            QuarantineEvent::RestoreNoop => "restore_noop",
+            QuarantineEvent::RestoreRefused => "restore_refused",
+            QuarantineEvent::Purged => "purged",
+            QuarantineEvent::PurgeKept => "purge_kept",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        [
+            QuarantineEvent::Restored,
+            QuarantineEvent::RestoreNoop,
+            QuarantineEvent::RestoreRefused,
+            QuarantineEvent::Purged,
+            QuarantineEvent::PurgeKept,
+        ]
+        .into_iter()
+        .find(|e| e.as_str() == s)
+    }
+}
+
+/// One row of the append-only quarantine log (schema v5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineLogEntry {
+    /// The manifest entry.
+    pub entry_id: i64,
+    /// When (Unix seconds).
+    pub recorded_at: i64,
+    /// What happened.
+    pub event: QuarantineEvent,
+    /// The path involved (restore target), if any.
+    pub path: Option<FsPath>,
+    /// Stable reason code for refusals and kept entries.
+    pub reason: Option<String>,
+    /// Bytes involved (freed by a purge), if any.
+    pub bytes: Option<u64>,
+}
+
 /// A quarantined entry to record (right after the same-volume move).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewQuarantineEntry {
@@ -237,6 +295,57 @@ impl Store {
                     format!("quarantine entry {entry_id} is not held (restored or purged)"),
                 ))
             }
+        })
+    }
+
+    /// Append a row to the quarantine log (restores and purges, including refusals).
+    pub fn log_quarantine_event(&mut self, e: &QuarantineLogEntry) -> Result<()> {
+        self.write(|tx| {
+            tx.execute(
+                "INSERT INTO quarantine_log (entry_id, recorded_at, event, path, reason, bytes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    e.entry_id,
+                    e.recorded_at,
+                    e.event.as_str(),
+                    e.path.as_ref().map(FsPath::as_str),
+                    e.reason,
+                    e.bytes.map(int).transpose()?,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The log rows of one manifest entry, oldest first.
+    pub fn quarantine_log(&self, entry_id: i64) -> Result<Vec<QuarantineLogEntry>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT recorded_at, event, path, reason, bytes FROM quarantine_log \
+                 WHERE entry_id = ?1 ORDER BY seq",
+            )?;
+            let rows = stmt.query_map([entry_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (recorded_at, event, path, reason, bytes) = row?;
+                out.push(QuarantineLogEntry {
+                    entry_id,
+                    recorded_at,
+                    event: QuarantineEvent::parse(&event).ok_or_else(|| bad("log event"))?,
+                    path: path.map(|p| FsPath::from(p.as_str())),
+                    reason,
+                    bytes: bytes.map(|b| u64::try_from(b).unwrap_or(0)),
+                });
+            }
+            Ok(out)
         })
     }
 

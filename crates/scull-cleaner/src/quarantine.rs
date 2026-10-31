@@ -46,7 +46,9 @@ use scull_platform::remove::{self, RemoveError, RemoveOutcome, RemoveRequest};
 use scull_platform::{
     EntryKind, Native, Platform, create_dir_owner_only, create_file_owner_only, ensure_owner_only,
 };
-use scull_storage::{NewQuarantineEntry, QuarantineEntry, Store};
+use scull_storage::{
+    NewQuarantineEntry, QuarantineEntry, QuarantineEvent, QuarantineLogEntry, Store,
+};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -486,20 +488,36 @@ impl Executor {
         let mut report = PurgeReport::default();
         for entry in select(held, policy) {
             let outcome = purge_one(&entry);
-            match &outcome {
+            let (event, reason, bytes) = match &outcome {
                 PurgeOutcome::Purged { freed_bytes } => {
                     store
                         .mark_quarantine_purged(entry.entry_id, policy.now, *freed_bytes)
                         .map_err(ScullError::from)?;
                     report.freed_bytes = report.freed_bytes.saturating_add(*freed_bytes);
+                    (QuarantineEvent::Purged, None, Some(*freed_bytes))
                 }
                 PurgeOutcome::AlreadyGone => {
                     store
                         .mark_quarantine_purged(entry.entry_id, policy.now, 0)
                         .map_err(ScullError::from)?;
+                    (QuarantineEvent::Purged, Some("already_gone"), Some(0))
                 }
-                _ => {}
-            }
+                _ => (
+                    QuarantineEvent::PurgeKept,
+                    Some("changed_or_incomplete"),
+                    None,
+                ),
+            };
+            store
+                .log_quarantine_event(&QuarantineLogEntry {
+                    entry_id: entry.entry_id,
+                    recorded_at: policy.now,
+                    event,
+                    path: None,
+                    reason: reason.map(str::to_owned),
+                    bytes,
+                })
+                .map_err(ScullError::from)?;
             report.entries.push((entry, outcome));
         }
         Ok(report)

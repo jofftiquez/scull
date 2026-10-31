@@ -52,7 +52,10 @@ pub use history::{
 };
 pub use migrate::{APPLICATION_ID, SCHEMA_VERSION};
 pub use perms::{DefaultPermissions, OwnerOnly};
-pub use quarantine::{NewQuarantineEntry, QuarantineEntry, identity_key, parse_identity_key};
+pub use quarantine::{
+    NewQuarantineEntry, QuarantineEntry, QuarantineEvent, QuarantineLogEntry, identity_key,
+    parse_identity_key,
+};
 pub use records::{
     Approval, ApprovalMethod, NewApproval, OperationStart, Rollup, ScanFinish, ScanStart,
     ScanStatus, ScanTotals,

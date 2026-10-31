@@ -423,8 +423,7 @@ fn fx_data_01_v3_database_upgrades_to_v4_with_backup_and_keeps_old_manifest_rows
             .unwrap();
     }
 
-    let s = open_with(&path, MIGRATIONS).unwrap();
-    assert_eq!(SCHEMA_VERSION, 4);
+    let s = open_with(&path, &MIGRATIONS[..4]).unwrap();
     assert_eq!(s.schema_version().unwrap(), 4);
     assert_eq!(s.backups_taken().len(), 1);
     let name = s.backups_taken()[0]
@@ -474,9 +473,61 @@ fn fx_data_01_v3_database_upgrades_to_v4_with_backup_and_keeps_old_manifest_rows
     s.check_integrity().unwrap();
     drop(s);
     assert!(
-        open_with(&path, MIGRATIONS)
+        open_with(&path, &MIGRATIONS[..4])
             .unwrap()
             .backups_taken()
             .is_empty()
     );
+}
+
+// ---- v4 → v5 (quarantine log) -------------------------------------------------------------
+
+#[test]
+fn fx_data_01_v4_database_upgrades_to_v5_with_backup_and_an_append_only_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    {
+        let s = open_with(&path, &MIGRATIONS[..4]).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
+                 quarantine_path, bytes, quarantined_at, entry_identity, entry_kind, \
+                 parent_identity, logical_bytes) VALUES ('op_O1', '0123456789abcdef0123456789abcdef', '/work/a/target', \
+                 '/work/.scull-quarantine/op_O1/0001', 10, 100, '7:1', 'dir', '7:2', 8)",
+                [],
+            )
+            .unwrap();
+    }
+    let mut s = open_with(&path, MIGRATIONS).unwrap();
+    assert_eq!(SCHEMA_VERSION, 5);
+    assert_eq!(s.schema_version().unwrap(), 5);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v4"), "{name}");
+    // The v4 entry is intact and loggable; the log is append-only.
+    let entry = s.quarantine_entries(None).unwrap();
+    assert_eq!(entry.len(), 1);
+    s.log_quarantine_event(&crate::QuarantineLogEntry {
+        entry_id: entry[0].entry_id,
+        recorded_at: 200,
+        event: crate::QuarantineEvent::RestoreRefused,
+        path: None,
+        reason: Some("identity_changed".into()),
+        bytes: None,
+    })
+    .unwrap();
+    assert_eq!(s.quarantine_log(entry[0].entry_id).unwrap().len(), 1);
+    for sql in [
+        "UPDATE quarantine_log SET reason = 'x'",
+        "DELETE FROM quarantine_log",
+    ] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    s.check_integrity().unwrap();
 }

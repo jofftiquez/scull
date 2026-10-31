@@ -44,6 +44,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         crate::audit::migrate_v3_legacy,
     ),
     Migration::sql(include_str!("migrations/v004_quarantine.sql")),
+    Migration::sql(include_str!("migrations/v005_quarantine_log.sql")),
 ];
 
 /// Newest schema version this binary knows. A database with a higher `user_version` is refused.

@@ -25,6 +25,10 @@
 //!   their own volume by one atomic no-replace rename, recorded in the database manifest of
 //!   record; where that is impossible they are blocked, never deleted.
 //!   [`Executor::purge_quarantine`] removes expired entries and records the freed bytes.
+//!   [`Executor::restore`] moves an entry back to its recorded path only (the database manifest
+//!   is authoritative), after verifying its identity, kind and size and that the original
+//!   folder is the same directory object; it never overwrites (a taken path gets a
+//!   `<name>.scull-restored-<n>` sibling), is idempotent, and logs every attempt (T-32).
 //!
 //! # Not wired into any interface yet
 //!
@@ -37,7 +41,8 @@
 //! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
 //!   P2-EXEC-11, #77;
 //! * the Trash fallback: P2-EXEC-07, #73;
-//! * Windows quarantine moves (handle-based rename, with the Windows walker's helpers).
+//! * Windows quarantine moves and restore (handle-based rename, with the Windows walker's
+//!   helpers).
 
 mod execution;
 mod executor;
@@ -47,6 +52,7 @@ mod operation;
 pub mod own_data;
 mod quarantine;
 pub mod quickclean;
+mod restore;
 mod revalidate;
 pub mod trash;
 
@@ -58,6 +64,7 @@ pub use quarantine::{
     DEFAULT_RETENTION_SECS, DISK_MANIFEST, PurgeOutcome, PurgePolicy, PurgeReport,
     QuarantineSettings, Quarantined,
 };
+pub use restore::{RESTORED_SUFFIX, RestoreOutcome, RestoreReport};
 pub use revalidate::{Revalidated, Revalidation, Skip};
 pub use scull_platform::quarantine::QUARANTINE_DIR_NAME;
 pub use scull_platform::remove::{
