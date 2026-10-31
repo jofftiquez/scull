@@ -465,7 +465,7 @@ fn same_object(platform: &dyn Platform, a: &Path, b: &Path) -> bool {
 }
 
 /// Resolve `.` and `..` lexically (`..` at the root stays at the root).
-fn normalize(p: &Path) -> PathBuf {
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

@@ -12,6 +12,10 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   The `node.*` rules are run by `scull_detectors::node` detectors, which add workspace lockfile
   resolution, link recording in `node_modules`, and a package.json dependency alternative to the
   config-file markers of framework outputs (see the header of `ecosystems/node.toml`).
+- Package caches (Quick Clean): `scull_detectors::caches::locate_caches` finds the npm, pnpm,
+  Bun and Yarn (classic and Berry) caches per OS from an injected `CacheEnv` (home, environment,
+  OS layout), validates their locations (QC-05, T-23) and picks each tool's native command by
+  rule ID (`npm.cache`, `pnpm.store`, `bun.cache`, `yarn.classic-cache`, `yarn.berry-cache`).
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.

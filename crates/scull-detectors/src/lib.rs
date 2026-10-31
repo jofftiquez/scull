@@ -4,15 +4,22 @@
 //! * [`Detector`], [`Detectors`], [`DetectedArtifact`]: deciding whether a directory the
 //!   scanner visited is an artifact, with evidence ([`detector`] module docs).
 //! * [`cargo`]: shared Cargo target directories (`CARGO_TARGET_DIR`, `[build] target-dir`).
+//! * [`caches`]: package-manager caches (npm, pnpm, Bun, Yarn) located per OS, without running
+//!   any tool (Quick Clean, QC-01…05).
 //! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
+pub mod caches;
 pub mod cargo;
 pub mod detector;
 pub mod node;
 pub mod rules;
 
+pub use caches::{
+    CacheCommands, CacheEnv, CacheProblem, CacheScan, CacheSource, CacheTool, LocatedCache,
+    NativeCommand, RefusedCache, commands_for_rule, locate_caches,
+};
 pub use cargo::{SharedTargetDirs, TargetDirSource};
 pub use detector::{
     CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detector, DetectorSignals,
