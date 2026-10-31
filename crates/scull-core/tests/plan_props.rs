@@ -495,3 +495,41 @@ proptest! {
         prop_assert_eq!(plan.verify(now, MACHINE, &user).unwrap_err().kind, ErrorKind::PlanForeign);
     }
 }
+
+/// P1-CORE-04 / D-28: an uncertain (S2) item may only be quarantined or trashed. A plan that
+/// proposes an irreversible action for it is refused at creation.
+#[test]
+fn s2_items_with_irreversible_actions_are_refused() {
+    let identity = FileIdentity::new(7, 42);
+    let path = "/work/repo-wt";
+    let item = |action: Action| PlanItem {
+        item_id: ItemId::derive(identity, path.as_bytes()),
+        identity,
+        path: FsPath::from(path),
+        category: Category::Worktree,
+        rule: RuleRef {
+            id: "git.worktree".into(),
+            version: 1,
+        },
+        tier: Tier::S2,
+        action,
+        reclaimable_bytes: 1,
+    };
+    let irreversible = [
+        Action::Delete,
+        Action::GitWorktreeRemove,
+        Action::GitWorktreePrune,
+        Action::ToolCommand {
+            tool: "npm".into(),
+            args: vec!["cache".into(), "clean".into(), "--force".into()],
+        },
+    ];
+    for action in irreversible {
+        let err = Plan::new(params(1_000, PlanOrigin::Cli), vec![item(action.clone())])
+            .expect_err("S2 + irreversible action must be refused");
+        assert_eq!(err.kind, ErrorKind::SafetyBlocked, "{action:?}");
+    }
+    for action in [Action::Quarantine, Action::Trash] {
+        Plan::new(params(1_000, PlanOrigin::Cli), vec![item(action)]).expect("restorable is fine");
+    }
+}

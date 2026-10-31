@@ -145,7 +145,7 @@ unknown), regeneration instructions/cost (`Unknown` unless evidenced, D-5), and 
 `Action` with its `Restorability`.
 
 `Candidate::is_consistent()` enforces: tier equals the most protective reason (no reasons means
-S3); S3 never carries a mutating action (I-1); `Delete` only for S0 (D-3; S1/S2 quarantine).
+S3); S3 never carries a mutating action (I-1); actions allowed per tier (D-28: `Delete` only S0; tool/Git actions only S0/S1; S2 only quarantine/Trash).
 
 ### 3.4 Plan: `scull_core::plan`
 

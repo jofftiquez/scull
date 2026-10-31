@@ -49,6 +49,43 @@ impl Action {
         !matches!(self, Action::None)
     }
 
+    /// Whether `self` may be proposed for an item at `tier` (PRD §8.2, D-3):
+    ///
+    /// | Tier | Allowed |
+    /// |---|---|
+    /// | S0 | any action |
+    /// | S1 | anything except `Delete` (quarantine, Trash, tool command, git operation) |
+    /// | S2 | **only** `Quarantine` or `Trash` (restorable), or `None` |
+    /// | S3 | only `None` |
+    ///
+    /// Irreversible actions (tool commands, `git worktree remove/prune`, delete) are never
+    /// allowed for uncertain (S2) items.
+    pub fn allowed_for(&self, tier: Tier) -> bool {
+        match (tier, self) {
+            (_, Action::None) => true,
+            (Tier::S3, _) => false,
+            (Tier::S2, a) => matches!(a, Action::Quarantine | Action::Trash),
+            (Tier::S1, a) => !matches!(a, Action::Delete),
+            (Tier::S0, _) => true,
+        }
+    }
+
+    /// The most useful action allowed at `tier` that is no less safe than `self`, used when a
+    /// tier is raised: `Delete`/`GitWorktreeRemove` become `Quarantine` at S1/S2 (restorable
+    /// move); tool commands and `GitWorktreePrune` become `None` at S2 (skipped, QC-05); anything
+    /// becomes `None` at S3.
+    #[must_use]
+    pub fn constrained_to(self, tier: Tier) -> Action {
+        if self.allowed_for(tier) {
+            return self;
+        }
+        match (tier, self) {
+            (Tier::S3, _) => Action::None,
+            (_, Action::Delete | Action::GitWorktreeRemove) => Action::Quarantine,
+            _ => Action::None,
+        }
+    }
+
     /// The default action for a filesystem candidate at `tier` (D-3).
     pub fn default_for(tier: Tier) -> Action {
         match tier {
@@ -86,6 +123,34 @@ mod tests {
         assert_eq!(Action::default_for(Tier::S2), Action::Quarantine);
         assert_eq!(Action::default_for(Tier::S3), Action::None);
         assert!(!Action::None.is_mutating());
+    }
+
+    #[test]
+    fn s2_allows_only_restorable_moves() {
+        let tool = Action::ToolCommand {
+            tool: "npm".into(),
+            args: vec!["cache".into(), "verify".into()],
+        };
+        for a in [
+            Action::Delete,
+            tool.clone(),
+            Action::GitWorktreeRemove,
+            Action::GitWorktreePrune,
+        ] {
+            assert!(!a.allowed_for(Tier::S2), "{a:?} must not be allowed at S2");
+            assert!(!a.allowed_for(Tier::S3));
+        }
+        assert!(Action::Quarantine.allowed_for(Tier::S2));
+        assert!(Action::Trash.allowed_for(Tier::S2));
+        assert!(tool.allowed_for(Tier::S1));
+        assert!(!Action::Delete.allowed_for(Tier::S1));
+        assert_eq!(
+            Action::GitWorktreeRemove.constrained_to(Tier::S2),
+            Action::Quarantine
+        );
+        assert_eq!(tool.constrained_to(Tier::S2), Action::None);
+        assert_eq!(Action::Quarantine.constrained_to(Tier::S3), Action::None);
+        assert_eq!(Action::Delete.constrained_to(Tier::S1), Action::Quarantine);
     }
 
     #[test]

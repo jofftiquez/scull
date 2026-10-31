@@ -211,9 +211,7 @@ impl PlanItem {
 /// Whether `action` may be planned or executed for an item at `tier`: the action must be
 /// mutating, the tier must not be S3, and `Delete` is only for S0 (D-3).
 pub fn action_allowed_for(tier: Tier, action: &Action) -> bool {
-    tier.is_actionable()
-        && action.is_mutating()
-        && !(matches!(action, Action::Delete) && tier != Tier::S0)
+    tier.is_actionable() && action.is_mutating() && action.allowed_for(tier)
 }
 
 /// Inputs to [`Plan::new`] other than the items.

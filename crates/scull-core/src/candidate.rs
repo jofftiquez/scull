@@ -143,15 +143,13 @@ impl Candidate {
     /// Whether the candidate is internally consistent:
     /// * `tier` equals the most protective reason (or S3 with no reasons);
     /// * an S3 item proposes no mutating action (invariant I-1);
-    /// * a `Delete` action is only proposed for S0 (D-3: S1/S2 go to quarantine).
+    /// * the action is allowed for the tier ([`Action::allowed_for`]): `Delete` only at S0,
+    ///   irreversible tool/Git actions at S0/S1 only, S2 only quarantine/Trash (PRD §8.2, D-3).
     pub fn is_consistent(&self) -> bool {
         if self.tier != Self::tier_from_reasons(&self.reasons) {
             return false;
         }
-        if self.tier == Tier::S3 && self.action.is_mutating() {
-            return false;
-        }
-        !(matches!(self.action, Action::Delete) && self.tier != Tier::S0)
+        self.action.allowed_for(self.tier)
     }
 
     /// Whether the proposed action can be undone.
@@ -159,15 +157,13 @@ impl Candidate {
         self.action.restorability()
     }
 
-    /// Raise the tier to at least `tier` for `reason`, never lowering it. If the result is S3,
-    /// the action becomes [`Action::None`].
+    /// Raise the tier to at least `tier` for `reason`, never lowering it. The action is then
+    /// constrained to the new tier ([`Action::constrained_to`]): S3 ⇒ `None`; at S2 a delete or
+    /// worktree removal becomes `Quarantine` and tool commands become `None`.
     pub fn raise(&mut self, reason: TierReason) {
         self.tier = self.tier.max_protective(reason.tier);
         self.reasons.push(reason);
-        if self.tier == Tier::S3 {
-            self.action = Action::None;
-        } else if matches!(self.action, Action::Delete) && self.tier != Tier::S0 {
-            self.action = Action::Quarantine;
-        }
+        let action = std::mem::replace(&mut self.action, Action::None);
+        self.action = action.constrained_to(self.tier);
     }
 }
