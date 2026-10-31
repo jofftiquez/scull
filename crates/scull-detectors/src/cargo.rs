@@ -393,6 +393,7 @@ fn shared_artifact(
             .iter()
             .map(|s| (*s).to_owned())
             .collect(),
+        tool_action: None,
     }
 }
 

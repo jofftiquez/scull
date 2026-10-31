@@ -222,6 +222,18 @@ fn uv_cache(fx: &mut Fixture, dir: &str) {
         .unwrap();
 }
 
+fn conda_pkgs(fx: &mut Fixture, dir: &str) {
+    fx.file(
+        format!("{dir}/urls.txt"),
+        "https://conda.anaconda.org/conda-forge/linux-64/numpy-2.1.2-py312h.conda\n",
+    )
+    .unwrap()
+    .file_of_size(format!("{dir}/numpy-2.1.2-py312h.conda"), 4096)
+    .unwrap()
+    .file(format!("{dir}/numpy-2.1.2-py312h/info/index.json"), "{}")
+    .unwrap();
+}
+
 fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
     match tool {
         CacheTool::Npm => npm_cache(fx, dir),
@@ -231,6 +243,7 @@ fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
         CacheTool::YarnBerry => yarn_berry(fx, dir),
         CacheTool::Pip => pip_cache(fx, dir),
         CacheTool::Uv => uv_cache(fx, dir),
+        CacheTool::Conda => conda_pkgs(fx, dir),
     }
 }
 
@@ -245,6 +258,7 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::YarnBerry, "home/.yarn/berry/cache"),
             (CacheTool::Pip, "home/.cache/pip"),
             (CacheTool::Uv, "home/.cache/uv"),
+            (CacheTool::Conda, "home/miniconda3/pkgs"),
         ],
         Os::Macos => vec![
             (CacheTool::Npm, "home/.npm/_cacache"),
@@ -254,6 +268,7 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::YarnBerry, "home/.yarn/berry/cache"),
             (CacheTool::Pip, "home/Library/Caches/pip"),
             (CacheTool::Uv, "home/.cache/uv"),
+            (CacheTool::Conda, "home/miniconda3/pkgs"),
         ],
         Os::Windows => vec![
             (CacheTool::Npm, "home/AppData/Local/npm-cache/_cacache"),
@@ -263,6 +278,7 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::YarnBerry, "home/AppData/Local/Yarn/Berry/cache"),
             (CacheTool::Pip, "home/AppData/Local/pip/Cache"),
             (CacheTool::Uv, "home/AppData/Local/uv/cache"),
+            (CacheTool::Conda, "home/miniconda3/pkgs"),
         ],
     }
 }
@@ -1479,5 +1495,145 @@ fn pip_and_uv_xdg_and_windows_variables() {
             (CacheTool::Uv, "lad/uv/cache".to_owned())
         ]
     );
+    check(&fx, &plan_inputs(&[]));
+}
+
+// ---------------------------------------------------------------------------------------------
+// conda package cache (P4-DET-01)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn conda_default_roots_command_and_note() {
+    for os in ALL_OS {
+        let mut fx = Fixture::new().unwrap();
+        conda_pkgs(&mut fx, "home/miniforge3/pkgs");
+        conda_pkgs(&mut fx, "home/.conda/pkgs");
+        conda_pkgs(&mut fx, "home/AppData/Local/conda/conda/pkgs");
+        fx.file("home/anaconda3/pkgs/readme.txt", "not a package cache")
+            .unwrap()
+            .checkpoint()
+            .unwrap();
+        let scan = locate(&env(&fx, os, &[]));
+        assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+        let conda: Vec<&LocatedCache> = scan
+            .found
+            .iter()
+            .filter(|c| c.tool == CacheTool::Conda)
+            .collect();
+        let mut want = vec![
+            "home/anaconda3/pkgs",
+            "home/miniforge3/pkgs",
+            "home/.conda/pkgs",
+        ];
+        if os == Os::Windows {
+            want.push("home/AppData/Local/conda/conda/pkgs");
+        }
+        assert_eq!(
+            conda
+                .iter()
+                .map(|c| rel(fx.root(), &c.path))
+                .collect::<Vec<_>>(),
+            want,
+            "{os:?}"
+        );
+        let mut cands = Vec::new();
+        for c in conda {
+            let cand = c.clone().into_candidate(&idle(), None);
+            assert!(cand.is_consistent());
+            if rel(fx.root(), &c.path) == "home/anaconda3/pkgs" {
+                assert!(!c.recognized, "no urls.txt or package archive");
+                assert_eq!(cand.tier, expected(Tier::S2));
+                assert_eq!(cand.action, Action::None);
+            } else {
+                assert!(c.recognized);
+                assert_eq!(
+                    c.markers
+                        .iter()
+                        .map(|m| m.file_name().unwrap().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                    ["urls.txt", "numpy-2.1.2-py312h.conda"]
+                );
+                assert_eq!(cand.tier, expected(Tier::S1));
+                assert_eq!(cand.rule.id, "conda.pkgs");
+                if identity_available() {
+                    assert_eq!(
+                        cand.action,
+                        tool_action("conda", &["clean", "--packages", "--tarballs", "--yes"])
+                    );
+                }
+                assert!(
+                    notes(&cand)
+                        .iter()
+                        .any(|n| n.contains("hard-link into this package cache"))
+                );
+            }
+            cands.push(cand);
+        }
+        check(&fx, &plan_inputs(&cands));
+    }
+}
+
+#[test]
+fn conda_env_beats_condarc_beats_default() {
+    let mut fx = Fixture::new().unwrap();
+    conda_pkgs(&mut fx, "home/miniconda3/pkgs");
+    conda_pkgs(&mut fx, "rc/a");
+    conda_pkgs(&mut fx, "rc/b");
+    conda_pkgs(&mut fx, "envs/x");
+    conda_pkgs(&mut fx, "envs/y");
+    let (a, b) = (abs(&fx, "rc/a"), abs(&fx, "rc/b"));
+    fx.file(
+        "home/.condarc",
+        format!("channels:\n  - conda-forge\npkgs_dirs:\n  - {a}\n  - '{b}'\n"),
+    )
+    .unwrap()
+    .checkpoint()
+    .unwrap();
+    let paths = |scan: &CacheScan| -> Vec<String> {
+        scan.found
+            .iter()
+            .filter(|c| c.tool == CacheTool::Conda)
+            .map(|c| rel(fx.root(), &c.path))
+            .collect()
+    };
+    let scan = locate(&env(&fx, Os::Linux, &[]));
+    assert_eq!(
+        paths(&scan),
+        ["rc/a", "rc/b"],
+        "condarc replaces the defaults"
+    );
+    assert!(matches!(
+        &scan.found[0].source,
+        CacheSource::Config { key, .. } if key == "pkgs_dirs"
+    ));
+    let joined = format!("{},{}", abs(&fx, "envs/x"), abs(&fx, "envs/y"));
+    let scan = locate(&env(&fx, Os::Macos, &[("CONDA_PKGS_DIRS", joined)]));
+    assert_eq!(paths(&scan), ["envs/x", "envs/y"]);
+    check(&fx, &plan_inputs(&[]));
+}
+
+#[test]
+fn conda_unreadable_or_unexpected_locations_are_refused() {
+    // A condarc `pkgs_dirs` this parser can't read: the location is unknown.
+    let mut fx = Fixture::new().unwrap();
+    conda_pkgs(&mut fx, "home/miniconda3/pkgs");
+    fx.file("home/.condarc", "pkgs_dirs: /scalar/not/a/list\n")
+        .unwrap()
+        .checkpoint()
+        .unwrap();
+    let scan = locate(&env(&fx, Os::Linux, &[]));
+    assert!(scan.found.iter().all(|c| c.tool != CacheTool::Conda));
+    assert_eq!(scan.refused[0].tool, CacheTool::Conda);
+    assert!(scan.refused[0].reason.contains("is not a list"));
+    check(&fx, &plan_inputs(&[]));
+
+    // One bad entry (home itself) refuses the whole tool: `conda clean` acts on every entry.
+    let mut fx = Fixture::new().unwrap();
+    conda_pkgs(&mut fx, "pk");
+    fx.checkpoint().unwrap();
+    let joined = format!("{},{}", abs(&fx, "pk"), abs(&fx, "home"));
+    let scan = locate(&env(&fx, Os::Windows, &[("CONDA_PKGS_DIRS", joined)]));
+    assert!(scan.found.is_empty());
+    assert!(scan.refused[0].reason.contains("home folder"));
     check(&fx, &plan_inputs(&[]));
 }

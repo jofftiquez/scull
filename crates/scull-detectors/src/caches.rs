@@ -1,5 +1,5 @@
-//! Package-manager caches: npm, pnpm, Bun, Yarn, pip and uv (P1-DET-04, P4-DET-02, PRD §10.8
-//! QC-01…05, T-23).
+//! Package-manager caches: npm, pnpm, Bun, Yarn, pip, uv and conda (P1-DET-04, P4-DET-02,
+//! P4-DET-01, PRD §10.8 QC-01…05, T-23).
 //!
 //! Global package caches hold no unique data, so they form the Quick Clean category
 //! ([`Category::PackageCache`]): **S1**, cleaned with the tool's **own** command (QC-02, QC-03),
@@ -20,6 +20,7 @@
 //! | Yarn classic | `YARN_CACHE_FOLDER`; `cache-folder` in `~/.yarnrc` | `$XDG_CACHE_HOME/yarn` or `~/.cache/yarn` / `~/Library/Caches/Yarn` / `%LocalAppData%\Yarn\Cache` |
 //! | Yarn Berry | global folder from `YARN_GLOBAL_FOLDER` or `globalFolder` in `~/.yarnrc.yml` (the cache is its `cache/`) | `$XDG_DATA_HOME/yarn/berry` or `~/.yarn/berry` / `~/.yarn/berry` / `%LocalAppData%\Yarn\Berry` |
 //! | pip | `PIP_CACHE_DIR`; `cache-dir` in `[global]` of the user pip config (`PIP_CONFIG_FILE` alone when it names an existing file; otherwise `$XDG_CONFIG_HOME/pip/pip.conf` or `~/.config/pip/pip.conf`, macOS first `~/Library/Application Support/pip/pip.conf`, Windows `%AppData%\pip\pip.ini`, then the legacy `~/.pip/pip.conf` / `~\pip\pip.ini`) | `$XDG_CACHE_HOME/pip` or `~/.cache/pip` / `~/Library/Caches/pip` / `%LocalAppData%\pip\Cache` |
+//! | conda | `CONDA_PKGS_DIRS` (comma-separated, every entry); `pkgs_dirs` in the user condarc (`$CONDARC`, `~/.condarc`, `~/.conda/condarc`, `$XDG_CONFIG_HOME/conda/condarc` or `~/.config/conda/condarc`; every listed folder) | `pkgs/` of `~/miniconda3`, `~/anaconda3`, `~/miniforge3`, `~/mambaforge`, and `~/.conda/pkgs` (all OSs), plus `%LocalAppData%\conda\conda\pkgs` on Windows |
 //! | uv | `UV_CACHE_DIR`; top-level `cache-dir` in the user `uv.toml` (`UV_CONFIG_FILE`, else `$XDG_CONFIG_HOME/uv/uv.toml` or `~/.config/uv/uv.toml`, Windows `%AppData%\uv\uv.toml`) | `$XDG_CACHE_HOME/uv` or `~/.cache/uv` (Linux and macOS) / `%LocalAppData%\uv\cache` |
 //!
 //! Configuration files are read through the [`DetectContext::config_reader`] as data only.
@@ -93,11 +94,13 @@ pub enum CacheTool {
     Pip,
     /// uv's global cache.
     Uv,
+    /// conda's package cache (`pkgs/`).
+    Conda,
 }
 
 impl CacheTool {
     /// Every tool, in reporting order.
-    pub const ALL: [CacheTool; 7] = [
+    pub const ALL: [CacheTool; 8] = [
         CacheTool::Npm,
         CacheTool::Pnpm,
         CacheTool::Bun,
@@ -105,6 +108,7 @@ impl CacheTool {
         CacheTool::YarnBerry,
         CacheTool::Pip,
         CacheTool::Uv,
+        CacheTool::Conda,
     ];
 
     /// Rule ID recorded on its candidates.
@@ -117,6 +121,7 @@ impl CacheTool {
             CacheTool::YarnBerry => "yarn.berry-cache",
             CacheTool::Pip => "pip.cache",
             CacheTool::Uv => "uv.cache",
+            CacheTool::Conda => "conda.pkgs",
         }
     }
 
@@ -134,6 +139,7 @@ impl CacheTool {
             CacheTool::YarnClassic | CacheTool::YarnBerry => "yarn",
             CacheTool::Pip => "pip",
             CacheTool::Uv => "uv",
+            CacheTool::Conda => "conda",
         }
     }
 
@@ -147,6 +153,7 @@ impl CacheTool {
             CacheTool::YarnBerry => "Yarn Berry global cache",
             CacheTool::Pip => "pip cache",
             CacheTool::Uv => "uv cache",
+            CacheTool::Conda => "conda package cache",
         }
     }
 
@@ -159,6 +166,7 @@ impl CacheTool {
             CacheTool::YarnClassic | CacheTool::YarnBerry => &["yarn"],
             CacheTool::Pip => &["pip", "pip3"],
             CacheTool::Uv => &["uv", "uvx"],
+            CacheTool::Conda => &["conda", "mamba", "micromamba"],
         }
     }
 }
@@ -256,6 +264,13 @@ fn commands_for_tool(tool: CacheTool) -> CacheCommands {
             preferred_prunes: true,
             wipe: Some(c("uv", &["cache", "clean"])),
         },
+        // Environments hard-link into `pkgs/`: `--packages` removes only extracted packages no
+        // environment uses, `--tarballs` the downloaded archives. Never removed directly.
+        CacheTool::Conda => CacheCommands {
+            preferred: c("conda", &["clean", "--packages", "--tarballs", "--yes"]),
+            preferred_prunes: true,
+            wipe: None,
+        },
     }
 }
 
@@ -325,7 +340,7 @@ impl CacheEnv {
 
     /// An environment variable holding an absolute directory (relative values are ignored, as
     /// the XDG spec requires).
-    fn abs_var(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn abs_var(&self, name: &str) -> Option<PathBuf> {
         self.var(name)
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
@@ -344,7 +359,7 @@ impl CacheEnv {
     }
 
     /// `$XDG_CACHE_HOME`, or `~/.cache` when unset.
-    fn xdg_cache(&self) -> PathBuf {
+    pub(crate) fn xdg_cache(&self) -> PathBuf {
         self.abs_var("XDG_CACHE_HOME")
             .unwrap_or_else(|| self.home.join(".cache"))
     }
@@ -356,7 +371,7 @@ impl CacheEnv {
     }
 
     /// Folders that hold more than one tool's data: a cache location must never be one.
-    fn shared_folders(&self) -> Vec<PathBuf> {
+    pub(crate) fn shared_folders(&self) -> Vec<PathBuf> {
         let h = &self.home;
         let mut v: Vec<PathBuf> = [
             ".cache",
@@ -502,6 +517,7 @@ pub fn locate_caches(
             CacheTool::YarnBerry => yarn_berry_spots(env, platform, ctx),
             CacheTool::Pip => pip_spots(env, platform, ctx),
             CacheTool::Uv => uv_spots(env, platform, ctx),
+            CacheTool::Conda => conda_spots(env, platform, ctx),
         };
         let spots = match spots {
             Ok(s) => s,
@@ -974,6 +990,93 @@ fn uv_spots(env: &CacheEnv, platform: &dyn Platform, ctx: &DetectContext<'_>) ->
     Ok(vec![Spot::new(tool, root, CacheSource::Default)])
 }
 
+/// The user condarc files conda reads, in its order.
+fn condarc_files(env: &CacheEnv) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Some(p) = env.abs_var("CONDARC") {
+        v.push(p);
+    }
+    v.push(env.home.join(".condarc"));
+    v.push(env.home.join(".conda").join("condarc"));
+    v.push(env.xdg_config().join("conda").join("condarc"));
+    v
+}
+
+fn conda_spots(env: &CacheEnv, platform: &dyn Platform, ctx: &DetectContext<'_>) -> Spots {
+    let tool = CacheTool::Conda;
+    let many = |values: Vec<String>, source: &CacheSource| -> Spots {
+        let mut out = Vec::new();
+        for v in values {
+            let (root, source) = configured(env, tool, &v, source.clone())?;
+            out.push(Spot::new(tool, root, source));
+        }
+        Ok(out)
+    };
+    if let Some((var, v)) = env.first_var(&["CONDA_PKGS_DIRS"]) {
+        let values: Vec<String> = v
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+        return many(values, &CacheSource::Env { var });
+    }
+    let mut configured_spots = Vec::new();
+    for file in condarc_files(env) {
+        let source = CacheSource::Config {
+            file: file.clone(),
+            key: "pkgs_dirs".into(),
+        };
+        match UserRc::read(file, platform, ctx) {
+            UserRc::Absent => {}
+            UserRc::Unreadable { file } => {
+                return Err(refused(
+                    tool,
+                    None,
+                    source,
+                    format!(
+                        "{} exists but can't be read as a small regular file, so the effective \
+                         package cache location is unknown",
+                        file.display()
+                    ),
+                ));
+            }
+            UserRc::Text { file, text } => match parse_condarc_pkgs_dirs(&text) {
+                None => {}
+                Some(Ok(values)) => configured_spots.extend(many(values, &source)?),
+                Some(Err(why)) => {
+                    return Err(refused(
+                        tool,
+                        None,
+                        source,
+                        format!("`pkgs_dirs` in {} {why}", file.display()),
+                    ));
+                }
+            },
+        }
+    }
+    if !configured_spots.is_empty() {
+        return Ok(configured_spots);
+    }
+    let mut roots: Vec<PathBuf> = ["miniconda3", "anaconda3", "miniforge3", "mambaforge"]
+        .iter()
+        .map(|d| env.home.join(d).join("pkgs"))
+        .collect();
+    roots.push(env.home.join(".conda").join("pkgs"));
+    if env.os == Os::Windows {
+        roots.push(
+            env.local_app_data()
+                .join("conda")
+                .join("conda")
+                .join("pkgs"),
+        );
+    }
+    Ok(roots
+        .into_iter()
+        .map(|r| Spot::new(tool, r, CacheSource::Default))
+        .collect())
+}
+
 /// T-23 / QC-05 location checks on a spot's configured root.
 fn validate(env: &CacheEnv, s: &Spot) -> Result<(), RefusedCache> {
     let refuse = |reason: &str| RefusedCache {
@@ -1118,6 +1221,22 @@ fn recognize(c: &mut LocatedCache, inside: &Listing) {
             .filter(|n| matches!(*n, "http" | "http-v2" | "wheels"))
             .collect(),
         CacheTool::Uv => dirs().filter(|n| is_uv_bucket(n)).collect(),
+        CacheTool::Conda => {
+            let files = || {
+                inside
+                    .iter()
+                    .filter(|(_, k)| **k == EntryKind::File)
+                    .map(|(n, _)| n.as_str())
+            };
+            files()
+                .filter(|n| *n == "urls.txt")
+                .chain(
+                    files()
+                        .filter(|n| n.ends_with(".conda") || n.ends_with(".tar.bz2"))
+                        .take(1),
+                )
+                .collect()
+        }
     };
     c.recognized = !markers.is_empty();
     if c.tool == CacheTool::Pnpm && c.recognized {
@@ -1207,6 +1326,14 @@ impl LocatedCache {
                 }
             },
         });
+        if self.tool == CacheTool::Conda {
+            evidence.push(Evidence::Note {
+                text: "conda environments hard-link into this package cache: it is never \
+                       removed directly, and `conda clean --packages` removes only packages no \
+                       environment uses (shared bytes show how much is still referenced)"
+                    .into(),
+            });
+        }
         if self.tool == CacheTool::Pnpm {
             evidence.push(Evidence::Note {
                 text: "projects' node_modules hard-link into this store: it is never removed \
@@ -1457,6 +1584,64 @@ pub(crate) fn parse_pip_conf(text: &str) -> BTreeMap<String, String> {
     out
 }
 
+/// The top-level `pkgs_dirs` list of a condarc (YAML): a block list (`  - /path`) or a flow
+/// list (`[/a, /b]`). `None` when the key is absent; an error when it is present but holds no
+/// path this parser understands (the location is then unknown). Pure: the file is data.
+pub(crate) fn parse_condarc_pkgs_dirs(text: &str) -> Option<Result<Vec<String>, String>> {
+    let strip = |v: &str| -> String {
+        let v = match v.find(" #") {
+            Some(i) => &v[..i],
+            None => v,
+        };
+        unquote(v).to_owned()
+    };
+    let mut lines = text.lines();
+    let rest = loop {
+        let line = lines.next()?;
+        if let Some(r) = line.strip_prefix("pkgs_dirs:") {
+            break r.trim();
+        }
+    };
+    let rest = strip(rest);
+    let mut values = Vec::new();
+    if let Some(flow) = rest.strip_prefix('[') {
+        let Some(inner) = flow.strip_suffix(']') else {
+            return Some(Err("is a list this parser can't read".into()));
+        };
+        values.extend(
+            inner
+                .split(',')
+                .map(|v| unquote(v.trim()).to_owned())
+                .filter(|v| !v.is_empty()),
+        );
+    } else if !rest.is_empty() {
+        return Some(Err("is not a list".into()));
+    } else {
+        for line in lines {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            if !line.starts_with([' ', '\t', '-']) {
+                break; // the next top-level key
+            }
+            match t.strip_prefix('-') {
+                Some(v) => {
+                    let v = strip(v.trim());
+                    if !v.is_empty() {
+                        values.push(v);
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+    if values.is_empty() {
+        return Some(Err("lists no folder".into()));
+    }
+    Some(Ok(values))
+}
+
 /// The top-level `cache-dir` of a `uv.toml`. Pure: the file is data, never executed.
 pub(crate) fn parse_uv_toml(text: &str) -> Result<Option<String>, String> {
     let table: toml::Table = toml::from_str(text).map_err(|e| e.message().to_owned())?;
@@ -1575,6 +1760,15 @@ mod tests {
         assert_eq!(s("uv.cache").preferred.to_string(), "uv cache prune");
         assert!(s("uv.cache").preferred_prunes);
         assert_eq!(s("uv.cache").wipe.unwrap().to_string(), "uv cache clean");
+        assert_eq!(
+            s("conda.pkgs").preferred.to_string(),
+            "conda clean --packages --tarballs --yes"
+        );
+        assert!(s("conda.pkgs").preferred_prunes && s("conda.pkgs").wipe.is_none());
+        assert!(
+            commands_for_rule("ollama.models").is_none(),
+            "not a package cache"
+        );
         assert!(commands_for_rule("rust.target").is_none());
         assert!(commands_for_rule("python.venv").is_none());
         for t in CacheTool::ALL {
@@ -1644,6 +1838,31 @@ mod tests {
         assert!(parse_uv_toml("cache-dir = \n").is_err());
         // A nested `cache-dir` is not the global setting.
         assert_eq!(parse_uv_toml("[pip]\ncache-dir = '/x'\n").unwrap(), None);
+    }
+
+    #[test]
+    fn condarc_pkgs_dirs() {
+        let p = parse_condarc_pkgs_dirs;
+        assert_eq!(p("channels:\n  - conda-forge\n"), None);
+        assert_eq!(
+            p(
+                "channels:\n  - defaults\npkgs_dirs:\n  - /a/pkgs  # main\n  - \"/b pkgs\"\n\n\
+               envs_dirs:\n  - /e\n"
+            ),
+            Some(Ok(vec!["/a/pkgs".to_owned(), "/b pkgs".to_owned()]))
+        );
+        assert_eq!(
+            p("pkgs_dirs:\n- /a\n- /b\nauto_activate_base: false\n"),
+            Some(Ok(vec!["/a".to_owned(), "/b".to_owned()]))
+        );
+        assert_eq!(
+            p("pkgs_dirs: [/a, '/b']\n"),
+            Some(Ok(vec!["/a".to_owned(), "/b".to_owned()]))
+        );
+        assert!(matches!(p("pkgs_dirs: /a\n"), Some(Err(_))));
+        assert!(matches!(p("pkgs_dirs: []\n"), Some(Err(_))));
+        assert!(matches!(p("pkgs_dirs:\nchannels: []\n"), Some(Err(_))));
+        assert!(matches!(p("pkgs_dirs: [/a\n"), Some(Err(_))));
     }
 
     #[test]
