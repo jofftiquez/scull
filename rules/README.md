@@ -9,6 +9,9 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   `RuleDetector`, which lists the directory and the ancestor levels the rule needs through
   `scull-platform` (no-follow), runs `check_markers` and returns a `DetectedArtifact`. Shared
   Cargo target directories: `scull_detectors::cargo::SharedTargetDirs` (`rust.shared-target`).
+  The `node.*` rules are run by `scull_detectors::node` detectors, which add workspace lockfile
+  resolution, link recording in `node_modules`, and a package.json dependency alternative to the
+  config-file markers of framework outputs (see the header of `ecosystems/node.toml`).
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.
@@ -54,6 +57,7 @@ lock_files = ["debug/.cargo-lock"]
 instructions = "Run `cargo build` in the project to rebuild."
 network = false                    # optional hint
 long_build = false                 # optional hint
+quick = false                      # optional hint
 ```
 
 ### Fields
@@ -76,7 +80,7 @@ long_build = false                 # optional hint
 | `exclude.within` | no | Name patterns matched case-insensitively against every ancestor directory name up to the scan root. |
 | `activity.processes` | no | Process names (letters, digits, `-_.`) whose handles/cwd inside the candidate mean "in use". The universal 24 h activity window always applies and can't be disabled by a rule. |
 | `activity.lock_files` | no | Literal paths **inside** the candidate (`/`-separated, no `..`, no wildcards, max 4 segments). |
-| `regeneration.*` | no | Display text and hints. |
+| `regeneration.*` | no | Display text and hints. The hints set the rubric's regeneration cost: `long_build = true` → costly (S1); `quick = true` with `long_build = false` → quick (S0-eligible) even if `network = true` (e.g. a lockfile-pinned reinstall); `network = true` → costly; `network = false` and `long_build = false` → local (S0-eligible); anything unstated → unknown, treated as costly (D-5). The rule's `base_tier` is always a floor. |
 
 ### Name patterns
 

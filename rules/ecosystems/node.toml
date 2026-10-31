@@ -1,11 +1,20 @@
 # JavaScript / TypeScript rules. Format: rules/README.md.
 # Package-manager caches and the pnpm store need Rust detectors (CLS-02), not rules.
+#
+# Rust detectors in `scull_detectors::node` add to these rules, never loosen them, except where
+# noted:
+# * every rule: when no lockfile sits beside the project, the nearest ancestor lockfile counts if
+#   that ancestor's workspace declaration (`pnpm-workspace.yaml`, or `workspaces` in its
+#   package.json) includes the project;
+# * `node.node-modules`: links inside are recorded (never followed);
+# * framework outputs: if the config-file markers are missing, the project's package.json
+#   declaring the framework as a dependency is accepted instead (read as data).
 
 schema_version = 1
 
 [[rule]]
 id = "node.node-modules"
-version = 1
+version = 2
 artifact = "Installed npm dependencies"
 ecosystem = "node"
 category = "project_artifact"
@@ -21,7 +30,14 @@ names = ["node_modules"]
 all = ["../package.json"]
 
 [rule.lockfiles]
-any = ["../package-lock.json", "../pnpm-lock.yaml", "../yarn.lock", "../bun.lockb", "../bun.lock"]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
 
 [rule.exclude]
 # A node_modules inside another node_modules belongs to the outer one.
@@ -31,12 +47,16 @@ within = ["node_modules"]
 processes = ["node", "npm", "pnpm", "yarn", "bun"]
 
 [rule.regeneration]
-instructions = "Reinstall with your package manager (`npm ci`, `pnpm install`, `yarn install`)."
+instructions = "Reinstall with your package manager (`npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable`, `bun install --frozen-lockfile`)."
+# Reinstalling may download, but with a lockfile it is pinned and usually served from the
+# package manager's local cache: "regenerable quickly" (FX-CLS-05: S0 with a lockfile).
 network = true
+long_build = false
+quick = true
 
 [[rule]]
 id = "node.next"
-version = 1
+version = 2
 artifact = "Next.js build output"
 ecosystem = "node"
 category = "project_artifact"
@@ -50,10 +70,17 @@ names = [".next"]
 
 [rule.markers]
 all = ["../package.json"]
-any = ["../next.config.{js,mjs,cjs,ts}", "../next-env.d.ts"]
+any = ["../next.config.{js,mjs,cjs,ts,mts}", "../next-env.d.ts"]
 
 [rule.lockfiles]
-any = ["../package-lock.json", "../pnpm-lock.yaml", "../yarn.lock", "../bun.lockb", "../bun.lock"]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
 
 [rule.exclude]
 within = ["node_modules"]
@@ -63,5 +90,165 @@ processes = ["node", "next"]
 
 [rule.regeneration]
 instructions = "Run `next build` (or `next dev`) in the project to rebuild."
+network = false
+long_build = false
+
+[[rule]]
+id = "node.nuxt"
+version = 1
+artifact = "Nuxt generated files"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".nuxt"]
+
+[rule.markers]
+all = ["../package.json"]
+any = ["../nuxt.config.{js,mjs,cjs,ts,mts}", "../.nuxtrc"]
+
+[rule.lockfiles]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "nuxi", "nuxt"]
+
+[rule.regeneration]
+instructions = "Run `nuxi prepare` (or `nuxi dev` / `nuxi build`) in the project to regenerate."
+network = false
+long_build = false
+
+[[rule]]
+id = "node.output"
+version = 1
+artifact = "Nuxt / Nitro build output"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".output"]
+
+[rule.markers]
+# `.output` is a generic name: only a Nuxt or Nitro project makes it a build output.
+all = ["../package.json"]
+any = ["../nuxt.config.{js,mjs,cjs,ts,mts}", "../nitro.config.{js,mjs,cjs,ts,mts}"]
+
+[rule.lockfiles]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "nuxi", "nuxt", "nitro"]
+
+[rule.regeneration]
+instructions = "Run `nuxi build` (or `nitro build`) in the project to rebuild."
+network = false
+long_build = false
+
+[[rule]]
+id = "node.turbo"
+version = 1
+artifact = "Turborepo cache and logs"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".turbo"]
+
+[rule.markers]
+# The repository root holds turbo.json; package-level `.turbo/` dirs sit up to three levels
+# below it (`apps/web/.turbo`, `packages/ui/.turbo`).
+all = ["../package.json"]
+any = ["../turbo.json", "../../turbo.json", "../../../turbo.json", "../../../../turbo.json"]
+
+[rule.lockfiles]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "turbo"]
+
+[rule.regeneration]
+instructions = "Run your Turborepo tasks again (`turbo run build`); the cache refills."
+network = false
+long_build = false
+
+[[rule]]
+id = "node.parcel-cache"
+version = 1
+artifact = "Parcel build cache"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".parcel-cache"]
+
+[rule.markers]
+# Parcel is usually zero-config, so most projects have no `.parcelrc`; the Rust detector also
+# accepts package.json declaring `parcel` / `@parcel/core` as a dependency.
+all = ["../package.json", "../.parcelrc"]
+
+[rule.lockfiles]
+any = [
+  "../package-lock.json",
+  "../npm-shrinkwrap.json",
+  "../pnpm-lock.yaml",
+  "../yarn.lock",
+  "../bun.lock",
+  "../bun.lockb",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "parcel"]
+
+[rule.regeneration]
+instructions = "Run your Parcel build again (`parcel build` / `parcel serve`); the cache refills."
 network = false
 long_build = false

@@ -1106,6 +1106,7 @@ dependencies = [
  "scull-platform",
  "scull-safety",
  "serde",
+ "serde_json",
  "toml",
 ]
 

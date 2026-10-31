@@ -4,11 +4,13 @@
 //! * [`Detector`], [`Detectors`], [`DetectedArtifact`]: deciding whether a directory the
 //!   scanner visited is an artifact, with evidence ([`detector`] module docs).
 //! * [`cargo`]: shared Cargo target directories (`CARGO_TARGET_DIR`, `[build] target-dir`).
+//! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
 pub mod cargo;
 pub mod detector;
+pub mod node;
 pub mod rules;
 
 pub use cargo::{SharedTargetDirs, TargetDirSource};
@@ -16,6 +18,7 @@ pub use detector::{
     CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detector, DetectorSignals,
     Detectors, MAX_CONFIG_BYTES, RuleDetector,
 };
+pub use node::{FrameworkDetector, NodeModulesDetector};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

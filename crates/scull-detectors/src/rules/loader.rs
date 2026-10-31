@@ -133,6 +133,7 @@ struct RawRegeneration {
     instructions: Option<String>,
     network: Option<bool>,
     long_build: Option<bool>,
+    quick: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -419,6 +420,7 @@ fn validate(r: RawRule, origin: &str, source: RuleSource) -> Result<Rule, RuleEr
             instructions: r.regeneration.instructions,
             network: r.regeneration.network,
             long_build: r.regeneration.long_build,
+            quick: r.regeneration.quick,
         },
         source,
         origin: origin.to_string(),

@@ -139,6 +139,7 @@ pub struct RegenerationGuidance {
     pub(crate) instructions: Option<String>,
     pub(crate) network: Option<bool>,
     pub(crate) long_build: Option<bool>,
+    pub(crate) quick: Option<bool>,
 }
 
 impl RegenerationGuidance {
@@ -155,6 +156,14 @@ impl RegenerationGuidance {
     /// Whether regenerating needs a long build (`None` = unknown).
     pub fn long_build(&self) -> Option<bool> {
         self.long_build
+    }
+
+    /// Whether regenerating is quick even though it may need the network, e.g. a reinstall
+    /// pinned by a lockfile that package managers usually serve from their local cache
+    /// (`None` = unknown). Counts as "regenerable quickly" (PRD §8.3, S0 row) unless
+    /// `long_build` is `true`.
+    pub fn quick(&self) -> Option<bool> {
+        self.quick
     }
 }
 

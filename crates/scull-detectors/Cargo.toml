@@ -17,6 +17,7 @@ scull-core.workspace = true
 scull-platform.workspace = true
 scull-safety.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml = "1"
 
 [dev-dependencies]

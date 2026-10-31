@@ -67,8 +67,16 @@ fn base_rule_loads_with_every_field_typed() {
 #[test]
 fn bundled_rules_all_load_and_are_enabled() {
     let set = RuleSet::bundled().unwrap();
-    assert!(set.len() >= 3);
-    for id in ["rust.target", "node.node-modules", "node.next"] {
+    assert!(set.len() >= 7);
+    for id in [
+        "rust.target",
+        "node.node-modules",
+        "node.next",
+        "node.nuxt",
+        "node.output",
+        "node.turbo",
+        "node.parcel-cache",
+    ] {
         let r = set.get(id).unwrap_or_else(|| panic!("{id} missing"));
         assert_eq!(r.source(), RuleSource::Bundled);
         assert!(set.is_enabled(id));
@@ -76,6 +84,13 @@ fn bundled_rules_all_load_and_are_enabled() {
     }
     assert_eq!(set.get("rust.target").unwrap().base_tier(), Tier::S0);
     assert_eq!(set.enabled().count(), set.len());
+    // The `quick` regeneration hint loads (node_modules: network, but quick with a lockfile).
+    let g = set.get("node.node-modules").unwrap().regeneration();
+    assert_eq!(
+        (g.network(), g.long_build(), g.quick()),
+        (Some(true), Some(false), Some(true))
+    );
+    assert_eq!(set.get("rust.target").unwrap().regeneration().quick(), None);
 }
 
 #[test]

@@ -111,8 +111,8 @@ pub fn scan(root: &Path, explicit: &[(PathBuf, &str)]) -> Scan {
     Scan { found, visited }
 }
 
-/// Newest modification time of any non-directory entry under `path` (no-follow), and whether
-/// anything was found.
+/// Newest modification time of any regular file under `path` (no-follow; links themselves are
+/// created by the fixture "now" and are not activity in these tests).
 pub fn newest_mtime(path: &Path) -> Option<i64> {
     let mut newest: Option<i64> = None;
     let mut stack = vec![path.to_path_buf()];
@@ -122,7 +122,9 @@ pub fn newest_mtime(path: &Path) -> Option<i64> {
             for e in fs::read_dir(&p).unwrap() {
                 stack.push(e.unwrap().path());
             }
-        } else if let Ok(t) = md.modified() {
+        } else if md.is_file()
+            && let Ok(t) = md.modified()
+        {
             let secs = t
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64);

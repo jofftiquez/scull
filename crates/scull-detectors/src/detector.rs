@@ -285,12 +285,16 @@ fn base_tier_reason(rule_id: &str, base: Tier) -> Option<TierReason> {
     ))
 }
 
-/// Regeneration cost from a rule's hints. Only an explicit "no network and no long build"
-/// counts as local; any "yes" is costly; anything unstated is unknown (D-5).
+/// Regeneration cost from a rule's hints (PRD §8.3: S0 = "regenerable from local inputs or
+/// quickly", S1 = "needs network or a long build"). A long build is always costly; an explicit
+/// `quick` (with `long_build = false`) is quick even if it uses the network; otherwise only an
+/// explicit "no network and no long build" counts as local. Anything unstated is unknown (D-5).
 pub(crate) fn regen_from(g: &RegenerationGuidance) -> Regen {
-    match (g.network(), g.long_build()) {
-        (Some(true), _) | (_, Some(true)) => Regen::NetworkOrLong,
-        (Some(false), Some(false)) => Regen::Local,
+    match (g.network(), g.long_build(), g.quick()) {
+        (_, Some(true), _) => Regen::NetworkOrLong,
+        (_, Some(false), Some(true)) => Regen::Local,
+        (Some(true), _, _) => Regen::NetworkOrLong,
+        (Some(false), Some(false), _) => Regen::Local,
         _ => Regen::Unknown,
     }
 }
@@ -371,12 +375,33 @@ pub(crate) fn dir_name(dir: &Path) -> Option<&str> {
     dir.file_name()?.to_str()
 }
 
+/// What [`gather`] observed around a candidate directory.
+pub(crate) struct Gathered {
+    /// Entry names at every level `rule` needs, plus ancestor names.
+    pub surroundings: Surroundings,
+    /// The candidate's own entries, with kinds.
+    pub inside: Listing,
+    /// The candidate's no-follow identity.
+    pub identity: Option<FileIdentity>,
+}
+
 /// Apply `rule` to `dir`. On a match returns the artifact and the listing of `dir` itself.
 pub(crate) fn detect_with_rule(
     rule: &Rule,
     dir: &Path,
     platform: &dyn Platform,
 ) -> Option<(DetectedArtifact, Listing)> {
+    let g = gather(rule, dir, platform)?;
+    let MarkerOutcome::Matched(m) = rule.check_markers(&g.surroundings) else {
+        return None;
+    };
+    let artifact = artifact_from_match(rule, dir, g.identity, &m, &g.inside);
+    Some((artifact, g.inside))
+}
+
+/// Name check (pure, first), platform check, no-follow metadata (`dir` must be a real
+/// directory), then no-follow listings of `dir` and of every ancestor level `rule` needs.
+pub(crate) fn gather(rule: &Rule, dir: &Path, platform: &dyn Platform) -> Option<Gathered> {
     // Cheap, pure check first: most visited directories fail here without any I/O.
     let name = dir_name(dir)?;
     if !rule.names().iter().any(|n| n.matches(name)) {
@@ -408,15 +433,15 @@ pub(crate) fn detect_with_rule(
             .filter_map(|a| a.file_name())
             .map(|n| n.to_string_lossy().into_owned()),
     );
-
-    let MarkerOutcome::Matched(m) = rule.check_markers(&s) else {
-        return None;
-    };
-    let artifact = artifact_from_match(rule, dir, md.identity, &m, &inside);
-    Some((artifact, inside))
+    Some(Gathered {
+        surroundings: s,
+        inside,
+        identity: md.identity,
+    })
 }
 
-fn artifact_from_match(
+/// Build the artifact for a marker match of `rule` on `dir`.
+pub(crate) fn artifact_from_match(
     rule: &Rule,
     dir: &Path,
     identity: Option<FileIdentity>,
@@ -509,7 +534,10 @@ impl Detectors {
         list.sort_by(|a, b| a.id().cmp(b.id()));
         let detectors = list
             .into_iter()
-            .map(|r| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
+            .map(|r| {
+                crate::node::detector_for(r)
+                    .unwrap_or_else(|| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
+            })
             .collect();
         Self { detectors }
     }
@@ -553,22 +581,28 @@ mod tests {
 
     #[test]
     fn regen_needs_explicit_local_hints() {
-        let g = |network, long_build| RegenerationGuidance {
+        let g = |network, long_build, quick| RegenerationGuidance {
             instructions: None,
             network,
             long_build,
+            quick,
         };
-        assert_eq!(regen_from(&g(Some(false), Some(false))), Regen::Local);
+        let r = |n, l, q| regen_from(&g(n, l, q));
+        assert_eq!(r(Some(false), Some(false), None), Regen::Local);
+        assert_eq!(r(Some(true), Some(false), None), Regen::NetworkOrLong);
+        assert_eq!(r(Some(false), Some(true), None), Regen::NetworkOrLong);
+        assert_eq!(r(None, Some(false), None), Regen::Unknown);
+        assert_eq!(r(None, None, None), Regen::Unknown);
+        // `quick` makes a network reinstall quick, but never overrides a long build and needs
+        // `long_build = false` stated.
+        assert_eq!(r(Some(true), Some(false), Some(true)), Regen::Local);
+        assert_eq!(r(Some(true), Some(true), Some(true)), Regen::NetworkOrLong);
+        assert_eq!(r(Some(true), None, Some(true)), Regen::NetworkOrLong);
+        assert_eq!(r(None, None, Some(true)), Regen::Unknown);
         assert_eq!(
-            regen_from(&g(Some(true), Some(false))),
+            r(Some(true), Some(false), Some(false)),
             Regen::NetworkOrLong
         );
-        assert_eq!(
-            regen_from(&g(Some(false), Some(true))),
-            Regen::NetworkOrLong
-        );
-        assert_eq!(regen_from(&g(None, Some(false))), Regen::Unknown);
-        assert_eq!(regen_from(&g(None, None)), Regen::Unknown);
     }
 
     #[test]
