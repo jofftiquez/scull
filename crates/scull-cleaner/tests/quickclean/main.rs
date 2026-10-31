@@ -23,6 +23,7 @@ use scull_cleaner::quickclean::{
     CleanMode, Ended, NOT_UNDOABLE_NOTE, QuickClean, QuickCleanOptions, QuickCleanPlan,
     QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, Spawn, needs_escape,
 };
+use scull_cleaner::{Executor, LockOptions, RemoveOutcome};
 use scull_core::{Candidate, Tier};
 use scull_detectors::caches::{CacheProblem, CacheScan, CacheTool};
 use scull_detectors::rules::Platform as Os;
@@ -86,6 +87,14 @@ const TESTS: &[Test] = &[
     (
         "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
         fx_qc_05_uninstalled_tool_cache_is_reported_not_removed,
+    ),
+    (
+        "d36_orphaned_cache_removed_through_executor_only_after_confirmation",
+        d36_orphaned_cache_removed_through_executor_only_after_confirmation,
+    ),
+    (
+        "d36_orphaned_cache_rechecked_right_before_removal",
+        d36_orphaned_cache_rechecked_right_before_removal,
     ),
     (
         "fx_qc_06_untrusted_npm_binaries_never_run",
@@ -1076,6 +1085,193 @@ fn fx_qc_05_uninstalled_tool_cache_is_reported_not_removed() {
     assert!(reason.to_string().contains("manual removal"));
     let report = run_ok(&q, &plan);
     assert!(report.results.is_empty() && report.spawned.is_empty());
+    assert!(bun.join("a1b2c3.npm").is_file());
+    check(&fx, &plan, &cands, &[]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// D-36 (provisional, #217): orphaned caches removed through the Executor, per-tool confirmation
+// ---------------------------------------------------------------------------------------------
+
+/// An Executor holding the execution lock, kept beside (never inside) the fixture root.
+fn locked_executor(fx: &Fixture) -> Executor {
+    Executor::acquire(&LockOptions::at(
+        fx.base().join("state").join("execution.lock"),
+    ))
+    .unwrap()
+}
+
+fn confirmed(tools: &[CacheTool]) -> BTreeSet<CacheTool> {
+    tools.iter().copied().collect()
+}
+
+/// D-36 / FX-QC-05: Bun is uninstalled and its cache qualifies (S1 package cache, validated
+/// location, not a link, same volume, not in use). The tool runner still skips it
+/// (`NotInstalled`); the preview lists it as orphaned with the not-undoable note. Nothing is
+/// removed without the Bun-specific confirmation; with it, the Executor's walker removes the
+/// folder and nothing else. No process is started.
+fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let bun = bun_cache(&mut fx);
+    let npm = npm_cache(&mut fx);
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap(); // trusted folder without bun or npm
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty());
+    assert!(matches!(
+        skip_reason(&plan.skipped, CacheTool::Bun),
+        SkipReason::NotInstalled { .. }
+    ));
+    let orphaned: Vec<CacheTool> = plan.orphaned.iter().map(|o| o.tool).collect();
+    assert!(orphaned.contains(&CacheTool::Bun), "{plan:#?}");
+    let o = plan
+        .orphaned
+        .iter()
+        .find(|o| o.tool == CacheTool::Bun)
+        .unwrap();
+    assert_eq!(o.not_undoable, NOT_UNDOABLE_NOTE);
+    assert_eq!(o.item.tier, Tier::S1);
+    println!(
+        "orphaned: {:?} {} ({} B) - {}",
+        o.tool,
+        o.cache.display(),
+        o.reclaimable_bytes,
+        o.not_undoable
+    );
+
+    let exec = locked_executor(&fx);
+    // No confirmation: nothing happens.
+    let none = q.remove_orphaned(
+        &exec,
+        &plan,
+        &confirmed(&[]),
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
+    assert!(none.removed.is_empty() && none.skipped.is_empty());
+    assert!(bun.join("a1b2c3.npm").is_file());
+    // Confirming another tool doesn't remove Bun's cache.
+    let other = q.remove_orphaned(
+        &exec,
+        &plan,
+        &confirmed(&[CacheTool::Pnpm]),
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
+    assert!(other.removed.is_empty());
+    assert!(bun.is_dir());
+
+    let report = q.remove_orphaned(
+        &exec,
+        &plan,
+        &confirmed(&[CacheTool::Bun]),
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
+    assert!(report.skipped.is_empty(), "{report:#?}");
+    assert_eq!(report.removed.len(), 1);
+    let r = &report.removed[0];
+    let walk = r.outcome.as_ref().expect("removed");
+    assert_eq!(walk.outcome, RemoveOutcome::Complete, "{walk:#?}");
+    assert_eq!(r.not_undoable, NOT_UNDOABLE_NOTE);
+    assert!(r.size_before.is_some_and(|s| s.logical > 0));
+    println!(
+        "removed {} ({} entries, {} B allocated); free before {:?} after {:?}",
+        r.cache.display(),
+        walk.removed.files + walk.removed.dirs,
+        walk.removed.allocated_bytes,
+        r.free_before,
+        r.free_after
+    );
+    assert!(!bun.exists());
+    assert!(
+        npm.join("index-v5").is_dir(),
+        "only the confirmed tool's cache"
+    );
+    check(&fx, &plan, &cands, &[rel(&fx, &bun)]);
+}
+
+/// D-36: every condition is re-checked right before the removal. A cache that is in use, was
+/// swapped for a link to the canary, or whose tool got installed meanwhile is skipped with the
+/// reason and left intact; a cache in use at planning is never offered.
+fn d36_orphaned_cache_rechecked_right_before_removal() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let bun = bun_cache(&mut fx);
+    fx.dir("elsewhere").unwrap();
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap();
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let exec = locked_executor(&fx);
+    let bun_only = confirmed(&[CacheTool::Bun]);
+
+    // In use at planning: not offered.
+    let held = Probe::holding(bun.join("a1b2c3.npm"));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &held);
+    assert!(plan.orphaned.is_empty(), "{plan:#?}");
+
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert_eq!(plan.orphaned.len(), 1);
+
+    // In use at removal time.
+    let r = q.remove_orphaned(&exec, &plan, &bun_only, &held, &CancelToken::new());
+    assert!(r.removed.is_empty());
+    assert!(matches!(
+        skip_reason(&r.skipped, CacheTool::Bun),
+        SkipReason::InUse(_)
+    ));
+    // Activity unknown counts as in use.
+    let unknown = Probe {
+        held: Vec::new(),
+        unknown: true,
+    };
+    let r = q.remove_orphaned(&exec, &plan, &bun_only, &unknown, &CancelToken::new());
+    assert!(matches!(
+        skip_reason(&r.skipped, CacheTool::Bun),
+        SkipReason::ActivityUnknown(_)
+    ));
+    assert!(bun.join("a1b2c3.npm").is_file());
+
+    // The tool was installed meanwhile: its own command is the way.
+    fake::install(&tools(&fx), "bun");
+    let r = q.remove_orphaned(&exec, &plan, &bun_only, &Probe::idle(), &CancelToken::new());
+    assert!(r.removed.is_empty());
+    assert!(matches!(
+        skip_reason(&r.skipped, CacheTool::Bun),
+        SkipReason::Changed(_)
+    ));
+    fs::remove_file(tools(&fx).join(exe("bun"))).unwrap();
+
+    // Swapped for a link to the canary after planning.
+    let moved = fx.root().join("elsewhere/cache");
+    fs::rename(&bun, &moved).unwrap();
+    let canary = fx.canary().dir.clone();
+    let linked = fx
+        .symlink("home/.bun/install/cache", &canary)
+        .unwrap()
+        .is_created();
+    if linked {
+        let r = q.remove_orphaned(&exec, &plan, &bun_only, &Probe::idle(), &CancelToken::new());
+        assert!(r.removed.is_empty(), "{r:#?}");
+        assert!(matches!(
+            skip_reason(&r.skipped, CacheTool::Bun),
+            SkipReason::Problem(CacheProblem::Link { .. }) | SkipReason::Changed(_)
+        ));
+        fs::remove_file(&bun)
+            .or_else(|_| fs::remove_dir(&bun))
+            .unwrap();
+    }
+    fs::rename(&moved, &bun).unwrap();
     assert!(bun.join("a1b2c3.npm").is_file());
     check(&fx, &plan, &cands, &[]);
 }

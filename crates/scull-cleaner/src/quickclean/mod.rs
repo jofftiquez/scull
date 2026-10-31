@@ -102,9 +102,19 @@
 //!
 //! QC-03 says such a cache is removed "through the safe executor", but the Executor's only
 //! removal is `Action::Delete`, which D-28 allows at S0 only, and a package cache is S1
-//! (QC-02), so it can't be planned; quarantine would free nothing (QC-02). Until that conflict
-//! is decided, the tool is skipped with [`SkipReason::NotInstalled`] and the folder is
-//! reported for manual removal. Nothing is ever removed by scull without the tool.
+//! (QC-02); quarantine would free nothing (QC-02). **D-36** (provisional, #217) resolves this
+//! with one narrow path ([`crate::orphaned`]), not a core rule change:
+//!
+//! * the tool runner still skips the tool with [`SkipReason::NotInstalled`] (manual removal);
+//! * when the cache also qualifies (S1 package cache, validated location, not a link, same
+//!   volume, not in use), it is listed in [`QuickCleanPlan::orphaned`] for the preview, with
+//!   the not-undoable note;
+//! * only if the user confirms **that tool** does [`QuickClean::remove_orphaned`] gather fresh
+//!   [`OrphanedCacheEvidence`] (every check again, right before) and remove the folder with
+//!   [`Executor::delete_orphaned_cache`] (the fd-relative, no-follow walker), under the
+//!   execution lock.
+//!
+//! Without that confirmation nothing is removed.
 
 mod output;
 mod process;
@@ -115,9 +125,14 @@ pub use process::Ended;
 pub use resolve::{Lookup, TrustedDirs};
 pub use scull_detectors::caches::NOT_UNDOABLE_NOTE;
 
+use crate::executor::{DeleteTarget, Executor};
+use crate::orphaned::OrphanedCacheEvidence;
 use process::{Ran, Sandbox, Spec};
-use scull_core::{Action, Candidate, FileIdentity, FsPath, ItemId, Tier};
+use scull_core::{
+    Action, Candidate, Category, FileIdentity, FsPath, ItemId, PlanItem, ScullError, Tier,
+};
 use scull_detectors::caches::{CacheProblem, CacheScan, CacheTool, LocatedCache, NativeCommand};
+use scull_platform::remove::RemoveReport;
 use scull_platform::{Elevation, Platform, free_space};
 use scull_safety::{ActivityProbe, ProbeResult, Tri, check_in_use};
 use scull_scanner::{CancelToken, NullSink, ScanOptions};
@@ -397,6 +412,27 @@ pub struct Spawn {
     pub args: Vec<OsString>,
 }
 
+/// A cache whose tool is not installed and that scull may remove itself, through the
+/// Executor, if the user confirms this tool (D-36, provisional). Also listed in
+/// [`QuickCleanPlan::skipped`] as [`SkipReason::NotInstalled`]: the tool runner never touches it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanedCache {
+    /// The uninstalled tool.
+    pub tool: CacheTool,
+    /// The cache folder.
+    pub cache: PathBuf,
+    /// The folder it was located from (the removal's anchor).
+    pub anchor: PathBuf,
+    /// Its no-follow identity at planning time.
+    pub identity: FileIdentity,
+    /// The classified item (S1 package cache).
+    pub item: PlanItem,
+    /// The candidate's reclaimable estimate, bytes.
+    pub reclaimable_bytes: u64,
+    /// [`NOT_UNDOABLE_NOTE`]: the preview must show it and ask for this tool's confirmation.
+    pub not_undoable: &'static str,
+}
+
 /// The Quick Clean preview: what will run, and what won't.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickCleanPlan {
@@ -406,6 +442,9 @@ pub struct QuickCleanPlan {
     pub skipped: Vec<SkippedTool>,
     /// Processes started while planning (Yarn version probes).
     pub spawned: Vec<Spawn>,
+    /// Caches of uninstalled tools that qualify for removal by scull (D-36), each only after
+    /// its own confirmation ([`QuickClean::remove_orphaned`]).
+    pub orphaned: Vec<OrphanedCache>,
 }
 
 impl QuickCleanPlan {
@@ -480,6 +519,35 @@ impl ToolResult {
     }
 }
 
+/// What removing one orphaned cache did (D-36).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanedRemoval {
+    /// The uninstalled tool.
+    pub tool: CacheTool,
+    /// The cache folder.
+    pub cache: PathBuf,
+    /// The walker's report (it may be incomplete: entries kept, each with a reason), or why
+    /// the Executor refused (nothing removed).
+    pub outcome: Result<RemoveReport, ScullError>,
+    /// Free space on the cache's volume before, bytes.
+    pub free_before: Option<u64>,
+    /// Free space on the cache's volume after, bytes.
+    pub free_after: Option<u64>,
+    /// The cache's size before.
+    pub size_before: Option<CacheSize>,
+    /// [`NOT_UNDOABLE_NOTE`].
+    pub not_undoable: &'static str,
+}
+
+/// What [`QuickClean::remove_orphaned`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OrphanedReport {
+    /// Confirmed caches the Executor was asked to remove.
+    pub removed: Vec<OrphanedRemoval>,
+    /// Confirmed caches not removed, with the reason (a check failed right before).
+    pub skipped: Vec<SkippedTool>,
+}
+
 /// What a Quick Clean run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickCleanReport {
@@ -549,6 +617,7 @@ impl QuickClean {
             tools: Vec::new(),
             skipped: Vec::new(),
             spawned: Vec::new(),
+            orphaned: Vec::new(),
         };
         let mut sandbox: Option<Result<Sandbox, String>> = None;
         for r in &scan.refused {
@@ -568,11 +637,18 @@ impl QuickClean {
                 &mut plan.spawned,
             ) {
                 Ok(t) => plan.tools.push(t),
-                Err(reason) => plan.skipped.push(SkippedTool {
-                    tool: c.tool,
-                    path: Some(c.path.clone()),
-                    reason,
-                }),
+                Err(reason) => {
+                    if matches!(reason, SkipReason::NotInstalled { .. })
+                        && let Some(o) = self.orphaned(c, candidates, probe)
+                    {
+                        plan.orphaned.push(o);
+                    }
+                    plan.skipped.push(SkippedTool {
+                        tool: c.tool,
+                        path: Some(c.path.clone()),
+                        reason,
+                    });
+                }
             }
         }
         plan
@@ -668,6 +744,136 @@ impl QuickClean {
             notes,
             not_undoable: NOT_UNDOABLE_NOTE,
         })
+    }
+
+    /// D-36: whether the located cache of an uninstalled tool qualifies for removal by scull
+    /// (S1 package cache, validated location, not a link, same volume, not in use).
+    fn orphaned(
+        &self,
+        c: &LocatedCache,
+        candidates: &[Candidate],
+        probe: &dyn ActivityProbe,
+    ) -> Option<OrphanedCache> {
+        if !c.problems.is_empty() || !c.volume_checked || !c.recognized {
+            return None;
+        }
+        let identity = c.identity?;
+        let cand = candidates
+            .iter()
+            .find(|k| k.path == FsPath::from_path(&c.path) && k.rule.id == c.tool.rule_id())?;
+        if cand.tier != Tier::S1
+            || cand.category != Category::PackageCache
+            || cand.identity != identity
+            || !matches!(cand.action, Action::ToolCommand { .. })
+        {
+            return None;
+        }
+        let item = PlanItem::from_candidate(cand).ok()?;
+        self.gather_evidence(c.tool, &c.path, &c.anchor, identity, probe)
+            .ok()?;
+        Some(OrphanedCache {
+            tool: c.tool,
+            cache: c.path.clone(),
+            anchor: c.anchor.clone(),
+            identity,
+            item,
+            reclaimable_bytes: cand.sizes.reclaimable.bytes,
+            not_undoable: NOT_UNDOABLE_NOTE,
+        })
+    }
+
+    /// Gathers D-36 evidence for `cache` right now: no trusted binary, the folder is a
+    /// directory with the located identity, nothing between its anchor and it is a link, it is
+    /// on its anchor's volume, and a fresh probe says nothing holds it.
+    fn gather_evidence(
+        &self,
+        tool: CacheTool,
+        cache: &Path,
+        anchor: &Path,
+        identity: FileIdentity,
+        probe: &dyn ActivityProbe,
+    ) -> Result<OrphanedCacheEvidence, SkipReason> {
+        match self.trusted.find(tool.binary()) {
+            Lookup::NotFound => {}
+            Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
+            Lookup::Found(b) => {
+                return Err(SkipReason::Changed(format!(
+                    "`{}` is installed now ({}): use its own command",
+                    tool.binary(),
+                    b.display()
+                )));
+            }
+        }
+        let anchor_identity = self.check_location(cache, anchor, identity)?;
+        in_use(cache, probe)?;
+        Ok(OrphanedCacheEvidence::checked(
+            tool,
+            cache.to_path_buf(),
+            anchor.to_path_buf(),
+            identity,
+            anchor_identity,
+            self.trusted.dirs().len(),
+        ))
+    }
+
+    /// D-36: remove the orphaned caches of `plan` whose tool the user confirmed, one by one,
+    /// each right after gathering fresh evidence ([`OrphanedCacheEvidence`]), through
+    /// [`Executor::delete_orphaned_cache`] (needs `exec` to hold the execution lock). Tools not
+    /// in `confirmed` are left alone. Not undoable ([`NOT_UNDOABLE_NOTE`]). Stops at `cancel`.
+    pub fn remove_orphaned(
+        &self,
+        exec: &Executor,
+        plan: &QuickCleanPlan,
+        confirmed: &BTreeSet<CacheTool>,
+        probe: &dyn ActivityProbe,
+        cancel: &CancelToken,
+    ) -> OrphanedReport {
+        let mut report = OrphanedReport::default();
+        for o in plan.orphaned.iter().filter(|o| confirmed.contains(&o.tool)) {
+            let skip = |reason| SkippedTool {
+                tool: o.tool,
+                path: Some(o.cache.clone()),
+                reason,
+            };
+            if cancel.is_cancelled() {
+                report.skipped.push(skip(SkipReason::Cancelled));
+                continue;
+            }
+            if self.elevation.blocks_destructive() && !self.opts.allow_elevated {
+                report
+                    .skipped
+                    .push(skip(SkipReason::Elevated(self.elevation)));
+                continue;
+            }
+            let evidence =
+                match self.gather_evidence(o.tool, &o.cache, &o.anchor, o.identity, probe) {
+                    Ok(e) => e,
+                    Err(reason) => {
+                        report.skipped.push(skip(reason));
+                        continue;
+                    }
+                };
+            let free_before = free_space(&o.anchor).ok();
+            let size_before = self.measure(&o.cache);
+            let target = DeleteTarget {
+                anchor: &o.anchor,
+                anchor_identity: Some(evidence.anchor_identity()),
+                path: &o.cache,
+            };
+            let outcome = exec
+                .delete_orphaned_cache(&o.item, &target, evidence)
+                .map(|d| d.report);
+            report.removed.push(OrphanedRemoval {
+                tool: o.tool,
+                cache: o.cache.clone(),
+                outcome,
+                free_before,
+                free_after: free_space(&o.anchor).ok(),
+                size_before,
+                not_undoable: NOT_UNDOABLE_NOTE,
+            });
+        }
+        report
     }
 
     /// Runs `yarn --version` (sandboxed) and checks the major version against the cache.
@@ -817,35 +1023,56 @@ impl QuickClean {
 
     /// SAFE-05-style checks right before starting a tool.
     fn revalidate(&self, t: &PlannedTool, probe: &dyn ActivityProbe) -> Result<(), SkipReason> {
-        let md = self.platform.metadata(&t.cache).map_err(|e| {
-            SkipReason::Changed(format!("{} can't be read: {e}", t.cache.display()))
-        })?;
+        self.check_location(&t.cache, &t.anchor, t.identity)?;
+        if self.trusted.find(t.tool.binary()) != Lookup::Found(t.binary.clone()) {
+            return Err(SkipReason::Changed(format!(
+                "the trusted `{}` binary is no longer {}",
+                t.tool.binary(),
+                t.binary.display()
+            )));
+        }
+        in_use(&t.location, probe)
+    }
+
+    /// The cache is still a directory with `identity`, nothing between `anchor` and it is a
+    /// link (no-follow lookups), and it is on the anchor's volume. Returns the anchor's
+    /// identity.
+    fn check_location(
+        &self,
+        cache: &Path,
+        anchor: &Path,
+        identity: FileIdentity,
+    ) -> Result<FileIdentity, SkipReason> {
+        let md = self
+            .platform
+            .metadata(cache)
+            .map_err(|e| SkipReason::Changed(format!("{} can't be read: {e}", cache.display())))?;
         if md.kind.is_link() {
             return Err(SkipReason::Problem(CacheProblem::Link {
-                path: t.cache.clone(),
+                path: cache.to_path_buf(),
             }));
         }
         if md.kind != scull_platform::EntryKind::Dir {
             return Err(SkipReason::Changed(format!(
                 "{} is no longer a folder",
-                t.cache.display()
+                cache.display()
             )));
         }
-        if md.identity != Some(t.identity) {
+        if md.identity != Some(identity) {
             return Err(SkipReason::Changed(format!(
                 "{} was replaced (different file identity)",
-                t.cache.display()
+                cache.display()
             )));
         }
         // Every component strictly below the anchor, down to the cache (no-follow each).
-        let rest = t.cache.strip_prefix(&t.anchor).map_err(|_| {
+        let rest = cache.strip_prefix(anchor).map_err(|_| {
             SkipReason::Changed(format!(
                 "{} is not inside {}",
-                t.cache.display(),
-                t.anchor.display()
+                cache.display(),
+                anchor.display()
             ))
         })?;
-        let mut at = t.anchor.clone();
+        let mut at = anchor.to_path_buf();
         for comp in rest.components() {
             at.push(comp.as_os_str());
             match self.platform.metadata(&at) {
@@ -858,29 +1085,14 @@ impl QuickClean {
                 }
             }
         }
-        let anchor_volume = self
-            .platform
-            .metadata(&t.anchor)
-            .ok()
-            .and_then(|m| m.identity)
-            .map(|i| i.volume);
-        match anchor_volume {
-            Some(v) if v == t.identity.volume => {}
-            Some(_) => {
-                return Err(SkipReason::Problem(CacheProblem::OtherVolume {
-                    anchor: t.anchor.clone(),
-                }));
-            }
-            None => return Err(SkipReason::VolumeUnverified),
+        let anchor_identity = self.platform.metadata(anchor).ok().and_then(|m| m.identity);
+        match anchor_identity {
+            Some(a) if a.volume == identity.volume => Ok(a),
+            Some(_) => Err(SkipReason::Problem(CacheProblem::OtherVolume {
+                anchor: anchor.to_path_buf(),
+            })),
+            None => Err(SkipReason::VolumeUnverified),
         }
-        if self.trusted.find(t.tool.binary()) != Lookup::Found(t.binary.clone()) {
-            return Err(SkipReason::Changed(format!(
-                "the trusted `{}` binary is no longer {}",
-                t.tool.binary(),
-                t.binary.display()
-            )));
-        }
-        in_use(&t.location, probe)
     }
 
     /// The cache's size, or zero when it no longer exists. `None` when it can't be measured.

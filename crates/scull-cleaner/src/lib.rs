@@ -40,6 +40,12 @@
 //!   [`ExecutionReport::measurement`] and [`Operation::finish`] records the measured delta next
 //!   to the predicted bytes (I-5).
 //!
+//! * Orphaned package caches (D-36, provisional, [`orphaned`]): an S1 package cache whose tool
+//!   is not installed may be removed through the walker by
+//!   [`Executor::delete_orphaned_cache`], only with [`OrphanedCacheEvidence`] that Quick Clean
+//!   gathers right before ([`quickclean::QuickClean::remove_orphaned`]) and a per-tool
+//!   confirmation. `Action::allowed_for` is unchanged: no other path deletes at S1.
+//!
 //! # Not wired into any interface yet
 //!
 //! **Do not call the Executor from the CLI, desktop app or MCP server** until the remaining
@@ -57,6 +63,7 @@ pub mod journal;
 mod lock;
 pub mod measure;
 mod operation;
+pub mod orphaned;
 pub mod own_data;
 mod quarantine;
 pub mod quickclean;
@@ -70,6 +77,7 @@ pub use executor::{DeleteReport, DeleteTarget, Executor};
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
 pub use operation::Operation;
+pub use orphaned::OrphanedCacheEvidence;
 pub use quarantine::{
     DEFAULT_RETENTION_SECS, DISK_MANIFEST, PurgeOutcome, PurgePolicy, PurgeReport,
     QuarantineSettings, Quarantined,

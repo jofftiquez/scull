@@ -140,12 +140,34 @@ impl Executor {
     ) -> Result<DeleteReport, ScullError> {
         check_item(item)?;
         let relative = check_target(item, target)?;
+        // Journaling (SAFE-19) and auditing (SAFE-08) happen in `execute_plan`, which owns the
+        // operation record: a bare `delete` has no operation and no database. The measured
+        // free-space delta (PHY-02) is taken around the whole plan there too.
+        self.walk(
+            item,
+            target.anchor,
+            target.anchor_identity,
+            relative,
+            expected_kind,
+            observer,
+        )
+    }
 
-        // Journaling (SAFE-19) happens in `execute_plan`, which owns the operation record: a
-        // bare `delete` has no operation and no database to journal in.
+    /// The removal walk itself, for an item whose tier, action and path binding the caller
+    /// has already checked ([`Executor::run`], or the D-36 path in
+    /// [`Executor::delete_orphaned_cache`]).
+    pub(crate) fn walk(
+        &self,
+        item: &PlanItem,
+        anchor: &Path,
+        anchor_identity: Option<FileIdentity>,
+        relative: &Path,
+        expected_kind: Option<EntryKind>,
+        observer: Option<&mut dyn FnMut(&WalkEvent<'_>)>,
+    ) -> Result<DeleteReport, ScullError> {
         let req = RemoveRequest {
-            anchor: target.anchor,
-            anchor_identity: target.anchor_identity,
+            anchor,
+            anchor_identity,
             relative,
             expected: item.identity,
             // `PlanItem` records no kind, and its category does not imply one (a project
@@ -159,8 +181,6 @@ impl Executor {
             Some(observer) => remove::remove_tree_observed(&req, observer),
             None => remove::remove_tree(&req),
         };
-        // TODO(#75, P2-EXEC-09): append the per-item audit outcome (also for refusals).
-        // TODO(#76, P2-EXEC-10): measure the free-space delta around the walk.
         match result {
             Ok(report) => Ok(DeleteReport {
                 item_id: item.item_id.clone(),
@@ -207,7 +227,10 @@ pub(crate) fn check_item_for(item: &PlanItem, executing: &Action) -> Result<(), 
 }
 
 /// Binds the native path to the item and returns it relative to the anchor.
-fn check_target<'a>(item: &PlanItem, target: &DeleteTarget<'a>) -> Result<&'a Path, ScullError> {
+pub(crate) fn check_target<'a>(
+    item: &PlanItem,
+    target: &DeleteTarget<'a>,
+) -> Result<&'a Path, ScullError> {
     let invalid = |kind: ErrorKind, msg: &str| {
         Err(ScullError::new(kind, msg)
             .with_item(item.item_id.clone())
