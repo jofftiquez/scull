@@ -29,21 +29,22 @@ Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
 ## 2. Crates and dependencies
 
 ```text
-          scull-cli (binary `scull`)      scull-mcp      desktop (Phase 3)
-                         └──────────────┬──────┴───────────┘
-                                   scull-engine (read-only pipeline, D-29)
-                        (scull-cli alone also links scull-cleaner, Phase 2)
-          ┌──────────────┬──────┴───────┬─────────────┬──────────────┐
-          ▼              ▼              ▼             ▼              ▼
-     scull-mcp      scull-cleaner   scull-scanner  scull-detectors  scull-git
-   (no cleaner dep)  │      │            │              │              │
-          │          ▼      ▼            │              │              │
-          │   scull-safety scull-storage │              │              │
-          │       │   └────────┬─────────┴──────────────┴──────────────┘
-          │       ▼            ▼
-          └──► scull-platform ──► scull-core   (everything depends on scull-core)
+  scull-cli (binary)        scull-mcp (stdio)        apps/desktop (Phase 3)
+      │   │                       │                          │
+      │   └───────────────────────┼──────────────┬───────────┘
+      │                           ▼              ▼
+      │                    scull-engine  (read-only pipeline, D-29)
+      │                           │
+      │     ┌──────────┬──────────┼───────────┬────────────┬─────────────┐
+      │     ▼          ▼          ▼           ▼            ▼             ▼
+      │  scanner   detectors     git        safety      storage      platform
+      │
+      └──► scull-cleaner  (Executor, the ONLY deleter; Phase 2; only the CLI links it)
+              │  safety · storage · platform
 
-  scull-fixtures: dev-dependency only (test trees, canaries, invariants)
+  Everything depends on scull-core (types, no I/O). Only scull-platform calls OS APIs.
+  scull-mcp and the desktop never depend on scull-cleaner (SAFE-10).
+  scull-fixtures: dev-dependency only (test trees, canaries, invariants).
 ```
 
 | Crate | Owns | Status |
