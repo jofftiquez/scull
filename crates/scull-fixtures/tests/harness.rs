@@ -89,10 +89,11 @@ fn untouched_fixture_passes_all_implemented_invariants() {
         report.outcome(InvariantId::I8),
         Outcome::NotApplicable(_)
     ));
+    // Nothing executed, measured or spawned: not applicable, never a pass.
     for i in [InvariantId::I4, InvariantId::I5, InvariantId::I7] {
         assert!(
-            matches!(report.outcome(i), Outcome::Unimplemented { .. }),
-            "{i} must not claim to pass"
+            matches!(report.outcome(i), Outcome::NotApplicable(_)),
+            "{i} must not claim to pass: {report}"
         );
     }
 }
