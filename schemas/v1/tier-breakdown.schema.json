@@ -1,0 +1,39 @@
+{
+  "$id": "https://scull.dev/schemas/v1/tier-breakdown.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Bytes per tier, used to aggregate parent nodes for charts (PRD §8.3 \"Aggregation\").\n\nA parent's *badge* is the most protective tier that has any bytes; charts must never color a\nparent as safe when it contains S2/S3 bytes.",
+  "properties": {
+    "s0": {
+      "description": "Bytes classified S0.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "s1": {
+      "description": "Bytes classified S1.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "s2": {
+      "description": "Bytes classified S2.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "s3": {
+      "description": "Bytes classified S3.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "s0",
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "title": "TierBreakdown",
+  "type": "object"
+}

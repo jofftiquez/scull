@@ -1,0 +1,381 @@
+{
+  "$defs": {
+    "Action": {
+      "description": "The action proposed for a candidate.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No action: the item is blocked (S3) or inspect-only.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete through the safe executor (S0 default, D-3). Restore path is regeneration.",
+          "properties": {
+            "type": {
+              "const": "delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Atomic same-volume move into `.scull-quarantine/<operation-id>/` (S1/S2 default).",
+          "properties": {
+            "type": {
+              "const": "quarantine",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move to the platform Trash / Recycle Bin (fallback when quarantine isn't possible).",
+          "properties": {
+            "type": {
+              "const": "trash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a tool's own cleanup command (package caches, Docker; SAFE-06, QC-03).",
+          "properties": {
+            "args": {
+              "description": "Structured arguments (no shell), e.g. `[\"cache\", \"verify\"]`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tool": {
+              "description": "Tool name, e.g. \"npm\".",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree remove` (never `--force` unless authorized per item).",
+          "properties": {
+            "type": {
+              "const": "git_worktree_remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree prune` for a stale registration.",
+          "properties": {
+            "type": {
+              "const": "git_worktree_prune",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "ContentHash": {
+      "description": "SHA-256 of the plan's canonical JSON, lowercase hex.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "FileIdentity": {
+      "additionalProperties": false,
+      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
+      "properties": {
+        "file": {
+          "description": "Inode / file ID as lowercase hex.",
+          "pattern": "^[0-9a-f]{1,32}$",
+          "type": "string"
+        },
+        "volume": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "volume",
+        "file"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "PlanId": {
+      "pattern": "^plan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "PlanItem": {
+      "additionalProperties": false,
+      "description": "One item of a plan: what was reviewed and what will be done to it.\n\nThe item is identified by [`ItemId`] *and* [`FileIdentity`]; `path` is for display and\naudit only. Execution never acts on the path from a plan (see [`narrow`]).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The action that was reviewed. Always mutating and allowed for `tier` (D-3)."
+        },
+        "category": {
+          "$ref": "#/$defs/Category",
+          "description": "Category, for grouping in the preview."
+        },
+        "identity": {
+          "$ref": "#/$defs/FileIdentity",
+          "description": "File identity at planning time."
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "Stable item ID (identity + path)."
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Exact path at planning time (display and audit only)."
+        },
+        "reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes at planning time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rule": {
+          "$ref": "#/$defs/RuleRef",
+          "description": "Rule that produced the candidate."
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "Tier at planning time. Never S3."
+        }
+      },
+      "required": [
+        "item_id",
+        "identity",
+        "path",
+        "category",
+        "rule",
+        "tier",
+        "action",
+        "reclaimable_bytes"
+      ],
+      "type": "object"
+    },
+    "PlanOrigin": {
+      "description": "Which surface created a plan. Determines the default and maximum lifetime.",
+      "oneOf": [
+        {
+          "const": "cli",
+          "description": "`scull clean --plan-out` and friends.",
+          "type": "string"
+        },
+        {
+          "const": "mcp",
+          "description": "`prepare_cleanup` over MCP (approved out of band, §13.3).",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "The desktop Cleanup Review screen.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuleRef": {
+      "additionalProperties": false,
+      "description": "Reference to the detector rule that produced a candidate (CLS-01).",
+      "properties": {
+        "id": {
+          "description": "Rule ID, e.g. `rust.target`.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Rule version; bumps whenever the rule's matching or tiering changes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ScanId": {
+      "pattern": "^scan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://scull.dev/schemas/v1/plan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An immutable cleanup plan (PRD §10.4, SAFE-11).\n\nConstruct with [`Plan::new`] (which computes the hash) or by deserializing a plan file\n(which rejects unknown fields). Either way, call [`Plan::verify`] before trusting it, and\n[`narrow`] it against freshly derived candidates before executing anything.\n\n```\nuse scull_core::*;\n\nlet identity = FileIdentity::new(1, 42);\nlet path = \"/home/me/proj/target\";\nlet reasons = vec![TierReason::new(Tier::S0, ReasonCode::Regenerable, \"Cargo.lock present\")];\nlet candidate = Candidate {\n    id: ItemId::derive(identity, path.as_bytes()),\n    path: FsPath::from(path),\n    identity,\n    category: Category::ProjectArtifact,\n    artifact: \"Cargo build output\".into(),\n    rule: RuleRef { id: \"rust.target\".into(), version: 1 },\n    project: None,\n    tier: Tier::S0,\n    reasons,\n    evidence: vec![],\n    sizes: Sizes::default(),\n    flags: Flags::default(),\n    regeneration: Regeneration::default(),\n    action: Action::Delete,\n};\nlet params = PlanParams {\n    id: PlanId::from_suffix(\"01J\").unwrap(),\n    scan_id: ScanId::from_suffix(\"01J\").unwrap(),\n    created_unix: 1_800_000_000,\n    ttl_secs: None,\n    machine_id: \"machine-a\".into(),\n    user: \"me\".into(),\n    origin: PlanOrigin::Cli,\n};\nlet plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();\nassert!(plan.verify(1_800_000_060, \"machine-a\", \"me\").is_ok());\nassert_eq!(\n    plan.verify(1_800_000_060, \"machine-b\", \"me\").unwrap_err().kind,\n    ErrorKind::PlanForeign\n);\n\nlet narrowed = narrow(&plan, &[candidate]);\nassert_eq!(narrowed.executable.len(), 1);\nassert!(narrow(&plan, &[]).executable.is_empty());\n```",
+  "properties": {
+    "content_hash": {
+      "$ref": "#/$defs/ContentHash"
+    },
+    "created_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "expires_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "id": {
+      "$ref": "#/$defs/PlanId"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/PlanItem"
+      },
+      "type": "array"
+    },
+    "machine_id": {
+      "type": "string"
+    },
+    "origin": {
+      "$ref": "#/$defs/PlanOrigin"
+    },
+    "scan_id": {
+      "$ref": "#/$defs/ScanId"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "user": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "created_unix",
+    "expires_unix",
+    "scan_id",
+    "machine_id",
+    "user",
+    "origin",
+    "items",
+    "content_hash"
+  ],
+  "title": "Plan",
+  "type": "object"
+}

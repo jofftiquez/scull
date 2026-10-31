@@ -1,0 +1,69 @@
+{
+  "action": {
+    "type": "delete"
+  },
+  "artifact": "Cargo build output",
+  "category": "project_artifact",
+  "evidence": [
+    {
+      "kind": "marker",
+      "path": "/Users/dev/Projects/api/Cargo.toml"
+    },
+    {
+      "kind": "lockfile",
+      "path": "/Users/dev/Projects/api/Cargo.lock"
+    },
+    {
+      "kind": "last_modified",
+      "newest_unix": 1761600000,
+      "sampled": false
+    }
+  ],
+  "flags": {
+    "active": false,
+    "cloud_placeholder": false,
+    "cross_mount": false,
+    "hardlinked": false,
+    "symlink": false
+  },
+  "id": "9c5a93f6e9be4ec26d4d4197bf180d1f",
+  "identity": {
+    "file": "2b9c1f",
+    "volume": 16777220
+  },
+  "path": "/Users/dev/Projects/api/target",
+  "project": {
+    "ecosystem": "rust",
+    "name": "api",
+    "root": "/Users/dev/Projects/api"
+  },
+  "reasons": [
+    {
+      "code": "regenerable",
+      "message": "Cargo.toml and Cargo.lock present; rebuild with `cargo build`",
+      "tier": "S0"
+    }
+  ],
+  "regeneration": {
+    "cost": {
+      "network": false,
+      "seconds": 180,
+      "type": "estimate"
+    },
+    "instructions": "cargo build"
+  },
+  "rule": {
+    "id": "rust.target",
+    "version": 1
+  },
+  "sizes": {
+    "allocated": 4100000000,
+    "logical": 4400000000,
+    "reclaimable": {
+      "bytes": 4100000000,
+      "confidence": "high",
+      "shared_bytes": 0
+    }
+  },
+  "tier": "S9"
+}

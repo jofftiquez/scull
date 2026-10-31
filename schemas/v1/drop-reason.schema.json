@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://scull.dev/schemas/v1/drop-reason.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a plan item was left out of the executable set.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "The plan item itself is invalid (S3, or an action not allowed for its tier).",
+      "properties": {
+        "reason": {
+          "const": "invalid_plan_item",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The item appears more than once in the plan; only the first occurrence is kept.",
+      "properties": {
+        "reason": {
+          "const": "duplicate_in_plan",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "No fresh candidate has this item ID (gone, moved, or no longer detected).",
+      "properties": {
+        "reason": {
+          "const": "missing",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "More than one fresh candidate has this item ID.",
+      "properties": {
+        "reason": {
+          "const": "ambiguous",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The object at the path was replaced (different device/inode or volume/file ID).",
+      "properties": {
+        "reason": {
+          "const": "identity_changed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The fresh candidate's path differs from the planned path.",
+      "properties": {
+        "reason": {
+          "const": "path_changed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The fresh candidate is internally inconsistent.",
+      "properties": {
+        "reason": {
+          "const": "inconsistent_candidate",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The item is now S3 (protected) (FX-EXEC-10).",
+      "properties": {
+        "reason": {
+          "const": "now_protected",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The item's tier is now more protective than when it was planned.",
+      "properties": {
+        "fresh": {
+          "$ref": "#/$defs/Tier",
+          "description": "Tier now."
+        },
+        "planned": {
+          "$ref": "#/$defs/Tier",
+          "description": "Tier at planning time."
+        },
+        "reason": {
+          "const": "tier_raised",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "planned",
+        "fresh"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The proposed action changed to something that is not the same or safer.",
+      "properties": {
+        "reason": {
+          "const": "action_changed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "DropReason"
+}

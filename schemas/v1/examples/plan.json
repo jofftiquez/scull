@@ -1,0 +1,31 @@
+{
+  "content_hash": "4cffcd4f6fdca3f0a484f05a899d5c2a6b4e150693784a20038b3571a4fa637b",
+  "created_unix": 1761900000,
+  "expires_unix": 1761986400,
+  "id": "plan_01JBX7Q2M4",
+  "items": [
+    {
+      "action": {
+        "type": "delete"
+      },
+      "category": "project_artifact",
+      "identity": {
+        "file": "2b9c1f",
+        "volume": 16777220
+      },
+      "item_id": "9c5a93f6e9be4ec26d4d4197bf180d1f",
+      "path": "/Users/dev/Projects/api/target",
+      "reclaimable_bytes": 4100000000,
+      "rule": {
+        "id": "rust.target",
+        "version": 1
+      },
+      "tier": "S0"
+    }
+  ],
+  "machine_id": "c0ffee00c0ffee00",
+  "origin": "cli",
+  "scan_id": "scan_01JBX7PZ9K",
+  "schema_version": 1,
+  "user": "dev"
+}

@@ -77,12 +77,23 @@ mod hex_u128 {
 /// Binding both means an item ID stops matching if the object at the path is replaced
 /// (new identity) *or* the same object is moved (new path). Plans refer to items by `ItemId`,
 /// never by path alone (SAFE-11): a lossy or edited path in a plan file can't redirect deletion.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-#[schemars(with = "String")]
 pub struct ItemId(String);
+
+impl JsonSchema for ItemId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ItemId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+            "pattern": "^[0-9a-f]{32}$"
+        })
+    }
+}
 
 impl ItemId {
     /// Length of the hex string (128-bit truncated SHA-256).
@@ -154,12 +165,22 @@ macro_rules! opaque_id {
             "characters of `[0-9A-Za-z]`. Generation (time + randomness) lives outside ",
             "`scull-core`, which performs no I/O."
         )]
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
-        )]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
-        #[schemars(with = "String")]
         pub struct $name(String);
+
+        impl JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                schemars::json_schema!({
+                    "type": "string",
+                    "pattern": concat!("^", $prefix, "_[0-9A-Za-z]{1,64}$")
+                })
+            }
+        }
 
         impl $name {
             /// Required prefix, including the trailing underscore.

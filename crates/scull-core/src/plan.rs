@@ -81,12 +81,23 @@ impl PlanOrigin {
 }
 
 /// SHA-256 of a plan's canonical JSON, as 64 lowercase hex characters.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-#[schemars(with = "String")]
 pub struct ContentHash(String);
+
+impl JsonSchema for ContentHash {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ContentHash".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "SHA-256 of the plan's canonical JSON, lowercase hex.",
+            "pattern": "^[0-9a-f]{64}$"
+        })
+    }
+}
 
 impl ContentHash {
     /// Length of the hex string.
