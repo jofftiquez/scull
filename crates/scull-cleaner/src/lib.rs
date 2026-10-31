@@ -1,6 +1,36 @@
 //! The Executor: the only code path in scull that deletes anything (SAFE-10).
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/PRD.md` §10 and `HANDOVER.md` for responsibilities and boundaries.
+//!
+//! * [`Executor`]: takes one already verified and narrowed plan item
+//!   ([`scull_core::narrow`]) and deletes it through the platform's fd-relative, no-follow
+//!   removal walker (`scull_platform::remove`, SAFE-04, SAFE-05, SAFE-18). This crate is the
+//!   only one that enables `scull-platform`'s `delete` feature.
+//!
+//! # Not wired into any interface yet
+//!
+//! **Do not call the Executor from the CLI, desktop app or MCP server** until the remaining
+//! Phase 2 safeguards land; the inspect-only release gate checks that `scull clean` is still a
+//! stub. Missing today, each tracked by its issue:
+//!
+//! * single execution lock per user (SAFE-09): P2-EXEC-04, #70;
+//! * revalidation of the item against a fresh scan right before execution (SAFE-05): P2-EXEC-03,
+//!   #69 (callers must pass items that went through [`scull_core::narrow`]);
+//! * write-ahead journal and crash recovery (SAFE-19): P2-EXEC-08, #74;
+//! * append-only audit log (SAFE-08): P2-EXEC-09, #75;
+//! * measured free-space delta (PHY-02): P2-EXEC-10, #76;
+//! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
+//!   P2-EXEC-11, #77;
+//! * quarantine, Trash and tool-native actions: P2-EXEC-05 #71, P2-EXEC-07 #73, P2-QC-01 #78;
+//! * the Windows walker: P2-EXEC-02, #68.
+
+mod executor;
+
+pub use executor::{DeleteReport, DeleteTarget, Executor};
+pub use scull_platform::remove::{
+    AbortReason, Anomaly, RemoveOutcome, RemoveReport, RemovedCounts, SkipReason, SkippedEntry,
+    VERIFY_EVERY, WalkEvent,
+};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

@@ -26,6 +26,9 @@
 //!   administrator, and the invoking user under `sudo`, for the executor's refusal and
 //!   `scull doctor` (SAFE-14). [`Elevation::Unknown`] blocks destructive operations like
 //!   [`Elevation::Elevated`].
+//! * `remove` (only with the `delete` cargo feature, which only `scull-cleaner` enables,
+//!   SAFE-10): the fd-relative, no-follow removal walker the Executor deletes through
+//!   (SAFE-04, SAFE-05, SAFE-18; P2-EXEC-01). Unix only for now; Windows is #68.
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -51,6 +54,8 @@ pub mod elevation;
 mod error;
 mod native;
 pub mod owner_only;
+#[cfg(feature = "delete")]
+pub mod remove;
 mod types;
 pub mod volumes;
 
@@ -95,7 +100,8 @@ pub type DirIter<'a> = Box<dyn Iterator<Item = Result<DirEntry>> + Send + 'a>;
 /// 3. **Never hydrate cloud placeholders** (PLT-04): metadata-only calls, no reads of file
 ///    contents.
 /// 4. **Read-only.** Nothing here creates, modifies or deletes anything. Deletion belongs to
-///    the executor in `scull-cleaner` (SAFE-10).
+///    the executor in `scull-cleaner` (SAFE-10), which uses the feature-gated `remove` module,
+///    never this trait.
 /// 5. **Don't guess.** A signal the OS can't provide is `None` and reported as unavailable in
 ///    [`Platform::capabilities`]; callers then lower confidence or block (PLT-08).
 pub trait Platform: Send + Sync {

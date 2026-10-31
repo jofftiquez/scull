@@ -1,0 +1,208 @@
+//! [`Executor`]: delete one verified plan item through the platform removal walker.
+
+use scull_core::{
+    Action, ErrorKind, FileIdentity, FsPath, ItemId, PlanItem, ScullError, action_allowed_for,
+};
+use scull_platform::native_path_bytes;
+use scull_platform::remove::{self, RemoveError, RemoveReport, RemoveRequest, WalkEvent};
+use std::path::Path;
+
+/// Where a plan item lives on disk, in native form.
+///
+/// A plan's [`FsPath`] is display-only and may be lossy, so the Executor never deletes by it:
+/// the caller passes the native path of the freshly re-derived candidate, and the Executor
+/// checks that this path, together with the item's identity, hashes to the item's
+/// [`ItemId`] (the same derivation the scanner used), so a path cannot be swapped in.
+#[derive(Debug, Clone, Copy)]
+pub struct DeleteTarget<'a> {
+    /// Trusted directory the walk starts from: the scan root the item was found under. Every
+    /// component between it and the item is opened no-follow; the anchor itself is never
+    /// removed.
+    pub anchor: &'a Path,
+    /// Identity the anchor must have, if known (recommended).
+    pub anchor_identity: Option<FileIdentity>,
+    /// The item's native, absolute path, strictly below `anchor`.
+    pub path: &'a Path,
+}
+
+/// The result of one executed item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DeleteReport {
+    /// The item.
+    pub item_id: ItemId,
+    /// What the walker removed, kept (with reasons) or stopped at.
+    pub report: RemoveReport,
+}
+
+/// The only code path in scull that deletes (SAFE-10). See the crate docs for what is still
+/// missing before it may be wired into any interface.
+#[derive(Debug, Default)]
+#[non_exhaustive]
+pub struct Executor {}
+
+impl Executor {
+    /// A new Executor.
+    //
+    // TODO(#70, P2-EXEC-04): take the per-user execution lock here and hold it for the
+    // Executor's lifetime; a second executor must wait or fail with `LockHeld`.
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    /// Deletes one plan item. `item` must come from [`scull_core::narrow`] (verified plan,
+    /// re-derived candidate); this method re-checks what it can on its own:
+    ///
+    /// * the item is not S3 and its action is [`Action::Delete`], allowed for its tier (D-3,
+    ///   D-28: only S0 may be deleted); anything else is refused with
+    ///   [`ErrorKind::SafetyBlocked`]; quarantine, Trash and tool actions are not executed by
+    ///   this build at all;
+    /// * `target.path` is absolute, strictly below `target.anchor`, and hashes with the item's
+    ///   identity to its [`ItemId`] ([`ErrorKind::PlanInvalidated`] otherwise);
+    /// * the walker then verifies device + inode at open time (SAFE-05) and removes the tree
+    ///   without following links or crossing mounts.
+    ///
+    /// `Err` means nothing was removed. `Ok` carries the walker's report, which may be
+    /// [`remove::RemoveOutcome::Incomplete`] (entries kept, each with a reason) or
+    /// [`remove::RemoveOutcome::Aborted`] (an anomaly stopped the walk).
+    pub fn delete(
+        &self,
+        item: &PlanItem,
+        target: &DeleteTarget<'_>,
+    ) -> Result<DeleteReport, ScullError> {
+        self.run(item, target, None)
+    }
+
+    /// [`Executor::delete`] with an observer called at each [`WalkEvent`], for fault-injection
+    /// tests (FX-RACE-02). The walker re-verifies everything after each call.
+    pub fn delete_observed(
+        &self,
+        item: &PlanItem,
+        target: &DeleteTarget<'_>,
+        observer: &mut dyn FnMut(&WalkEvent<'_>),
+    ) -> Result<DeleteReport, ScullError> {
+        self.run(item, target, Some(observer))
+    }
+
+    fn run(
+        &self,
+        item: &PlanItem,
+        target: &DeleteTarget<'_>,
+        observer: Option<&mut dyn FnMut(&WalkEvent<'_>)>,
+    ) -> Result<DeleteReport, ScullError> {
+        check_item(item)?;
+        let relative = check_target(item, target)?;
+
+        // TODO(#74, P2-EXEC-08): write the journal intent record before touching the disk.
+        let req = RemoveRequest {
+            anchor: target.anchor,
+            anchor_identity: target.anchor_identity,
+            relative,
+            expected: item.identity,
+            // `PlanItem` records no kind, and its category does not imply one (a project
+            // artifact or cache may be a directory or a single file; `LargeFile` items are
+            // inspect-only and never planned). The identity already pins the object, whose
+            // type cannot change; the walker refuses hard-linked single files on its own.
+            expected_kind: None,
+        };
+        let result = match observer {
+            Some(observer) => remove::remove_tree_observed(&req, observer),
+            None => remove::remove_tree(&req),
+        };
+        // TODO(#75, P2-EXEC-09): append the per-item audit outcome (also for refusals).
+        // TODO(#76, P2-EXEC-10): measure the free-space delta around the walk.
+        match result {
+            Ok(report) => Ok(DeleteReport {
+                item_id: item.item_id.clone(),
+                report,
+            }),
+            Err(e) => Err(refusal(&e)
+                .with_item(item.item_id.clone())
+                .with_path(item.path.clone())),
+        }
+    }
+}
+
+/// Tier and action checks (I-1, D-3, D-28).
+fn check_item(item: &PlanItem) -> Result<(), ScullError> {
+    let blocked = |msg: String| {
+        Err(ScullError::new(ErrorKind::SafetyBlocked, msg)
+            .with_item(item.item_id.clone())
+            .with_path(item.path.clone()))
+    };
+    if !item.tier.is_actionable() {
+        return blocked("S3 (protected) items are never executed (I-1)".into());
+    }
+    if !action_allowed_for(item.tier, &item.action) {
+        return blocked(format!(
+            "action {:?} is not allowed for tier {} (D-3, D-28)",
+            item.action, item.tier
+        ));
+    }
+    if item.action != Action::Delete {
+        return blocked(format!(
+            "action {:?} is not executed by this build: quarantine (#71), Trash (#73) and \
+             tool-native commands (#78) are not implemented yet",
+            item.action
+        ));
+    }
+    Ok(())
+}
+
+/// Binds the native path to the item and returns it relative to the anchor.
+fn check_target<'a>(item: &PlanItem, target: &DeleteTarget<'a>) -> Result<&'a Path, ScullError> {
+    let invalid = |kind: ErrorKind, msg: &str| {
+        Err(ScullError::new(kind, msg)
+            .with_item(item.item_id.clone())
+            .with_path(item.path.clone()))
+    };
+    if !target.anchor.is_absolute() || !target.path.is_absolute() {
+        return invalid(
+            ErrorKind::SafetyBlocked,
+            "the anchor and the item path must be absolute",
+        );
+    }
+    let Ok(relative) = target.path.strip_prefix(target.anchor) else {
+        return invalid(
+            ErrorKind::SafetyBlocked,
+            "the item path is not below the anchor (scan root)",
+        );
+    };
+    if relative.as_os_str().is_empty() {
+        return invalid(
+            ErrorKind::SafetyBlocked,
+            "the anchor (scan root) itself is never deleted",
+        );
+    }
+    if ItemId::derive(item.identity, &native_path_bytes(target.path)) != item.item_id
+        || FsPath::from_path(target.path) != item.path
+    {
+        return invalid(
+            ErrorKind::PlanInvalidated,
+            "the given path is not the planned item's path",
+        );
+    }
+    Ok(relative)
+}
+
+/// A refused removal (nothing removed) as a shared error.
+fn refusal(e: &RemoveError) -> ScullError {
+    let kind = match e {
+        RemoveError::AnchorUnavailable { source, .. }
+        | RemoveError::TargetUnavailable { source } => {
+            return ScullError::new(ScullError::from_io(source).kind, e.to_string());
+        }
+        RemoveError::TargetMissing => ErrorKind::NotFound,
+        RemoveError::AnchorChanged { .. }
+        | RemoveError::IdentityMismatch { .. }
+        | RemoveError::KindMismatch { .. }
+        | RemoveError::TargetChanged { .. } => ErrorKind::PlanInvalidated,
+        RemoveError::PathNotTraversable { .. }
+        | RemoveError::InvalidRequest { .. }
+        | RemoveError::TargetIsMountPoint { .. }
+        | RemoveError::HardLinked { .. } => ErrorKind::SafetyBlocked,
+        RemoveError::Unsupported => ErrorKind::UnsupportedPlatform,
+        _ => ErrorKind::Internal,
+    };
+    ScullError::new(kind, e.to_string())
+}

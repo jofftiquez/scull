@@ -14,6 +14,11 @@ workspace = true
 
 [dependencies]
 scull-core.workspace = true
-scull-platform.workspace = true
+# `delete`: the removal walker. This crate is the only one allowed to enable it (SAFE-10;
+# checked by tests/delete_feature.rs).
+scull-platform = { workspace = true, features = ["delete"] }
 scull-safety.workspace = true
 scull-storage.workspace = true
+
+[dev-dependencies]
+scull-fixtures.workspace = true

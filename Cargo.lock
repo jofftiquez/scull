@@ -1251,6 +1251,7 @@ name = "scull-cleaner"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "scull-fixtures",
  "scull-platform",
  "scull-safety",
  "scull-storage",
@@ -1266,7 +1267,6 @@ dependencies = [
  "jsonschema",
  "proptest",
  "schemars",
- "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",
@@ -1388,7 +1388,9 @@ name = "scull-platform"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "rustix",
  "scull-core",
+ "scull-fixtures",
  "serde",
  "serde_json",
  "tempfile",

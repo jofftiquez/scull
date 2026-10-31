@@ -20,7 +20,9 @@ scull-detectors.workspace = true
 scull-git.workspace = true
 scull-safety.workspace = true
 scull-storage.workspace = true
-scull-cleaner.workspace = true
+# No scull-cleaner until P2-CLI-01 wires `scull clean` behind the Phase 2 safeguards (lock,
+# journal, audit): the shipped binary must not even compile the deletion walker in (SAFE-10;
+# checked by crates/scull-cleaner/tests/delete_feature.rs).
 scull-mcp.workspace = true
 scull-engine.workspace = true
 serde.workspace = true

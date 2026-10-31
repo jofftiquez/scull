@@ -12,6 +12,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The fd-relative, no-follow removal walker (`scull_platform::remove`, P2-EXEC-01). Off by
+# default: only `scull-cleaner` (the Executor) may enable it, so no other crate can even compile a
+# call to it (SAFE-10). Checked by `crates/scull-cleaner/tests/delete_feature.rs`.
+delete = ["dep:rustix"]
+
 [dependencies]
 scull-core.workspace = true
 serde.workspace = true
@@ -19,6 +25,8 @@ serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Safe wrappers for openat/fstatat/unlinkat/getdents used by the removal walker (no `unsafe`).
+rustix = { version = "1", features = ["fs", "std"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -39,3 +47,4 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = "3"
+scull-fixtures.workspace = true

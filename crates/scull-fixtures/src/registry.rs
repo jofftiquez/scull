@@ -155,6 +155,7 @@ const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
 const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
 const LARGE: &str = "crates/scull-detectors/tests/large_files.rs";
+const EXEC_UNIX: &str = "crates/scull-cleaner/tests/executor_unix.rs";
 
 const fn fx(
     id: &'static str,
@@ -631,12 +632,18 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Tracked {
-            issue: 83,
-            reason: "scan and classify are end-to-end (link counted, never followed, canary bytes not attributed) and removal runs on a std::fs stand-in; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
-            partial: &[t(
-                E2E_FS,
-                "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
-            )],
+            issue: 68,
+            reason: "scan and classify are end-to-end (link counted, never followed, canary bytes not attributed); on Unix the links are removed through the real Executor walker (#67); the Windows walker (#68) is pending",
+            partial: &[
+                t(
+                    EXEC_UNIX,
+                    "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
+                ),
+                t(
+                    E2E_FS,
+                    "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
+                ),
+            ],
         },
     ),
     fx(
@@ -686,8 +693,11 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Mode::Nightly,
         Status::Tracked {
             issue: 189,
-            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet",
-            partial: &[],
+            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet. The Executor walker's abort at a mount point runs where an unprivileged mount namespace exists (skipped with the reason elsewhere) and is simulated in scull-platform's walker unit tests",
+            partial: &[t(
+                EXEC_UNIX,
+                "fx_fs_04_mount_inside_candidate_is_never_crossed",
+            )],
         },
     ),
     fx(
@@ -696,9 +706,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Tracked {
-            issue: 83,
-            reason: "bytes attributed once (shared, not freed) is end-to-end; the canary keeping its content and link after the candidate is removed needs the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            issue: 68,
+            reason: "bytes attributed once (shared, not freed) is end-to-end; on Unix the candidate's link is removed through the real Executor walker with the canary file intact (#67); the Windows walker (#68) is pending",
             partial: &[
+                t(
+                    EXEC_UNIX,
+                    "fx_fs_05_hardlink_to_canary_link_removed_canary_intact",
+                ),
                 t(E2E_FS, "fx_fs_05_hardlink_to_canary_bytes_attributed_once"),
                 t(
                     HARDLINKS,
@@ -723,12 +737,18 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Tracked {
-            issue: 83,
-            reason: "scan and classify with read-only entries are end-to-end and I-3 proves no permission changed; deleting them within the candidate needs the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
-            partial: &[t(
-                E2E_FS,
-                "fx_fs_07_read_only_entries_inside_candidate_permissions_untouched",
-            )],
+            issue: 68,
+            reason: "scan and classify with read-only entries are end-to-end and I-3 proves no permission changed; on Unix the Executor walker deletes what is permitted and reports the rest without changing permissions (#67); the Windows walker (#68) is pending",
+            partial: &[
+                t(
+                    EXEC_UNIX,
+                    "fx_fs_07_read_only_entries_deleted_if_permitted_or_reported",
+                ),
+                t(
+                    E2E_FS,
+                    "fx_fs_07_read_only_entries_inside_candidate_permissions_untouched",
+                ),
+            ],
         },
     ),
     fx(
@@ -737,9 +757,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Tracked {
-            issue: 83,
-            reason: "the scan reports the denied folder with its reason, marks the item incomplete and never lowers protection (end-to-end, Unix); the item's partial/failed outcome is an Executor result; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            issue: 68,
+            reason: "the scan reports the denied folder with its reason, marks the item incomplete and never lowers protection (end-to-end, Unix); on Unix the Executor reports the item incomplete with the reason, no escalation (#67); the Windows walker (#68) is pending",
             partial: &[
+                t(
+                    EXEC_UNIX,
+                    "fx_fs_08_permission_denied_subfolder_reported_not_escalated",
+                ),
                 t(
                     E2E_FS,
                     "fx_fs_08_permission_denied_subfolder_is_reported_not_escalated",
@@ -796,12 +820,18 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Tracked {
-            issue: 83,
-            reason: "a >260-character candidate path is scanned and classified end-to-end; paths beyond the OS limit (4096 bytes on Linux) need handle-relative traversal and deletion, i.e. the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
-            partial: &[t(
-                E2E_FS,
-                "fx_fs_12_long_path_candidate_is_scanned_and_classified",
-            )],
+            issue: 68,
+            reason: "a >260-character candidate path is scanned and classified end-to-end; on Unix a tree far beyond PATH_MAX is deleted by the handle-relative Executor walker (#67); the Windows walker (#68, `\\\\?\\` paths) is pending",
+            partial: &[
+                t(
+                    EXEC_UNIX,
+                    "fx_fs_12_very_deep_tree_beyond_path_max_is_removed",
+                ),
+                t(
+                    E2E_FS,
+                    "fx_fs_12_long_path_candidate_is_scanned_and_classified",
+                ),
+            ],
         },
     ),
     fx(
@@ -820,6 +850,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(
                 E2E_FS,
                 "fx_fs_14_fifo_and_socket_inside_candidate_never_opened",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_fs_14_fifo_and_socket_inside_candidate_unlinked_never_opened",
             ),
             t(
                 SCAN_SPECIAL,
