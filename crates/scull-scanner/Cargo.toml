@@ -15,3 +15,6 @@ workspace = true
 [dependencies]
 scull-core.workspace = true
 scull-platform.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

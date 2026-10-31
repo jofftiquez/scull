@@ -511,6 +511,7 @@ version = "0.0.0"
 dependencies = [
  "scull-core",
  "scull-platform",
+ "tempfile",
 ]
 
 [[package]]
