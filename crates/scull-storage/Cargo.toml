@@ -13,4 +13,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
 scull-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
