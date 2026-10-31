@@ -56,7 +56,21 @@ const SHOTS = [
   { file: 'McpApproval', name: '12g-mcp-approval-expired', hash: '#state=expired' },
   { file: 'McpApproval', name: '12h-mcp-approval-denied', hash: '#state=denied' },
   { file: 'McpApproval', name: '12i-mcp-approval-plan-changed', hash: '#state=changed' },
-  { file: 'McpApproval', name: '12j-mcp-approval-terminal', hash: '#state=terminal' }
+  { file: 'McpApproval', name: '12j-mcp-approval-terminal', hash: '#state=terminal' },
+  { file: 'States', name: '13-states-first-run', hash: '#state=first-run', act: async () => { await wait(600); } },
+  { file: 'States', name: '13b-states-no-candidates', hash: '#state=no-candidates', act: async () => { await wait(600); } },
+  { file: 'States', name: '13c-states-no-worktrees', hash: '#state=no-worktrees' },
+  { file: 'States', name: '13d-states-no-caches', hash: '#state=no-caches' },
+  { file: 'States', name: '13e-states-scan-failed', hash: '#state=scan-failed' },
+  { file: 'States', name: '13f-states-drive-disconnected', hash: '#state=drive-disconnected' },
+  { file: 'States', name: '13g-states-db-corrupt', hash: '#state=db-corrupt' },
+  { file: 'States', name: '13h-states-git-missing', hash: '#state=git-missing' },
+  { file: 'States', name: '13i-states-plan-rejected', hash: '#state=plan-rejected' },
+  { file: 'States', name: '13j-states-macos-full-disk-access', hash: '#state=macos-full-disk-access' },
+  { file: 'States', name: '13k-states-windows-protected-folders', hash: '#state=windows-protected-folders' },
+  { file: 'States', name: '13l-states-linux-unreadable', hash: '#state=linux-unreadable' },
+  { file: 'States', name: '13m-states-signals-unavailable', hash: '#state=signals-unavailable' },
+  { file: 'States', name: '13n-states-elevated-refusal', hash: '#state=elevated-refusal' }
 ];
 
 (async () => {

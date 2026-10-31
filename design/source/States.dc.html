@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Empty, error and permission states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#111}a:hover{color:#9C78FF}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #D6268A;outline-offset:2px}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.dc.html" aria-current="{{nav.Main.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Main.bg}}; color: {{nav.Main.fg}}; font-weight: {{nav.Main.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Main.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.dc.html" aria-current="{{nav.Projects.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Projects.bg}}; color: {{nav.Projects.fg}}; font-weight: {{nav.Projects.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Projects.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{counts.projects}}</span></a>
+    <a href="Explorer.dc.html" aria-current="{{nav.Explorer.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Explorer.bg}}; color: {{nav.Explorer.fg}}; font-weight: {{nav.Explorer.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Explorer.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.dc.html" aria-current="{{nav.Worktrees.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Worktrees.bg}}; color: {{nav.Worktrees.fg}}; font-weight: {{nav.Worktrees.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Worktrees.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{counts.worktrees}}</span></a>
+    <a href="Caches.dc.html" aria-current="{{nav.Caches.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Caches.bg}}; color: {{nav.Caches.fg}}; font-weight: {{nav.Caches.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Caches.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{counts.caches}}</span></a>
+    <a href="CleanupReview.dc.html" aria-current="{{nav.CleanupReview.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.CleanupReview.bg}}; color: {{nav.CleanupReview.fg}}; font-weight: {{nav.CleanupReview.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.CleanupReview.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.dc.html" aria-current="{{nav.Insights.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Insights.bg}}; color: {{nav.Insights.fg}}; font-weight: {{nav.Insights.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Insights.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.dc.html" aria-current="{{nav.History.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.History.bg}}; color: {{nav.History.fg}}; font-weight: {{nav.History.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.History.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.dc.html" aria-current="{{nav.Settings.cur}}" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: {{nav.Settings.bg}}; color: {{nav.Settings.fg}}; font-weight: {{nav.Settings.fw}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{nav.Settings.stroke}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.dc.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">{{drv.hdNote}}</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">{{drv.ssdPct}}</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: {{drv.ssdBar}}; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: {{drv.ssdColor}}">{{drv.ssdNote}}</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+        <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">{{h.title}}</h1>
+        <sc-if value="{{h.chip}}" hint-placeholder-val="{{ false }}"><span style="padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; background: {{h.chipBg}}; color: {{h.chipFg}}">{{h.chip}}</span></sc-if>
+      </div>
+      <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{h.sub}}</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px">
+      <sc-for list="{{h.actions}}" as="a" hint-placeholder-count="1">
+        <button type="button" onClick="{{a.on}}" disabled="{{a.disabled}}" title="{{a.title}}" style="height: 44px; padding: 0 20px; background: {{a.bg}}; color: {{a.fg}}; border: 1px solid {{a.border}}; border-radius: 12px; font: inherit; font-weight: 500; cursor: {{a.cursor}}; display: inline-flex; align-items: center; gap: 8px"><sc-if value="{{a.lock}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></sc-if>{{a.label}}</button>
+      </sc-for>
+    </div>
+  </header>
+
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+    <section class="tile" aria-label="{{t.title}}" role="{{t.role}}" style="grid-column: span 12; position: relative; overflow: hidden; border-radius: 22px; background: {{t.bg}}; border: 1px solid {{t.border}}; padding: {{t.pad}}; display: flex; flex-direction: {{t.dir}}; flex-wrap: wrap; align-items: {{t.align}}; text-align: {{t.textAlign}}; gap: {{t.gap}}; animation: {{t.anim}}">
+      <sc-if value="{{t.band}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: {{t.band}}"></span></sc-if>
+      <span aria-hidden="true" style="flex: none; width: {{t.box}}px; height: {{t.box}}px; border-radius: {{t.boxRadius}}px; background: {{t.glyphBg}}; display: flex; align-items: center; justify-content: center; animation: {{t.glyphAnim}}">
+        <svg width="{{t.glyph}}" height="{{t.glyph}}" viewBox="0 0 64 64" fill="none" stroke="#15121A" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+          <sc-if value="{{g.logo}}" hint-placeholder-val="{{ false }}"><g transform="translate(0 0) scale(2)"><line x1="5" y1="27" x2="27" y2="5" stroke-width="1.6"></line><line x1="5" y1="5" x2="27" y2="27" stroke-width="1.6"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="3.6" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="3.6" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF" stroke-width="1.6"></path><g style="transform-origin: 16px 15.4px; animation: scull-wink 2600ms 600ms ease-in-out infinite"><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></g></g></sc-if>
+          <sc-if value="{{g.check}}" hint-placeholder-val="{{ false }}"><circle cx="32" cy="32" r="22" stroke="#7C4DFF" stroke-width="4"></circle><path d="M21 33 l8 8 l15 -17" stroke-width="4.5" stroke-dasharray="48" stroke-dashoffset="48" style="animation: scull-check 420ms 200ms ease-out forwards"></path></sc-if>
+          <sc-if value="{{g.branch}}" hint-placeholder-val="{{ false }}"><circle cx="20" cy="14" r="5"></circle><circle cx="20" cy="50" r="5"></circle><circle cx="44" cy="22" r="5"></circle><path d="M20 19v26"></path><path d="M44 27c0 10-14 8-22 18" stroke-dasharray="3 5"></path><circle cx="44" cy="22" r="2" fill="#D6268A" stroke="none"></circle></sc-if>
+          <sc-if value="{{g.cache}}" hint-placeholder-val="{{ false }}"><ellipse cx="32" cy="16" rx="18" ry="6"></ellipse><path d="M14 16v14c0 3.3 8 6 18 6s18-2.7 18-6V16"></path><path d="M14 30v14c0 3.3 8 6 18 6s18-2.7 18-6V30" stroke-dasharray="3 5"></path></sc-if>
+          <sc-if value="{{g.radar}}" hint-placeholder-val="{{ false }}"><path d="M32 10a22 22 0 1 1-20.6 14.3"></path><path d="M32 20a12 12 0 1 1-11.3 8"></path><path d="M32 32 L48 16"></path><circle cx="32" cy="32" r="2.5" fill="#15121A" stroke="none"></circle><path d="M8 12l8 8M16 12l-8 8" stroke="#D6268A" stroke-width="3.4"></path></sc-if>
+          <sc-if value="{{g.drive}}" hint-placeholder-val="{{ false }}"><rect x="10" y="16" width="34" height="24" rx="5"></rect><circle cx="36" cy="28" r="2" fill="#15121A" stroke="none"></circle><path d="M17 28h10"></path><path d="M44 28h4" ></path><path d="M54 22v12" stroke="#D6268A" stroke-width="3.4"></path><path d="M20 48h14" stroke-dasharray="3 5"></path></sc-if>
+          <sc-if value="{{g.db}}" hint-placeholder-val="{{ false }}"><ellipse cx="32" cy="15" rx="18" ry="6"></ellipse><path d="M14 15v34c0 3.3 8 6 18 6s18-2.7 18-6V15"></path><path d="M14 30c0 3.3 8 6 18 6s18-2.7 18-6"></path><path d="M36 22l-6 9 7 5-6 10" stroke="#D6268A" stroke-width="3.2"></path></sc-if>
+          <sc-if value="{{g.branchq}}" hint-placeholder-val="{{ false }}"><circle cx="16" cy="14" r="5"></circle><circle cx="16" cy="50" r="5"></circle><path d="M16 19v26"></path><path d="M36 22a8 8 0 1 1 11 7.4c-2 .9-3 2.4-3 4.6v2" stroke="#D6268A" stroke-width="3.4"></path><circle cx="44" cy="44" r="2.2" fill="#D6268A" stroke="none"></circle></sc-if>
+          <sc-if value="{{g.doc}}" hint-placeholder-val="{{ false }}"><path d="M16 8h22l12 12v36H16z"></path><path d="M38 8v12h12"></path><path d="M24 30h18M24 38h12" stroke-dasharray="3 5"></path><path d="M38 42l12 12M50 42l-12 12" stroke="#D6268A" stroke-width="3.4"></path></sc-if>
+          <sc-if value="{{g.lock}}" hint-placeholder-val="{{ false }}"><rect x="14" y="28" width="36" height="26" rx="6"></rect><path d="M22 28v-7a10 10 0 0 1 20 0v7"></path><circle cx="32" cy="40" r="3.4" fill="#D6268A" stroke="none"></circle><path d="M32 43v5" stroke="#D6268A" stroke-width="3.4"></path></sc-if>
+          <sc-if value="{{g.shield}}" hint-placeholder-val="{{ false }}"><path d="M32 8l20 7v15c0 13-8.7 21.6-20 26-11.3-4.4-20-13-20-26V15z"></path><path d="M24 31l6 6 11-12" stroke="#D6268A" stroke-width="3.4"></path></sc-if>
+          <sc-if value="{{g.folderlock}}" hint-placeholder-val="{{ false }}"><path d="M8 18a4 4 0 0 1 4-4h12l5 6h21a4 4 0 0 1 4 4v8"></path><path d="M8 18v28a4 4 0 0 0 4 4h20"></path><rect x="38" y="38" width="18" height="15" rx="3" stroke="#D6268A"></rect><path d="M42 38v-3a5 5 0 0 1 10 0v3" stroke="#D6268A"></path></sc-if>
+          <sc-if value="{{g.eye}}" hint-placeholder-val="{{ false }}"><path d="M6 32s9-16 26-16 26 16 26 16-9 16-26 16S6 32 6 32z"></path><circle cx="32" cy="32" r="7"></circle><path d="M12 52L52 12" stroke="#15121A" stroke-width="3.4"></path><path d="M14 54L54 14" stroke="#FFB547" stroke-width="2"></path></sc-if>
+          <sc-if value="{{g.root}}" hint-placeholder-val="{{ false }}"><path d="M32 8l20 7v15c0 13-8.7 21.6-20 26-11.3-4.4-20-13-20-26V15z"></path><path d="M26 24l-2 18M38 24l-2 18M21 30h20M20 37h20" stroke="#5A4772" stroke-width="3"></path></sc-if>
+        </svg>
+      </span>
+      <div style="flex: {{t.innerFlex}}; min-width: 0; display: flex; flex-direction: column; align-items: {{t.align}}; gap: 8px; max-width: {{t.maxW}}">
+        <span style="font-size: {{t.titleSize}}; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2">{{t.title}}</span>
+        <span style="font-size: {{t.textSize}}; color: #4A4450">{{t.text}}</span>
+        <sc-if value="{{t.hasProgress}}" hint-placeholder-val="{{ false }}">
+          <div role="progressbar" aria-label="{{t.progressLabel}}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{t.progressNow}}" style="width: 100%; max-width: 520px; height: 10px; border-radius: 999px; background: #F2EFEA; overflow: hidden; margin-top: 4px"><div style="height: 100%; width: {{t.progressNow}}%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 12px, #9C78FF 12px 24px); background-size: 48px 100%; animation: scull-shimmer 600ms linear infinite"></div></div>
+          <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{t.progressText}}</span>
+        </sc-if>
+        <sc-if value="{{t.hasActions}}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; justify-content: {{t.align}}">
+          <sc-for list="{{t.actions}}" as="a" hint-placeholder-count="2">
+            <sc-if value="{{a.isLink}}" hint-placeholder-val="{{ false }}"><a href="{{a.href}}" style="min-height: 48px; padding: 0 22px; display: inline-flex; align-items: center; border-radius: 12px; text-decoration: none; font-weight: {{a.fw}}; background: {{a.bg}}; color: {{a.fg}}; border: 1px solid {{a.border}}">{{a.label}}</a></sc-if>
+            <sc-if value="{{a.isBtn}}" hint-placeholder-val="{{ true }}"><button type="button" onClick="{{a.on}}" disabled="{{a.disabled}}" style="min-height: 48px; padding: 0 22px; border-radius: 12px; font: inherit; font-weight: {{a.fw}}; cursor: {{a.cursor}}; background: {{a.bg}}; color: {{a.fg}}; border: 1px solid {{a.border}}; display: inline-flex; align-items: center; gap: 8px"><sc-if value="{{a.lock}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></sc-if>{{a.label}}</button></sc-if>
+          </sc-for>
+        </div>
+        </sc-if>
+        <sc-if value="{{t.note}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #615B66; font-family: {{t.noteFont}}">{{t.note}}</span></sc-if>
+      </div>
+    </section>
+
+    <sc-for list="{{ctx}}" as="c" hint-placeholder-count="0">
+      <section class="tile" aria-label="{{c.label}}" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span style="font-size: 13px; font-weight: 500; color: #615B66">{{c.label}}</span><sc-if value="{{c.tag}}" hint-placeholder-val="{{ false }}"><span style="padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: {{c.tagBg}}; color: {{c.tagFg}}">{{c.tag}}</span></sc-if></div>
+        <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1; color: {{c.color}}; text-decoration: {{c.strike}}">{{c.value}}</span>
+        <span style="font-size: 13px; color: #615B66">{{c.sub}}</span>
+      </section>
+    </sc-for>
+
+    <sc-for list="{{panels}}" as="p" hint-placeholder-count="2">
+      <section class="tile" aria-label="{{p.title}}" style="grid-column: span {{p.span}}; border-radius: 22px; background: {{p.bg}}; padding: 24px; display: flex; flex-direction: column; gap: 10px; min-width: 0">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-size: 13px; font-weight: 500; color: {{p.titleColor}}">{{p.title}}</span><span style="font-size: 12px; color: {{p.titleColor}}">{{p.aside}}</span></div>
+        <sc-if value="{{p.isRows}}" hint-placeholder-val="{{ true }}">
+          <div role="list" style="display: flex; flex-direction: column">
+            <sc-for list="{{p.rows}}" as="r" hint-placeholder-count="3">
+              <div role="listitem" style="display: grid; grid-template-columns: {{p.cols}}; gap: 14px; align-items: center; min-height: 52px; padding: 10px 0; border-top: 1px solid #E6E2DC; background: {{r.bg}}">
+                <sc-if value="{{p.hasBadges}}" hint-placeholder-val="{{ true }}"><span><span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; white-space: nowrap; background: {{r.bBg}}; color: {{r.bFg}}; border: 1px solid {{r.bBorder}}">{{r.bText}}</span></span></sc-if>
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-family: {{r.font}}; font-size: 13px; font-weight: 500; overflow-wrap: anywhere">{{r.title}}</span><span style="font-size: 12px; color: #615B66">{{r.sub}}</span></span>
+                <span style="font-family: {{r.rightFont}}; font-size: 13px; text-align: right; color: {{r.rightColor}}; white-space: nowrap">{{r.right}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{p.isRadios}}" hint-placeholder-val="{{ false }}">
+          <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px">
+            <legend style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">{{p.title}}</legend>
+            <sc-for list="{{p.options}}" as="o" hint-placeholder-count="3">
+              <label style="display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 60px; padding: 10px 14px; border-radius: 16px; border: 1px solid {{o.border}}; background: {{o.bg}}; cursor: {{o.cursor}}">
+                <input id="{{o.id}}" type="radio" name="backup" checked="{{o.checked}}" disabled="{{o.disabled}}" onChange="{{o.pick}}" style="width: 20px; height: 20px; margin: 0; accent-color: #15121A">
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-weight: 600">{{o.label}}</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66; overflow-wrap: anywhere">{{o.sub}}</span></span>
+                <span style="font-size: 12px; font-weight: 600; color: {{o.tagFg}}">{{o.tag}}</span>
+              </label>
+            </sc-for>
+          </fieldset>
+        </sc-if>
+        <sc-if value="{{p.isSteps}}" hint-placeholder-val="{{ false }}">
+          <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
+            <sc-for list="{{p.steps}}" as="st" hint-placeholder-count="3">
+              <li style="display: flex; gap: 12px; align-items: flex-start; font-size: 13px"><span aria-hidden="true" style="flex: none; width: 24px; height: 24px; border-radius: 8px; background: #F3ECFF; color: #6B3FD9; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500">{{st.n}}</span><span style="padding-top: 2px">{{st.text}}</span></li>
+            </sc-for>
+          </ol>
+        </sc-if>
+        <sc-if value="{{p.isTerm}}" hint-placeholder-val="{{ false }}">
+          <div style="border-radius: 14px; background: #15121A; color: #E8E3EE; padding: 14px 16px; font-family: 'DM Mono', monospace; font-size: 12px; line-height: 1.7; display: flex; flex-direction: column; overflow-x: auto">
+            <sc-for list="{{p.lines}}" as="l" hint-placeholder-count="3"><span style="white-space: pre-wrap; color: {{l.c}}">{{l.t}}</span></sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{p.isText}}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{p.paras}}" as="tx" hint-placeholder-count="2"><p style="margin: 0; font-size: 13px; color: {{tx.c}}">{{tx.t}}</p></sc-for>
+        </sc-if>
+        <sc-if value="{{p.foot}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #615B66; font-family: {{p.footFont}}">{{p.foot}}</span></sc-if>
+      </section>
+    </sc-for>
+  </div>
+  <nav aria-label="Design states" style="padding: 4px 8px 8px; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870; text-align: center; line-height: 1.2">design states · <sc-for list="{{stateLinks}}" as="l" hint-placeholder-count="14"><a href="{{l.href}}" aria-current="{{l.current}}" style="display: inline-block; padding: 12px 6px; color: {{l.color}}">{{l.label}}</a></sc-for></nav>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = this.preset(this.hashState());
+  }
+  hashState() {
+    const m = /state=([a-z0-9-]+)/.exec((typeof location !== 'undefined' && location.hash) || '');
+    return m ? m[1] : 'first-run';
+  }
+  preset(name) { return { name: name, phase: 'idle', p: 0, pick: 'b1' }; }
+  componentDidMount() {
+    window.addEventListener('hashchange', () => { this.stop(); this.setState(this.preset(this.hashState())); });
+  }
+  componentWillUnmount() { this.stop(); }
+  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } if (this.doneT) { clearTimeout(this.doneT); this.doneT = null; } }
+  // Simulated progress: steps of ~0.1 every 260 ms, then `done` phase.
+  run(from, phase, done) {
+    this.stop();
+    this.setState({ phase: phase, p: from });
+    this.timer = setInterval(() => {
+      const p = Math.min(1, Math.round((this.state.p + 0.1) * 100) / 100);
+      this.setState({ p: p });
+      if (p >= 1) { this.stop(); this.doneT = setTimeout(() => this.setState({ phase: done }), 300); }
+    }, 260);
+  }
+  renderVals() {
+    const s = this.state;
+    const MONO = "'DM Mono', monospace";
+    const SANS = 'inherit';
+    const S0 = { bText: 'S0 Regenerable', bBg: '#7C4DFF', bFg: '#FFFFFF', bBorder: '#7C4DFF' };
+    const S1 = { bText: 'S1 Costly', bBg: '#DCCBFF', bFg: '#15121A', bBorder: '#DCCBFF' };
+    const S2 = { bText: 'S2 Uncertain', bBg: 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)', bFg: '#15121A', bBorder: '#FFB547' };
+    const S3 = { bText: 'S3 Protected', bBg: 'repeating-linear-gradient(135deg, #3B2A4F 0 3px, #5A4772 3px 6px)', bFg: '#FFFFFF', bBorder: '#3B2A4F' };
+    const pill = (text, kind) => ({
+      ok: { bText: '✓ ' + text, bBg: '#F3ECFF', bFg: '#6B3FD9', bBorder: '#F3ECFF' },
+      no: { bText: '✕ ' + text, bBg: '#FFFFFF', bFg: '#B81E74', bBorder: '#F3C9DE' },
+      warn: { bText: '! ' + text, bBg: 'repeating-linear-gradient(135deg, #FFF3DD 0 6px, #FFFAF0 6px 12px)', bFg: '#15121A', bBorder: '#FFB547' },
+      off: { bText: text, bBg: '#F2EFEA', bFg: '#4A4450', bBorder: '#F2EFEA' }
+    }[kind]);
+    const isPath = (x) => /^(~|\/|[A-Z]:\\)/.test(x) || x.indexOf('/') >= 0;
+    const row = (title, sub, right, extra) => Object.assign({ title: title, sub: sub || '', right: right || '', font: isPath(title) ? MONO : SANS, rightFont: MONO, rightColor: '#15121A', bg: 'transparent', bText: '', bBg: 'transparent', bFg: '#15121A', bBorder: 'transparent' }, extra || {});
+    const rowsPanel = (span, title, rows, opts) => Object.assign({ span: span, title: title, aside: '', isRows: true, rows: rows, hasBadges: rows.some((r) => r.bText), cols: rows.some((r) => r.bText) ? '132px minmax(0, 1fr) auto' : 'minmax(0, 1fr) auto', bg: '#FFFFFF', titleColor: '#615B66', foot: '', footFont: SANS }, opts || {});
+    const stepsPanel = (span, title, steps, opts) => Object.assign({ span: span, title: title, aside: '', isSteps: true, steps: steps.map((t, i) => ({ n: i + 1, text: t })), bg: '#FFFFFF', titleColor: '#615B66', foot: '', footFont: SANS }, opts || {});
+    const termPanel = (span, title, lines, opts) => Object.assign({ span: span, title: title, aside: '', isTerm: true, lines: lines.map((l) => (typeof l === 'string' ? { t: l, c: '#E8E3EE' } : l)), bg: '#FFFFFF', titleColor: '#615B66', foot: '', footFont: SANS }, opts || {});
+    const textPanel = (span, title, paras, opts) => Object.assign({ span: span, title: title, aside: '', isText: true, paras: paras.map((t) => ({ t: t, c: '#15121A' })), bg: '#FFFFFF', titleColor: '#615B66', foot: '', footFont: SANS }, opts || {});
+    const dim = '#A39DA8', err = '#FF8CC6', vio = '#B79CFF';
+
+    const noop = () => {};
+    const btn = (label, kind, extra) => {
+      const k = {
+        primary: { bg: '#15121A', fg: '#FFFFFF', border: '#15121A', fw: 600 },
+        secondary: { bg: '#FFFFFF', fg: '#15121A', border: '#D8D3CB', fw: 500 },
+        ghost: { bg: 'transparent', fg: '#15121A', border: '#4A4450', fw: 500 },
+        locked: { bg: '#F2EFEA', fg: '#615B66', border: '#F2EFEA', fw: 600 }
+      }[kind];
+      const o = Object.assign({ label: label, isLink: false, isBtn: true, href: '', on: noop, disabled: kind === 'locked', lock: kind === 'locked', title: kind === 'locked' ? 'Cleaning is off while scull runs elevated' : '', cursor: kind === 'locked' ? 'not-allowed' : 'pointer' }, k, extra || {});
+      if (o.href) { o.isLink = true; o.isBtn = false; }
+      return o;
+    };
+    const rescanBtn = btn('Rescan', 'secondary');
+
+    const COUNTS = { projects: '41', worktrees: '63', caches: '14.9 GB' };
+    const DRV = { ssdPct: '61%', ssdBar: '61%', ssdNote: '390 GB free · 48.2 GB reclaimable', ssdColor: '#4A4450', hdNote: 'full in ~9 days' };
+    const TONES = {
+      plain: { bg: '#FFFFFF', border: '#FFFFFF', band: '', glyphBg: '#F2EFEA' },
+      attention: { bg: '#FCEEF5', border: '#F3C9DE', band: '', glyphBg: '#FFFFFF' },
+      uncertain: { bg: '#FFFFFF', border: '#E6E2DC', band: 'repeating-linear-gradient(135deg, #FFB547 0 6px, #FFD08A 6px 12px)', glyphBg: '#FFF3DD' },
+      protected: { bg: '#FFFFFF', border: '#E6E2DC', band: 'repeating-linear-gradient(135deg, #3B2A4F 0 4px, #5A4772 4px 8px)', glyphBg: '#F2EFEA' },
+      success: { bg: '#FFFFFF', border: '#DCCBFF', band: '', glyphBg: '#F3ECFF' },
+      error: { bg: '#FFFFFF', border: '#F3C9DE', band: '', glyphBg: '#FCEEF5' }
+    };
+
+    const running = s.phase === 'scanning' || s.phase === 'restoring' || s.phase === 'rescanning';
+    const pct = Math.round(s.p * 100);
+    let v;
+    switch (s.name) {
+      case 'no-candidates': v = {
+        nav: 'CleanupReview',
+        h: { title: 'Cleanup Review', sub: 'scanned 4 min ago · 3 folders · 41 projects · nothing to clean', actions: [rescanBtn] },
+        t: { variant: 'hero', tone: 'plain', glyph: 'check', title: 'Nothing to clean right now', text: 'Everything scull found is in use, changed recently, protected, or already clean. Nothing is regenerable and idle, so there is no plan to review.', actions: [btn('Rescan', 'primary'), btn('Show 6 opt-in items', 'secondary', { href: 'CleanupReview.dc.html' })], note: 'Costly and uncertain items are never preselected. You can still pick them yourself.' },
+        panels: [
+          rowsPanel(7, 'Why nothing qualified', [
+            row('12 build folders changed in the last 24 h', 'Held one tier more protective until they go idle', '31.9 GB', S1),
+            row('3 folders in use', 'cargo build (pid 48213), next dev (pid 51877), rust-analyzer', '14.2 GB', S3),
+            row('Git-tracked or protected', 'Tracked files, ~/.ssh, cloud-sync roots and your exclusions', '55.3 GB', S3),
+            row('6 costly or uncertain items', 'Unity Library, Hugging Face models, .venv without a lockfile', '19.8 GB', S2)
+          ], { aside: 'from the scan 4 min ago' }),
+          textPanel(5, 'Keep it this way', ['scull checks again every day at 10:00 and alerts you before Macintosh HD is 95% full.', 'Agents can ask for a plan through MCP. You still review and approve every one.'], { foot: 'Change the schedule in Settings › Alerts.' })
+        ]
+      }; break;
+      case 'no-worktrees': v = {
+        nav: 'Worktrees', counts: { worktrees: '0' },
+        h: { title: 'Git Worktrees', sub: 'scanned 4 min ago · 41 repositories · 0 linked worktrees', actions: [rescanBtn] },
+        t: { variant: 'hero', tone: 'plain', glyph: 'branch', title: 'No extra worktrees', text: 'None of your 41 repositories has a linked worktree, so there is nothing to tidy here. When you or an agent runs git worktree add, each one shows up with its checks and a verdict.', actions: [btn('Set up agent worktrees', 'secondary', { href: 'Settings.dc.html' })], note: 'Main checkouts are never listed here and never removed.' },
+        panels: [
+          stepsPanel(6, 'What scull checks on every worktree', ['Uncommitted or untracked files (any → protected)', 'Commits not pushed to any remote', 'Branch merged into the default branch', 'Locked or in use by a running process', 'Prunable: folder already gone, metadata left']),
+          textPanel(6, 'Agents create worktrees a lot', ['Coding agents often make one worktree per task and leave them behind. With scull agent install, agents register each worktree with a time-to-live so scull can suggest removing it once it\'s merged and idle.', 'Registering never deletes anything; you still review every removal.'])
+        ]
+      }; break;
+      case 'no-caches': v = {
+        nav: 'Caches', counts: { caches: '158 MB' },
+        h: { title: 'Caches', sub: 'checked 4 min ago · 8 tools looked for · 158 MB in total', actions: [rescanBtn] },
+        t: { variant: 'hero', tone: 'plain', glyph: 'cache', title: 'No package caches worth cleaning', text: 'The caches scull knows about are empty, small or not installed. Quick Clean lights up when one grows past 500 MB.', actions: [btn('Check again', 'secondary')], note: 'Caches are cleaned with each tool\'s own command, never by deleting folders directly.' },
+        panels: [
+          rowsPanel(8, 'What was checked', [
+            row('npm', 'Installed · ~/.npm/_cacache', '112 MB', pill('below 500 MB', 'off')),
+            row('Cargo', 'Installed · ~/.cargo/registry', '46 MB', pill('below 500 MB', 'off')),
+            row('pnpm', 'Not installed', '—', pill('not found', 'off')),
+            row('Yarn · Bun · pip · uv', 'Not installed', '—', pill('not found', 'off')),
+            row('Docker', 'Docker Desktop isn\'t running, so images and build cache weren\'t checked', 'unknown', pill('not checked', 'warn'))
+          ], { cols: '132px minmax(0, 1fr) auto' }),
+          textPanel(4, 'Unknown is not zero', ['Docker\'s images live inside its own disk image. scull asks the docker CLI for sizes, so they show up only while Docker is running.'], { foot: 'Start Docker Desktop, then Check again.' })
+        ]
+      }; break;
+      case 'scan-failed': {
+        const done = s.phase === 'done';
+        v = {
+          nav: 'Main', drv: done ? {} : { hdNote: 'partial scan' },
+          h: { title: 'Overview', sub: done ? 'scanned just now · 3 folders · 186.0 GB of development data' : 'last scan stopped at 38% · 10:41 · partial results shown', actions: [] },
+          t: done
+            ? { variant: 'hero', tone: 'success', glyph: 'check', title: 'Scan finished', text: '186.0 GB of development data across 41 projects. 38.6 GB is safe to reclaim now.', actions: [btn('Back to overview', 'primary', { href: 'Main.dc.html' }), btn('Run demo again', 'secondary', { on: () => { this.stop(); this.setState(this.preset('scan-failed')); } })], anim: 'scull-rise 320ms ease-out' }
+            : running
+              ? { variant: 'hero', tone: 'plain', glyph: 'radar', title: 'Scanning again…', text: 'Re-reading ~/code from where it stopped. Folders that already finished are kept.', progress: true, progressText: pct + '% · ~/code/kart-game', actions: [] }
+              : { variant: 'hero', tone: 'error', glyph: 'radar', title: 'The scan stopped at 38%', text: 'scull couldn\'t finish reading ~/code: a folder became unreadable partway through (input/output error). What was read is kept and labelled partial. Nothing was changed.', actions: [btn('Retry scan', 'primary', { on: () => this.run(0.38, 'scanning', 'done') }), btn('Skip this folder next time', 'secondary'), btn('Copy error details', 'ghost')], note: 'Partial numbers are never presented as complete.' },
+          ctx: done ? [] : [
+            { label: 'Reclaimable', value: '21.4 GB', sub: '2 of 3 folders finished', tag: 'partial', tagBg: 'repeating-linear-gradient(135deg, #FFF3DD 0 6px, #FFFAF0 6px 12px)', tagFg: '#15121A', color: '#7C4DFF' },
+            { label: 'Development data', value: '118.9 GB', sub: 'so far · ~/code incomplete', tag: 'partial', tagBg: 'repeating-linear-gradient(135deg, #FFF3DD 0 6px, #FFFAF0 6px 12px)', tagFg: '#15121A', color: '#15121A' },
+            { label: 'Projects', value: '27', sub: 'found before it stopped', tag: '', color: '#15121A' },
+            { label: 'Changed', value: '0', sub: 'scans never change anything', tag: '', color: '#15121A' }
+          ],
+          panels: done ? [] : [
+            rowsPanel(6, 'Folders in this scan', [
+              row('~/Developer', '9 projects · 31.2 GB', 'done', pill('complete', 'ok')),
+              row('~/code/shop-api', 'Scanned as its own root · 4.1 GB', 'done', pill('complete', 'ok')),
+              row('~/code', 'Stopped in ~/code/kart-game/Library after 61,204 entries', '38%', pill('partial', 'warn'))
+            ]),
+            termPanel(6, 'Error details', [
+              { t: 'error[io] read_dir failed', c: err },
+              '  ~/code/kart-game/Library/ShaderCache',
+              '  Input/output error (os error 5)',
+              { t: 'scan 2f81 · 61,204 entries · 1 m 12 s', c: dim },
+              { t: 'log ~/Library/Logs/scull/scan-2f81.log', c: dim }
+            ], { foot: 'Often a failing disk or a flaky network mount. Check Disk Utility if it happens again.' })
+          ]
+        };
+      } break;
+      case 'drive-disconnected': v = {
+        nav: 'Main', drv: { ssdPct: '—', ssdBar: '0%', ssdNote: 'disconnected · last seen Oct 29', ssdColor: '#B81E74' },
+        h: { title: 'Overview', sub: 'Macintosh HD scanned 4 min ago · Dev SSD not connected since Oct 29, 14:02', actions: [rescanBtn] },
+        t: { variant: 'banner', tone: 'attention', glyph: 'drive', title: 'Dev SSD isn\'t connected', text: 'Its numbers below are from the last scan on Oct 29 and may be out of date. Nothing on it can be cleaned or restored until it\'s back. scull picks up where it left off when you plug it in.', actions: [btn('OK', 'primary'), btn('Forget this drive', 'secondary')], note: '' },
+        ctx: [
+          { label: 'Dev SSD · used', value: '61%', sub: 'as of Oct 29, 14:02', tag: 'stale', tagBg: '#F2EFEA', tagFg: '#4A4450', color: '#615B66' },
+          { label: 'Dev SSD · reclaimable', value: '48.2 GB', sub: 'can\'t be cleaned while disconnected', tag: 'stale', tagBg: '#F2EFEA', tagFg: '#4A4450', color: '#615B66' },
+          { label: 'Macintosh HD · reclaimable', value: '38.6 GB', sub: 'current · scanned 4 min ago', tag: '', color: '#7C4DFF' },
+          { label: 'Macintosh HD · free', value: '41.2 GB', sub: 'full in ~9 days', tag: '', color: '#15121A' }
+        ],
+        panels: [
+          rowsPanel(7, 'Waiting for Dev SSD', [
+            row('Quarantine on Dev SSD', '2 items · restorable until Nov 4 · each drive keeps its own quarantine', '3.1 GB', pill('paused', 'off')),
+            row('Saved plan 5b07·a913', '4 items on Dev SSD · re-checked from scratch when the drive returns', '22.0 GB', pill('paused', 'off')),
+            row('Forecast for Dev SSD', 'Needs fresh numbers · hidden until the next scan', '—', pill('paused', 'off'))
+          ]),
+          textPanel(5, 'When it comes back', ['scull rescans Dev SSD automatically when it\'s mounted again, then refreshes these numbers.', 'Backup drives (Time Machine) are never scanned, connected or not.'])
+        ]
+      }; break;
+      case 'db-corrupt': {
+        const restored = s.phase === 'done';
+        const opts = [
+          { id: 'b1', label: 'Oct 30, 08:15 · before update to schema v3', sub: 'scull.db.backup-20261030T081500Z-v3 · 2.1 MB', tag: 'Newest', tagFg: '#6B3FD9' },
+          { id: 'b2', label: 'Oct 12, 09:02 · before update to schema v2', sub: 'scull.db.backup-20261012T090200Z-v2 · 1.8 MB', tag: '', tagFg: '#615B66' }
+        ].map((o) => Object.assign(o, { checked: s.pick === o.id, disabled: running || restored, pick: () => this.setState({ pick: o.id }), border: s.pick === o.id ? '#15121A' : '#E6E2DC', bg: s.pick === o.id ? '#FAF9F7' : '#FFFFFF', cursor: running || restored ? 'default' : 'pointer' }));
+        const when = s.pick === 'b1' ? 'Oct 30, 08:15' : 'Oct 12, 09:02';
+        v = {
+          nav: 'History',
+          h: { title: 'History', sub: restored ? 'database restored from the ' + when + ' backup · history up to then' : 'database unreadable · ~/Library/Application Support/scull/scull.db · file left untouched', actions: [] },
+          t: restored
+            ? { variant: 'hero', tone: 'success', glyph: 'check', title: 'Restored the ' + when + ' backup', text: 'History, insights, quarantine and approvals work again, with everything up to ' + when + '. The damaged file was kept next to it as scull.db.damaged-20261031T104210Z; nothing was deleted.', actions: [btn('Open History', 'primary', { href: 'History.dc.html' }), btn('Run demo again', 'secondary', { on: () => { this.stop(); this.setState(this.preset('db-corrupt')); } })], anim: 'scull-rise 320ms ease-out' }
+            : running
+              ? { variant: 'hero', tone: 'plain', glyph: 'db', title: 'Restoring the ' + when + ' backup…', text: 'Setting the damaged file aside first, then copying the backup into place.', progress: true, progressText: pct + '% · checking the backup\'s integrity', actions: [] }
+              : { variant: 'hero', tone: 'error', glyph: 'db', title: 'scull\'s database is damaged', text: 'scull couldn\'t read its history file (database disk image is malformed). The file hasn\'t been touched. Scanning and the storage overview still work. History, insights, quarantine restore and agent approvals need the database.', actions: [btn('Restore selected backup', 'primary', { on: () => this.run(0, 'restoring', 'done') }), btn('Continue without history', 'secondary'), btn('Start a new database', 'ghost')], note: 'Cleanup stays off until the database is back: every cleanup must be logged.' },
+          panels: restored ? [] : [
+            { span: 7, title: 'Backups found next to the database', aside: 'newest first', isRadios: true, options: opts, bg: '#FFFFFF', titleColor: '#615B66', foot: 'Anything after the backup\'s date won\'t be in History: here, 1 cleanup on Oct 30 (12.4 GB). Its audit mirror stays in the log folder.', footFont: SANS },
+            termPanel(5, 'Details', [
+              { t: 'error[io] database disk image is malformed', c: err },
+              '  ~/Library/Application Support/scull/scull.db',
+              { t: 'integrity_check: 3 pages unreadable', c: dim },
+              { t: 'opened read-only · not modified', c: vio }
+            ], { foot: 'Start a new database keeps the damaged file too. It just begins History again from today.' })
+          ]
+        };
+      } break;
+      case 'git-missing': v = {
+        nav: 'Worktrees', counts: { worktrees: '—' },
+        h: { title: 'Git Worktrees', sub: 'git not found · worktree checks off · repositories treated as protected', actions: [btn('Check again', 'secondary')] },
+        t: { variant: 'hero', tone: 'error', glyph: 'branchq', title: 'scull can\'t find Git', text: 'scull only uses a git it finds in trusted places, never one inside your projects. Without Git it can\'t tell which files are tracked, so everything inside a repository is treated as protected and worktree checks are off.', actions: [btn('Install Command Line Tools', 'primary'), btn('Check again', 'secondary')], note: 'xcode-select --install · or: brew install git', noteFont: MONO },
+        panels: [
+          rowsPanel(6, 'Where scull looked', [
+            row('/usr/bin/git', 'Apple stub: Command Line Tools aren\'t installed', 'stub only', pill('unusable', 'no')),
+            row('/opt/homebrew/bin/git', 'Homebrew', 'not found', pill('missing', 'off')),
+            row('/usr/local/bin/git', 'Homebrew (Intel) or manual install', 'not found', pill('missing', 'off')),
+            row('node_modules/.bin, project folders, current folder', 'Never used, even if a git is there (SAFE-12)', 'ignored', pill('by design', 'off'))
+          ]),
+          rowsPanel(6, 'What changes until Git is back', [
+            row('41 repositories', 'Every folder inside a repo held at Protected', '55.3 GB', S3),
+            row('Worktree cleanup', 'Needs git worktree list and status', 'off', pill('off', 'off')),
+            row('Caches and folders outside repos', 'Work as usual', 'on', pill('normal', 'ok'))
+          ], { cols: '132px minmax(0, 1fr) auto' })
+        ]
+      }; break;
+      case 'plan-rejected': v = {
+        nav: 'CleanupReview',
+        h: { title: 'Cleanup Review', sub: 'plan 7f3a·c21e · from ~/Desktop/plan.json · rejected · nothing changed', actions: [] },
+        t: { variant: 'hero', tone: 'error', glyph: 'doc', title: 'This plan can\'t be used', text: 'plan 7f3a·c21e was edited after it was made: its contents no longer match its fingerprint. scull only runs plans exactly as they were made, and a plan can only ever narrow what gets cleaned. Nothing was changed.', actions: [btn('Make a new plan', 'primary', { href: 'CleanupReview.dc.html' }), btn('Show the plan file', 'secondary')], note: 'Plans are checked again right before anything runs, so you won\'t see this halfway through a cleanup.' },
+        panels: [
+          rowsPanel(7, 'Why a plan gets rejected', [
+            row('Edited after it was made', 'Fingerprint mismatch: 1 path added (~/Documents/old)', 'this plan', Object.assign(pill('plan_tampered', 'no'), { bg: '#FCEEF5', rightColor: '#B81E74' })),
+            row('Too old', 'CLI plans expire after 24 h, agent plans after 15 min', '', pill('plan_expired', 'off')),
+            row('From another machine or user', 'Plans are bound to where and by whom they were made', '', pill('plan_foreign', 'off')),
+            row('Overtaken by another cleanup', 'Another operation touched the same folders', '', pill('plan_invalidated', 'off'))
+          ], { cols: '170px minmax(0, 1fr) auto' }),
+          termPanel(5, 'Same check in the CLI', [
+            { t: '$ scull clean --plan ~/Desktop/plan.json', c: dim },
+            { t: 'error[plan_tampered] plan 7f3a·c21e does not', c: err },
+            '  match its fingerprint (1 path added).',
+            '  Nothing changed. Run scull plan to make',
+            '  a new one.'
+          ])
+        ]
+      }; break;
+      case 'macos-full-disk-access': {
+        const granted = s.phase === 'done';
+        v = {
+          nav: 'Main', drv: granted ? {} : { hdNote: '4 areas not scanned' },
+          h: { title: 'Overview', sub: granted ? 'scanned just now · 4 areas added · 186.0 GB of development data' : 'scanned 4 min ago · 4 areas not readable · results partial', actions: [rescanBtn] },
+          t: granted
+            ? { variant: 'banner', tone: 'success', glyph: 'check', title: 'Full Disk Access is on · 4 areas scanned', text: 'Found 23.4 GB more, 6.1 GB of it safe to reclaim. The overview is complete again.', actions: [btn('Run demo again', 'secondary', { on: () => { this.stop(); this.setState(this.preset('macos-full-disk-access')); } })], anim: 'scull-rise 320ms ease-out' }
+            : running
+              ? { variant: 'banner', tone: 'attention', glyph: 'lock', title: 'Scanning the 4 areas…', text: 'Only the areas that were blocked are read again.', progress: true, progressText: pct + '% · ~/Library/Containers/com.docker.docker', actions: [] }
+              : { variant: 'banner', tone: 'attention', glyph: 'lock', title: 'macOS blocked 4 areas', text: 'scull doesn\'t have Full Disk Access, so the scan carried on without them. Their sizes are unknown, not zero, and nothing inside them will be offered for cleaning.', actions: [btn('Open Full Disk Access settings', 'primary'), btn('I turned it on · rescan', 'secondary', { on: () => this.run(0, 'rescanning', 'done') }), btn('Keep going without it', 'ghost')], note: '' },
+          ctx: granted ? [] : [
+            { label: 'Reclaimable', value: '38.6 GB', sub: 'in the areas scull could read', tag: 'partial', tagBg: 'repeating-linear-gradient(135deg, #FFF3DD 0 6px, #FFFAF0 6px 12px)', tagFg: '#15121A', color: '#7C4DFF' },
+            { label: 'Not readable', value: '4 areas', sub: 'size unknown', tag: '', color: '#15121A' },
+            { label: 'Development data', value: '162.6 GB', sub: 'scanned so far', tag: 'partial', tagBg: 'repeating-linear-gradient(135deg, #FFF3DD 0 6px, #FFFAF0 6px 12px)', tagFg: '#15121A', color: '#15121A' },
+            { label: 'Projects', value: '38', sub: '3 may be inside ~/Documents', tag: '', color: '#15121A' }
+          ],
+          panels: granted ? [] : [
+            rowsPanel(8, 'Areas scull couldn\'t read', [
+              row('~/Documents', 'Documents folder · 3 projects may live here', 'size unknown', pill('blocked', 'no')),
+              row('~/Desktop', 'Desktop folder', 'size unknown', pill('blocked', 'no')),
+              row('~/Library/Containers/com.docker.docker', 'Docker Desktop\'s disk image', 'size unknown', pill('blocked', 'no')),
+              row('/Volumes/Dev SSD', 'Removable volume · needs its own permission', 'size unknown', pill('blocked', 'no'))
+            ], { cols: '132px minmax(0, 1fr) auto' }),
+            stepsPanel(4, 'How to allow it', ['Open System Settings › Privacy & Security › Full Disk Access.', 'Turn on scull. macOS may ask you to quit and reopen it.', 'Come back: scull rescans only these 4 areas.'], { foot: 'scull reads names and sizes, never file contents. Nothing is uploaded.' })
+          ]
+        };
+      } break;
+      case 'windows-protected-folders': v = {
+        nav: 'Main', drv: { hdNote: '3 items left out' },
+        h: { title: 'Overview', sub: 'scanned 4 min ago · C:\\Users\\joff · 2 folders denied, 3 items read-only', actions: [rescanBtn] },
+        t: { variant: 'banner', tone: 'attention', glyph: 'shield', title: 'Windows is protecting some folders', text: 'Controlled folder access is on. scull can measure Documents and Desktop, but Windows won\'t let it change anything there, so 3 items in them are left out of plans. 2 other folders refused access entirely.', actions: [btn('Open Windows Security', 'primary'), btn('Keep them out of plans', 'secondary')], note: 'scull never asks to run as administrator, and never turns these protections off for you.' },
+        panels: [
+          rowsPanel(12, 'Folders Windows protected', [
+            row('C:\\Users\\joff\\Documents\\projects\\kart-game\\Library', 'Controlled folder access · scull can read it, not change it', '8.2 GB', pill('read-only', 'warn')),
+            row('C:\\Users\\joff\\Desktop\\old-site\\node_modules', 'Controlled folder access · left out of plans', '1.1 GB', pill('read-only', 'warn')),
+            row('C:\\Users\\joff\\Documents\\ml-lab\\.venv', 'Controlled folder access · left out of plans', '9.8 GB', pill('read-only', 'warn')),
+            row('C:\\Users\\Public\\dev-cache', 'Access denied · owned by another account', 'size unknown', pill('denied', 'no')),
+            row('C:\\Program Files\\WindowsApps', 'Access denied · system folder, never cleaned anyway', 'size unknown', pill('denied', 'no'))
+          ], { cols: '132px minmax(0, 1fr) auto', foot: 'To include the read-only items, allow scull under Windows Security › Ransomware protection › Allow an app through Controlled folder access.' })
+        ]
+      }; break;
+      case 'linux-unreadable': v = {
+        nav: 'Main', drv: { hdNote: '3 folders skipped' },
+        h: { title: 'Overview', sub: 'scanned 4 min ago · /home/joff · 3 folders unreadable', actions: [rescanBtn] },
+        t: { variant: 'banner', tone: 'attention', glyph: 'folderlock', title: '3 folders couldn\'t be read', text: 'They belong to another user (often root, after a build run with sudo) or have no read permission. scull runs as you and never uses sudo, so it skipped them. Their sizes are unknown and nothing in them will be cleaned.', actions: [btn('Copy the list', 'secondary'), btn('Rescan', 'ghost')], note: '' },
+        panels: [
+          rowsPanel(8, 'Unreadable folders', [
+            row('/home/joff/code/legacy/target', 'Owned by root · drwx------ · probably from sudo cargo build', 'size unknown', pill('no access', 'no')),
+            row('/home/joff/.cache/docker-buildx', 'Owned by root · drwx------', 'size unknown', pill('no access', 'no')),
+            row('/var/lib/docker', 'System folder · Docker is measured through the docker CLI instead', 'via CLI', pill('by design', 'off'))
+          ], { cols: '132px minmax(0, 1fr) auto' }),
+          textPanel(4, 'To include them', ['Give the folders back to your user yourself, for example:', 'scull won\'t change ownership or ask for root to do it for you.'], { foot: 'sudo chown -R joff /home/joff/code/legacy/target', footFont: MONO })
+        ]
+      }; break;
+      case 'signals-unavailable': v = {
+        nav: 'CleanupReview',
+        h: { title: 'Cleanup Review', sub: 'plan 3d9e·04a1 · created 1 min ago · expires in 24 h · 1 activity signal unavailable', actions: [btn('Export plan', 'secondary')] },
+        t: { variant: 'banner', tone: 'uncertain', glyph: 'eye', title: 'scull can\'t tell which folders are in use', text: 'Open-file and process checks aren\'t available here (/proc is restricted inside this Flatpak sandbox). Missing evidence never counts as idle, so every item is held one tier more protective: S0 becomes S1 and is quarantined instead of deleted, and nothing is preselected.', actions: [btn('Why this happens', 'secondary'), btn('Review items', 'ghost')], note: 'Install the tarball or distro package to get full checks. Flatpak\'s sandbox hides other processes from scull.' },
+        panels: [
+          rowsPanel(6, 'Activity signals on this system', [
+            row('Last modified time', 'Newest file in each folder, sampled', '', pill('available', 'ok')),
+            row('Open files', '/proc/<pid>/fd not readable in the sandbox', '', Object.assign(pill('unavailable', 'warn'), { rightColor: '#15121A' })),
+            row('Process working folders', '/proc/<pid>/cwd not readable in the sandbox', '', Object.assign(pill('unavailable', 'warn'), { rightColor: '#15121A' })),
+            row('Tool lock files', 'Cargo, npm, Gradle and other lock files', '', pill('available', 'ok'))
+          ], { cols: '132px minmax(0, 1fr) auto' }),
+          rowsPanel(6, 'What that does to this plan', [
+            row('~/code/rust-svc/target', 'Was S0 · delete · now quarantine, 7-day undo', '15.2 GB', S1),
+            row('~/code/shop-api/node_modules', 'Was S0 · delete · now quarantine, 7-day undo', '12.4 GB', S1),
+            row('~/code/ml-lab/.venv', 'Already uncertain · quarantine · not preselected', '9.8 GB', S2),
+            row('~/work/payments/target', 'Lock file held by cargo · skipped', '6.1 GB', S3)
+          ], { cols: '132px minmax(0, 1fr) auto' })
+        ]
+      }; break;
+      case 'elevated-refusal': v = {
+        nav: 'Main',
+        h: { title: 'Overview', sub: 'scanned 4 min ago · running as root · read-only', chip: 'Read-only', chipBg: '#15121A', chipFg: '#FFFFFF', actions: [btn('Reclaim 38.6 GB', 'locked')] },
+        t: { variant: 'banner', tone: 'protected', glyph: 'root', title: 'scull is running as root, so cleaning is off', text: 'Running elevated widens what a mistake could touch: system folders and other people\'s files. Scans, the overview and reports still work. Quit and open scull as your normal user to clean.', actions: [btn('Quit scull', 'primary'), btn('Continue read-only', 'secondary')], note: 'The desktop app has no override and never asks for elevation. Servers can use the CLI with scull clean --allow-root.' },
+        panels: [
+          rowsPanel(6, 'Still works', [
+            row('Scan and overview', 'Sizes, tiers and forecasts', '', pill('on', 'ok')),
+            row('Insights and History', 'Read-only views', '', pill('on', 'ok')),
+            row('Export plan', 'Plans made now can be run later as your user', '', pill('on', 'ok'))
+          ], { cols: '132px minmax(0, 1fr) auto' }),
+          rowsPanel(6, 'Turned off while elevated', [
+            row('Delete and quarantine', 'Cleanup Review, Quick Clean, Projects', '', pill('off', 'no')),
+            row('Worktree removal and restore', 'Anything that writes to disk', '', pill('off', 'no')),
+            row('Agent approvals', 'Approving would let an agent run with root rights', '', pill('off', 'no'))
+          ], { cols: '132px minmax(0, 1fr) auto' })
+        ]
+      }; break;
+      default: v = {
+        nav: 'Main', counts: { projects: '', worktrees: '', caches: '' }, drv: { ssdNote: '390 GB free · not scanned yet', hdNote: 'scan to see a forecast' },
+        h: { title: 'Overview', sub: 'no scan yet · scull reads names and sizes, never file contents', actions: [] },
+        t: { variant: 'hero', tone: 'plain', glyph: 'logo', title: 'Let\'s see what\'s taking up space', text: 'scull hasn\'t scanned anything yet. The first scan reads folder names, sizes and project markers in the places you choose. It changes nothing, and nothing leaves this Mac.', actions: [btn('Start first scan', 'primary', { href: 'Onboarding.dc.html' }), btn('Choose folders first', 'secondary', { href: 'Onboarding.dc.html' })], note: 'About 2 minutes for 400 GB. You can keep working while it runs.' },
+        panels: [
+          rowsPanel(5, 'Found on this Mac', [
+            row('~/code', 'Looks like projects: Cargo.toml, package.json', 'suggested', pill('folder', 'off')),
+            row('~/Developer', 'Xcode projects', 'suggested', pill('folder', 'off')),
+            row('npm · pnpm · Cargo · Docker', 'Package caches and tools', 'detected', pill('tools', 'off'))
+          ], { cols: '96px minmax(0, 1fr) auto' }),
+          stepsPanel(4, 'What happens next', ['scull scans the folders you pick.', 'You see what\'s taking space and what\'s safe to free.', 'Nothing is cleaned until you review and confirm a plan.']),
+          textPanel(3, 'Never', ['Reads file contents', 'Follows links outside a folder', 'Uploads anything'], { foot: 'Local only · no account' })
+        ]
+      };
+    }
+
+    // Normalize the view.
+    const tone = TONES[v.t.tone];
+    const hero = v.t.variant === 'hero';
+    const t = Object.assign({
+      title: '', text: '', actions: [], note: '', noteFont: SANS, progress: false, progressText: '', anim: 'none'
+    }, v.t, tone, {
+      role: v.t.tone === 'error' || v.t.tone === 'attention' || v.t.tone === 'uncertain' || v.t.tone === 'protected' ? 'alert' : 'status',
+      dir: hero ? 'column' : 'row', align: hero ? 'center' : 'flex-start', textAlign: hero ? 'center' : 'left',
+      pad: hero ? '56px 32px 48px' : (tone.band ? '24px 24px 24px 34px' : '24px'), gap: hero ? '18px' : '20px',
+      box: hero ? 112 : 64, boxRadius: hero ? 32 : 18, glyph: hero ? 64 : 40,
+      innerFlex: hero ? '0 0 auto' : '1 1 360px', titleSize: hero ? '28px' : '20px', textSize: hero ? '15px' : '14px', maxW: hero ? '620px' : 'none',
+      glyphAnim: hero && v.t.glyph !== 'check' && !running ? 'scull-float 3200ms ease-in-out infinite' : 'none'
+    });
+    t.hasActions = t.actions.length > 0;
+    t.hasProgress = !!t.progress;
+    t.progressNow = pct;
+    t.progressLabel = t.title;
+    if (!t.anim || t.anim === 'none') t.anim = 'none';
+    const g = {};
+    ['logo', 'check', 'branch', 'cache', 'radar', 'drive', 'db', 'branchq', 'doc', 'lock', 'shield', 'folderlock', 'eye', 'root'].forEach((k) => { g[k] = v.t.glyph === k; });
+
+    const nav = {};
+    ['Main', 'Projects', 'Explorer', 'Worktrees', 'Caches', 'CleanupReview', 'Insights', 'History', 'Settings'].forEach((k) => {
+      const on = v.nav === k;
+      nav[k] = { cur: on ? 'page' : 'false', bg: on ? '#15121A' : 'transparent', fg: on ? '#FFFFFF' : '#4A4450', fw: on ? 500 : 400, stroke: on ? '#D6268A' : 'currentColor' };
+    });
+    const h = Object.assign({ chip: '', chipBg: '', chipFg: '', actions: [] }, v.h);
+    const ctx = (v.ctx || []).map((c) => Object.assign({ tag: '', tagBg: '', tagFg: '', strike: 'none' }, c));
+    const panels = (v.panels || []).map((p) => Object.assign({ isRows: false, isRadios: false, isSteps: false, isTerm: false, isText: false, aside: '' }, p));
+
+    const links = [['first-run', 'first run'], ['no-candidates', 'no candidates'], ['no-worktrees', 'no worktrees'], ['no-caches', 'no caches'], ['scan-failed', 'scan failed'], ['drive-disconnected', 'drive disconnected'], ['db-corrupt', 'database damaged'], ['git-missing', 'git missing'], ['plan-rejected', 'plan rejected'], ['macos-full-disk-access', 'macOS full disk access'], ['windows-protected-folders', 'Windows protected folders'], ['linux-unreadable', 'Linux unreadable'], ['signals-unavailable', 'signals unavailable'], ['elevated-refusal', 'running elevated']];
+    const cur = links.some((l) => l[0] === s.name) ? s.name : 'first-run';
+    const stateLinks = links.map((l) => ({ href: '#state=' + l[0], label: l[1], current: cur === l[0] ? 'page' : 'false', color: cur === l[0] ? '#B81E74' : '#4A4450' }));
+
+    return {
+      nav: nav, counts: Object.assign({}, COUNTS, v.counts || {}), drv: Object.assign({}, DRV, v.drv || {}),
+      h: h, t: t, g: g, ctx: ctx, panels: panels, stateLinks: stateLinks
+    };
+  }
+}
+</script>
+</body>
+</html>
