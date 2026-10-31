@@ -1,13 +1,18 @@
 //! Unix-only tests for the native [`Platform`] (P1-PLAT-01): identity, allocated size, link
 //! count, symlinks that are never followed, and special files that are never opened. Everything
-//! runs inside a fresh temp directory.
+//! runs inside a fresh temp directory. Also owner-only creation (P1-PLAT-06): modes read back
+//! with `lstat`.
 #![cfg(unix)]
 
-use scull_platform::{EntryKind, ErrorKind, Native, Platform};
+use scull_platform::{
+    EntryKind, ErrorKind, Exposure, Native, Operation, Platform, create_dir_owner_only,
+    create_file_owner_only, ensure_owner_only, owner_only,
+};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -281,5 +286,191 @@ fn unreadable_directory_is_permission_denied() -> TestResult {
         Ok(_) => eprintln!("skipping assertion: running with permission override"),
         Err(e) => assert!(e.is_permission_denied(), "{e}"),
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Owner-only creation (P1-PLAT-06, DATA-04, SAFE-16, FX-DATA-03)
+// ---------------------------------------------------------------------------------------------
+
+fn mode(path: &Path) -> Result<u32, Box<dyn Error>> {
+    Ok(fs::symlink_metadata(path)?.mode() & 0o7777)
+}
+
+fn exposures(path: &Path) -> Vec<Exposure> {
+    match ensure_owner_only(path) {
+        Ok(()) => Vec::new(),
+        Err(e) => match e.kind() {
+            ErrorKind::NotOwnerOnly { exposures } => exposures.clone(),
+            _ => panic!("unexpected error: {e}"),
+        },
+    }
+}
+
+#[test]
+fn owner_only_dirs_are_0700_and_existing_ancestors_untouched() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let existing = tmp.path().join("existing");
+    fs::create_dir(&existing)?;
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o755))?;
+
+    let leaf = existing.join("a").join("b").join("scull");
+    create_dir_owner_only(&leaf)?;
+
+    assert_eq!(
+        mode(&existing)?,
+        0o755,
+        "an existing ancestor must never be chmodded"
+    );
+    for created in [existing.join("a"), existing.join("a/b"), leaf.clone()] {
+        assert_eq!(mode(&created)?, 0o700, "{}", created.display());
+        ensure_owner_only(&created)?;
+    }
+    assert_eq!(
+        fs::symlink_metadata(&leaf)?.uid(),
+        fs::symlink_metadata(tmp.path())?.uid()
+    );
+    Ok(())
+}
+
+#[test]
+fn existing_dir_is_left_as_is_and_reported() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let dir = tmp.path().join("shared");
+    fs::create_dir(&dir)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755))?;
+    create_dir_owner_only(&dir)?; // exists: not modified
+    assert_eq!(mode(&dir)?, 0o755);
+    assert_eq!(exposures(&dir), vec![Exposure::Mode { mode: 0o755 }]);
+    Ok(())
+}
+
+#[test]
+fn owner_only_files_are_0600_at_creation() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("scull.db");
+    drop(create_file_owner_only(&path)?);
+    assert_eq!(mode(&path)?, 0o600);
+    ensure_owner_only(&path)?;
+    Ok(())
+}
+
+#[test]
+fn broader_modes_are_reported() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("plain");
+    write_file(&path, b"x")?;
+    for (m, broad) in [
+        (0o644, true),
+        (0o640, true),
+        (0o604, true),
+        (0o600, false),
+        (0o400, false),
+    ] {
+        fs::set_permissions(&path, fs::Permissions::from_mode(m))?;
+        let found = exposures(&path);
+        if broad {
+            assert_eq!(found, vec![Exposure::Mode { mode: m }], "{m:o}");
+            let err = ensure_owner_only(&path).expect_err("broad");
+            assert_eq!(err.operation(), Operation::CheckPermissions);
+            assert!(err.to_string().contains("not owner-only"), "{err}");
+        } else {
+            assert!(found.is_empty(), "{m:o}: {found:?}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn symlinks_are_never_followed_by_owner_only_helpers() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let target_dir = tmp.path().join("target-dir");
+    fs::create_dir(&target_dir)?;
+    let dir_link = tmp.path().join("dir-link");
+    symlink(&target_dir, &dir_link)?;
+
+    // A symlink where the directory should be is refused, not followed.
+    let err = create_dir_owner_only(&dir_link).expect_err("link");
+    assert!(
+        matches!(
+            err.kind(),
+            ErrorKind::NotADirectory {
+                found: EntryKind::Symlink
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        exposures(&dir_link),
+        vec![Exposure::Link {
+            found: EntryKind::Symlink
+        }]
+    );
+
+    // A dangling symlink where the file should be: refused, and its target is not created.
+    let target_file = tmp.path().join("target-file");
+    let file_link = tmp.path().join("file-link");
+    symlink(&target_file, &file_link)?;
+    let err = create_file_owner_only(&file_link).expect_err("link");
+    assert!(
+        matches!(err.kind(), ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists),
+        "{err}"
+    );
+    assert!(
+        fs::symlink_metadata(&target_file).is_err(),
+        "link target must not be created"
+    );
+    Ok(())
+}
+
+#[test]
+fn restrict_clears_group_other_and_special_bits() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let file = tmp.path().join("f");
+    write_file(&file, b"x")?;
+    for (before, after) in [
+        (0o644, 0o600),
+        (0o4755, 0o700),
+        (0o600, 0o600),
+        (0o640, 0o600),
+    ] {
+        fs::set_permissions(&file, fs::Permissions::from_mode(before))?;
+        owner_only::restrict(&file)?;
+        assert_eq!(mode(&file)?, after, "{before:o}");
+    }
+    let dir = tmp.path().join("d");
+    fs::create_dir(&dir)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o1777))?;
+    owner_only::restrict(&dir)?;
+    assert_eq!(mode(&dir)?, 0o700);
+    Ok(())
+}
+
+#[test]
+fn restrict_never_follows_links_or_opens_special_files() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let target = tmp.path().join("target");
+    write_file(&target, b"x")?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644))?;
+    let link = tmp.path().join("link");
+    symlink(&target, &link)?;
+    let err = owner_only::restrict(&link).expect_err("symlink");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
+    assert_eq!(mode(&target)?, 0o644, "the link target must be untouched");
+
+    let fifo = tmp.path().join("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()?
+        .success();
+    assert!(made, "mkfifo failed");
+    let path = fifo.clone();
+    let err = must_not_block(move || {
+        owner_only::restrict(&path)
+            .map_err(|e| e.to_string())
+            .err()
+            .ok_or_else(|| "restricted a FIFO".to_owned())
+    })?;
+    assert!(err.contains("fifo"), "{err}");
     Ok(())
 }

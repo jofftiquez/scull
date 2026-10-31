@@ -44,6 +44,13 @@
 
 #![allow(unsafe_code)]
 
+mod security;
+
+pub(crate) use security::{
+    create_dir_owner_only, create_file_owner_only, known_folder, owner_only_exposures,
+    restrict_owner_only,
+};
+
 use crate::{
     Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, PlatformError, Result,
 };

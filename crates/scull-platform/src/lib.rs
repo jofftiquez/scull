@@ -13,6 +13,16 @@
 //!   ([`Capabilities`]), for `scull doctor` and for lowering confidence when a signal is
 //!   missing (PLT-08, PLT-09).
 //!
+//! Besides the trait, the crate owns the other per-user OS conventions:
+//!
+//! * [`app_dirs()`]: where scull keeps config, data (database, quarantine metadata), cache and
+//!   state on each OS ([`AppDirs`]; Windows data never roams, DATA-04). `SCULL_HOME` overrides
+//!   all of them for tests.
+//! * [`create_dir_owner_only`], [`create_file_owner_only`], [`ensure_owner_only`]: create and
+//!   check entries only the current user can access (Unix `0700`/`0600`; Windows protected
+//!   DACL for the user and SYSTEM), for the database and quarantine folders (DATA-04,
+//!   SAFE-16).
+//!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
 //!
@@ -30,14 +40,20 @@
 //!   placeholders, app execution aliases, ...). Long paths are sent as `\\?\` paths.
 //!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
+pub mod app_dirs;
 mod error;
 mod native;
+pub mod owner_only;
 mod types;
 
 use std::path::Path;
 
+pub use app_dirs::{
+    APP_NAME, AppDirs, AppDirsError, DirLayout, DirSource, HOME_OVERRIDE_ENV, app_dirs,
+};
 pub use error::{ErrorKind, Operation, PlatformError};
 pub use native::{Native, native_path_bytes};
+pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 
 /// Crate name, used in diagnostics and `scull doctor` output.

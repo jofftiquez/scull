@@ -1,11 +1,14 @@
 //! Windows-only tests for the native [`Platform`] (P1-PLAT-02): file identity, link count,
 //! allocated size of compressed and sparse files, junctions and symlinks that are never
 //! followed, long paths, reserved names. Everything runs inside a fresh temp directory; the
-//! only external tools are `cmd /C mklink`, `fsutil sparse` and `compact`, run on files in
-//! that directory.
+//! only external tools are `cmd /C mklink`, `fsutil sparse`, `compact` and `icacls`, run on
+//! files in that directory.
 #![cfg(windows)]
 
-use scull_platform::{EntryKind, ErrorKind, Native, Platform};
+use scull_platform::{
+    EntryKind, ErrorKind, Exposure, Native, Platform, create_dir_owner_only,
+    create_file_owner_only, ensure_owner_only,
+};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -426,5 +429,117 @@ fn read_dir_lists_with_kinds() -> TestResult {
     // Empty directory.
     let empty = root.join("sub");
     assert_eq!(Native.read_dir(&empty)?.count(), 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Owner-only creation (P1-PLAT-06, DATA-04, SAFE-16, FX-DATA-03, FX-WIN-12). The exact DACL is
+// read back in the crate's unit tests (`native::windows::security`); these go through the
+// public API.
+// ---------------------------------------------------------------------------------------------
+
+/// `S-1-1-0`.
+const EVERYONE: &str = "S-1-1-0";
+
+fn exposures(path: &Path) -> Vec<Exposure> {
+    match ensure_owner_only(path) {
+        Ok(()) => Vec::new(),
+        Err(e) => match e.kind() {
+            ErrorKind::NotOwnerOnly { exposures } => exposures.clone(),
+            _ => panic!("unexpected error: {e}"),
+        },
+    }
+}
+
+#[test]
+fn owner_only_entries_pass_the_check() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let dir = tmp.path().join("a").join("scull");
+    create_dir_owner_only(&dir)?;
+    ensure_owner_only(&tmp.path().join("a"))?;
+    ensure_owner_only(&dir)?;
+    let file = dir.join("scull.db");
+    drop(create_file_owner_only(&file)?);
+    ensure_owner_only(&file)?;
+    Ok(())
+}
+
+#[test]
+fn everyone_grant_is_reported() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let dir = tmp.path().join("private");
+    create_dir_owner_only(&dir)?;
+    let file = dir.join("f");
+    drop(create_file_owner_only(&file)?);
+    if !run(
+        "icacls",
+        &[file.as_os_str(), "/grant".as_ref(), "*S-1-1-0:(R)".as_ref()],
+    )? {
+        return skip("icacls unavailable");
+    }
+    let found = exposures(&file);
+    assert!(
+        found
+            .iter()
+            .any(|e| matches!(e, Exposure::Grant { sid, .. } if sid == EVERYONE)),
+        "{found:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn owner_only_helpers_never_follow_junctions() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let target = tmp.path().join("target");
+    create_dir_owner_only(&target)?;
+    let link = tmp.path().join("link");
+    if !mklink_junction(&link, &target)? {
+        return skip("mklink /J unavailable");
+    }
+    assert_eq!(
+        exposures(&link),
+        vec![Exposure::Link {
+            found: EntryKind::Junction
+        }]
+    );
+    let err = create_dir_owner_only(&link).expect_err("junction");
+    assert!(
+        matches!(
+            err.kind(),
+            ErrorKind::NotADirectory {
+                found: EntryKind::Junction
+            }
+        ),
+        "{err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn owner_only_file_over_a_symlink_is_a_collision() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let target = tmp.path().join("target-file");
+    let link = tmp.path().join("file-link");
+    let made = run(
+        "cmd",
+        &[
+            "/C".as_ref(),
+            "mklink".as_ref(),
+            link.as_os_str(),
+            target.as_os_str(),
+        ],
+    )?;
+    if !made {
+        return skip("mklink (file symlink) needs Developer Mode or admin");
+    }
+    let err = create_file_owner_only(&link).expect_err("existing link");
+    assert!(
+        matches!(err.kind(), ErrorKind::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists),
+        "{err}"
+    );
+    assert!(
+        fs::symlink_metadata(&target).is_err(),
+        "link target must not be created"
+    );
     Ok(())
 }

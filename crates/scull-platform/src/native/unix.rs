@@ -99,3 +99,96 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
 pub(super) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
     Cow::Borrowed(path.as_os_str().as_bytes())
 }
+
+// ---------------------------------------------------------------------------------------------
+// Owner-only entries (P1-PLAT-06)
+// ---------------------------------------------------------------------------------------------
+
+/// Owner-only directory mode.
+const DIR_MODE: u32 = 0o700;
+/// Owner-only file mode.
+const FILE_MODE: u32 = 0o600;
+
+/// The effective user ID of this process.
+#[allow(unsafe_code)]
+pub(super) fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail and has no side effects (POSIX).
+    unsafe { libc::geteuid() }
+}
+
+/// `mkdir(path, 0700)`: the mode is applied by the creating call; the umask can only narrow
+/// it. Not recursive.
+pub(super) fn create_dir_owner_only(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(DIR_MODE).create(path)
+}
+
+/// `open(path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600)`. `O_EXCL` with
+/// `O_CREAT` already fails on any existing entry, including a symlink; `O_NOFOLLOW` says so
+/// explicitly.
+pub(super) fn create_file_owner_only(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(FILE_MODE)
+        .open(path)
+}
+
+/// `fchmod(fd, mode & 0700)` on a descriptor opened with `O_NOFOLLOW | O_NONBLOCK`: a symlink
+/// fails to open instead of being followed, and nothing blocks. Only regular files and
+/// directories are opened (checked with `lstat` first, SAFE-18), and the opened descriptor
+/// must be the entry that was checked (same device and inode), so a swap in between is an
+/// error. Permissions are only ever narrowed. Needs read permission on the entry.
+pub(super) fn restrict_owner_only(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let checked = fs::symlink_metadata(path)?;
+    let found = kind(checked.file_type());
+    if found != EntryKind::File && found != EntryKind::Dir {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to restrict a {found}: only real files and directories are restricted"
+            ),
+        ));
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let md = file.metadata()?;
+    if md.dev() != checked.dev() || md.ino() != checked.ino() {
+        return Err(io::Error::other(
+            "the entry changed while it was being restricted",
+        ));
+    }
+    let mode = md.mode() & 0o7777;
+    let narrowed = mode & 0o700; // owner bits only: drops group, other, setuid/setgid, sticky
+    if narrowed != mode {
+        file.set_permissions(fs::Permissions::from_mode(narrowed))?;
+    }
+    Ok(())
+}
+
+pub(super) fn owner_only_exposures(path: &Path) -> io::Result<Vec<crate::Exposure>> {
+    use crate::Exposure;
+    let md = fs::symlink_metadata(path)?;
+    let mut exposures = Vec::new();
+    let mode = md.mode() & 0o7777;
+    if mode & 0o077 != 0 {
+        exposures.push(Exposure::Mode { mode });
+    }
+    if md.uid() != effective_uid() {
+        exposures.push(Exposure::Owner {
+            owner: md.uid().to_string(),
+        });
+    }
+    Ok(exposures)
+}
+
+/// Known folders are a Windows concept.
+pub(super) fn known_folder(_source: crate::DirSource) -> Option<std::path::PathBuf> {
+    None
+}
