@@ -17,13 +17,15 @@ use scull_storage::{
 
 /// An operation in progress. Borrowing the store keeps every record of the operation in one
 /// place; drop it only after [`Operation::finish`] (an unfinished operation is what crash
-/// recovery, #74, picks up).
+/// recovery, [`Executor::recover`], picks up).
 #[derive(Debug)]
 pub struct Operation<'s> {
     pub(crate) store: &'s mut Store,
     pub(crate) audit: OperationAudit,
     pub(crate) quarantine: QuarantineSettings,
     pub(crate) folders: Vec<QuarantineFolder>,
+    /// The journal intent of the step in progress, until it is closed (SAFE-19).
+    pub(crate) open_step: Option<i64>,
 }
 
 impl Operation<'_> {
@@ -79,7 +81,8 @@ impl Operation<'_> {
 
 impl Executor {
     /// Start an operation for `plan` (which must already be recorded in `store`), under the
-    /// execution lock. Refuses with [`ErrorKind::PlanInvalidated`] (exit 4) when another
+    /// execution lock. Refuses with [`ErrorKind::SafetyBlocked`] while an earlier operation is
+    /// unfinished (a crash: run [`Executor::recover`] first, SAFE-19). Refuses with [`ErrorKind::PlanInvalidated`] (exit 4) when another
     /// operation that started at or after the plan's creation targeted any of its items
     /// (SAFE-09); otherwise records the operation, its `started` audit row and the identity of
     /// every plan item.
@@ -99,6 +102,18 @@ impl Executor {
             return Err(ScullError::new(
                 ErrorKind::PlanTampered,
                 "the operation does not match the plan",
+            ));
+        }
+        let pending = store.unfinished_operations().map_err(ScullError::from)?;
+        if !pending.is_empty() {
+            let ids: Vec<&str> = pending.iter().map(OperationId::as_str).collect();
+            return Err(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                format!(
+                    "an earlier operation did not finish ({}): run crash recovery \
+                     (Executor::recover) before starting a new one (SAFE-19)",
+                    ids.join(", ")
+                ),
             ));
         }
         let identities: Vec<_> = plan.items().iter().map(|i| i.identity).collect();
@@ -132,6 +147,7 @@ impl Executor {
             audit,
             quarantine: QuarantineSettings::default(),
             folders: Vec::new(),
+            open_step: None,
         })
     }
 }

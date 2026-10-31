@@ -2,13 +2,17 @@
 //! (SAFE-05, SAFE-11, P2-EXEC-03), recording each outcome in the operation's audit (SAFE-08).
 
 use crate::executor::{DeleteTarget, Executor};
+use crate::journal::{StepPoint, at, fingerprint};
 use crate::operation::Operation;
 use crate::quarantine::{QuarantineRefusal, Quarantined};
 use crate::revalidate::{Revalidated, Revalidation, Skip};
 use scull_core::{Action, ErrorKind, FsPath, ItemId, Plan, PlanId, ScullError, Tier};
 use scull_engine::{CancelToken, now_unix};
-use scull_platform::remove::{RemoveOutcome, RemoveReport};
-use scull_storage::{ItemOutcome as AuditOutcome, ItemRecord, WalkEnd, WalkSummary};
+use scull_platform::remove::{RemoveOutcome, RemoveReport, WalkEvent};
+use scull_platform::{Native, Platform};
+use scull_storage::{
+    ItemOutcome as AuditOutcome, ItemRecord, JournalAction, JournalIntent, WalkEnd, WalkSummary,
+};
 
 /// Who and when, for [`Plan::verify`].
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +101,7 @@ impl ItemReport {
     }
 
     /// The audit record for this outcome (`None` when the item was not attempted).
-    fn audit_record(&self, at: i64) -> Option<ItemRecord> {
+    pub(crate) fn audit_record(&self, at: i64) -> Option<ItemRecord> {
         let id = self.item_id.clone();
         Some(match &self.outcome {
             ItemOutcome::Deleted(r) => ItemRecord::from_walk(
@@ -178,8 +182,11 @@ impl Executor {
     /// then execute it. An item that fails revalidation is skipped and reported; the others
     /// continue (SAFE-05).
     ///
-    /// With an `operation` ([`Executor::begin_operation`]), every item's outcome is recorded
-    /// in its audit log right after it is handled (SAFE-08), and quarantine is available:
+    /// With an `operation` ([`Executor::begin_operation`]), every mutating step is announced
+    /// first in the operation's write-ahead journal and closed after it (SAFE-19, see
+    /// [`crate::journal`]; [`Executor::recover`] reconciles what a crash left open), every
+    /// item's outcome is recorded in its audit log right after it is handled (SAFE-08), and
+    /// quarantine is available:
     ///
     /// * [`Action::Delete`] (S0): the removal walker;
     /// * [`Action::Quarantine`] (S1/S2): a same-volume, no-replace move into the operation's
@@ -188,7 +195,8 @@ impl Executor {
     ///   deleted;
     /// * anything else is refused per item (Trash #73, tool-native #78).
     ///
-    /// If the audit can't be written the run stops at that item and the error is returned.
+    /// If the journal or the audit can't be written the run stops at that item and the error
+    /// is returned (an intent that can't be journaled means the step is not run at all).
     pub fn execute_plan(
         &self,
         plan: &Plan,
@@ -240,7 +248,13 @@ impl Executor {
             if let Some(op) = operation.as_deref_mut()
                 && let Some(rec) = entry.audit_record(now_unix())
             {
+                let journaled = op.open_step.is_some();
+                op.journal_close(Some(&rec), rec.recorded_at)?;
+                if journaled {
+                    at(self.hook(), StepPoint::AfterClose(&item.item_id));
+                }
                 op.record(&rec)?;
+                at(self.hook(), StepPoint::AfterAudit(&item.item_id));
             }
             report.items.push(entry);
         }
@@ -254,7 +268,7 @@ impl Executor {
                 if let Err(e) = crate::executor::check_item_for(&ok.item, &Action::Quarantine) {
                     return ItemOutcome::Refused(e);
                 }
-                match op.quarantine(ok, now_unix()) {
+                match op.quarantine(ok, now_unix(), self.hook()) {
                     Ok(q) => ItemOutcome::Quarantined(q),
                     Err(QuarantineRefusal::Impossible(why)) => ItemOutcome::Blocked {
                         code: "quarantine_impossible",
@@ -277,17 +291,68 @@ impl Executor {
                 )
                 .with_item(ok.item.item_id.clone()),
             ),
-            _ => {
+            (_, operation) => {
                 let target = DeleteTarget {
                     anchor: &ok.anchor,
                     anchor_identity: ok.anchor_identity,
                     path: &ok.path,
                 };
-                match self.run(&ok.item, &target, Some(ok.kind), None) {
+                if let Some(op) = operation {
+                    // Refusals that need no disk access are not journaled.
+                    if let Err(e) = crate::executor::check_item_for(&ok.item, &Action::Delete) {
+                        return ItemOutcome::Refused(e);
+                    }
+                    if let Err(e) = journal_delete(op, ok, self) {
+                        return ItemOutcome::Refused(e.with_item(ok.item.item_id.clone()));
+                    }
+                }
+                let id = &ok.item.item_id;
+                let mut events = 0u64;
+                let mut observe = |_: &WalkEvent<'_>| {
+                    events += 1;
+                    at(self.hook(), StepPoint::Walk(id, events));
+                };
+                let observer: Option<&mut dyn FnMut(&WalkEvent<'_>)> = if self.hook().is_some() {
+                    Some(&mut observe)
+                } else {
+                    None
+                };
+                match self.run(&ok.item, &target, Some(ok.kind), observer) {
                     Ok(r) => ItemOutcome::Deleted(r.report),
                     Err(e) => ItemOutcome::Refused(e),
                 }
             }
         }
     }
+}
+
+/// Journals the intent of a removal walk (SAFE-19): path, identity, kind, parent identity and
+/// the tree's fingerprint, so recovery can tell an untouched tree from a partly removed one.
+fn journal_delete(
+    op: &mut Operation<'_>,
+    ok: &Revalidated,
+    exec: &Executor,
+) -> Result<(), ScullError> {
+    let id = &ok.item.item_id;
+    at(exec.hook(), StepPoint::BeforeIntent(id));
+    let intent = JournalIntent {
+        operation_id: op.id().clone(),
+        item_id: id.clone(),
+        action: JournalAction::Delete,
+        source_path: FsPath::from_path(&ok.path),
+        source_identity: ok.item.identity,
+        source_kind: ok.kind.as_str().to_owned(),
+        source_parent: ok
+            .path
+            .parent()
+            .and_then(|p| Native.metadata(p).ok())
+            .and_then(|m| m.identity),
+        destination: None,
+        destination_dir: None,
+        tree: Some(fingerprint(&ok.path)),
+        recorded_at: now_unix(),
+    };
+    op.journal_intent(&intent)?;
+    at(exec.hook(), StepPoint::AfterIntent(id));
+    Ok(())
 }

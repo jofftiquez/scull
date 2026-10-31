@@ -13,6 +13,10 @@
 //!   operation ([`Store::begin_operation`], [`Store::record_item`],
 //!   [`Store::finish_operation`], [`Store::verify_chain`]; SAFE-08); see [`audit`] for the
 //!   chain format, tamper evidence, the mirror and the data for invariant I-4.
+//! * Every mutating step of an operation is announced first in an append-only, fsynced
+//!   write-ahead journal and closed after it ([`Store::journal_intent`],
+//!   [`Store::journal_close`]); crash recovery reconciles open steps with the disk (SAFE-19,
+//!   see [`journal`]).
 //! * History is recorded around every scan from the first one ([`Store::record_scan`]):
 //!   rollups, item lifecycle, free space per volume and scull's own footprint, with cheap
 //!   queries for insights, forecasts and `scull status --short` ([`Store::status_summary`]);
@@ -29,6 +33,7 @@ mod backup;
 mod error;
 mod export;
 pub mod history;
+pub mod journal;
 mod migrate;
 mod perms;
 pub mod quarantine;
@@ -49,6 +54,9 @@ pub use history::{
     Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, MaintenanceReport,
     RegrowthEvent, RetentionPolicy, RollupPoint, SIZE_CHANGE_FRACTION, SIZE_CHANGE_MIN_BYTES,
     ScanRecord, ScanRecorded, ScanSummary, StatusSummary, VolumeSample, rollups_from_candidates,
+};
+pub use journal::{
+    JournalAction, JournalClose, JournalCloseKind, JournalIntent, JournalStep, TreeFingerprint,
 };
 pub use migrate::{APPLICATION_ID, SCHEMA_VERSION};
 pub use perms::{DefaultPermissions, OwnerOnly};

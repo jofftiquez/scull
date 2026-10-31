@@ -45,6 +45,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     ),
     Migration::sql(include_str!("migrations/v004_quarantine.sql")),
     Migration::sql(include_str!("migrations/v005_quarantine_log.sql")),
+    Migration::sql(include_str!("migrations/v006_journal.sql")),
 ];
 
 /// Newest schema version this binary knows. A database with a higher `user_version` is refused.

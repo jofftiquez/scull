@@ -36,6 +36,7 @@
 //! freed bytes.
 
 use crate::executor::Executor;
+use crate::journal::{StepHook, StepPoint, at};
 use crate::operation::Operation;
 use crate::revalidate::Revalidated;
 use scull_core::{ErrorKind, FileIdentity, FsPath, OperationId, ScullError};
@@ -47,7 +48,8 @@ use scull_platform::{
     EntryKind, Native, Platform, create_dir_owner_only, create_file_owner_only, ensure_owner_only,
 };
 use scull_storage::{
-    NewQuarantineEntry, QuarantineEntry, QuarantineEvent, QuarantineLogEntry, Store,
+    JournalAction, JournalIntent, NewQuarantineEntry, QuarantineEntry, QuarantineEvent,
+    QuarantineLogEntry, Store,
 };
 use std::ffi::OsStr;
 use std::io::Write;
@@ -137,22 +139,7 @@ pub(crate) fn kind_from_code(s: &str) -> Option<EntryKind> {
 
 /// Logical and allocated bytes of the tree at `path`, never following links.
 pub(crate) fn measure(path: &Path) -> (u64, u64) {
-    let (mut logical, mut allocated) = (0u64, 0u64);
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(p) = stack.pop() {
-        let Ok(md) = Native.metadata(&p) else {
-            continue;
-        };
-        logical = logical.saturating_add(md.logical_size);
-        allocated = allocated.saturating_add(md.allocated_size.unwrap_or(md.logical_size));
-        if md.kind == EntryKind::Dir
-            && let Ok(entries) = Native.read_dir(&p)
-        {
-            for e in entries.flatten() {
-                stack.push(e.path);
-            }
-        }
-    }
+    let (_, logical, allocated) = crate::journal::tree_stats(path);
     (logical, allocated)
 }
 
@@ -161,10 +148,10 @@ fn failed(kind: ErrorKind, msg: impl Into<String>) -> QuarantineRefusal {
 }
 
 impl Operation<'_> {
-    /// This operation's folder under `base`, created owner-only on first use.
-    fn folder(&mut self, base: &Path) -> Result<&mut QuarantineFolder, QuarantineRefusal> {
+    /// This operation's folder under `base` (its index), created owner-only on first use.
+    fn folder(&mut self, base: &Path) -> Result<usize, QuarantineRefusal> {
         if let Some(i) = self.folders.iter().position(|f| f.base == base) {
-            return Ok(&mut self.folders[i]);
+            return Ok(i);
         }
         let root = base.join(QUARANTINE_DIR_NAME);
         let dir = root.join(self.id().as_str());
@@ -195,14 +182,21 @@ impl Operation<'_> {
             identity,
             next: 1,
         });
-        Ok(self.folders.last_mut().expect("just pushed"))
+        Ok(self.folders.len() - 1)
     }
 
     /// Moves a revalidated item into this operation's quarantine and records it.
+    ///
+    /// Each move attempt is journaled first (SAFE-19): the item's path, identity and kind, its
+    /// parent directory's identity and the exact destination entry, so crash recovery can tell
+    /// a done move from one that never happened by looking for the identity on both sides. The
+    /// open step is closed by the caller with the audited outcome; an attempt whose entry name
+    /// was already taken is closed here as "changed nothing".
     pub(crate) fn quarantine(
         &mut self,
         item: &Revalidated,
         now: i64,
+        hook: Option<&StepHook>,
     ) -> Result<Quarantined, QuarantineRefusal> {
         let parent = item
             .path
@@ -241,22 +235,50 @@ impl Operation<'_> {
         }
         let retention = self.quarantine.retention_secs;
         let folder = self.folder(&base)?;
+        let (folder_dir, folder_identity) = (
+            self.folders[folder].dir.clone(),
+            self.folders[folder].identity,
+        );
+        let source_parent = Native.metadata(parent).ok().and_then(|m| m.identity);
+        let item_id = &item.item.item_id;
         let (moved, dest) = loop {
-            let entry_name = format!("{:04}", folder.next);
-            folder.next += 1;
+            let entry_name = format!("{:04}", self.folders[folder].next);
+            self.folders[folder].next += 1;
+            let dest = folder_dir.join(&entry_name);
+            at(hook, StepPoint::BeforeIntent(item_id));
+            self.journal_intent(&JournalIntent {
+                operation_id: self.id().clone(),
+                item_id: item_id.clone(),
+                action: JournalAction::Quarantine,
+                source_path: FsPath::from_path(&item.path),
+                source_identity: item.item.identity,
+                source_kind: kind_code(item.kind).to_owned(),
+                source_parent,
+                destination: Some(FsPath::from_path(&dest)),
+                destination_dir: Some(folder_identity),
+                tree: None,
+                recorded_at: now,
+            })
+            .map_err(QuarantineRefusal::Failed)?;
+            at(hook, StepPoint::AfterIntent(item_id));
             let req = MoveRequest {
                 anchor: &item.anchor,
                 anchor_identity: item.anchor_identity,
                 relative: &relative,
                 expected: item.item.identity,
                 expected_kind: Some(item.kind),
-                dest_dir: &folder.dir,
-                dest_dir_identity: Some(folder.identity),
+                dest_dir: &folder_dir,
+                dest_dir_identity: Some(folder_identity),
                 dest_name: OsStr::new(&entry_name),
             };
             match move_no_replace(&req) {
-                Ok(m) => break (m, folder.dir.join(&entry_name)),
-                Err(MoveError::DestinationExists) if folder.next < 10_000 => continue,
+                Ok(m) => break (m, dest),
+                Err(MoveError::DestinationExists) if self.folders[folder].next < 10_000 => {
+                    // This attempt changed nothing; the next one is journaled anew.
+                    self.journal_close(None, now)
+                        .map_err(QuarantineRefusal::Failed)?;
+                    continue;
+                }
                 Err(e) if e.is_impossible_here() => {
                     return Err(QuarantineRefusal::Impossible(e.to_string()));
                 }
@@ -274,12 +296,11 @@ impl Operation<'_> {
                 }
             }
         };
-        let folder_dir = folder.dir.clone();
-        let folder_identity = folder.identity;
+        at(hook, StepPoint::AfterMove(item_id));
         let (logical_bytes, bytes) = measure(&dest);
         let rec = NewQuarantineEntry {
             operation_id: self.id().clone(),
-            item_id: item.item.item_id.clone(),
+            item_id: item_id.clone(),
             original_path: FsPath::from_path(&item.path),
             quarantine_path: FsPath::from_path(&dest),
             entry_identity: moved.identity,
@@ -291,12 +312,15 @@ impl Operation<'_> {
             expires_at: now.checked_add(retention),
         };
         match self.store.insert_quarantine_entry(&rec) {
-            Ok(entry_id) => Ok(Quarantined {
-                entry_id,
-                quarantine_path: dest,
-                bytes,
-                logical_bytes,
-            }),
+            Ok(entry_id) => {
+                at(hook, StepPoint::AfterManifest(item_id));
+                Ok(Quarantined {
+                    entry_id,
+                    quarantine_path: dest,
+                    bytes,
+                    logical_bytes,
+                })
+            }
             Err(db) => {
                 // Without a manifest entry the item could not be restored by scull: move it
                 // back to where it was (no-replace, into the same directory object).
@@ -326,6 +350,20 @@ impl Operation<'_> {
 }
 
 impl QuarantineFolder {
+    /// An existing operation folder (crash recovery rewrites its manifest copy).
+    pub(crate) fn existing(dir: PathBuf, identity: FileIdentity) -> Self {
+        Self {
+            base: dir
+                .parent()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            dir,
+            identity,
+            next: 1,
+        }
+    }
+
     /// Writes `manifest.json`, a copy of this folder's database entries (restore never trusts
     /// it), replacing the previous copy atomically.
     pub(crate) fn write_disk_manifest(

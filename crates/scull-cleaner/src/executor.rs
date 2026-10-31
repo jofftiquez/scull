@@ -1,5 +1,6 @@
 //! [`Executor`]: delete one verified plan item through the platform removal walker.
 
+use crate::journal::StepHook;
 use crate::lock::{ExecutionLock, LockOptions};
 
 use scull_core::{
@@ -42,10 +43,20 @@ pub struct DeleteReport {
 ///
 /// Plans are executed only by an Executor made with [`Executor::acquire`], which holds the
 /// per-user execution lock (SAFE-09) for its whole lifetime.
-#[derive(Debug, Default)]
+#[derive(Default)]
 #[non_exhaustive]
 pub struct Executor {
     lock: Option<ExecutionLock>,
+    hook: Option<StepHook>,
+}
+
+impl std::fmt::Debug for Executor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Executor")
+            .field("lock", &self.lock)
+            .field("step_hook", &self.hook.is_some())
+            .finish()
+    }
 }
 
 impl Executor {
@@ -53,7 +64,7 @@ impl Executor {
     /// ([`Executor::delete`]) but [`Executor::execute_plan`] refuses to run. Use
     /// [`Executor::acquire`] to execute plans.
     pub fn new() -> Self {
-        Self { lock: None }
+        Self::default()
     }
 
     /// An Executor holding the per-user execution lock (SAFE-09) until it is dropped. Fails
@@ -62,7 +73,23 @@ impl Executor {
     pub fn acquire(opts: &LockOptions) -> Result<Self, ScullError> {
         Ok(Self {
             lock: Some(ExecutionLock::acquire(opts)?),
+            hook: None,
         })
+    }
+
+    /// Calls `hook` at every [`StepPoint`](crate::StepPoint) of plan execution (journal
+    /// intent, removal-walk events, quarantine move, journal close, audit). For fault-injection
+    /// tests: the crash-recovery kill tests (SAFE-19) stop the process at a chosen point.
+    /// Production code installs no hook.
+    #[must_use]
+    pub fn with_step_hook(mut self, hook: StepHook) -> Self {
+        self.hook = Some(hook);
+        self
+    }
+
+    /// The step hook, if any.
+    pub(crate) fn hook(&self) -> Option<&StepHook> {
+        self.hook.as_ref()
     }
 
     /// The execution lock this Executor holds, if any.
@@ -114,7 +141,8 @@ impl Executor {
         check_item(item)?;
         let relative = check_target(item, target)?;
 
-        // TODO(#74, P2-EXEC-08): write the journal intent record before touching the disk.
+        // Journaling (SAFE-19) happens in `execute_plan`, which owns the operation record: a
+        // bare `delete` has no operation and no database to journal in.
         let req = RemoveRequest {
             anchor: target.anchor,
             anchor_identity: target.anchor_identity,

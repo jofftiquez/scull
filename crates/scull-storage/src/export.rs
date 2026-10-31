@@ -60,6 +60,7 @@ const TABLES: &[TableSql] = &[
     table!("quarantine_manifest", "entry_id"),
     table!("operation_targets", "operation_id, item_id"),
     table!("quarantine_log", "seq"),
+    table!("journal", "seq"),
     table!("events", "event_id"),
     table!("metrics", "metric_id"),
 ];
@@ -86,6 +87,7 @@ pub const EXPORT_TABLES: &[&str] = &[
     "quarantine_manifest",
     "operation_targets",
     "quarantine_log",
+    "journal",
     "events",
     "metrics",
 ];

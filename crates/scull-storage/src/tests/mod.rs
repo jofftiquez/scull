@@ -499,8 +499,7 @@ fn fx_data_01_v4_database_upgrades_to_v5_with_backup_and_an_append_only_log() {
             )
             .unwrap();
     }
-    let mut s = open_with(&path, MIGRATIONS).unwrap();
-    assert_eq!(SCHEMA_VERSION, 5);
+    let mut s = open_with(&path, &MIGRATIONS[..5]).unwrap();
     assert_eq!(s.schema_version().unwrap(), 5);
     assert_eq!(s.backups_taken().len(), 1);
     let name = s.backups_taken()[0]
@@ -529,5 +528,92 @@ fn fx_data_01_v4_database_upgrades_to_v5_with_backup_and_an_append_only_log() {
         let err = s.conn.execute(sql, []).unwrap_err();
         assert!(err.to_string().contains("append-only"), "{sql}: {err}");
     }
+    s.check_integrity().unwrap();
+}
+
+// ---- v5 → v6 (write-ahead journal) ---------------------------------------------------------
+
+#[test]
+fn fx_data_01_v5_database_upgrades_to_v6_with_backup_and_an_append_only_journal() {
+    use crate::{
+        ItemOutcome, ItemRecord, JournalAction, JournalClose, JournalCloseKind, JournalIntent,
+        TreeFingerprint,
+    };
+    use scull_core::{FileIdentity, FsPath, ItemId, OperationId};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    drop(open_with(&path, &MIGRATIONS[..5]).unwrap());
+    let mut s = open_with(&path, MIGRATIONS).unwrap();
+    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(s.schema_version().unwrap(), 6);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v5"), "{name}");
+    // op_O1 carries pre-v3 (legacy) rows and predates the journal; op_O2 never finished.
+    let op = OperationId::try_from("op_O2".to_owned()).unwrap();
+    assert_eq!(s.unfinished_operations().unwrap(), vec![op.clone()]);
+    let item = ItemId::try_from(ITEM_A.to_owned()).unwrap();
+    let intent = JournalIntent {
+        operation_id: op.clone(),
+        item_id: item.clone(),
+        action: JournalAction::Delete,
+        source_path: FsPath::from("/work/a/target"),
+        source_identity: FileIdentity::new(7, 1),
+        source_kind: "dir".into(),
+        source_parent: Some(FileIdentity::new(7, 2)),
+        destination: None,
+        destination_dir: None,
+        tree: Some(TreeFingerprint {
+            entries: 3,
+            bytes: 10,
+        }),
+        recorded_at: 300,
+    };
+    let seq = s.journal_intent(&intent).unwrap();
+    let steps = s.journal_steps(&op).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].intent, intent);
+    assert!(steps[0].close.is_none());
+    let close = |rec: Option<ItemRecord>| JournalClose {
+        kind: JournalCloseKind::Done,
+        recorded_at: 301,
+        outcome: rec,
+    };
+    // Only stable codes; a touched-nothing outcome can't carry bytes.
+    let mut bad = ItemRecord::new(item.clone(), 301, ItemOutcome::Skipped).with_reason("x y");
+    assert!(s.journal_close(seq, &close(Some(bad.clone()))).is_err());
+    bad.reason = Some("interrupted".into());
+    bad.freed_bytes = Some(5);
+    assert!(s.journal_close(seq, &close(Some(bad))).is_err());
+    let rec = ItemRecord::new(item.clone(), 301, ItemOutcome::Removed);
+    s.journal_close(seq, &close(Some(rec.clone()))).unwrap();
+    // Closed exactly once.
+    assert!(s.journal_close(seq, &close(Some(rec.clone()))).is_err());
+    assert_eq!(
+        s.journal_steps(&op).unwrap()[0].close,
+        Some(close(Some(rec)))
+    );
+    for sql in ["UPDATE journal SET reason = 'x'", "DELETE FROM journal"] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    // A close must reference an intent of the same operation and item.
+    let err = s
+        .conn
+        .execute(
+            "INSERT INTO journal (operation_id, item_id, kind, intent_seq, recorded_at) \
+             VALUES ('op_O2', 'ffffffffffffffffffffffffffffffff', 'done', ?1, 1)",
+            [seq],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("must reference an intent"),
+        "{err}"
+    );
     s.check_integrity().unwrap();
 }

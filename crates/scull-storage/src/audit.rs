@@ -13,7 +13,8 @@
 //!    store computes from its own item rows: predicted vs moved vs freed bytes, plus the measured
 //!    free-space delta when the caller has one (#76). Nothing can be appended afterwards.
 //!
-//! [`Store::resume_operation`] reopens an unfinished operation (crash recovery, #74).
+//! [`Store::resume_operation`] reopens an unfinished operation (crash recovery, #74; the
+//! write-ahead journal it reconciles is in [`crate::journal`]).
 //!
 //! # Tamper evidence
 //!
@@ -1318,7 +1319,7 @@ fn check_code(code: &str) -> Result<()> {
     }
 }
 
-fn check_record(rec: &ItemRecord) -> Result<()> {
+pub(crate) fn check_record(rec: &ItemRecord) -> Result<()> {
     match &rec.reason {
         Some(code) => check_code(code)?,
         None if rec.outcome.needs_reason() => {
@@ -1406,7 +1407,7 @@ fn item_totals(c: &Connection, op: &OperationId) -> Result<OperationTotals> {
     ))
 }
 
-fn is_finished(c: &Connection, op: &OperationId) -> Result<bool> {
+pub(crate) fn is_finished(c: &Connection, op: &OperationId) -> Result<bool> {
     Ok(c.query_row(
         "SELECT EXISTS (SELECT 1 FROM audit WHERE operation_id = ?1 AND kind = 'finished')",
         [op.as_str()],
