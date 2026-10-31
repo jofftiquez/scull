@@ -1,15 +1,21 @@
 //! `scull status [--short]` (P1-CLI-04, PRO-09): one cached line for shell prompts, tmux or
 //! scripts.
 //!
-//! Reads **only** the database, with one indexed query ([`scull_storage::Store::status_summary`]):
-//! no scan, no `git`, no network, no config file. It never creates or migrates the database
-//! (see [`crate::db`]).
+//! Reads **only** the database: one indexed query ([`scull_storage::Store::status_summary`])
+//! plus, per sampled volume, one indexed range query over its last 30 days of free-space
+//! samples for the disk-full forecast ([`scull_proactive::forecast_all`], PRO-01). No scan, no
+//! `git`, no network, no config file (the forecast uses its default policy). It never creates
+//! or migrates the database (see [`crate::db`]).
 //!
 //! * `scull status`:
 //!   `scull: 18.4 GiB reclaimable (12.1 GiB safe) · 41.0 GiB free on / · last scan 2h ago`
 //! * `scull status --short`: `☠ 41G free · 2h · 18G reclaimable` (free space of the fullest
 //!   volume sampled, age of the data, reclaimable bytes), meant to be embedded in a prompt.
-//! * `--json` / `--ndjson`: `scull/status@1`.
+//! * When a volume is forecast to drop below its reserve with at least medium confidence, both
+//!   lines add it: `… · 41.0 GiB free on / · full in ~9 days · last scan 2h ago` and
+//!   `☠ 41G free · full ~9d · 2h · 18G reclaimable` (the volume is named when it is not the
+//!   fullest one: `/data full in ~9 days`, `/data full ~9d`).
+//! * `--json` / `--ndjson`: `scull/status@1` (with every volume's forecast in `forecasts`).
 //!
 //! **Prompt contract:** `--short` always exits 0 and prints nothing at all (not even a newline)
 //! when there is nothing to show: no scan recorded yet, database missing, written by a newer
@@ -17,6 +23,7 @@
 //! shows error noise. Without `--short` the same situations print one explanatory line, still
 //! with exit 0.
 
+use super::forecast::{ForecastReport, headline};
 use super::{emit_machine, emit_text};
 use crate::db::{self, NotOpened, Probe};
 use crate::output::Ui;
@@ -64,6 +71,8 @@ pub struct StatusReport {
     pub last_scan: Option<LastScanReport>,
     /// Latest free-space sample of every volume ever sampled.
     pub volumes: Vec<VolumeReport>,
+    /// Disk-full forecast of every volume ever sampled (PRO-01, D-22), by volume id.
+    pub forecasts: Vec<ForecastReport>,
     /// The human line (`scull status`), empty when there is nothing to show.
     pub line: String,
     /// The prompt line (`scull status --short`), empty when there is nothing to show.
@@ -135,7 +144,16 @@ pub fn collect(now: i64) -> StatusReport {
     let path = db::db_path(&data_dir);
     match db::open_current(&path) {
         Ok(store) => match store.status_summary() {
-            Ok(summary) => from_summary(&summary, now),
+            Ok(summary) => {
+                // A forecast that can't be read never hides the rest of the status.
+                let forecasts = scull_proactive::forecast_all(
+                    &store,
+                    now,
+                    &scull_proactive::ForecastPolicy::default(),
+                )
+                .unwrap_or_default();
+                from_parts(&summary, &forecasts, now)
+            }
             Err(e) => unavailable(now, StatusState::Unavailable, Some(e.to_string())),
         },
         Err(NotOpened::Probe(Probe::Missing)) => unavailable(now, StatusState::NoDatabase, None),
@@ -182,13 +200,25 @@ fn unavailable(now: i64, state: StatusState, detail: Option<String>) -> StatusRe
         now,
         last_scan: None,
         volumes: Vec::new(),
+        forecasts: Vec::new(),
         line,
         short: String::new(),
     }
 }
 
-/// Build the report from a store summary (pure; `now` is injected for tests).
+/// Build the report from a store summary without forecasts (pure; `now` is injected).
 pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
+    from_parts(s, &[], now)
+}
+
+/// Build the report from a store summary and the volumes' forecasts (pure; `now` is
+/// injected for tests).
+pub fn from_parts(
+    s: &StatusSummary,
+    forecasts: &[scull_proactive::Forecast],
+    now: i64,
+) -> StatusReport {
+    let forecasts: Vec<ForecastReport> = forecasts.iter().map(ForecastReport::from).collect();
     let volumes: Vec<VolumeReport> = s
         .volumes
         .iter()
@@ -202,6 +232,7 @@ pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
     let Some(scan) = &s.last_scan else {
         let mut r = unavailable(now, StatusState::NoScan, None);
         r.volumes = volumes;
+        r.forecasts = forecasts;
         return r;
     };
     let age_secs = u64::try_from(now.saturating_sub(scan.finished_at)).unwrap_or(0);
@@ -222,8 +253,18 @@ pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
         reclaimable_bytes: scan.reclaimable_bytes,
         safe_reclaimable_bytes: scan.safe_reclaimable_bytes,
     };
-    // The fullest volume is the one worth a prompt's attention.
+    // The fullest volume is the one worth a prompt's attention; the soonest-filling
+    // forecast (medium confidence or better) is added next to it.
     let fullest = volumes.iter().min_by_key(|v| v.free_bytes);
+    let soonest = headline(&forecasts).and_then(|f| {
+        let days = f.days_text()?;
+        let named = fullest.is_none_or(|v| v.volume_id != f.volume_id);
+        Some((
+            named.then(|| f.volume_id.clone()),
+            days,
+            f.days_until_threshold,
+        ))
+    });
 
     let mut line = format!(
         "scull: {} reclaimable ({} safe)",
@@ -237,6 +278,12 @@ pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
             v.volume_id
         ));
     }
+    if let Some((named, days, _)) = &soonest {
+        match named {
+            Some(id) => line.push_str(&format!(" \u{b7} {id} full in {days}")),
+            None => line.push_str(&format!(" \u{b7} full in {days}")),
+        }
+    }
     line.push_str(&format!(" \u{b7} last scan {} ago", age(age_secs)));
     if last.status == "partial" {
         line.push_str(" (partial)");
@@ -245,6 +292,12 @@ pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
     let mut short = SHORT_MARKER.to_owned();
     if let Some(v) = fullest {
         short.push_str(&format!(" {} free \u{b7}", compact_bytes(v.free_bytes)));
+    }
+    if let Some((named, _, Some(d))) = &soonest {
+        match named {
+            Some(id) => short.push_str(&format!(" {id} full ~{d}d \u{b7}")),
+            None => short.push_str(&format!(" full ~{d}d \u{b7}")),
+        }
     }
     short.push_str(&format!(
         " {} \u{b7} {} reclaimable",
@@ -258,6 +311,7 @@ pub fn from_summary(s: &StatusSummary, now: i64) -> StatusReport {
         now,
         last_scan: Some(last),
         volumes,
+        forecasts,
         line,
         short,
     }
@@ -354,6 +408,73 @@ mod tests {
         assert_eq!(empty.state, StatusState::NoScan);
         assert!(empty.short.is_empty());
         assert!(empty.line.contains("no scan recorded yet"));
+    }
+
+    /// Daily samples of `volume` over 20 days ending at `end`, losing `per_day` GiB a day
+    /// down to `free_now` GiB.
+    fn filling(volume: &str, end: i64, free_now: u64, per_day: u64) -> Vec<VolumeSample> {
+        (0..=20)
+            .map(|i| VolumeSample {
+                volume_id: volume.into(),
+                total: 500 * GIB,
+                free: (free_now + per_day * (20 - i)) * GIB,
+                at: end - i64::try_from(20 - i).expect("i") * 86_400,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lines_show_a_confident_forecast() {
+        let now = 1_100 + 2 * 3_600;
+        let policy = scull_proactive::ForecastPolicy::default();
+        // 46 GiB free on /, losing 4 GiB a day: (46 - 10) / 4 = 9 days.
+        let root = filling("/", 1_100, 46, 4);
+        let f_root = scull_proactive::forecast("/", &root, &[], now, &policy);
+        let vols = vec![root.last().expect("sample").clone()];
+        let r = from_parts(&summary(vols), std::slice::from_ref(&f_root), now);
+        assert_eq!(
+            r.line,
+            "scull: 18.5 GiB reclaimable (12.0 GiB safe) \u{b7} 46.0 GiB free on / \u{b7} full in ~9 days \u{b7} last scan 2h ago"
+        );
+        assert_eq!(
+            r.short,
+            "\u{2620} 46G free \u{b7} full ~9d \u{b7} 2h \u{b7} 18G reclaimable"
+        );
+        assert_eq!(r.forecasts.len(), 1);
+        assert_eq!(r.forecasts[0].days_until_threshold, Some(9));
+
+        // The forecast is on another volume than the fullest one: it is named.
+        let data = filling("/data", 1_100, 60, 5);
+        let f_data = scull_proactive::forecast("/data", &data, &[], now, &policy);
+        let flat = VolumeSample {
+            volume_id: "/".into(),
+            total: 500 * GIB,
+            free: 41 * GIB,
+            at: 1_100,
+        };
+        let vols = vec![flat, data.last().expect("sample").clone()];
+        let r = from_parts(&summary(vols), &[f_data], now);
+        assert!(
+            r.line
+                .contains("41.0 GiB free on / \u{b7} /data full in ~10 days"),
+            "{}",
+            r.line
+        );
+        assert!(
+            r.short.contains("41G free \u{b7} /data full ~10d \u{b7}"),
+            "{}",
+            r.short
+        );
+
+        // Not enough history: nothing added.
+        let short = &filling("/", 1_100, 46, 4)[18..];
+        let f = scull_proactive::forecast("/", short, &[], now, &policy);
+        let r = from_parts(&summary(vec![short[2].clone()]), &[f], now);
+        assert!(!r.line.contains("full in"), "{}", r.line);
+        assert_eq!(
+            r.forecasts[0].state,
+            scull_proactive::ForecastState::NotEnoughHistory
+        );
     }
 
     #[test]

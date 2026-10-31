@@ -1,5 +1,91 @@
 {
   "$defs": {
+    "Budget": {
+      "additionalProperties": false,
+      "description": "A size cap (PRO-03): the allocated bytes of every candidate matching all the given filters\nmust stay at or below `max_gib`. A budget with no filter caps everything scull found.",
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Category"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only candidates of this category (e.g. `project_artifact`, `package_cache`)."
+        },
+        "ecosystem": {
+          "description": "Only candidates whose project ecosystem is this (e.g. `rust`, `node`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_gib": {
+          "description": "The cap, in GiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Only candidates inside this directory (`~` allowed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "max_gib"
+      ],
+      "type": "object"
+    },
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
     "ColorChoice": {
       "description": "When to use color in terminal output.",
       "oneOf": [
@@ -49,6 +135,22 @@
             "units": "binary"
           },
           "description": "Terminal output."
+        },
+        "proactive": {
+          "$ref": "#/$defs/ProactiveConfig",
+          "default": {
+            "alert_days": 14,
+            "budgets": [],
+            "reserve_gib": 10,
+            "spike_gib": 20,
+            "spike_min_gib": 5,
+            "spike_percent": 50,
+            "spike_window": "24h",
+            "stale_build": "720h",
+            "stale_cache": "2160h",
+            "stale_worktree": "336h"
+          },
+          "description": "Alert policies for proactive protection (PRD §16)."
         },
         "rules": {
           "$ref": "#/$defs/RulesConfig",
@@ -414,6 +516,76 @@
           "type": "string"
         }
       ]
+    },
+    "ProactiveConfig": {
+      "additionalProperties": false,
+      "description": "Alert policies (PRD §16): `[proactive]` in the user config file.\n\n```toml\n[proactive]\nreserve_gib = 10          # \"full\" means less free space than this\nalert_days = 14           # alert when a drive is forecast to be full within this\nstale_worktree = \"14d\"    # worktrees idle for longer than this\nstale_build = \"30d\"       # build outputs of projects idle for longer than this\nstale_cache = \"90d\"       # caches untouched for longer than this\nspike_gib = 20            # alert when something grows by this much...\nspike_window = \"24h\"      # ...within this window\nspike_percent = 50        # or by this percentage (and at least spike_min_gib); 0 = off\nspike_min_gib = 5\n\n[[proactive.budgets]]     # \"all Rust target/ <= 50 GB\"\ncategory = \"project_artifact\"\necosystem = \"rust\"\nmax_gib = 50\n\n[[proactive.budgets]]     # \"this project <= 30 GB\"\npath = \"~/Projects/monorepo\"\nmax_gib = 30\n```",
+      "properties": {
+        "alert_days": {
+          "default": 14,
+          "description": "Alert when a drive is forecast to drop below the reserve within this many days.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "budgets": {
+          "default": [],
+          "description": "Size caps per category, ecosystem or path (PRO-03). None by default.",
+          "items": {
+            "$ref": "#/$defs/Budget"
+          },
+          "type": "array"
+        },
+        "reserve_gib": {
+          "default": 10,
+          "description": "\"Full\" means less free space than this many GiB (PRO-01).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spike_gib": {
+          "default": 20,
+          "description": "Alert when a category or drive grows by this many GiB within `spike_window` (PRO-04).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spike_min_gib": {
+          "default": 5,
+          "description": "...when the growth is at least this many GiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spike_percent": {
+          "default": 50,
+          "description": "Also alert on growth by this percentage within the window (0 turns it off)...",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spike_window": {
+          "$ref": "#/$defs/DurationSpec",
+          "default": "24h",
+          "description": "The window spikes are measured over."
+        },
+        "stale_build": {
+          "$ref": "#/$defs/DurationSpec",
+          "default": "720h",
+          "description": "Build outputs of projects idle for longer than this are stale (PRO-02)."
+        },
+        "stale_cache": {
+          "$ref": "#/$defs/DurationSpec",
+          "default": "2160h",
+          "description": "Caches untouched for longer than this are stale (PRO-02)."
+        },
+        "stale_worktree": {
+          "$ref": "#/$defs/DurationSpec",
+          "default": "336h",
+          "description": "Worktrees idle for longer than this are stale (PRO-02)."
+        }
+      },
+      "type": "object"
     },
     "RulesConfig": {
       "additionalProperties": false,

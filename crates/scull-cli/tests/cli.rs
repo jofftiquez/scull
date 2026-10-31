@@ -147,8 +147,7 @@ fn stub_commands_exit_1_with_tracking_issue() {
             "(tracked in #111)",
         ),
         (&["approve", "p"], "(tracked in #108)"),
-        (&["check"], "(tracked in #114)"),
-        (&["insights"], "(tracked in #116)"),
+        (&["insights", "purge"], "(tracked in #266)"),
         (&["agent", "install", "codex"], "(tracked in #110)"),
         (&["schedule", "enable"], "(tracked in #114)"),
     ];
@@ -167,7 +166,7 @@ fn stub_commands_exit_1_with_tracking_issue() {
 fn stub_errors_are_json_on_stderr_in_machine_modes() {
     let validator = error_schema_validator();
     for mode in ["--json", "--ndjson"] {
-        let o = scull(&["check", mode]);
+        let o = scull(&["approve", "p", mode]);
         assert_eq!(o.status.code(), Some(1), "{mode}");
         assert!(o.stdout.is_empty(), "{mode}: no partial document on stdout");
         let err = stderr(&o);
@@ -178,7 +177,7 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
         assert_eq!(v["error"]["kind"], "unsupported_platform");
         assert_eq!(
             v["error"]["message"],
-            "`scull check` is not implemented yet (tracked in #114)"
+            "`scull approve` is not implemented yet (tracked in #108)"
         );
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{mode}: {errors:?}");
@@ -187,29 +186,29 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
 
 #[test]
 fn quiet_still_reports_errors() {
-    let o = scull(&["check", "-q"]);
+    let o = scull(&["approve", "p", "-q"]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("tracked in #114"));
+    assert!(stderr(&o).contains("tracked in #108"));
     // -q and -v are mutually exclusive.
-    assert_eq!(scull(&["check", "-q", "-v"]).status.code(), Some(2));
-    assert_eq!(scull(&["-q", "check", "-v"]).status.code(), Some(2));
+    assert_eq!(scull(&["approve", "p", "-q", "-v"]).status.code(), Some(2));
+    assert_eq!(scull(&["-q", "approve", "p", "-v"]).status.code(), Some(2));
 }
 
 #[test]
 fn color_never_and_no_color_produce_no_escapes() {
-    let o = scull(&["check", "--color", "never"]);
+    let o = scull(&["approve", "p", "--color", "never"]);
     assert!(!stderr(&o).contains('\x1b'));
     let o = Command::new(env!("CARGO_BIN_EXE_scull"))
-        .args(["check"])
+        .args(["approve", "p"])
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
         .output()
         .expect("run");
     assert!(!String::from_utf8_lossy(&o.stderr).contains('\x1b'));
-    let o = scull(&["check", "--color", "always"]);
+    let o = scull(&["approve", "p", "--color", "always"]);
     assert!(stderr(&o).contains("\x1b["), "--color always forces color");
     assert_eq!(
-        scull(&["check", "--color", "rainbow"]).status.code(),
+        scull(&["approve", "p", "--color", "rainbow"]).status.code(),
         Some(2)
     );
 }
@@ -257,7 +256,7 @@ fn committed_error_schema_validates_real_output() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let validator = jsonschema::validator_for(&committed).expect("schema compiles");
-    for args in [&["check", "--json"][..], &["frob", "--ndjson"][..]] {
+    for args in [&["approve", "p", "--json"][..], &["frob", "--ndjson"][..]] {
         let o = scull(args);
         let v: Value = serde_json::from_str(&stderr(&o)).expect("JSON error");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();

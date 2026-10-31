@@ -2,13 +2,16 @@
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
 pub mod caches;
+pub mod check;
 pub mod clean;
 pub mod clean_caches;
 pub mod data;
 pub mod doctor;
 pub mod exec;
+pub mod forecast;
 pub mod history;
 pub mod init;
+pub mod insights;
 pub mod mcp;
 pub mod pipeline;
 pub mod projects;

@@ -204,8 +204,12 @@ pub enum Command {
     /// Light scan plus forecast and alerts (run by the OS scheduler).
     Check,
 
-    /// Local trends and insights.
+    /// Local trends and insights from scull's own history (read-only).
     Insights {
+        /// Start of the report window: a duration back from now (7d, 30d, 12w, 48h) or a UTC
+        /// date (2026-10-01). Default: 30 days.
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        since: Option<crate::cmd::insights::When>,
         /// Optional subcommand.
         #[command(subcommand)]
         action: Option<InsightsAction>,
@@ -519,10 +523,34 @@ pub enum RulesAction {
 /// `scull insights` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum InsightsAction {
-    /// Export recorded trends.
-    Export,
-    /// Delete recorded trends.
-    Purge,
+    /// Write the insights report to stdout as JSON or CSV (redirect it to a file to keep it).
+    Export {
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
+        /// Start of the report window (as for `scull insights --since`).
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        since: Option<crate::cmd::insights::When>,
+    },
+    /// Forget recorded trends (history rows only; scans, plans, audit and files are kept).
+    /// Refused in the inspect-only alpha (#266).
+    Purge {
+        /// Only delete history older than this: a duration (90d, 12w) or a UTC date.
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        older_than: Option<crate::cmd::insights::When>,
+        /// Delete without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+/// Formats for `scull insights export`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ExportFormat {
+    /// The `scull/insights@1` JSON document.
+    Json,
+    /// One tidy CSV table: section, period, subject, metric, value.
+    Csv,
 }
 
 /// `scull agent` subcommands.

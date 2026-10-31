@@ -53,12 +53,12 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
-        Command::Check => planned("check", 114),
-        Command::Insights { action } => match action {
-            None => planned("insights", 116),
-            Some(InsightsAction::Export) => planned("insights export", 116),
-            Some(InsightsAction::Purge) => planned("insights purge", 116),
-        },
+        Command::Check => None,
+        Command::Insights {
+            action: Some(InsightsAction::Purge { .. }),
+            ..
+        } => Some(crate::cmd::insights::PURGE),
+        Command::Insights { .. } => None,
         Command::Agent {
             action: AgentAction::Install { .. },
         } => planned("agent install", 110),
@@ -135,6 +135,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Check => crate::cmd::check::run(ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
@@ -169,6 +170,9 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
                 include_quarantine: *include_quarantine,
             };
             crate::cmd::data::run_purge(ui, &opts, *confirm)?;
+        }
+        Command::Insights { since, action } => {
+            crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
         _ => {}
     }
@@ -216,10 +220,12 @@ mod tests {
                 Some(111),
             ),
             (&["approve", "plan-1"], "approve", Some(108)),
-            (&["check"], "check", Some(114)),
-            (&["insights"], "insights", Some(116)),
-            (&["insights", "export"], "insights export", Some(116)),
-            (&["insights", "purge"], "insights purge", Some(116)),
+            (&["insights", "purge"], "insights purge", Some(266)),
+            (
+                &["insights", "purge", "--older-than", "90d", "--confirm"],
+                "insights purge",
+                Some(266),
+            ),
             (&["agent", "install", "codex"], "agent install", Some(110)),
             (&["schedule", "enable"], "schedule enable", Some(114)),
             (&["schedule", "disable"], "schedule disable", Some(114)),
@@ -264,6 +270,13 @@ mod tests {
         assert_eq!(planned_of(&["init", "--yes"]), None);
         assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
         assert_eq!(planned_of(&["mcp", "serve"]), None);
+        for insights in [
+            &["insights"][..],
+            &["insights", "--since", "7d"],
+            &["insights", "export", "--format", "csv"],
+        ] {
+            assert_eq!(planned_of(insights), None, "{insights:?}");
+        }
     }
 
     #[test]

@@ -845,7 +845,9 @@ fn maintenance_never_touches_append_only_records() {
     scan(&mut s, 1, T0, &["/work"], ScanStatus::Completed, &three());
     s.maintain(
         &RetentionPolicy {
-            raw_free_space_secs: 0,
+            raw_secs: 0,
+            daily_secs: 0,
+            budget_bytes: Some(0),
         },
         T0 + 1000 * DAY,
     )

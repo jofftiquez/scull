@@ -273,6 +273,11 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         "data-purge",
     );
 
+    // Phase 4 read-only commands from main: forecast check and insights (exit 0 whether or not
+    // an alert fired; both only read history and the volumes' free space).
+    schemas.json(&cli, &["check"], "check");
+    schemas.json(&cli, &["insights"], "insights");
+
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
     clean_history_restore_outputs(&schemas, &cli);
 
@@ -814,7 +819,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         &mut seen,
         &schemas,
         &cli,
-        &["check", "--json"],
+        &["approve", "p", "--json"],
         ExitCode::General,
         Some("unsupported_platform"),
     );
