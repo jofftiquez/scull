@@ -41,6 +41,21 @@ dependency is MIT or Apache-2.0.
 Byte counts use the CLI's rules (binary units, `41.2 GiB`), so the same number reads the same in
 both places. An unknown size is shown as "size unknown", never 0.
 
+### Projects screen
+
+Projects (`#/projects`) reads `projects()`: the last complete scan. Its actions don't exist in
+the core bridge yet, so they go through `src/components/projects/bridge.ts` (`ProjectActions`),
+which is kept out of `ScullBridge`:
+
+- `cleanRegenerable(root, bytes)`: will become a plan for the project's S0 candidates that the
+  core Executor runs (planned commands `plan_project_clean` and `execute_plan`).
+- `neverSuggest(root)` and `reveal(root)` (Show in Finder/Explorer/Files).
+
+The mock only animates and touches nothing. Inside Tauri these calls reject until the commands
+exist. The recorded fixture has no S0 bytes (in-use probes aren't available in that build), so
+with the mock bridge `#/projects?demo=design` loads the design's eight projects to show the
+clean and its animation.
+
 ## Rust side
 
 The bridge crate is part of the normal workspace bar:
