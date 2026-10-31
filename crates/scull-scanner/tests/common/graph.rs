@@ -1,13 +1,16 @@
 //! An in-memory filesystem *graph* behind the [`Platform`] trait, for conditions a temp dir
 //! can't produce: directory hard links and bind mounts that make real cycles (the same
 //! directory reachable below itself), device nodes (need root to create), and Windows AF_UNIX
-//! socket reparse points.
+//! socket reparse points, and cloud-sync placeholders (macOS `SF_DATALESS`, Windows recall /
+//! offline attributes; [`Graph::set_cloud`]).
 //!
 //! It is deliberately adversarial: like an OS, it resolves links in the middle of a path, and
 //! its `read_dir` *follows* a link at the end of the path instead of refusing. So a scanner
 //! that ever asked to list a link, list a special file, or look at a path beneath a link would
 //! get an answer, and the attempt is recorded in [`Graph::violations`]. Listing a special
-//! file is what "opening" it means at this layer (SAFE-18).
+//! file is what "opening" it means at this layer (SAFE-18). Likewise, listing a cloud
+//! placeholder directory (which would hydrate it, PLT-04) or touching anything beneath one is
+//! answered and recorded as a violation.
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)] // test helpers: panics are failures
 
 use scull_core::FileIdentity;
@@ -21,6 +24,39 @@ use std::sync::Mutex;
 
 /// Windows `IO_REPARSE_TAG_AF_UNIX`: the reparse tag of an AF_UNIX socket file.
 pub const IO_REPARSE_TAG_AF_UNIX: u32 = 0x8000_0023;
+
+/// macOS `SF_DATALESS` (`st_flags`): content evicted to the cloud.
+pub const SF_DATALESS: u32 = 0x4000_0000;
+/// Windows `FILE_ATTRIBUTE_DIRECTORY`.
+pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+/// Windows `FILE_ATTRIBUTE_OFFLINE`.
+pub const FILE_ATTRIBUTE_OFFLINE: u32 = 0x0000_1000;
+/// Windows `FILE_ATTRIBUTE_RECALL_ON_OPEN`: cloud directory whose children aren't populated.
+pub const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
+/// Windows `FILE_ATTRIBUTE_PINNED`: "Always keep on this device" (cloud-managed, local).
+pub const FILE_ATTRIBUTE_PINNED: u32 = 0x0008_0000;
+/// Windows `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`: dehydrated file placeholder.
+pub const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+
+/// Cloud-related metadata bits of one node, as an OS would report them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Cloud {
+    /// Windows `FILE_ATTRIBUTE_*` bits.
+    pub file_attributes: Option<u32>,
+    /// macOS `st_flags`.
+    pub bsd_flags: Option<u32>,
+}
+
+impl Cloud {
+    /// Whether these bits mark content that is not on disk.
+    pub fn is_placeholder(self) -> bool {
+        let win = FILE_ATTRIBUTE_OFFLINE
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN
+            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
+        self.file_attributes.is_some_and(|a| a & win != 0)
+            || self.bsd_flags.is_some_and(|f| f & SF_DATALESS != 0)
+    }
+}
 
 /// Volume reported in every identity of the graph.
 const VOLUME: u64 = 7;
@@ -43,6 +79,8 @@ pub enum Node {
 pub struct Graph {
     root: PathBuf,
     nodes: Vec<Node>,
+    /// Cloud bits per node id (absent: none).
+    cloud: std::collections::HashMap<usize, Cloud>,
     md: Metadata,
     de: DirEntry,
     _tmp: tempfile::TempDir,
@@ -82,6 +120,7 @@ impl Graph {
         Self {
             root: tmp.path().join("graph"),
             nodes: vec![Node::Dir(Vec::new())],
+            cloud: std::collections::HashMap::new(),
             md,
             de,
             _tmp: tmp,
@@ -115,6 +154,15 @@ impl Graph {
             Node::Dir(children) => children.push((name.to_owned(), id)),
             other => panic!("parent {parent} is not a directory: {other:?}"),
         }
+    }
+
+    /// Report cloud bits for node `id` (e.g. make it a dataless or recall-on-open placeholder).
+    pub fn set_cloud(&mut self, id: usize, cloud: Cloud) {
+        self.cloud.insert(id, cloud);
+    }
+
+    fn is_placeholder(&self, id: usize) -> bool {
+        self.cloud.get(&id).is_some_and(|c| c.is_placeholder())
     }
 
     /// Number of nodes.
@@ -228,9 +276,19 @@ impl Graph {
         md.nlink = Some(1);
         md.mtime_unix = Some(1_700_000_000);
         md.readonly = false;
-        md.file_attributes = None;
+        let cloud = self.cloud.get(&id).copied().unwrap_or_default();
+        md.file_attributes = cloud.file_attributes;
+        md.bsd_flags = cloud.bsd_flags;
         md.reparse_tag = self.reparse_tag(id);
         md
+    }
+
+    /// Reaching a path through a placeholder directory means it was listed or hydrated.
+    fn check_beneath_placeholder(&self, r: &Resolved, path: &Path) {
+        let above = &r.chain[..r.chain.len() - 1];
+        if above.iter().any(|&id| self.is_placeholder(id)) {
+            self.violation(format!("beneath a cloud placeholder: {}", path.display()));
+        }
     }
 
     fn error(op: Operation, path: &Path, miss: Miss) -> PlatformError {
@@ -253,6 +311,7 @@ impl Platform for Graph {
         if r.via_link {
             self.violation(format!("metadata beneath a link: {}", path.display()));
         }
+        self.check_beneath_placeholder(&r, path);
         Ok(self.metadata_of(r.node))
     }
 
@@ -270,6 +329,14 @@ impl Platform for Graph {
         if kind.is_link() || lstat.via_link {
             self.violation(format!("listed through a {kind}: {}", path.display()));
         }
+        if self.is_placeholder(lstat.node) {
+            // A real OS would ask the sync provider to download it here (PLT-04).
+            self.violation(format!(
+                "listed (hydrated) a cloud placeholder: {}",
+                path.display()
+            ));
+        }
+        self.check_beneath_placeholder(&lstat, path);
         // Adversarial: follow a final link like `opendir` would.
         let r = self
             .resolve(path, true)

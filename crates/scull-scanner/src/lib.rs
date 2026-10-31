@@ -10,7 +10,7 @@
 //! * [`ScanEvent::DirDone`]: each directory's subtree totals (logical and allocated bytes,
 //!   file/dir/link counts, newest mtime), bottom-up, for "how big is subtree X?";
 //! * [`ScanEvent::Boundary`]: directories counted but not descended (depth limit, other
-//!   volume, identity loop);
+//!   volume, identity loop, cloud placeholder);
 //! * [`ScanEvent::Issue`]: permission denied and other errors, reported and never fatal.
 //!
 //! Memory stays bounded: only directories whose subtree is still in progress are held, and
@@ -99,7 +99,7 @@ pub use estimate::{
 pub use types::{
     Boundary, BoundaryReason, DirListing, DirSummary, EntryInfo, EventSink, IssueKind, IssueOp,
     NullSink, Progress, ScanError, ScanEvent, ScanIssue, ScanOptions, ScanOutcome, ScanStatus,
-    Totals,
+    Totals, is_cloud_placeholder,
 };
 pub use walk::scan;
 

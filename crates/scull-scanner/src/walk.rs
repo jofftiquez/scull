@@ -31,6 +31,7 @@ use crate::links::{LinkKind, LinkSet, OpenLink, OpenLinks};
 use crate::types::{
     Boundary, BoundaryReason, DirListing, DirSummary, EntryInfo, EventSink, IssueOp, Progress,
     ScanError, ScanEvent, ScanIssue, ScanOptions, ScanOutcome, ScanStatus, Totals,
+    is_cloud_placeholder,
 };
 use scull_core::{Confidence, FileIdentity};
 use scull_platform::{EntryKind, Metadata, Platform};
@@ -61,7 +62,8 @@ struct Agg {
     complete: bool,
     /// Multi-linked files with links outside the part seen so far, and the shared bytes.
     links: OpenLinks,
-    /// Some bytes could not be attributed (no identity or link count): low confidence.
+    /// Some bytes could not be attributed (no identity or link count), or a cloud placeholder
+    /// directory was left unlisted: low confidence.
     uncertain: bool,
 }
 
@@ -300,6 +302,11 @@ impl Shared {
 
     /// Why a subdirectory at `depth` with metadata `md` must not be descended, if it mustn't.
     fn boundary(&self, parent: &DirNode, depth: usize, md: &Metadata) -> Option<BoundaryReason> {
+        // First: listing a placeholder downloads it (PLT-04), whatever else applies. The
+        // check reads bits of the `lstat` result already in hand: no extra system call.
+        if is_cloud_placeholder(md) {
+            return Some(BoundaryReason::CloudPlaceholder);
+        }
         if self.opts.max_depth.is_some_and(|max| depth > max) {
             return Some(BoundaryReason::MaxDepth);
         }
@@ -375,6 +382,9 @@ impl Shared {
             }
             if md.kind == EntryKind::Dir {
                 if let Some(reason) = self.boundary(node, child_depth, &md) {
+                    // Its contents are unknown (and not on this disk): sized from its own
+                    // metadata only.
+                    local.uncertain |= reason == BoundaryReason::CloudPlaceholder;
                     boundaries.push(Boundary {
                         path: de.path,
                         depth: child_depth,
@@ -547,13 +557,17 @@ fn spawn_worker(shared: &Arc<Shared>) -> std::io::Result<()> {
 /// * FIFOs, sockets and devices are identified from metadata and never opened;
 /// * directories on another volume, below the depth limit, or identical to an ancestor are
 ///   counted and reported as [`ScanEvent::Boundary`], not descended;
+/// * cloud-sync placeholder directories (PLT-04) are never listed: counted from their own
+///   metadata and reported as a [`BoundaryReason::CloudPlaceholder`] boundary; placeholder
+///   files are counted from metadata and never opened (nothing is ever opened for data);
 /// * errors below the root are reported as [`ScanEvent::Issue`] and never stop the scan;
 /// * read-only: nothing is created, modified or persisted.
 ///
 /// # Errors
 ///
 /// Only if the scan cannot start: the root's metadata is unreadable, the root is not a real
-/// directory, or no worker thread can be spawned.
+/// directory, the root is a cloud placeholder ([`ScanError::RootCloudPlaceholder`]; listing
+/// it would download it), or no worker thread can be spawned.
 pub fn scan(
     platform: Arc<dyn Platform>,
     root: &Path,
@@ -567,6 +581,11 @@ pub fn scan(
         return Err(ScanError::RootNotADirectory {
             path: root.to_path_buf(),
             found: root_md.kind,
+        });
+    }
+    if is_cloud_placeholder(&root_md) {
+        return Err(ScanError::RootCloudPlaceholder {
+            path: root.to_path_buf(),
         });
     }
     let threads = options.effective_threads();

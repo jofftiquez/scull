@@ -1,7 +1,7 @@
 //! Options, events and results of a scan.
 
 use scull_core::{Confidence, ErrorKind, FileIdentity, Reclaimable, ScullError};
-use scull_platform::{EntryKind, Metadata, PlatformError};
+use scull_platform::{CloudState, EntryKind, Metadata, PlatformError};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
@@ -173,6 +173,10 @@ pub struct Totals {
     pub issues: u64,
     /// Directories reported as [`ScanEvent::Boundary`].
     pub boundaries: u64,
+    /// Entries (paths of any kind) that are cloud-sync placeholders: content not on this disk
+    /// (see [`is_cloud_placeholder`]). Placeholder directories are also counted in
+    /// [`Totals::boundaries`], since they are never listed.
+    pub cloud_placeholders: u64,
 }
 
 impl Totals {
@@ -190,6 +194,9 @@ impl Totals {
         }
         if md.nlink.is_some_and(|n| n > 1) && md.kind != EntryKind::Dir {
             self.multi_linked += 1;
+        }
+        if is_cloud_placeholder(md) {
+            self.cloud_placeholders += 1;
         }
     }
 
@@ -230,7 +237,17 @@ impl Totals {
         self.hardlinks_deduped += o.hardlinks_deduped;
         self.issues += o.issues;
         self.boundaries += o.boundaries;
+        self.cloud_placeholders += o.cloud_placeholders;
     }
+}
+
+/// Whether an entry's own metadata marks it as a cloud-sync placeholder whose content is not
+/// on this disk (Windows recall / offline attributes, macOS `SF_DATALESS`; see
+/// [`CloudState::from_metadata`]). Reading such a file, or listing such a directory, makes the
+/// sync provider download it (PLT-04, T-52), so the scanner never lists one and callers must
+/// never read one. Decided from metadata bits alone: no extra system call.
+pub fn is_cloud_placeholder(md: &Metadata) -> bool {
+    CloudState::from_metadata(md).is_some_and(|c| c.placeholder)
 }
 
 /// One entry of a directory listing, with its own no-follow metadata.
@@ -252,6 +269,11 @@ pub struct EntryInfo {
     pub nlink: Option<u64>,
     /// Modification time, seconds since the Unix epoch.
     pub mtime: Option<i64>,
+    /// A cloud-sync placeholder: its content is not on this disk (see
+    /// [`is_cloud_placeholder`]). Never read it; a placeholder directory was not listed and is
+    /// reported as a [`BoundaryReason::CloudPlaceholder`] boundary. Such entries are at least
+    /// S2 (PRD §8.3).
+    pub cloud_placeholder: bool,
 }
 
 impl EntryInfo {
@@ -264,6 +286,7 @@ impl EntryInfo {
             allocated: md.allocated_size,
             nlink: md.nlink,
             mtime: md.mtime_unix,
+            cloud_placeholder: is_cloud_placeholder(md),
         }
     }
 }
@@ -318,8 +341,9 @@ pub struct DirSummary {
     /// only): [`Confidence::High`] when every byte could be attributed (no hard links, or
     /// every link's identity known); [`Confidence::Low`] when some multi-linked file had no
     /// identity (nothing is deduplicated and its bytes are reported as shared), a link count
-    /// or allocated size was unknown, or part of the subtree could not be read
-    /// ([`DirSummary::complete`] is `false`).
+    /// or allocated size was unknown, part of the subtree could not be read
+    /// ([`DirSummary::complete`] is `false`), or the subtree holds a cloud placeholder
+    /// directory ([`BoundaryReason::CloudPlaceholder`]) whose contents are unknown.
     pub reclaim_confidence: Confidence,
 }
 
@@ -347,6 +371,12 @@ pub enum BoundaryReason {
     /// Same identity as one of its ancestors (e.g. a bind mount of a parent): descending
     /// would loop forever (T-53, FX-FS-02).
     Loop,
+    /// A cloud-sync placeholder directory (macOS dataless iCloud / File Provider folder,
+    /// Windows recall-on-open or offline directory; see [`is_cloud_placeholder`]). Listing it
+    /// would make the sync provider download it (PLT-04), so it is never listed: only its own
+    /// metadata is counted, and the summaries containing it get [`Confidence::Low`]
+    /// ([`DirSummary::reclaim_confidence`]).
+    CloudPlaceholder,
 }
 
 /// A directory that was counted but not descended.
@@ -486,6 +516,12 @@ pub enum ScanError {
         /// What it is instead.
         found: EntryKind,
     },
+    /// The root is a cloud-sync placeholder directory: listing it would download it
+    /// (PLT-04), so it is refused rather than scanned (see [`is_cloud_placeholder`]).
+    RootCloudPlaceholder {
+        /// The root.
+        path: PathBuf,
+    },
     /// A worker thread could not be started.
     Spawn(std::io::Error),
 }
@@ -499,6 +535,13 @@ impl fmt::Display for ScanError {
                 "cannot scan {}: not a directory (found {found}; links are never followed)",
                 path.display()
             ),
+            ScanError::RootCloudPlaceholder { path } => write!(
+                f,
+                "cannot scan {}: it is a cloud-sync placeholder (online-only); listing it would \
+                 download it. Make it available offline in the sync client first, or scan a \
+                 different folder",
+                path.display()
+            ),
             ScanError::Spawn(e) => write!(f, "cannot start scan worker: {e}"),
         }
     }
@@ -509,7 +552,7 @@ impl std::error::Error for ScanError {
         match self {
             ScanError::Root(e) => Some(e),
             ScanError::Spawn(e) => Some(e),
-            ScanError::RootNotADirectory { .. } => None,
+            ScanError::RootNotADirectory { .. } | ScanError::RootCloudPlaceholder { .. } => None,
         }
     }
 }
@@ -521,6 +564,7 @@ impl From<&ScanError> for ScullError {
             ScanError::Root(p) if p.is_permission_denied() => ErrorKind::PermissionDenied,
             ScanError::Root(_) => ErrorKind::Io,
             ScanError::RootNotADirectory { .. } => ErrorKind::Usage,
+            ScanError::RootCloudPlaceholder { .. } => ErrorKind::SafetyBlocked,
             ScanError::Spawn(_) => ErrorKind::Internal,
         };
         ScullError::new(kind, e.to_string())
