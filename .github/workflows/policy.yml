@@ -1,0 +1,43 @@
+name: Policy
+
+# Linux-only policy checks (cheap). Required alongside "CI ok" once branch protection is on.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1" # weekly: catch new RustSec advisories on unchanged code
+  workflow_dispatch:
+
+concurrency:
+  group: policy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    # P1-CI-02 / D-2 / T-54: licenses (no copyleft), RustSec advisories (the cargo-audit DB),
+    # yanked crates, unknown registries/git sources.
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  platform-boundary:
+    # P1-CI-03 / PLT-11: no OS APIs outside crates/scull-platform.
+    name: platform-boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Self-test the checker
+        run: python3 scripts/ci/test_platform_boundary.py
+      - name: Check the workspace
+        run: python3 scripts/ci/platform_boundary.py

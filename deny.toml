@@ -1,0 +1,57 @@
+# cargo-deny policy (P1-CI-02, D-2, T-54). Run: `cargo deny check`.
+# scull is MIT OR Apache-2.0 and must never ship copyleft code.
+
+[graph]
+all-features = true
+# Check what we ship on every OS, not just the host.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+# RustSec advisory DB (the same database cargo-audit uses).
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licenses only. Anything else (GPL, LGPL, AGPL, MPL, EUPL, SSPL, unlicensed) fails.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "BSL-1.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+# Our own crates are unpublished workspace members; they're covered by LICENSE-MIT/APACHE.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  # Desktop/MCP must never pull in GUI runtimes through the CLI build (HANDOVER §8.1);
+  # enforced per-crate in P3. Placeholder for explicit bans.
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
