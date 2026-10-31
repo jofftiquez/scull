@@ -223,6 +223,7 @@ fn forbidden_reason(key: &str) -> Option<&'static str> {
         ("mcp", _) => "repository files cannot change MCP settings",
         ("forge", _) => "repository files cannot enable forge lookups",
         ("output", _) => "repository files cannot change output preferences",
+        ("proactive", _) => "repository files cannot change alert policies",
         _ => return None,
     })
 }

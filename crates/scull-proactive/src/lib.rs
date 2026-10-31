@@ -10,13 +10,22 @@
 //!   free space drops below a reserve, and a confidence level. See the [module
 //!   docs](mod@forecast) for the method and the differences from the desktop's `forecast.ts`.
 //! * [`alert`]: alert records with severity and a stable key, and the forecast alerts.
+//! * [`policy`]: staleness policies, budgets and spike alerts (PRO-02/03/04/08), configured by
+//!   `[proactive]` in the user config.
 //! * [`history`]: thin read helpers that load the inputs from a [`scull_storage::Store`].
 
 pub mod alert;
 pub mod forecast;
 pub mod history;
+pub mod policy;
 pub mod stats;
 
 pub use alert::{Alert, AlertKind, Severity, forecast_alerts};
 pub use forecast::{Confidence, Forecast, ForecastPolicy, ForecastState, Release, forecast};
-pub use history::{forecast_all, forecast_volume};
+pub use history::{
+    category_series, category_usage, forecast_all, forecast_volume, free_space_drop_alerts,
+};
+pub use policy::{
+    Activity, SeriesPoint, StaleKind, Usage, activity_from_candidate, budget_alerts,
+    forecast_policy, stale_alerts, usage_from_candidates,
+};

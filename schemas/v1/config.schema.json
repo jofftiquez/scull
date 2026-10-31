@@ -1,5 +1,91 @@
 {
   "$defs": {
+    "Budget": {
+      "additionalProperties": false,
+      "description": "A size cap (PRO-03): the allocated bytes of every candidate matching all the given filters\nmust stay at or below `max_gib`. A budget with no filter caps everything scull found.",
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Category"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only candidates of this category (e.g. `project_artifact`, `package_cache`)."
+        },
+        "ecosystem": {
+          "description": "Only candidates whose project ecosystem is this (e.g. `rust`, `node`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_gib": {
+          "description": "The cap, in GiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Only candidates inside this directory (`~` allowed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "max_gib"
+      ],
+      "type": "object"
+    },
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
     "ColorChoice": {
       "description": "When to use color in terminal output.",
       "oneOf": [
@@ -108,6 +194,112 @@
             }
           ],
           "description": "How to print sizes."
+        }
+      },
+      "type": "object"
+    },
+    "ProactiveLayer": {
+      "additionalProperties": false,
+      "description": "`[proactive]` in a [`ConfigLayer`](super::ConfigLayer). See [`ProactiveConfig`].",
+      "properties": {
+        "alert_days": {
+          "description": "See [`ProactiveConfig::alert_days`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "budgets": {
+          "description": "See [`ProactiveConfig::budgets`].",
+          "items": {
+            "$ref": "#/$defs/Budget"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reserve_gib": {
+          "description": "See [`ProactiveConfig::reserve_gib`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "spike_gib": {
+          "description": "See [`ProactiveConfig::spike_gib`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "spike_min_gib": {
+          "description": "See [`ProactiveConfig::spike_min_gib`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "spike_percent": {
+          "description": "See [`ProactiveConfig::spike_percent`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "spike_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`ProactiveConfig::spike_window`]."
+        },
+        "stale_build": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`ProactiveConfig::stale_build`]."
+        },
+        "stale_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`ProactiveConfig::stale_cache`]."
+        },
+        "stale_worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`ProactiveConfig::stale_worktree`]."
         }
       },
       "type": "object"
@@ -247,7 +439,7 @@
   "$id": "https://scull.dev/schemas/v1/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n```",
+  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n```",
   "properties": {
     "forge": {
       "$ref": "#/$defs/ForgeLayer",
@@ -260,6 +452,10 @@
     "output": {
       "$ref": "#/$defs/OutputLayer",
       "description": "Terminal output."
+    },
+    "proactive": {
+      "$ref": "#/$defs/ProactiveLayer",
+      "description": "Alert policies (user config file only)."
     },
     "rules": {
       "$ref": "#/$defs/RulesLayer",

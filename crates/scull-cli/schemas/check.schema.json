@@ -4,6 +4,15 @@
       "additionalProperties": false,
       "description": "One alert.",
       "properties": {
+        "bytes": {
+          "description": "The bytes concerned (stale total, budget usage, growth), when there is such a number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "key": {
           "description": "Stable identity for de-duplication and responses: `<kind>:<subject>`.",
           "type": "string"
@@ -15,6 +24,13 @@
         "message": {
           "description": "One plain sentence for people (not terminal-escaped: callers escape on output).",
           "type": "string"
+        },
+        "paths": {
+          "description": "The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "raised_at": {
           "description": "When it was raised (Unix seconds).",
@@ -36,7 +52,8 @@
         "key",
         "subject",
         "message",
-        "raised_at"
+        "raised_at",
+        "paths"
       ],
       "type": "object"
     },
@@ -51,6 +68,31 @@
         {
           "const": "low_space",
           "description": "A volume is already below its reserve (measured).",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "Worktrees, build outputs or caches idle longer than their staleness window (PRO-02).",
+          "type": "string"
+        },
+        {
+          "const": "worktree_ttl_expired",
+          "description": "An agent or script worktree is past its registered TTL (PRO-08).",
+          "type": "string"
+        },
+        {
+          "const": "budget_exceeded",
+          "description": "A category, ecosystem or path is over its size budget (PRO-03).",
+          "type": "string"
+        },
+        {
+          "const": "growth_spike",
+          "description": "A category grew faster than the spike threshold (PRO-04).",
+          "type": "string"
+        },
+        {
+          "const": "free_space_drop",
+          "description": "A volume lost free space faster than the spike threshold (PRO-04).",
           "type": "string"
         }
       ]

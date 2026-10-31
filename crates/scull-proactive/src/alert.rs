@@ -18,6 +18,16 @@ pub enum AlertKind {
     DiskFullForecast,
     /// A volume is already below its reserve (measured).
     LowSpace,
+    /// Worktrees, build outputs or caches idle longer than their staleness window (PRO-02).
+    Stale,
+    /// An agent or script worktree is past its registered TTL (PRO-08).
+    WorktreeTtlExpired,
+    /// A category, ecosystem or path is over its size budget (PRO-03).
+    BudgetExceeded,
+    /// A category grew faster than the spike threshold (PRO-04).
+    GrowthSpike,
+    /// A volume lost free space faster than the spike threshold (PRO-04).
+    FreeSpaceDrop,
 }
 
 impl AlertKind {
@@ -26,6 +36,11 @@ impl AlertKind {
         match self {
             AlertKind::DiskFullForecast => "disk_full_forecast",
             AlertKind::LowSpace => "low_space",
+            AlertKind::Stale => "stale",
+            AlertKind::WorktreeTtlExpired => "worktree_ttl_expired",
+            AlertKind::BudgetExceeded => "budget_exceeded",
+            AlertKind::GrowthSpike => "growth_spike",
+            AlertKind::FreeSpaceDrop => "free_space_drop",
         }
     }
 }
@@ -60,7 +75,14 @@ pub struct Alert {
     pub message: String,
     /// When it was raised (Unix seconds).
     pub raised_at: i64,
+    /// The bytes concerned (stale total, budget usage, growth), when there is such a number.
+    pub bytes: Option<u64>,
+    /// The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.
+    pub paths: Vec<String>,
 }
+
+/// At most this many paths are named in one alert.
+pub const MAX_ALERT_PATHS: usize = 5;
 
 impl Alert {
     /// An alert with its key derived from `kind` and `subject`.
@@ -79,7 +101,24 @@ impl Alert {
             subject,
             message: message.into(),
             raised_at,
+            bytes: None,
+            paths: Vec::new(),
         }
+    }
+
+    /// With the bytes concerned.
+    #[must_use]
+    pub fn with_bytes(mut self, bytes: u64) -> Alert {
+        self.bytes = Some(bytes);
+        self
+    }
+
+    /// With the folders responsible (truncated to [`MAX_ALERT_PATHS`]).
+    #[must_use]
+    pub fn with_paths(mut self, mut paths: Vec<String>) -> Alert {
+        paths.truncate(MAX_ALERT_PATHS);
+        self.paths = paths;
+        self
     }
 }
 

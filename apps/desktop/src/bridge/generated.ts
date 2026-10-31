@@ -1991,6 +1991,7 @@ export interface Config {
   forge?: ForgeConfig;
   mcp?: McpConfig;
   output?: OutputConfig;
+  proactive?: ProactiveConfig;
   rules?: RulesConfig;
   scan?: ScanConfig;
 }
@@ -2043,6 +2044,89 @@ export interface McpConfig {
 export interface OutputConfig {
   color?: ColorChoice;
   units?: SizeUnits;
+}
+/**
+ * Alert policies (PRD §16): `[proactive]` in the user config file.
+ *
+ * ```toml
+ * [proactive]
+ * reserve_gib = 10          # "full" means less free space than this
+ * alert_days = 14           # alert when a drive is forecast to be full within this
+ * stale_worktree = "14d"    # worktrees idle for longer than this
+ * stale_build = "30d"       # build outputs of projects idle for longer than this
+ * stale_cache = "90d"       # caches untouched for longer than this
+ * spike_gib = 20            # alert when something grows by this much...
+ * spike_window = "24h"      # ...within this window
+ * spike_percent = 50        # or by this percentage (and at least spike_min_gib); 0 = off
+ * spike_min_gib = 5
+ *
+ * [[proactive.budgets]]     # "all Rust target/ <= 50 GB"
+ * category = "project_artifact"
+ * ecosystem = "rust"
+ * max_gib = 50
+ *
+ * [[proactive.budgets]]     # "this project <= 30 GB"
+ * path = "~/Projects/monorepo"
+ * max_gib = 30
+ * ```
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ProactiveConfig".
+ */
+export interface ProactiveConfig {
+  /**
+   * Alert when a drive is forecast to drop below the reserve within this many days.
+   */
+  alert_days?: number;
+  /**
+   * Size caps per category, ecosystem or path (PRO-03). None by default.
+   */
+  budgets?: Budget[];
+  /**
+   * "Full" means less free space than this many GiB (PRO-01).
+   */
+  reserve_gib?: number;
+  /**
+   * Alert when a category or drive grows by this many GiB within `spike_window` (PRO-04).
+   */
+  spike_gib?: number;
+  /**
+   * ...when the growth is at least this many GiB.
+   */
+  spike_min_gib?: number;
+  /**
+   * Also alert on growth by this percentage within the window (0 turns it off)...
+   */
+  spike_percent?: number;
+  spike_window?: DurationSpec;
+  stale_build?: DurationSpec;
+  stale_cache?: DurationSpec;
+  stale_worktree?: DurationSpec;
+}
+/**
+ * A size cap (PRO-03): the allocated bytes of every candidate matching all the given filters
+ * must stay at or below `max_gib`. A budget with no filter caps everything scull found.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Budget".
+ */
+export interface Budget {
+  /**
+   * Only candidates of this category (e.g. `project_artifact`, `package_cache`).
+   */
+  category?: Category | null;
+  /**
+   * Only candidates whose project ecosystem is this (e.g. `rust`, `node`).
+   */
+  ecosystem?: string | null;
+  /**
+   * The cap, in GiB.
+   */
+  max_gib: number;
+  /**
+   * Only candidates inside this directory (`~` allowed).
+   */
+  path?: string | null;
 }
 /**
  * Optional (user or community) rules. Disabled until enabled here (CLS-04).

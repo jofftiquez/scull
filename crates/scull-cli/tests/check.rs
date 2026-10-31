@@ -225,3 +225,113 @@ fn status_shows_a_confident_forecast() {
     assert_eq!(v["data"]["forecasts"][0]["days_until_threshold"], 9);
     assert_eq!(v["data"]["forecasts"][0]["confidence"], "high");
 }
+
+/// `[proactive]` thresholds from the user config drive the budget and free-space drop alerts
+/// (P4-PRO-02).
+#[test]
+fn check_raises_budget_and_drop_alerts_from_config() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let config = home.path().join("config");
+    std::fs::create_dir_all(&config).expect("config dir");
+    std::fs::write(
+        config.join("config.toml"),
+        "[proactive]\nspike_gib = 30\n\n[[proactive.budgets]]\ncategory = \"container\"\nmax_gib = 50\n",
+    )
+    .expect("config");
+    let mut store = Store::open(&db_path(home.path()), &DefaultPermissions).expect("open");
+    let at = now() - 3_600;
+    let scan_id = ScanId::from_suffix("b1").expect("id");
+    store
+        .record_scan_start(&ScanStart {
+            scan_id: scan_id.clone(),
+            started_at: at - 60,
+            roots: vec![FsPath::from("/home/u")],
+        })
+        .expect("start");
+    store
+        .record_scan(&ScanRecord {
+            finish: ScanFinish {
+                scan_id,
+                finished_at: at,
+                status: ScanStatus::Completed,
+                totals: ScanTotals {
+                    entries_scanned: 1,
+                    candidates: 1,
+                    logical_bytes: 70 * GIB,
+                    allocated_bytes: 70 * GIB,
+                    reclaimable_bytes: 70 * GIB,
+                    errors: 0,
+                },
+                rollups: vec![scull_storage::Rollup {
+                    category: scull_core::Category::Container,
+                    tier: scull_core::Tier::S1,
+                    ecosystem: None,
+                    items: 1,
+                    logical_bytes: 70 * GIB,
+                    allocated_bytes: 70 * GIB,
+                    reclaimable_bytes: 70 * GIB,
+                }],
+            },
+            candidates: &[],
+            volumes: &[VolumeSample {
+                volume_id: VOL.to_owned(),
+                total: 500 * GIB,
+                free: 160 * GIB,
+                at,
+            }],
+        })
+        .expect("scan");
+    store
+        .record_free_space(
+            &[VolumeSample {
+                volume_id: VOL.to_owned(),
+                total: 500 * GIB,
+                free: 200 * GIB,
+                at: at - 19 * 3_600,
+            }],
+            None,
+        )
+        .expect("sample");
+    drop(store);
+
+    let o = scull_in(home.path(), &["check", "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate("check.schema.json", &v);
+    let alerts = v["data"]["alerts"].as_array().expect("alerts");
+    let keys: Vec<&str> = alerts.iter().filter_map(|a| a["key"].as_str()).collect();
+    assert!(keys.contains(&"budget_exceeded:container"), "{keys:?}");
+    let drop_key = format!("free_space_drop:{VOL}");
+    assert!(keys.contains(&drop_key.as_str()), "{keys:?}");
+    let drop = alerts
+        .iter()
+        .find(|a| a["kind"] == "free_space_drop")
+        .expect("drop");
+    assert_eq!(drop["bytes"], 40 * GIB);
+
+    // Raise the spike threshold above the drop: only the budget remains.
+    std::fs::write(
+        config.join("config.toml"),
+        "[proactive]\nspike_gib = 50\nspike_percent = 0\n\n[[proactive.budgets]]\ncategory = \"container\"\nmax_gib = 50\n",
+    )
+    .expect("config");
+    let o = scull_in(home.path(), &["check", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    let kinds: Vec<&str> = v["data"]["alerts"]
+        .as_array()
+        .expect("alerts")
+        .iter()
+        .filter_map(|a| a["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, vec!["budget_exceeded"]);
+    let text = String::from_utf8(scull_in(home.path(), &["check"]).stdout).expect("utf-8");
+    assert!(
+        text.contains("warning: container uses 70.0 GiB, over its 50.0 GiB budget"),
+        "{text}"
+    );
+}

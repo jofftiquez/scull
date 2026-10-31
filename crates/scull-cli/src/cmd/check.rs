@@ -6,8 +6,17 @@
 //!    the volumes holding the configured scan roots. The samples are recorded in the history
 //!    database like a scan's (INS-06: "every scan and every scheduled check").
 //! 2. **Forecast** each volume from its last 30 days of samples ([`scull_proactive::forecast()`]).
-//! 3. **Alert** on volumes below their reserve, or forecast to drop below it within 14 days
-//!    with at least medium confidence ([`scull_proactive::forecast_alerts`]).
+//! 3. **Alert** on volumes below their reserve, or forecast to drop below it within
+//!    `proactive.alert_days` (default 14) with at least medium confidence
+//!    ([`scull_proactive::forecast_alerts`]); on category budgets exceeded at the latest scan
+//!    ([`scull_proactive::budget_alerts`], PRO-03); and on volumes that lost more than the
+//!    spike threshold of free space within the spike window
+//!    ([`scull_proactive::free_space_drop_alerts`], PRO-04). Thresholds come from
+//!    `[proactive]` in the user config.
+//!
+//! Staleness alerts, ecosystem and path budgets need a scan's candidates, and category growth
+//! spikes need scans of the same roots; they come with the light scan (PRO-07). The policy
+//! functions are in `scull-proactive`.
 //!
 //! Writes nothing but history rows and never deletes anything: an alert points to a reviewed
 //! cleanup, it never performs one. Exit code 0 whether or not alerts fired (alerts are data).
@@ -26,7 +35,7 @@ use crate::output::escape::escape_for_terminal;
 use crate::output::json::SchemaId;
 use schemars::JsonSchema;
 use scull_core::{ErrorKind, ScullError};
-use scull_proactive::{Alert, Confidence, ForecastPolicy, ForecastState, Severity};
+use scull_proactive::{Alert, Confidence, ForecastState, Severity};
 use scull_storage::VolumeSample;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -84,9 +93,16 @@ pub fn run(ui: &Ui) -> Result<(), ScullError> {
             .record_free_space(&samples, None)
             .map_err(store_error)?;
     }
-    let policy = ForecastPolicy::default();
+    let cfg = &loaded.config.proactive;
+    let policy = scull_proactive::forecast_policy(cfg);
     let forecasts = scull_proactive::forecast_all(&store, now, &policy).map_err(store_error)?;
-    let alerts = scull_proactive::forecast_alerts(&forecasts, &policy, now);
+    let mut alerts = scull_proactive::forecast_alerts(&forecasts, &policy, now);
+    if !cfg.budgets.is_empty() {
+        let usage = scull_proactive::category_usage(&store, now).map_err(store_error)?;
+        alerts.extend(scull_proactive::budget_alerts(&cfg.budgets, &usage, now));
+    }
+    alerts.extend(scull_proactive::free_space_drop_alerts(&store, cfg, now).map_err(store_error)?);
+    scull_proactive::alert::sort_alerts(&mut alerts);
     let report = CheckReport {
         now,
         sampled: samples
@@ -244,6 +260,9 @@ pub fn render(r: &CheckReport) -> String {
             Severity::Info => "info",
         };
         out.push_str(&format!("{level}: {}\n", a.message));
+        for p in &a.paths {
+            out.push_str(&format!("    {p}\n"));
+        }
     }
     if r.alerts.is_empty() {
         out.push_str("no alerts\n");

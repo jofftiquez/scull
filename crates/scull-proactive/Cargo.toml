@@ -15,9 +15,10 @@ workspace = true
 [dependencies]
 scull-storage.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+scull-core.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-serde_json.workspace = true
 tempfile = "3"

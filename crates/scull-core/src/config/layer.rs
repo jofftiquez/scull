@@ -1,6 +1,6 @@
 //! Config layers (CLI, environment, user file), the merge (CFG-02) and value origins.
 
-use super::{ColorChoice, Config, DurationSpec, FIELDS, SizeUnits};
+use super::{ColorChoice, Config, DurationSpec, FIELDS, ProactiveLayer, SizeUnits};
 use crate::error::{ErrorKind, ScullError};
 use crate::tier::Tier;
 use schemars::JsonSchema;
@@ -42,6 +42,10 @@ use std::path::PathBuf;
 /// [output]
 /// color = "auto"           # auto | always | never
 /// units = "binary"         # binary | decimal
+///
+/// [proactive]              # alert policies; see `ProactiveConfig`
+/// reserve_gib = 10
+/// alert_days = 14
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +65,9 @@ pub struct ConfigLayer {
     /// Terminal output.
     #[serde(default, skip_serializing_if = "OutputLayer::is_empty")]
     pub output: OutputLayer,
+    /// Alert policies (user config file only).
+    #[serde(default, skip_serializing_if = "ProactiveLayer::is_empty")]
+    pub proactive: ProactiveLayer,
 }
 
 /// `[scan]` in a [`ConfigLayer`]. See [`super::ScanConfig`] for the meaning of each field.
@@ -560,6 +567,16 @@ pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> Resolve
     pick!(forge.enabled, scalar);
     pick!(output.color, scalar);
     pick!(output.units, scalar);
+    pick!(proactive.reserve_gib, scalar);
+    pick!(proactive.alert_days, scalar);
+    pick!(proactive.stale_worktree, scalar);
+    pick!(proactive.stale_build, scalar);
+    pick!(proactive.stale_cache, scalar);
+    pick!(proactive.spike_gib, scalar);
+    pick!(proactive.spike_window, scalar);
+    pick!(proactive.spike_percent, scalar);
+    pick!(proactive.spike_min_gib, scalar);
+    pick!(proactive.budgets, scalar);
 
     // File-only: destructive MCP tools.
     if let Some(v) = user.mcp.destructive {
