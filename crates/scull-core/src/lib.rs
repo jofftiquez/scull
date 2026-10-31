@@ -8,11 +8,14 @@
 //! * [`Evidence`] / [`TierReason`]: why a candidate got its tier (PRD §8.3).
 //! * [`Sizes`]: logical, allocated and reclaimable bytes with [`Confidence`] (PRD §9).
 //! * [`ItemId`], [`FileIdentity`], [`ScanId`], [`PlanId`], [`OperationId`]: identifiers.
+//! * [`ScullError`] / [`ErrorKind`] / [`ExitCode`]: the shared error model and stable exit
+//!   codes (CLI-05).
 //!
 //! See `docs/ARCHITECTURE.md` for how these flow through the engine.
 
 mod action;
 mod candidate;
+mod error;
 mod evidence;
 mod id;
 mod path;
@@ -21,6 +24,7 @@ mod tier;
 
 pub use action::{Action, Restorability};
 pub use candidate::{Candidate, Category, Flags, ProjectRef, Regeneration, RegenerationCost};
+pub use error::{ErrorKind, ExitCode, ScullError};
 pub use evidence::{Evidence, ReasonCode, TierReason};
 pub use id::{FileIdentity, ItemId, OperationId, PlanId, RuleRef, ScanId};
 pub use path::FsPath;
