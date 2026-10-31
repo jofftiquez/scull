@@ -131,6 +131,9 @@ pub enum Command {
 
     /// List detected projects, or inspect one.
     Projects {
+        /// Scan roots (default: `scan.roots` from the config).
+        #[command(flatten)]
+        roots: RootArgs,
         /// Optional subcommand.
         #[command(subcommand)]
         action: Option<ProjectsAction>,
@@ -138,6 +141,9 @@ pub enum Command {
 
     /// List Git worktrees and their state, inspect one, or register a TTL.
     Worktrees {
+        /// Scan roots (default: `scan.roots` from the config).
+        #[command(flatten)]
+        roots: RootArgs,
         /// Optional subcommand.
         #[command(subcommand)]
         action: Option<WorktreesAction>,
@@ -250,9 +256,41 @@ pub enum Command {
 /// Arguments for `scull scan`.
 #[derive(Debug, Args)]
 pub struct ScanArgs {
-    /// Directories to scan.
-    #[arg(required = true, value_name = "PATH")]
+    /// Directories to scan (default: `scan.roots` from the config file).
+    #[arg(value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+
+    /// Allow scanning a filesystem root, your home folder, or a folder that contains it
+    /// (refused by default, CFG-04).
+    #[arg(long)]
+    pub allow_broad_roots: bool,
+
+    /// Do not record this scan in the local history database.
+    #[arg(long)]
+    pub no_history: bool,
+
+    /// Allow scan roots on network or virtual volumes such as NFS, SMB, FUSE, tmpfs or
+    /// overlay (skipped by default, D-22; backup volumes are never scanned).
+    #[arg(long)]
+    pub allow_network_roots: bool,
+}
+
+/// Scan roots for `scull projects` and `scull worktrees`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct RootArgs {
+    /// Directory to scan; repeat for several (default: `scan.roots` from the config file).
+    #[arg(long = "root", value_name = "PATH", global = true)]
+    pub roots: Vec<PathBuf>,
+
+    /// Allow scanning a filesystem root, your home folder, or a folder that contains it
+    /// (refused by default, CFG-04).
+    #[arg(long, global = true)]
+    pub allow_broad_roots: bool,
+
+    /// Allow scan roots on network or virtual volumes such as NFS, SMB, FUSE, tmpfs or
+    /// overlay (skipped by default, D-22; backup volumes are never scanned).
+    #[arg(long, global = true)]
+    pub allow_network_roots: bool,
 }
 
 /// Arguments for `scull init` (ONB-01…04). Interactive on a terminal; with `--yes`, or when

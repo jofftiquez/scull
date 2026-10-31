@@ -1074,6 +1074,7 @@ dependencies = [
  "scull-cleaner",
  "scull-core",
  "scull-detectors",
+ "scull-engine",
  "scull-fixtures",
  "scull-git",
  "scull-mcp",
@@ -1113,6 +1114,24 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "scull-engine"
+version = "0.0.0"
+dependencies = [
+ "schemars",
+ "scull-core",
+ "scull-detectors",
+ "scull-fixtures",
+ "scull-git",
+ "scull-platform",
+ "scull-safety",
+ "scull-scanner",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

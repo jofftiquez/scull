@@ -34,19 +34,15 @@ const fn planned(name: &'static str, issue: u32) -> Option<Planned> {
 /// implemented in this build.
 pub fn planned_for(cmd: &Command) -> Option<Planned> {
     match cmd {
-        Command::Scan(_) => planned("scan", 56),
-        Command::Projects { action: None } => planned("projects", 56),
-        Command::Projects {
-            action: Some(ProjectsAction::Inspect { .. }),
-        } => planned("projects inspect", 56),
-        Command::Worktrees { action: None } => planned("worktrees", 56),
+        Command::Scan(_) | Command::Projects { .. } | Command::Caches => None,
         Command::Worktrees {
-            action: Some(WorktreesAction::Inspect { .. }),
-        } => planned("worktrees inspect", 56),
+            action: None | Some(WorktreesAction::Inspect { .. }),
+            ..
+        } => None,
         Command::Worktrees {
             action: Some(WorktreesAction::Register { .. }),
+            ..
         } => planned("worktrees register", 111),
-        Command::Caches => planned("caches", 56),
         Command::Clean(args) => match args.action {
             None => planned("clean", 79),
             Some(CleanAction::Caches { .. }) => planned("clean caches", 80),
@@ -113,6 +109,24 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
     cancel::check()?;
     match &cli.command {
         Command::Doctor => crate::cmd::doctor::run(ui)?,
+        Command::Scan(args) => crate::cmd::scan::run(args, ui)?,
+        Command::Projects {
+            roots,
+            action: None,
+        } => crate::cmd::projects::run(roots, ui)?,
+        Command::Projects {
+            roots,
+            action: Some(ProjectsAction::Inspect { path }),
+        } => crate::cmd::projects::inspect(path, roots, ui)?,
+        Command::Worktrees {
+            roots,
+            action: None,
+        } => crate::cmd::worktrees::run(roots, ui)?,
+        Command::Worktrees {
+            action: Some(WorktreesAction::Inspect { path }),
+            ..
+        } => crate::cmd::worktrees::inspect(path, ui)?,
+        Command::Caches => crate::cmd::caches::run(ui)?,
         Command::LargeFiles {
             path,
             min_size,
@@ -166,21 +180,11 @@ mod tests {
     #[test]
     fn every_planned_command_names_its_issue() {
         let table: &[(&[&str], &str, Option<u32>)] = &[
-            (&["scan", "."], "scan", Some(56)),
-            (&["projects"], "projects", Some(56)),
-            (&["projects", "inspect", "."], "projects inspect", Some(56)),
-            (&["worktrees"], "worktrees", Some(56)),
-            (
-                &["worktrees", "inspect", "."],
-                "worktrees inspect",
-                Some(56),
-            ),
             (
                 &["worktrees", "register", ".", "--ttl", "7d"],
                 "worktrees register",
                 Some(111),
             ),
-            (&["caches"], "caches", Some(56)),
             (&["clean"], "clean", Some(79)),
             (
                 &["clean", "--dry-run", "--output", "p.json"],
@@ -220,6 +224,16 @@ mod tests {
         }
         assert_eq!(planned_of(&["completions", "bash"]), None);
         assert_eq!(planned_of(&["doctor"]), None);
+        for implemented in [
+            &["scan", "."][..],
+            &["projects"],
+            &["projects", "inspect", "."],
+            &["worktrees"],
+            &["worktrees", "inspect", "."],
+            &["caches"],
+        ] {
+            assert_eq!(planned_of(implemented), None, "{implemented:?}");
+        }
         assert_eq!(planned_of(&["large-files", "."]), None);
         assert_eq!(planned_of(&["status", "--short"]), None);
         assert_eq!(planned_of(&["rules", "list"]), None);
@@ -230,12 +244,12 @@ mod tests {
     #[test]
     fn not_implemented_error_is_clear_and_exits_1() {
         let e = not_implemented(Planned {
-            name: "scan",
-            issue: Some(56),
+            name: "history",
+            issue: Some(81),
         });
         assert_eq!(
             e.message,
-            "`scull scan` is not implemented yet (tracked in #56)"
+            "`scull history` is not implemented yet (tracked in #81)"
         );
         assert_eq!(e.exit_code(), ExitCode::General);
         let e = not_implemented(Planned {

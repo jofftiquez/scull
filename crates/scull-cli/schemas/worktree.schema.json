@@ -1,0 +1,1684 @@
+{
+  "$defs": {
+    "Action": {
+      "description": "The action proposed for a candidate.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No action: the item is blocked (S3) or inspect-only.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete through the safe executor (S0 default, D-3). Restore path is regeneration.",
+          "properties": {
+            "type": {
+              "const": "delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Atomic same-volume move into `.scull-quarantine/<operation-id>/` (S1/S2 default).",
+          "properties": {
+            "type": {
+              "const": "quarantine",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move to the platform Trash / Recycle Bin (fallback when quarantine isn't possible).",
+          "properties": {
+            "type": {
+              "const": "trash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a tool's own cleanup command (package caches, Docker; SAFE-06, QC-03).",
+          "properties": {
+            "args": {
+              "description": "Structured arguments (no shell), e.g. `[\"cache\", \"verify\"]`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tool": {
+              "description": "Tool name, e.g. \"npm\".",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree remove` (never `--force` unless authorized per item).",
+          "properties": {
+            "type": {
+              "const": "git_worktree_remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`git worktree prune` for a stale registration.",
+          "properties": {
+            "type": {
+              "const": "git_worktree_prune",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Activity": {
+      "description": "The newest modification observed inside a worktree.\n\nMissing evidence never counts as evidence of inactivity (PRD §8.4): when the sample is\nincomplete, the true newest modification may be later than [`Activity::newest_unix`].",
+      "properties": {
+        "complete": {
+          "description": "Whether every entry was looked at. `false` when the bound was hit or some folder or entry\ncouldn't be read: the newest modification is then a lower bound.",
+          "type": "boolean"
+        },
+        "entries_sampled": {
+          "description": "Entries whose metadata was read.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "newest_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The entry that had it."
+        },
+        "newest_unix": {
+          "description": "Unix timestamp (seconds, UTC) of the newest modification time seen, if any entry had one.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries_sampled",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "ArtifactCleanup": {
+      "description": "Whether the worktree's regenerable artifacts may be cleaned on their own (GIT-03, last\ncolumn). Each artifact is still classified by the PRD §8.3 rubric.",
+      "oneOf": [
+        {
+          "const": "allowed",
+          "description": "Allowed.",
+          "type": "string"
+        },
+        {
+          "const": "blocked_for_this_run",
+          "description": "The worktree is in use: blocked for this run.",
+          "type": "string"
+        },
+        {
+          "const": "not_applicable",
+          "description": "The worktree folder is missing: nothing to clean.",
+          "type": "string"
+        }
+      ]
+    },
+    "CommitList": {
+      "description": "Commits reachable from HEAD but from no remote-tracking ref.",
+      "properties": {
+        "count": {
+          "description": "How many (a lower bound when `truncated`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "oids": {
+          "description": "The newest ones, at most [`AnalyzeOptions::max_listed_commits`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "description": "Whether counting stopped at [`AnalyzeOptions::max_commits`].",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "count",
+        "oids",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "Evidence": {
+      "description": "A fact observed about a candidate. Evidence is what the preview shows under \"why\".\n\nMissing evidence never counts as evidence of inactivity (PRD §8.4): when a signal can't be\nread, record [`Evidence::SignalUnavailable`] instead of omitting it.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A project marker at the expected relative location (e.g. `Cargo.toml` beside `target/`).\nCLS-03: a directory name alone is never enough.",
+          "properties": {
+            "kind": {
+              "const": "marker",
+              "type": "string"
+            },
+            "path": {
+              "$ref": "#/$defs/FsPath",
+              "description": "Path of the marker file."
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A lockfile or manifest the artifact can be reproduced from.",
+          "properties": {
+            "kind": {
+              "const": "lockfile",
+              "type": "string"
+            },
+            "path": {
+              "$ref": "#/$defs/FsPath",
+              "description": "Path of the lockfile."
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The artifact type is known to a rule.",
+          "properties": {
+            "artifact": {
+              "description": "Human-readable artifact type, e.g. \"Cargo build output\".",
+              "type": "string"
+            },
+            "kind": {
+              "const": "known_artifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Files inside the candidate are tracked by Git.",
+          "properties": {
+            "files": {
+              "description": "Number of tracked files found (may be a lower bound).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "git_tracked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "files"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The path is inside a protected root (SAFE-03).",
+          "properties": {
+            "kind": {
+              "const": "protected_root",
+              "type": "string"
+            },
+            "root": {
+              "$ref": "#/$defs/FsPath",
+              "description": "The protected root."
+            }
+          },
+          "required": [
+            "kind",
+            "root"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user excluded this path in config.",
+          "properties": {
+            "kind": {
+              "const": "user_exclusion",
+              "type": "string"
+            },
+            "rule": {
+              "description": "The exclusion entry that matched.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `.scull-protect` marker covers this path.",
+          "properties": {
+            "kind": {
+              "const": "protect_marker",
+              "type": "string"
+            },
+            "path": {
+              "$ref": "#/$defs/FsPath",
+              "description": "Path of the marker."
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The candidate is in use right now.",
+          "properties": {
+            "by": {
+              "description": "Process name or tool, if known.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "in_use",
+              "type": "string"
+            },
+            "signal": {
+              "description": "What showed it, e.g. \"open handle\", \"process cwd\", \"cargo lock\".",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "signal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Newest modification inside the candidate, sampled with a bound.",
+          "properties": {
+            "kind": {
+              "const": "last_modified",
+              "type": "string"
+            },
+            "newest_unix": {
+              "description": "Unix timestamp (seconds, UTC) of the newest observed mtime.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "sampled": {
+              "description": "Whether sampling hit its bound (the true newest may be later).",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "newest_unix",
+            "sampled"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The candidate crosses a mount or volume boundary.",
+          "properties": {
+            "kind": {
+              "const": "crosses_mount",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reached through a symlink or junction pointing outside the scan root.",
+          "properties": {
+            "kind": {
+              "const": "link_escape",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/FsPath",
+              "description": "Where the link points."
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cloud-sync placeholder or synced folder (iCloud, OneDrive, Dropbox). Never hydrated.",
+          "properties": {
+            "kind": {
+              "const": "cloud_sync",
+              "type": "string"
+            },
+            "provider": {
+              "description": "Provider name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Hardlinks shared with something outside the candidate (e.g. pnpm store).",
+          "properties": {
+            "kind": {
+              "const": "hardlinked",
+              "type": "string"
+            },
+            "shared_bytes": {
+              "description": "Bytes shared with other links.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "shared_bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A signal could not be read on this platform or with current permissions.",
+          "properties": {
+            "kind": {
+              "const": "signal_unavailable",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why, e.g. \"needs Full Disk Access\".",
+              "type": "string"
+            },
+            "signal": {
+              "description": "Which signal, e.g. \"open files\".",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "signal",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Free-form note from a detector (shown, never used for tiering).",
+          "properties": {
+            "kind": {
+              "const": "note",
+              "type": "string"
+            },
+            "text": {
+              "description": "The note.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "HeadState": {
+      "description": "What HEAD points at, resolved.",
+      "oneOf": [
+        {
+          "description": "A branch is checked out.",
+          "properties": {
+            "kind": {
+              "const": "branch",
+              "type": "string"
+            },
+            "name": {
+              "description": "Full ref name, e.g. `refs/heads/feature`.",
+              "type": "string"
+            },
+            "oid": {
+              "description": "The commit it points at; `None` for an unborn branch (no commits yet).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "HEAD is detached.",
+          "properties": {
+            "kind": {
+              "const": "detached",
+              "type": "string"
+            },
+            "oid": {
+              "description": "The commit.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "oid"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "LockState": {
+      "description": "Lock state of a linked worktree.",
+      "oneOf": [
+        {
+          "description": "Not locked.",
+          "properties": {
+            "state": {
+              "const": "unlocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Locked with `git worktree lock`; must be shown with its reason (FX-GIT-09).",
+          "properties": {
+            "reason": {
+              "description": "The reason given with `--reason`, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "const": "locked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MatchedArtifact": {
+      "description": "An ignored entry that a detector rule recognised as a regenerable artifact.",
+      "properties": {
+        "path": {
+          "description": "The entry, relative to the worktree.",
+          "type": "string"
+        },
+        "rule": {
+          "description": "The rule that matched.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "rule"
+      ],
+      "type": "object"
+    },
+    "MergeStatus": {
+      "description": "Whether HEAD is merged, and **how that was determined** (GIT-02).",
+      "oneOf": [
+        {
+          "description": "Proven: HEAD is an ancestor of a default-branch ref.",
+          "properties": {
+            "default_ref": {
+              "description": "The default-branch ref, e.g. `refs/remotes/origin/main`.",
+              "type": "string"
+            },
+            "method": {
+              "const": "ancestor_of_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method",
+            "default_ref"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Proven pushed: HEAD is reachable from a remote-tracking ref (so every commit on it is).",
+          "properties": {
+            "method": {
+              "const": "reachable_from_pushed_ref",
+              "type": "string"
+            },
+            "refs": {
+              "description": "Some of the remote-tracking refs that contain HEAD (may be empty if listing them\nfailed after reachability was established).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "method",
+            "refs"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Heuristic only: every commit on HEAD missing from the default branch has a\npatch-equivalent commit there (`git cherry` / patch-id), as after a squash or rebase\nmerge. Not proof (GIT-03: S2 \"merge unproven\").",
+          "properties": {
+            "commits": {
+              "description": "How many commits were patch-equivalent.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "default_ref": {
+              "description": "The default-branch ref compared against.",
+              "type": "string"
+            },
+            "method": {
+              "const": "patch_id_only",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method",
+            "default_ref",
+            "commits"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The branch has no commits (unborn): nothing can be lost.",
+          "properties": {
+            "method": {
+              "const": "no_commits",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No proof and no heuristic match against any default-branch ref.",
+          "properties": {
+            "checked": {
+              "description": "The default-branch refs checked.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "method": {
+              "const": "not_merged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method",
+            "checked"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Couldn't be determined (Git error, no default branch found, HEAD unknown).",
+          "properties": {
+            "method": {
+              "const": "unknown",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/HeadState",
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed2": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Upstream"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed3": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Activity",
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed4": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PathList",
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed5": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value.",
+              "items": {
+                "$ref": "#/$defs/Submodule"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed6": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed7": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CommitList",
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Observed8": {
+      "description": "A fact that may not have been observable. `Unknown` is never treated as the safe answer.",
+      "oneOf": [
+        {
+          "description": "The fact was observed.",
+          "properties": {
+            "status": {
+              "const": "known",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Reachability",
+              "description": "The value."
+            }
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fact could not be observed.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. the Git error.",
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ParentRepo": {
+      "description": "The repository a worktree belongs to.",
+      "properties": {
+        "bare": {
+          "description": "Whether the repository is bare.",
+          "type": "boolean"
+        },
+        "common_dir": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The common Git dir (identifies the repository)."
+        },
+        "main_worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The main working tree, for a non-bare repository."
+        }
+      },
+      "required": [
+        "common_dir",
+        "bare"
+      ],
+      "type": "object"
+    },
+    "PathList": {
+      "description": "A list of worktree-relative paths, capped for display.",
+      "properties": {
+        "paths": {
+          "description": "The paths (`/`-separated, relative to the worktree; a trailing `/` marks a whole folder\nGit collapsed into one entry). At most [`AnalyzeOptions::max_paths`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "total": {
+          "description": "How many entries Git reported in total.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "Whether `paths` was cut short.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "paths",
+        "total",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "Reachability": {
+      "description": "Whether HEAD's commit is reachable from any ref.",
+      "oneOf": [
+        {
+          "description": "Reachable from these refs (a branch HEAD is reachable from its branch).",
+          "properties": {
+            "kind": {
+              "const": "reachable_from",
+              "type": "string"
+            },
+            "refs": {
+              "description": "Some of the refs (at most [`AnalyzeOptions::max_paths`]).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "total": {
+              "description": "How many refs contain it.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "refs",
+            "total"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Reachable from no ref: only the worktree's detached HEAD keeps it (FX-GIT-07).",
+          "properties": {
+            "kind": {
+              "const": "unreachable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "HEAD has no commit (unborn branch).",
+          "properties": {
+            "kind": {
+              "const": "no_commit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReasonCode": {
+      "description": "Stable codes for tier reasons. Matches the rows of the rubric (PRD §8.3) and the worktree\ndecision table (GIT-03). New codes may be added; existing ones never change meaning.",
+      "oneOf": [
+        {
+          "const": "git_tracked",
+          "description": "Contains Git-tracked files → S3.",
+          "type": "string"
+        },
+        {
+          "const": "protected_root",
+          "description": "Inside a protected root → S3.",
+          "type": "string"
+        },
+        {
+          "const": "user_exclusion",
+          "description": "Matches a user exclusion → S3.",
+          "type": "string"
+        },
+        {
+          "const": "protect_marker",
+          "description": "Covered by `.scull-protect` → S3.",
+          "type": "string"
+        },
+        {
+          "const": "in_use",
+          "description": "In use (open handles, process cwd, held lock) → S3 for this run.",
+          "type": "string"
+        },
+        {
+          "const": "crosses_mount",
+          "description": "Crosses a mount/volume boundary → S3.",
+          "type": "string"
+        },
+        {
+          "const": "link_escape",
+          "description": "Reached via a link outside the scan root → S3.",
+          "type": "string"
+        },
+        {
+          "const": "cloud_sync",
+          "description": "Cloud placeholder or synced folder → S2.",
+          "type": "string"
+        },
+        {
+          "const": "no_lockfile",
+          "description": "Marker found but nothing to reproduce from → S2.",
+          "type": "string"
+        },
+        {
+          "const": "recent_activity",
+          "description": "Modified within the activity window → one tier more protective.",
+          "type": "string"
+        },
+        {
+          "const": "signal_unavailable",
+          "description": "A required signal was unavailable, so the engine assumed the protective answer.",
+          "type": "string"
+        },
+        {
+          "const": "costly_to_regenerate",
+          "description": "Reproducible, but needs network or a long build → S1.",
+          "type": "string"
+        },
+        {
+          "const": "regenerable",
+          "description": "Reproducible from local inputs or quickly → S0.",
+          "type": "string"
+        },
+        {
+          "const": "worktree_locked",
+          "description": "Worktree is locked → S3.",
+          "type": "string"
+        },
+        {
+          "const": "worktree_dirty",
+          "description": "Worktree has uncommitted or untracked changes → S3.",
+          "type": "string"
+        },
+        {
+          "const": "worktree_unique_ignored",
+          "description": "Worktree has ignored files not matched by an artifact rule → ≥ S2.",
+          "type": "string"
+        },
+        {
+          "const": "unpushed_commits",
+          "description": "Commits not reachable from any remote-tracking ref and not provably merged → S3.",
+          "type": "string"
+        },
+        {
+          "const": "orphan_head",
+          "description": "Detached HEAD at a commit reachable from no ref → S3.",
+          "type": "string"
+        },
+        {
+          "const": "merge_unproven",
+          "description": "Merge detected only heuristically → S2.",
+          "type": "string"
+        },
+        {
+          "const": "worktree_clean",
+          "description": "Clean, unlocked, everything pushed or merged → S1 (never S0).",
+          "type": "string"
+        },
+        {
+          "const": "stale_worktree_registration",
+          "description": "Registered worktree whose directory is gone → S0 (metadata only).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Package cache: re-downloadable → S1 (QC-02).",
+          "type": "string"
+        },
+        {
+          "const": "inspect_only",
+          "description": "Large file surfaced for inspection only → S2.",
+          "type": "string"
+        }
+      ]
+    },
+    "Submodule": {
+      "description": "A submodule of the worktree.",
+      "properties": {
+        "dirty": {
+          "$ref": "#/$defs/Observed6",
+          "description": "Whether its work tree (or a nested submodule's) has tracked changes or untracked files."
+        },
+        "initialized": {
+          "description": "Whether it is checked out (has a `.git`). An uninitialized submodule has no local files.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Path relative to the worktree.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "initialized",
+        "dirty"
+      ],
+      "type": "object"
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    },
+    "TierReason": {
+      "additionalProperties": false,
+      "description": "Why a candidate got (at least) a given tier. One per rubric row that fired (PRD §8.3); the\ncandidate's tier is the most protective of these.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ReasonCode",
+          "description": "Stable machine-readable code."
+        },
+        "message": {
+          "description": "Short human explanation shown in the preview.",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The minimum tier this reason imposes."
+        }
+      },
+      "required": [
+        "tier",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Upstream": {
+      "description": "The configured upstream of the checked-out branch.",
+      "properties": {
+        "ahead": {
+          "description": "Commits on HEAD not on the upstream, when known.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind": {
+          "description": "Commits on the upstream not on HEAD, when known.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exists": {
+          "description": "Whether the upstream ref exists locally (it is gone after the remote branch was deleted\nand pruned).",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Full ref name, e.g. `refs/remotes/origin/feature`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "exists"
+      ],
+      "type": "object"
+    },
+    "WorktreeDecision": {
+      "description": "The decision for one worktree.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "description": "The whole-worktree action: [`Action::GitWorktreePrune`] for a stale registration (S0),\n[`Action::GitWorktreeRemove`] (never `--force`) at S1, [`Action::Quarantine`] at S2,\n[`Action::None`] at S3. Never deletes a branch."
+        },
+        "artifact_cleanup": {
+          "$ref": "#/$defs/ArtifactCleanup",
+          "description": "Whether artifact-only cleanup is allowed."
+        },
+        "artifacts": {
+          "description": "Ignored entries recognised as regenerable artifacts.",
+          "items": {
+            "$ref": "#/$defs/MatchedArtifact"
+          },
+          "type": "array"
+        },
+        "evidence": {
+          "description": "Facts to show under \"why\" (activity, unavailable signals, in-use).",
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "reasons": {
+          "description": "Every row that fired.",
+          "items": {
+            "$ref": "#/$defs/TierReason"
+          },
+          "type": "array"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The most protective tier of `reasons`."
+        },
+        "unique_ignored": {
+          "description": "Ignored entries no artifact rule matched, by name (the preview must list them).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tier",
+        "reasons",
+        "action",
+        "artifact_cleanup",
+        "unique_ignored",
+        "artifacts",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "WorktreeKind": {
+      "description": "The role of a worktree in its repository.",
+      "oneOf": [
+        {
+          "const": "main",
+          "description": "The main working tree of a non-bare repository.",
+          "type": "string"
+        },
+        {
+          "const": "bare",
+          "description": "The entry for a bare repository itself (no working tree).",
+          "type": "string"
+        },
+        {
+          "const": "linked",
+          "description": "A linked worktree created with `git worktree add`.",
+          "type": "string"
+        }
+      ]
+    },
+    "WorktreeReport": {
+      "additionalProperties": false,
+      "description": "One worktree with its GIT-02 state and GIT-03 decision.",
+      "properties": {
+        "allocated": {
+          "description": "Allocated size of the folder, when measured.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Item ID of its candidate, when it is one."
+        },
+        "common_dir": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The repository's common Git dir."
+        },
+        "decision": {
+          "$ref": "#/$defs/WorktreeDecision",
+          "description": "The removal decision."
+        },
+        "inside_roots": {
+          "description": "Whether the folder lies inside a scan root. Worktrees elsewhere are reported but never\noffered as candidates.",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorktreeKind",
+          "description": "Main, bare or linked."
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The worktree folder (for a stale registration, the folder it was registered at)."
+        },
+        "state": {
+          "$ref": "#/$defs/WorktreeState",
+          "description": "Everything Git reported about it."
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "common_dir",
+        "inside_roots",
+        "state",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "WorktreeState": {
+      "description": "Everything GIT-02 reports about one worktree. Serializable for `--json` output.",
+      "properties": {
+        "activity": {
+          "$ref": "#/$defs/Observed3",
+          "description": "Last observed activity (supplied by the caller, see [`sample_activity`]).\n\n[`sample_activity`]: crate::sample_activity"
+        },
+        "git_dir": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The worktree's Git dir."
+        },
+        "head": {
+          "$ref": "#/$defs/Observed",
+          "description": "Branch or detached HEAD."
+        },
+        "head_reachability": {
+          "$ref": "#/$defs/Observed8",
+          "description": "Whether HEAD's commit is reachable from any ref (FX-GIT-07, -08)."
+        },
+        "ignored": {
+          "$ref": "#/$defs/Observed4",
+          "description": "Ignored paths, by name (FX-GIT-04). Folders Git ignores as a whole appear once, as\n`dir/`."
+        },
+        "kind": {
+          "$ref": "#/$defs/WorktreeKind",
+          "description": "Main, bare or linked."
+        },
+        "lock": {
+          "$ref": "#/$defs/LockState",
+          "description": "Lock state and reason (FX-GIT-09)."
+        },
+        "merge": {
+          "$ref": "#/$defs/MergeStatus",
+          "description": "Merge status and how it was determined (FX-GIT-01, -06)."
+        },
+        "missing": {
+          "description": "The worktree folder no longer exists: a stale registration that `git worktree prune`\nwould remove (metadata only, FX-GIT-10). Nothing else was analysed.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Admin-dir name (linked worktrees).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The worktree folder."
+        },
+        "repo": {
+          "$ref": "#/$defs/ParentRepo",
+          "description": "The parent repository."
+        },
+        "submodules": {
+          "$ref": "#/$defs/Observed5",
+          "description": "Submodules and whether their work trees have local changes (FX-GIT-13)."
+        },
+        "tracked_changes": {
+          "$ref": "#/$defs/Observed4",
+          "description": "Tracked paths with staged or unstaged changes, including conflicts and changed\nsubmodule commits (FX-GIT-02)."
+        },
+        "unpushed": {
+          "$ref": "#/$defs/Observed7",
+          "description": "Commits not reachable from any remote-tracking ref (FX-GIT-05, -11, -12)."
+        },
+        "untracked": {
+          "$ref": "#/$defs/Observed4",
+          "description": "Untracked, non-ignored paths (FX-GIT-03)."
+        },
+        "upstream": {
+          "$ref": "#/$defs/Observed2",
+          "description": "Upstream of the checked-out branch (`None` when detached or not configured)."
+        }
+      },
+      "required": [
+        "repo",
+        "kind",
+        "path",
+        "git_dir",
+        "missing",
+        "head",
+        "upstream",
+        "lock",
+        "activity",
+        "tracked_changes",
+        "untracked",
+        "ignored",
+        "submodules",
+        "unpushed",
+        "merge",
+        "head_reachability"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/WorktreeReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/worktree@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/worktree@1",
+  "type": "object"
+}

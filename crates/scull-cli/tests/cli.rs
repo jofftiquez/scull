@@ -143,16 +143,9 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
 fn stub_commands_exit_1_with_tracking_issue() {
     let cases: &[(&[&str], &str)] = &[
         (
-            &["scan", "."],
-            "`scull scan` is not implemented yet (tracked in #56)",
-        ),
-        (&["projects"], "(tracked in #56)"),
-        (&["worktrees", "inspect", "."], "(tracked in #56)"),
-        (
             &["worktrees", "register", ".", "--ttl", "7d"],
             "(tracked in #111)",
         ),
-        (&["caches"], "(tracked in #56)"),
         (
             &["clean"],
             "`scull clean` is not implemented yet (tracked in #79)",
@@ -183,7 +176,7 @@ fn stub_commands_exit_1_with_tracking_issue() {
 fn stub_errors_are_json_on_stderr_in_machine_modes() {
     let validator = error_schema_validator();
     for mode in ["--json", "--ndjson"] {
-        let o = scull(&["scan", ".", mode]);
+        let o = scull(&["history", mode]);
         assert_eq!(o.status.code(), Some(1), "{mode}");
         assert!(o.stdout.is_empty(), "{mode}: no partial document on stdout");
         let err = stderr(&o);
@@ -194,7 +187,7 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
         assert_eq!(v["error"]["kind"], "unsupported_platform");
         assert_eq!(
             v["error"]["message"],
-            "`scull scan` is not implemented yet (tracked in #56)"
+            "`scull history` is not implemented yet (tracked in #81)"
         );
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{mode}: {errors:?}");
@@ -273,7 +266,7 @@ fn committed_error_schema_validates_real_output() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let validator = jsonschema::validator_for(&committed).expect("schema compiles");
-    for args in [&["scan", ".", "--json"][..], &["frob", "--ndjson"][..]] {
+    for args in [&["history", "--json"][..], &["frob", "--ndjson"][..]] {
         let o = scull(args);
         let v: Value = serde_json::from_str(&stderr(&o)).expect("JSON error");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();

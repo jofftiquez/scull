@@ -1,10 +1,17 @@
 //! Implemented commands. Each module builds a serializable report, renders it for people,
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
+pub mod caches;
 pub mod doctor;
 pub mod init;
+pub mod pipeline;
+pub mod projects;
+pub mod render;
 pub mod rules;
+pub mod scan;
+pub mod schemas;
 pub mod status;
+pub mod worktrees;
 
 use crate::commands::ignore_broken_pipe;
 use crate::output::Format;
