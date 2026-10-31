@@ -12,6 +12,11 @@
 //!   one per subdirectory). When the counter reaches zero the directory emits
 //!   [`ScanEvent::DirDone`], folds its totals into its parent and is dropped, so finished
 //!   subtrees cost nothing.
+//! * **Hard links** ([`crate::links`]). Each [`Agg`] also carries the multi-linked files of
+//!   its subtree whose links are not all inside it; they are matched up as subtrees merge,
+//!   so every file is counted once per subtree and its bytes are reclaimable where all its
+//!   links meet. The scan-wide running totals dedupe through one sharded [`LinkSet`]. Both
+//!   only ever hold files with a link count above 1.
 //! * **Claiming.** A worker gathers a directory's entries into local buffers and only then
 //!   *claims* the node to commit them. The watchdog can claim a node first when its listing
 //!   overruns [`ScanOptions::dir_timeout`]; the worker then discards its work. Either way a
@@ -22,11 +27,12 @@
 //!   returns, delivering nothing.
 
 use crate::CancelToken;
+use crate::links::{LinkKind, LinkSet, OpenLink, OpenLinks};
 use crate::types::{
     Boundary, BoundaryReason, DirListing, DirSummary, EntryInfo, EventSink, IssueOp, Progress,
     ScanError, ScanEvent, ScanIssue, ScanOptions, ScanOutcome, ScanStatus, Totals,
 };
-use scull_core::FileIdentity;
+use scull_core::{Confidence, FileIdentity};
 use scull_platform::{EntryKind, Metadata, Platform};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,40 +49,101 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 
 /// Lock a mutex, ignoring poisoning: the data under our locks stays consistent even if a
 /// sink panicked while a lock was held elsewhere.
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Totals of a directory's subtree, accumulated as parts of it finish.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default)]
 struct Agg {
     totals: Totals,
     newest_mtime: Option<i64>,
     complete: bool,
+    /// Multi-linked files with links outside the part seen so far, and the shared bytes.
+    links: OpenLinks,
+    /// Some bytes could not be attributed (no identity or link count): low confidence.
+    uncertain: bool,
 }
 
 impl Agg {
-    fn new(own: &Metadata) -> Self {
-        let mut totals = Totals::default();
-        totals.add_size(own);
+    fn empty() -> Self {
         Self {
-            totals,
-            newest_mtime: own.mtime_unix,
             complete: true,
+            ..Self::default()
         }
+    }
+
+    fn new(own: &Metadata) -> Self {
+        let mut agg = Self::empty();
+        agg.totals.add_size(own);
+        agg.newest_mtime = own.mtime_unix;
+        agg
     }
 
     fn see_mtime(&mut self, m: Option<i64>) {
         self.newest_mtime = self.newest_mtime.max(m);
     }
 
+    /// Count an entry of a listing that is not descended (anything but a queued subdirectory).
+    fn add_entry(&mut self, md: &Metadata) {
+        self.totals.add_counts(md);
+        self.totals.add_bytes(md.logical_size, md.allocated_size);
+        self.see_mtime(md.mtime_unix);
+        match LinkKind::of(md) {
+            LinkKind::Single => {}
+            LinkKind::Linked(id, nlink) => self.links.add(
+                &mut self.totals,
+                id,
+                OpenLink {
+                    seen: 1,
+                    nlink,
+                    logical: md.logical_size,
+                    allocated: md.allocated_size,
+                },
+            ),
+            LinkKind::NoIdentity => {
+                self.links.add_unattributable(md.allocated_size);
+                self.uncertain = true;
+            }
+            LinkKind::UnknownCount => self.uncertain = true,
+        }
+    }
+
+    /// Fold in a finished part of this directory (its own listing or a subdirectory).
+    fn merge(&mut self, part: Agg) {
+        self.totals.merge(&part.totals);
+        self.see_mtime(part.newest_mtime);
+        self.complete &= part.complete;
+        self.uncertain |= part.uncertain;
+        self.links.merge(&mut self.totals, part.links);
+    }
+
     /// Fold in a finished subdirectory (the subdirectory itself counts as one entry).
-    fn merge_child(&mut self, child: &Agg) {
-        self.totals.merge(&child.totals);
+    fn merge_child(&mut self, child: Agg) {
+        self.merge(child);
         self.totals.entries += 1;
         self.totals.dirs += 1;
-        self.see_mtime(child.newest_mtime);
-        self.complete &= child.complete;
+    }
+
+    fn summary(&self, node: &DirNode) -> DirSummary {
+        let shared = self.links.shared_allocated.min(self.totals.allocated);
+        let confidence = if self.uncertain || !self.complete || self.totals.allocated_unknown > 0 {
+            Confidence::Low
+        } else {
+            Confidence::High
+        };
+        DirSummary {
+            path: node.path.clone(),
+            depth: node.depth,
+            identity: node.identity,
+            mtime: node.mtime,
+            newest_mtime: self.newest_mtime,
+            totals: self.totals,
+            complete: self.complete,
+            unique_allocated: self.totals.allocated - shared,
+            shared_allocated: shared,
+            reclaim_confidence: confidence,
+        }
     }
 }
 
@@ -158,6 +225,8 @@ struct Shared {
     /// A worker died from a panic (in the sink or a platform implementation).
     worker_panicked: AtomicBool,
     totals: Mutex<Totals>,
+    /// Multi-linked files with unseen links, so `totals` counts each file once.
+    links: LinkSet,
     slots: Mutex<Vec<Arc<Slot>>>,
 }
 
@@ -210,20 +279,13 @@ impl Shared {
             if cur.pending.fetch_sub(1, Ordering::AcqRel) != 1 {
                 return;
             }
-            let agg = *lock(&cur.agg);
-            let summary = DirSummary {
-                path: cur.path.clone(),
-                depth: cur.depth,
-                identity: cur.identity,
-                mtime: cur.mtime,
-                newest_mtime: agg.newest_mtime,
-                totals: agg.totals,
-                complete: agg.complete,
-            };
+            // Every part is done, so nobody else touches this node's aggregate any more.
+            let agg = std::mem::take(&mut *lock(&cur.agg));
+            let summary = agg.summary(&cur);
             match &cur.parent {
                 Some(parent) => {
                     self.emit(ScanEvent::DirDone(summary));
-                    lock(&parent.agg).merge_child(&agg);
+                    lock(&parent.agg).merge_child(agg);
                     cur = Arc::clone(parent);
                 }
                 None => {
@@ -269,12 +331,11 @@ impl Shared {
         };
 
         let child_depth = node.depth + 1;
-        let mut local = Agg {
-            totals: Totals::default(),
-            newest_mtime: None,
-            complete: true,
-        };
+        let mut local = Agg::empty();
+        // Scan-wide running totals; bytes of multi-linked files are added after the claim,
+        // once the scan-wide set says which link counts.
         let mut counted = Totals::default();
+        let mut linked: Vec<(FileIdentity, u64, u64, Option<u64>)> = Vec::new();
         let mut issues = Vec::new();
         let mut boundaries = Vec::new();
         let mut subdirs: Vec<(PathBuf, Metadata)> = Vec::new();
@@ -302,7 +363,13 @@ impl Shared {
                     continue;
                 }
             };
-            counted.add_entry(&md);
+            counted.add_counts(&md);
+            match LinkKind::of(&md) {
+                LinkKind::Linked(id, nlink) => {
+                    linked.push((id, nlink, md.logical_size, md.allocated_size));
+                }
+                _ => counted.add_bytes(md.logical_size, md.allocated_size),
+            }
             if let Some(l) = listing.as_mut() {
                 l.push(EntryInfo::new(de.file_name, &md));
             }
@@ -320,14 +387,20 @@ impl Shared {
                     continue;
                 }
             }
-            local.totals.add_entry(&md);
-            local.see_mtime(md.mtime_unix);
+            local.add_entry(&md);
         }
 
         if !node.claim() {
             return; // the watchdog gave up on this directory and reported it
         }
 
+        for (id, nlink, logical, allocated) in linked {
+            if self.links.observe(id, nlink) {
+                counted.add_bytes(logical, allocated);
+            } else {
+                counted.hardlinks_deduped += 1;
+            }
+        }
         local.totals.issues += issues.len() as u64;
         local.totals.boundaries += boundaries.len() as u64;
         local.complete = issues.is_empty();
@@ -353,12 +426,7 @@ impl Shared {
         // Register the subdirectories as unfinished parts *before* queueing them, so the node
         // can't finish early; then release this listing's own part.
         node.pending.fetch_add(subdirs.len(), Ordering::AcqRel);
-        {
-            let mut agg = lock(&node.agg);
-            agg.totals.merge(&local.totals);
-            agg.see_mtime(local.newest_mtime);
-            agg.complete &= local.complete;
-        }
+        lock(&node.agg).merge(local);
         let jobs = subdirs
             .into_iter()
             .map(|(path, md)| Arc::new(DirNode::new(path, child_depth, &md, Some(node.clone()))))
@@ -525,6 +593,7 @@ pub fn scan(
         live_workers: AtomicUsize::new(0),
         worker_panicked: AtomicBool::new(false),
         totals: Mutex::new(root_totals),
+        links: LinkSet::new(),
         slots: Mutex::new(Vec::new()),
     });
 
@@ -595,6 +664,7 @@ pub fn scan(
         root: root_summary,
         elapsed: started.elapsed(),
         threads,
+        peak_link_identities: shared.links.peak(),
     })
 }
 

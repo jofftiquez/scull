@@ -136,6 +136,7 @@ fn hardlinks_are_flagged_for_dedup() -> TestResult {
     fs::hard_link(root.join("a/one.bin"), root.join("d/one-again.bin"))?;
     let (out, ev) = run(&root, &opts())?;
     assert_eq!(out.totals.multi_linked, 2);
+    assert_eq!(out.totals.hardlinks_deduped, 1);
     let ids: Vec<_> = ev
         .listings()
         .iter()
@@ -146,7 +147,7 @@ fn hardlinks_are_flagged_for_dedup() -> TestResult {
     assert_eq!(ids.len(), 2);
     assert_eq!(
         ids[0], ids[1],
-        "same identity: #37 can attribute the bytes once"
+        "same identity: the bytes are attributed once"
     );
     Ok(())
 }

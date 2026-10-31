@@ -39,10 +39,20 @@
 //! # Ok::<(), scull_scanner::ScanError>(())
 //! ```
 //!
-//! Hardlink-aware sizing is #37: every entry carries its identity and link count
-//! ([`EntryInfo`]) and [`Totals::multi_linked`] counts the candidates for deduplication.
+//! # Hard links (PHY-03)
+//!
+//! Sizes count every file once, however many hard links to it the scan meets (deduplicated
+//! by [`scull_core::FileIdentity`]; only multi-linked files are tracked, so memory stays
+//! bounded). Each [`DirSummary`] also splits its allocated bytes into
+//! [`DirSummary::unique_allocated`] (files whose links are all inside the subtree: freed if it
+//! is removed) and [`DirSummary::shared_allocated`] (files with links elsewhere, e.g. a pnpm
+//! `node_modules` hard-linked into the store: removing it frees ~0 until `pnpm store prune`),
+//! with a [`DirSummary::reclaim_confidence`] that drops to low where the platform can't
+//! identify a multi-linked file. [`DirSummary::reclaimable`] packages these as a core
+//! [`scull_core::Reclaimable`].
 
 mod cancel;
+mod links;
 mod types;
 mod walk;
 

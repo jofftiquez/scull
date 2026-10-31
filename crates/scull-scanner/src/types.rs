@@ -1,6 +1,6 @@
 //! Options, events and results of a scan.
 
-use scull_core::{ErrorKind, FileIdentity, ScullError};
+use scull_core::{Confidence, ErrorKind, FileIdentity, Reclaimable, ScullError};
 use scull_platform::{EntryKind, Metadata, PlatformError};
 use std::ffi::OsString;
 use std::fmt;
@@ -139,6 +139,11 @@ pub struct Progress {
 
 /// Entry and byte counts. Sizes include the root directory itself and every entry's own
 /// metadata (links and special files count their own size, never a target's).
+///
+/// Counts (`entries`, `files`, ...) are per path. Sizes are per *file*: a file with several
+/// hard links is counted once, however many of its links were seen (PHY-03, deduplicated by
+/// [`FileIdentity`]). Entries whose identity the platform can't report are never deduplicated
+/// (see [`DirSummary::reclaim_confidence`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct Totals {
@@ -152,15 +157,18 @@ pub struct Totals {
     pub links: u64,
     /// FIFOs, sockets, devices and unknown kinds (never opened, SAFE-18).
     pub specials: u64,
-    /// Sum of logical sizes.
+    /// Sum of logical sizes, each hard-linked file counted once.
     pub logical: u64,
-    /// Sum of allocated sizes where known (see [`Totals::allocated_unknown`]).
+    /// Sum of allocated sizes where known (see [`Totals::allocated_unknown`]), each
+    /// hard-linked file counted once.
     pub allocated: u64,
-    /// Entries whose allocated size the platform could not report (e.g. Windows until #32).
+    /// Entries (paths) whose allocated size the platform could not report.
     pub allocated_unknown: u64,
-    /// Entries with a link count above 1. Hardlink-aware sizing (#37) dedupes these by
-    /// identity; until then they are counted once per path.
+    /// Entries (paths, not directories) with a link count above 1.
     pub multi_linked: u64,
+    /// Paths whose bytes were not counted because another link to the same file was already
+    /// counted (so `multi_linked - hardlinks_deduped` distinct multi-linked files were seen).
+    pub hardlinks_deduped: u64,
     /// Errors reported as [`ScanEvent::Issue`].
     pub issues: u64,
     /// Directories reported as [`ScanEvent::Boundary`].
@@ -168,7 +176,8 @@ pub struct Totals {
 }
 
 impl Totals {
-    pub(crate) fn add_entry(&mut self, md: &Metadata) {
+    /// Count an entry (kind counters, unknown allocation, link flag) without its bytes.
+    pub(crate) fn add_counts(&mut self, md: &Metadata) {
         self.entries += 1;
         match md.kind {
             EntryKind::File => self.files += 1,
@@ -176,17 +185,35 @@ impl Totals {
             k if k.is_link() => self.links += 1,
             _ => self.specials += 1,
         }
-        self.add_size(md);
+        if md.allocated_size.is_none() {
+            self.allocated_unknown += 1;
+        }
         if md.nlink.is_some_and(|n| n > 1) && md.kind != EntryKind::Dir {
             self.multi_linked += 1;
         }
     }
 
+    /// Add bytes, no counters.
+    pub(crate) fn add_bytes(&mut self, logical: u64, allocated: Option<u64>) {
+        self.logical = self.logical.saturating_add(logical);
+        if let Some(a) = allocated {
+            self.allocated = self.allocated.saturating_add(a);
+        }
+    }
+
+    /// Take back bytes added for a link whose file was already counted.
+    pub(crate) fn remove_bytes(&mut self, logical: u64, allocated: Option<u64>) {
+        self.logical = self.logical.saturating_sub(logical);
+        if let Some(a) = allocated {
+            self.allocated = self.allocated.saturating_sub(a);
+        }
+    }
+
+    /// Add a directory node's own size (it is counted as an entry by its parent).
     pub(crate) fn add_size(&mut self, md: &Metadata) {
-        self.logical = self.logical.saturating_add(md.logical_size);
-        match md.allocated_size {
-            Some(a) => self.allocated = self.allocated.saturating_add(a),
-            None => self.allocated_unknown += 1,
+        self.add_bytes(md.logical_size, md.allocated_size);
+        if md.allocated_size.is_none() {
+            self.allocated_unknown += 1;
         }
     }
 
@@ -200,6 +227,7 @@ impl Totals {
         self.allocated = self.allocated.saturating_add(o.allocated);
         self.allocated_unknown += o.allocated_unknown;
         self.multi_linked += o.multi_linked;
+        self.hardlinks_deduped += o.hardlinks_deduped;
         self.issues += o.issues;
         self.boundaries += o.boundaries;
     }
@@ -220,7 +248,7 @@ pub struct EntryInfo {
     pub logical: u64,
     /// Allocated size of the entry itself, if known.
     pub allocated: Option<u64>,
-    /// Hard-link count, if known (#37 uses this with `identity` to attribute bytes once).
+    /// Hard-link count, if known (used with `identity` to attribute bytes once).
     pub nlink: Option<u64>,
     /// Modification time, seconds since the Unix epoch.
     pub mtime: Option<i64>,
@@ -270,12 +298,42 @@ pub struct DirSummary {
     /// Newest modification time of anything in the subtree, the directory itself included.
     pub newest_mtime: Option<i64>,
     /// Subtree totals. `entries` counts everything below this directory; sizes include the
-    /// directory itself.
+    /// directory itself. A file hard-linked several times inside the subtree is counted once.
     pub totals: Totals,
     /// `false` if any part of the subtree could not be read (errors or timeouts). Boundaries
     /// (depth limit, other volume) don't make a subtree incomplete; they are counted in
     /// [`Totals::boundaries`].
     pub complete: bool,
+    /// Allocated bytes that removing this subtree would free: [`Totals::allocated`] minus
+    /// [`DirSummary::shared_allocated`]. A hard-linked file counts here only if *all* of its
+    /// links are inside the subtree.
+    pub unique_allocated: u64,
+    /// Allocated bytes of files that also have links outside this subtree (e.g. a pnpm
+    /// `node_modules` hard-linked into a store elsewhere): removing the subtree frees ~0 for
+    /// them while the other links remain. Also includes multi-linked files whose identity the
+    /// platform could not report, since their other links can't be located.
+    /// `unique_allocated + shared_allocated == totals.allocated`.
+    pub shared_allocated: u64,
+    /// How far to trust [`DirSummary::unique_allocated`] as a reclaim estimate (hard links
+    /// only): [`Confidence::High`] when every byte could be attributed (no hard links, or
+    /// every link's identity known); [`Confidence::Low`] when some multi-linked file had no
+    /// identity (nothing is deduplicated and its bytes are reported as shared), a link count
+    /// or allocated size was unknown, or part of the subtree could not be read
+    /// ([`DirSummary::complete`] is `false`).
+    pub reclaim_confidence: Confidence,
+}
+
+impl DirSummary {
+    /// The subtree's physically reclaimable bytes as a core [`Reclaimable`] (PHY-01): bytes
+    /// freed if it were removed now, bytes pinned by links elsewhere, and the confidence.
+    /// Accounts for hard links only; clones and snapshots are judged elsewhere (PRD §9).
+    pub fn reclaimable(&self) -> Reclaimable {
+        Reclaimable {
+            bytes: self.unique_allocated,
+            confidence: self.reclaim_confidence,
+            shared_bytes: self.shared_allocated,
+        }
+    }
 }
 
 /// Why a directory was not descended.
@@ -401,6 +459,10 @@ pub struct ScanOutcome {
     pub elapsed: Duration,
     /// Worker threads used.
     pub threads: usize,
+    /// Most file identities held at once for scan-wide hard-link deduplication. Only files
+    /// with a link count above 1 are tracked, and each is dropped as soon as all its links
+    /// were seen, so this stays far below the entry count (0 without hard links).
+    pub peak_link_identities: usize,
 }
 
 impl ScanOutcome {

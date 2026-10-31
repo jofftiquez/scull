@@ -104,6 +104,18 @@ fn real_main() -> Result<(), String> {
                 String::new()
             }
         );
+        if let Some(r) = &out.root {
+            println!(
+                "  hard links: {} multi-linked paths, {} deduplicated, peak {} identities \
+                 tracked; root reclaimable {:.1} MiB, shared {:.1} MiB ({:?} confidence)",
+                t.multi_linked,
+                t.hardlinks_deduped,
+                out.peak_link_identities,
+                r.unique_allocated as f64 / 1048576.0,
+                r.shared_allocated as f64 / 1048576.0,
+                r.reclaim_confidence,
+            );
+        }
         if let Some(h) = canceller {
             let at = h.join().map_err(|_| "canceller panicked")?;
             println!(

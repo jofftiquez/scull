@@ -1168,6 +1168,7 @@ name = "scull-scanner"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "scull-fixtures",
  "scull-platform",
  "tempfile",
 ]
