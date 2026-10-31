@@ -5,3 +5,5 @@ node_modules/
 .claude/
 scripts/evidence/node_modules/
 .evidence/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
