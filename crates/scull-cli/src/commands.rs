@@ -56,7 +56,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Restore { .. } => planned("restore", 81),
         Command::Approve { .. } => planned("approve", 108),
         Command::Rules { .. } => None,
-        Command::Init => planned("init", 57),
+        Command::Init(_) => None,
         Command::Status { .. } => None,
         Command::Check => planned("check", 114),
         Command::Insights { action } => match action {
@@ -119,6 +119,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
         } => crate::cmd::rules::run_list(ui)?,
@@ -195,7 +196,6 @@ mod tests {
             (&["history"], "history", Some(81)),
             (&["restore", "op-1"], "restore", Some(81)),
             (&["approve", "plan-1"], "approve", Some(108)),
-            (&["init"], "init", Some(57)),
             (&["check"], "check", Some(114)),
             (&["insights"], "insights", Some(116)),
             (&["insights", "export"], "insights export", Some(116)),
@@ -223,6 +223,7 @@ mod tests {
         assert_eq!(planned_of(&["large-files", "."]), None);
         assert_eq!(planned_of(&["status", "--short"]), None);
         assert_eq!(planned_of(&["rules", "list"]), None);
+        assert_eq!(planned_of(&["init", "--yes"]), None);
         assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
     }
 

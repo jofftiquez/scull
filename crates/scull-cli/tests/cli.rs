@@ -161,7 +161,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
         (&["history"], "(tracked in #81)"),
         (&["restore", "op"], "(tracked in #81)"),
         (&["approve", "p"], "(tracked in #108)"),
-        (&["init"], "(tracked in #57)"),
         (&["check"], "(tracked in #114)"),
         (&["insights"], "(tracked in #116)"),
         (&["agent", "install", "codex"], "(tracked in #110)"),

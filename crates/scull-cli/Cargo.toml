@@ -30,6 +30,8 @@ clap_complete = "4.6"
 ctrlc = "3.5"
 unicode-width = "0.2"
 
+toml = "1"
+
 [dev-dependencies]
 proptest.workspace = true
 scull-fixtures.workspace = true

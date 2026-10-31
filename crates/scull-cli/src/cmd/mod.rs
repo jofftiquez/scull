@@ -2,6 +2,7 @@
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
 pub mod doctor;
+pub mod init;
 pub mod rules;
 pub mod status;
 

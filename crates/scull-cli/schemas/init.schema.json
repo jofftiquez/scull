@@ -1,0 +1,231 @@
+{
+  "$defs": {
+    "Detection": {
+      "additionalProperties": false,
+      "description": "What the metadata-only probe found.",
+      "properties": {
+        "ai_clients": {
+          "description": "AI clients whose config folder exists.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "home": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The home directory probed."
+        },
+        "project_folders": {
+          "description": "Likely project folders that exist, as `~/...`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "toolchains": {
+          "description": "Toolchains with at least one binary or cache folder present.",
+          "items": {
+            "$ref": "#/$defs/Toolchain"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "home",
+        "toolchains",
+        "project_folders",
+        "ai_clients"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "InitReport": {
+      "additionalProperties": false,
+      "description": "`scull init` output.",
+      "properties": {
+        "config_backup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Backup of the previous config, if one was replaced."
+        },
+        "config_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The user config file written."
+        },
+        "confirmed_broad_roots": {
+          "description": "Broad roots kept because they were explicitly confirmed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "detected": {
+          "$ref": "#/$defs/Detection",
+          "description": "What the probe found."
+        },
+        "notes": {
+          "description": "Things worth knowing (missing roots, skipped broad roots, ...).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "$ref": "#/$defs/Profile",
+          "description": "The saved answers."
+        },
+        "profile_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The profile file written."
+        }
+      },
+      "required": [
+        "detected",
+        "profile",
+        "config_path",
+        "profile_path",
+        "confirmed_broad_roots",
+        "notes"
+      ],
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "description": "The onboarding answers, as saved in `profile.toml`.",
+      "properties": {
+        "agents": {
+          "description": "AI coding agents: none, sometimes, daily.",
+          "type": "string"
+        },
+        "builds": {
+          "description": "What you build.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "caution": {
+          "description": "Caution: cautious, balanced, expert. Never changes tiers or safety checks (ONB-07).",
+          "type": "string"
+        },
+        "detected_ai_clients": {
+          "description": "AI clients detected when the profile was made.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "detected_toolchains": {
+          "description": "Toolchain IDs detected when the profile was made.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "description": "What matters most: free-space, tidy, understand.",
+          "type": "string"
+        },
+        "roots": {
+          "description": "Scan roots as written to the config (`~/...` under the home directory).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "Profile format version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "builds",
+        "roots",
+        "agents",
+        "priority",
+        "caution",
+        "detected_toolchains",
+        "detected_ai_clients"
+      ],
+      "type": "object"
+    },
+    "Toolchain": {
+      "additionalProperties": false,
+      "description": "One detected toolchain.",
+      "properties": {
+        "binaries": {
+          "description": "Binaries found on `PATH` (first match of each).",
+          "items": {
+            "$ref": "#/$defs/FsPath"
+          },
+          "type": "array"
+        },
+        "build": {
+          "description": "The \"What do you build?\" answer it suggests.",
+          "type": "string"
+        },
+        "caches": {
+          "description": "Known cache folders that exist (not sized).",
+          "items": {
+            "$ref": "#/$defs/FsPath"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable identifier, e.g. `rust`.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Display name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "build",
+        "binaries",
+        "caches"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/InitReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/init@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/init@1",
+  "type": "object"
+}

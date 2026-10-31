@@ -189,7 +189,7 @@ pub enum Command {
     },
 
     /// First-run onboarding: detect toolchains, confirm roots and profile.
-    Init,
+    Init(InitArgs),
 
     /// Cached one-line status, e.g. for shell prompts.
     Status {
@@ -253,6 +253,47 @@ pub struct ScanArgs {
     /// Directories to scan.
     #[arg(required = true, value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+}
+
+/// Arguments for `scull init` (ONB-01…04). Interactive on a terminal; with `--yes`, or when
+/// stdin is not a terminal, every answer comes from these flags or the detected defaults.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Accept the detected defaults for every question not given by a flag (no prompts).
+    #[arg(short, long)]
+    pub yes: bool,
+
+    /// Scan roots (repeat or comma-separate); replaces the detected project folders.
+    #[arg(long, value_name = "PATH", value_delimiter = ',', num_args = 1..)]
+    pub roots: Vec<PathBuf>,
+
+    /// Explicitly confirm roots that are a filesystem root, the home directory or one of its
+    /// parents (CFG-04). Without it such roots are refused.
+    #[arg(long)]
+    pub allow_broad_roots: bool,
+
+    /// What you build (repeat or comma-separate): web, rust, python, ml, mobile, game,
+    /// native, infra, other.
+    #[arg(long, value_name = "KIND", value_delimiter = ',', num_args = 1..)]
+    pub builds: Vec<String>,
+
+    /// AI coding agents: none, sometimes or daily.
+    #[arg(long, value_name = "USE")]
+    pub agents: Option<String>,
+
+    /// What matters most: free-space, tidy or understand.
+    #[arg(long, value_name = "GOAL")]
+    pub priority: Option<String>,
+
+    /// How cautious scull should be: cautious, balanced or expert (never changes tiers or
+    /// safety checks, ONB-07).
+    #[arg(long, value_name = "LEVEL")]
+    pub caution: Option<String>,
+
+    /// Replace an existing profile and the config's scan roots (other config settings are
+    /// kept).
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// `scull projects` subcommands.
