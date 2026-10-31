@@ -1,0 +1,65 @@
+name: Bench baseline
+
+# P0-PERF-01: one-off baseline of gdu/dua on generated 100K and 1M-entry trees, per OS, on
+# GitHub-hosted runners (documented hardware). Manual only: macOS minutes are expensive.
+on:
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: "Tree sizes (space-separated entry counts)"
+        default: "100000 1000000"
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: baseline (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            gdu: https://github.com/dundee/gdu/releases/download/v5.38.0/gdu_linux_amd64_static.tgz
+            dua: https://github.com/Byron/dua-cli/releases/download/v2.46.0/dua-v2.46.0-x86_64-unknown-linux-musl.tar.gz
+          - os: macos-latest
+            gdu: https://github.com/dundee/gdu/releases/download/v5.38.0/gdu_darwin_arm64.tgz
+            dua: https://github.com/Byron/dua-cli/releases/download/v2.46.0/dua-v2.46.0-aarch64-apple-darwin.tar.gz
+          - os: windows-latest
+            gdu: https://github.com/dundee/gdu/releases/download/v5.38.0/gdu_windows_amd64.exe.zip
+            dua: https://github.com/Byron/dua-cli/releases/download/v2.46.0/dua-v2.46.0-x86_64-pc-windows-msvc.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install psutil
+      - name: Fetch gdu and dua
+        run: |
+          mkdir -p tools && cd tools
+          for url in "${{ matrix.gdu }}" "${{ matrix.dua }}"; do
+            curl -fsSL -o pkg "$url"
+            case "$url" in *.zip) unzip -oq pkg ;; *) tar xzf pkg ;; esac
+          done
+          find . -type f \( -name 'gdu*' -o -name 'dua*' \) ! -name '*.tgz' ! -name '*.zip' ! -name '*.gz' | head
+          G=$(find . -type f -name 'gdu*' ! -name '*.tgz' ! -name '*.zip' | head -1)
+          D=$(find . -type f \( -name dua -o -name dua.exe \) | head -1)
+          chmod +x "$G" "$D" || true
+          echo "GDU=$PWD/$G" >> "$GITHUB_ENV"
+          echo "DUA=$PWD/$D" >> "$GITHUB_ENV"
+      - name: Hardware
+        run: |
+          python -c "import os,platform,psutil;print(platform.platform(),platform.machine(),'cpus',os.cpu_count(),'ram_gb',round(psutil.virtual_memory().total/1e9,1))"
+          df -h "$RUNNER_TEMP" || true
+      - name: Benchmark
+        run: |
+          for n in ${{ inputs.sizes }}; do
+            tree="$RUNNER_TEMP/t$n"
+            /usr/bin/env time -p python scripts/bench/gen_tree.py "$tree" --entries $n 2>&1 || python scripts/bench/gen_tree.py "$tree" --entries $n
+            python scripts/bench/baseline.py "$tree" --runs 2 --tool gdu="$GDU" --tool dua="$DUA" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
