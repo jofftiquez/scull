@@ -10,6 +10,7 @@ import SearchField from './SearchField.vue';
 import SupporterCard from './SupporterCard.vue';
 import DrivesWidget from './DrivesWidget.vue';
 import { NAV_ITEMS, type NavIconName } from '../../navigation';
+import { shell } from '../../state/shell';
 
 const props = defineProps<{
   /** Version shown in the chip next to the logo. */
@@ -35,7 +36,7 @@ const versionLabel = computed(() => {
     data-testid="sidebar"
   >
     <div class="flex items-center gap-3 px-2 pt-1.5 pb-4">
-      <ScullLogo :size="30" />
+      <ScullLogo :key="shell.wink" :size="30" :wink="shell.wink > 0" />
       <span class="text-h2 font-semibold tracking-[-0.01em] text-ink">scull</span>
       <span
         class="ml-auto rounded-chip border border-border px-2 py-0.5 font-mono text-[11px] text-text-tertiary"

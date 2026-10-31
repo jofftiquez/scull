@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // The scull mark (D-21): skull over crossed oars, line icon; magenta blades, violet eyes.
-// `wink` plays the logo wink once (success moments, D-20); reduced motion collapses it.
+// `wink` plays the logo wink (design: twice, 420 ms, after 500 ms; success moments, D-20);
+// reduced motion collapses it.
 defineProps<{ size?: number; wink?: boolean }>();
 </script>
 
@@ -29,7 +30,7 @@ defineProps<{ size?: number; wink?: boolean }>();
       r="1.4"
       fill="var(--color-tier-s0)"
       stroke="none"
-      :style="wink ? 'transform-box: fill-box; transform-origin: center; animation: scull-wink 520ms ease-in-out 1' : undefined"
+      :style="wink ? 'transform-box: fill-box; transform-origin: center; animation: scull-wink 420ms 500ms ease-in-out 2' : undefined"
     />
   </svg>
 </template>

@@ -133,8 +133,16 @@ export function designScenarioBridge(base: ScullBridge, stepMs = 300): ScullBrid
       const s = await base.status();
       const reclaimable = DESIGN_CANDIDATES.reduce((a, c) => a + c.sizes.reclaimable.bytes, 0);
       const safe = DESIGN_CANDIDATES.filter((c) => c.tier === 'S0').reduce((a, c) => a + c.sizes.reclaimable.bytes, 0);
+      // The design's disk: 494 GB, 41.2 GB free, losing 3.5 GB a day (full in about 9 days).
+      const volumes = Array.from({ length: 8 }, (_, i) => ({
+        volume_id: '/',
+        total_bytes: 494 * GiB,
+        free_bytes: Math.round((41.2 + (7 - i) * 3.5) * GiB),
+        sampled_at: s.now - (7 - i) * 86400,
+      }));
       return {
         ...s,
+        volumes,
         last_scan: s.last_scan && {
           ...s.last_scan,
           roots: 3,

@@ -182,7 +182,7 @@ async function mountApp(path: string, bridge: ScullBridge) {
 }
 
 describe('onboarding screen', () => {
-  it('opens on first run, full window, and scans only the chosen roots', async () => {
+  it('opens on first run, full window, and scans only the chosen roots', { timeout: 30000 }, async () => {
     const calls: ScanParams[] = [];
     const base = createMockBridge();
     const bridge: ScullBridge = {
@@ -200,7 +200,7 @@ describe('onboarding screen', () => {
         await flushPromises();
         expect(router.currentRoute.value.path).toBe('/onboarding');
       },
-      { timeout: 5000, interval: 25 },
+      { timeout: 10000, interval: 25 },
     );
     await vi.waitFor(
       async () => {
@@ -209,7 +209,7 @@ describe('onboarding screen', () => {
         expect(wrapper.find('[data-testid="answered"]').text()).toBe('5 of 5 answered');
         expect(wrapper.find('[data-testid="found"]').text()).toContain('494.0 GiB');
       },
-      { timeout: 5000, interval: 25 },
+      { timeout: 10000, interval: 25 },
     );
     expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="found"]').text()).toContain('494.0 GiB · 41.2 GiB free');

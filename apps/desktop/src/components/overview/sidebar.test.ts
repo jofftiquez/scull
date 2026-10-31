@@ -1,0 +1,218 @@
+import { flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import App from '../../App.vue';
+import { BRIDGE_KEY, type ScullBridge, type VolumeSampleView } from '../../bridge';
+import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
+import { routes } from '../../navigation';
+import { core } from '../../state/core';
+import { shell } from '../../state/shell';
+import QuickCleanCard from './QuickCleanCard.vue';
+import { DESIGN_CANDIDATES, designScenarioBridge } from './designScenario';
+import { daysDash, forecastFull, FULL_RESERVE } from './forecast';
+import {
+  QUICK_CLEAN_UNAVAILABLE,
+  quickCleanFrame,
+  quickCleanPreview,
+  quickCleanTools,
+  toolLabel,
+} from './quickClean';
+import { itemReason, reclaimSummary, splitBytes } from './summary';
+import { buildWheelModel } from './wheel';
+
+const GiB = 1024 ** 3;
+const tools = quickCleanTools(DESIGN_CANDIDATES);
+
+function reduceMotion(on: boolean) {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: on && q.includes('reduce'),
+    media: q,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+
+beforeEach(() => {
+  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null });
+  shell.wink = 0;
+  reduceMotion(true);
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.body.innerHTML = '';
+});
+
+describe('quick clean model', () => {
+  it('offers package caches only (never protected ones), largest first, with short names', () => {
+    expect(tools.map((t) => t.label)).toEqual(['npm', 'pnpm', 'Bun', 'Yarn']);
+    const s3 = { ...DESIGN_CANDIDATES.find((c) => c.id === 'design-npm')!, tier: 'S3' as const };
+    expect(quickCleanTools([s3])).toEqual([]);
+    expect(toolLabel({ ...s3, rule: { id: 'weird.thing', version: 1 }, artifact: 'Weird cache' })).toBe('Weird');
+  });
+
+  it('pops chips in order while the total counts down', () => {
+    const idle = quickCleanFrame(tools, new Set(), 'idle', 0);
+    expect(idle.button).toBe('Clean 4 caches');
+    expect(idle.remaining).toBe(idle.total);
+    expect(quickCleanFrame(tools, new Set(), 'confirm', 0).button).toBe('Clean 14.9 GiB now');
+    const mid = quickCleanFrame(tools, new Set(), 'cleaning', 0.2);
+    // ease-out cubic: 0.2 -> 0.488, so chips 0 and 1 are done, chip 2 is active.
+    expect(mid.chips.map((c) => c.state)).toEqual(['done', 'active', 'on', 'on']);
+    expect(mid.button).toBe('Cleaning pnpm…');
+    expect(mid.remaining).toBeLessThan(idle.total);
+    expect(mid.chips[0]!.label).toBe('npm ✓');
+    const done = quickCleanFrame(tools, new Set(), 'done', 1);
+    expect(done.cleaned).toHaveLength(4);
+    expect(done.remaining).toBe(0);
+    expect(done.fill).toBe(100);
+  });
+
+  it('leaves chips that are switched off alone', () => {
+    const off = new Set([tools[0]!.id]);
+    const f = quickCleanFrame(tools, off, 'done', 1);
+    expect(f.chips[0]!.state).toBe('off');
+    expect(f.cleaned).not.toContain(tools[0]!.id);
+    expect(quickCleanFrame(tools, new Set(tools.map((t) => t.id)), 'idle', 0).button).toBe('Pick caches to clean');
+  });
+
+  it('the stub simulates with the mock bridge and refuses with the real one', async () => {
+    const mock = createMockBridge();
+    const r = await quickCleanPreview(mock, tools);
+    expect(r.simulated).toBe(true);
+    expect(r.freed).toBe(tools.reduce((a, t) => a + t.bytes, 0));
+    await expect(quickCleanPreview({ ...mock, kind: 'tauri' }, tools)).rejects.toThrow(QUICK_CLEAN_UNAVAILABLE);
+  });
+});
+
+describe('forecast', () => {
+  const day = 86400;
+  const samples = (frees: number[]): VolumeSampleView[] =>
+    frees.map((f, i) => ({ volume_id: '/', total_bytes: 494 * GiB, free_bytes: f * GiB, sampled_at: 1_000_000 + i * day }));
+
+  it('fits the free-space trend (design: 41.2 GB free, -3.5 GB/day -> 9 days; +14.9 GB -> 13)', () => {
+    const s = samples([65.7, 62.2, 58.7, 55.2, 51.7, 48.2, 44.7, 41.2]);
+    expect(forecastFull(s)!.days).toBe(9);
+    expect(forecastFull(s, 14.9 * GiB)!.days).toBe(13);
+    expect(forecastFull(s)!.perDay / GiB).toBeCloseTo(3.5, 5);
+  });
+
+  it('stays silent without a trend', () => {
+    expect(forecastFull([])).toBeNull();
+    expect(forecastFull(samples([41]))).toBeNull();
+    expect(forecastFull(samples([40, 41, 42]))).toBeNull();
+    expect(forecastFull(MOCK_DATA.status.volumes)).toBeNull();
+    const close = samples([20, 19]).map((s, i) => ({ ...s, sampled_at: 1000 + i * 60 }));
+    expect(forecastFull(close)).toBeNull();
+    expect(forecastFull(samples([11, 10.5]))!.days).toBe(1);
+    expect(FULL_RESERVE).toBe(10 * GiB);
+    expect(daysDash(9)).toBe('33.9');
+    expect(daysDash(90)).toBe('113.0');
+  });
+});
+
+describe('sidebar copy', () => {
+  it('summarises what is safe from the scan', () => {
+    expect(reclaimSummary(DESIGN_CANDIDATES)).toBe(
+      '3 projects hold 31.9 GiB of build output; 1 worktree holds 6.7 GiB of artifacts. All of it rebuilds itself.',
+    );
+    expect(reclaimSummary(MOCK_DATA.scanReport.candidates)).toMatch(/^Nothing is regenerable/);
+    expect(splitBytes(38.6 * GiB)).toEqual(['38.6', 'GiB']);
+  });
+
+  it('explains an item with the reasons at its tier', () => {
+    const hf = buildWheelModel(DESIGN_CANDIDATES).categories.flatMap((c) => c.items).find((i) => i.id === 'design-hf')!;
+    expect(itemReason(hf)).toBe('14 models. 3 unused for 90+ days hold 11.8 GB. Re-downloading all is about 31 GB.');
+  });
+});
+
+describe('quick clean card', () => {
+  it('idle -> confirm -> done (reduced motion: no animation, no particles)', async () => {
+    const w = mount(QuickCleanCard, { props: { tools, bridge: createMockBridge(), reduced: true } });
+    expect(w.findAll('[data-chip]').map((c) => c.text())).toEqual(['npm · 6.1 GiB', 'pnpm · 4.8 GiB', 'Bun · 2.6 GiB', 'Yarn · 1.4 GiB']);
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    expect(w.get('[data-testid="qc-confirm"]').text()).toContain('Not undoable');
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    await flushPromises();
+    const done = w.get('[data-testid="qc-done"]');
+    expect(done.text()).toContain('+14.9 GiB');
+    expect(done.text()).toContain('freed · measured 14.6 GiB');
+    expect(done.text()).toContain('simulated');
+    expect(w.findAll('.particle')).toHaveLength(0);
+    expect(w.get('[data-testid="qc-total"]').text()).toBe('0 B');
+    const last = w.emitted('state')!.at(-1)![0] as { phase: string; cleaned: string[] };
+    expect(last.phase).toBe('done');
+    expect(last.cleaned).toHaveLength(4);
+    await w.get('[data-testid="qc-nice"]').trigger('click');
+    expect(w.find('[data-testid="qc-done"]').exists()).toBe(false);
+  });
+
+  it('with motion: chips pop over 2.6 s and the burst has 20 particles', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = mount(QuickCleanCard, { props: { tools, bridge: createMockBridge(), reduced: false } });
+      await w.get('[data-testid="qc-button"]').trigger('click');
+      await w.get('[data-testid="qc-button"]').trigger('click');
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(800);
+      expect(w.get('[data-testid="qc-button"]').text()).toMatch(/^Cleaning /);
+      expect(w.findAll('[data-chip="done"]').length).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(w.find('[data-testid="qc-done"]').exists()).toBe(true);
+      expect(w.findAll('.particle')).toHaveLength(20);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the real app shows "not available" and deletes nothing', async () => {
+    const bridge: ScullBridge = { ...createMockBridge(), kind: 'tauri' };
+    const w = mount(QuickCleanCard, { props: { tools, bridge, reduced: true } });
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    await flushPromises();
+    expect(w.get('[data-testid="qc-unavailable"]').text()).toContain('Nothing was deleted');
+    expect(w.find('[data-testid="qc-done"]').exists()).toBe(false);
+  });
+});
+
+describe('overview sidebar', () => {
+  async function mountOverview(bridge: ScullBridge) {
+    const router = createRouter({ history: createMemoryHistory(), routes });
+    router.push('/');
+    await router.isReady();
+    const w = mount(App, { attachTo: document.body, global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: bridge } } });
+    await flushPromises();
+    // The Overview decides asynchronously whether to auto-scan (never on first run, CFG-04):
+    // wait for the report itself, then for the sweep to finish.
+    await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout: 2000 });
+    await vi.waitFor(() => expect(w.get('[data-testid="rescan"]').text()).toBe('Rescan'), { timeout: 2000 });
+    await flushPromises();
+    return w;
+  }
+
+  it('fills alert, hero, detail, quick clean and tiers from the bridge; Quick Clean done winks the logo', async () => {
+    const w = await mountOverview(designScenarioBridge(createMockBridge(), 0));
+    expect(w.get('[data-testid="forecast"]').text()).toContain('Disk full in about 9 days.');
+    expect(w.get('[data-testid="hero"]').text()).toContain('38.6');
+    expect(w.get('[data-testid="tiers"]').text()).toContain('186.0 GiB');
+    expect(w.get('[data-testid="selected"]').text()).toContain('Nothing selected');
+    await w.get('[data-seg="design-hf"]').trigger('click');
+    expect(w.get('[data-testid="badge"]').text()).toBe('Costly');
+    expect(w.get('[data-testid="detail-action"]').text()).toBe('Add to cleanup');
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    await w.get('[data-testid="qc-button"]').trigger('click');
+    await flushPromises();
+    expect(w.get('[data-testid="center"]').text()).toContain('Just freed');
+    expect(w.get('[data-testid="forecast"]').text()).toContain('13 days');
+    expect(w.get('[data-seg="design-npm"]').attributes('opacity')).toBe('0.1');
+    expect(shell.wink).toBe(1);
+    w.unmount();
+  });
+
+  it('with the recorded data: no forecast, nothing regenerable', async () => {
+    const w = await mountOverview(createMockBridge());
+    expect(w.find('[data-testid="forecast"]').exists()).toBe(false);
+    expect(w.get('[data-testid="hero"]').text()).toContain('Nothing is regenerable');
+    w.unmount();
+  });
+});

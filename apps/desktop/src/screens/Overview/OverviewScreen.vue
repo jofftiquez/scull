@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// Overview (design 01, 01b): the storage wheel with its tier toolbar in the middle, the
-// radar-sweep rescan in the header. The right sidebar lands in P3-UI-02.
+// Overview (design 01, 01b, 01c): the storage wheel with its tier toolbar in the middle, the
+// radar-sweep rescan in the header; on the right the forecast alert, the safe-to-reclaim hero,
+// the selected segment, Quick Clean and the tier breakdown.
 //
 // Data: the last scan of this session (core.report) plus the package caches. The bridge has
 // no "last report" call, so the first visit in a session starts a (read-only) scan.
@@ -14,10 +15,19 @@ import { useReducedMotion } from '../../components/overview/motion';
 import { useRadarSweep } from '../../components/overview/useRadarSweep';
 import { wheelCenter } from '../../components/overview/center';
 import { addToCleanup, cleanupBasket } from '../../components/overview/basket';
-import { TIERS, TIER_KEYS, type TierFilter } from '../../components/overview/tiers';
+import { type TierFilter } from '../../components/overview/tiers';
 import { buildWheelModel, collectCandidates, layoutWheel, type WheelItem } from '../../components/overview/wheel';
+import ForecastAlert from '../../components/overview/ForecastAlert.vue';
+import ReclaimHero from '../../components/overview/ReclaimHero.vue';
+import SelectedDetail from '../../components/overview/SelectedDetail.vue';
+import QuickCleanCard from '../../components/overview/QuickCleanCard.vue';
+import TierBreakdown from '../../components/overview/TierBreakdown.vue';
+import { ALERT_DAYS, forecastFull } from '../../components/overview/forecast';
+import { quickCleanTools, type Phase, type QuickCleanResult } from '../../components/overview/quickClean';
+import { reclaimSummary } from '../../components/overview/summary';
 import { formatBytes } from '../../lib/format';
 import { cancelScan, core, rescan } from '../../state/core';
+import { shell } from '../../state/shell';
 import { needsOnboarding } from '../../components/onboarding/model';
 
 const bridge = useOverviewBridge();
@@ -29,9 +39,8 @@ const filter = ref<TierFilter>('all');
 const selected = ref<string | null>(null);
 const announcement = ref('');
 
-const model = computed(() =>
-  core.report || caches.value ? buildWheelModel(collectCandidates(core.report, caches.value)) : null,
-);
+const candidates = computed(() => collectCandidates(core.report, caches.value));
+const model = computed(() => (core.report || caches.value ? buildWheelModel(candidates.value) : null));
 const arcs = computed(() => (model.value ? layoutWheel(model.value) : []));
 const scanningView = computed(() => core.scanning || sweep.sweeping.value);
 
@@ -47,8 +56,28 @@ watch(
   },
 );
 
+// Quick Clean state, reported by the card while it animates.
+const qc = ref<{ phase: Phase; cleaned: string[]; freed: number; result: QuickCleanResult | null }>({
+  phase: 'idle',
+  cleaned: [],
+  freed: 0,
+  result: null,
+});
+const cleaned = computed(() => new Set(qc.value.cleaned));
+const tools = computed(() => quickCleanTools(caches.value?.candidates ?? []));
+watch(
+  () => qc.value.phase,
+  (ph, was) => {
+    if (ph === 'done' && was !== 'done') shell.wink += 1;
+  },
+);
+
+const forecast = computed(() => forecastFull(core.status?.volumes ?? [], qc.value.freed));
 const center = computed(() => {
   if (scanningView.value) return wheelCenter({ kind: 'scanning', entries: seenEntries.value, where: where.value });
+  if (qc.value.phase === 'done' && qc.value.result) {
+    return wheelCenter({ kind: 'freed', bytes: qc.value.result.freed, what: 'package caches' });
+  }
   return wheelCenter({ kind: 'idle', model: model.value, selected: selected.value });
 });
 
@@ -76,6 +105,14 @@ function onSelect(id: string | null, add: boolean) {
     return;
   }
   selected.value = selected.value === id ? null : id;
+}
+
+function addSelected(item: WheelItem) {
+  announcement.value = addToCleanup(item);
+}
+
+function focusTiers() {
+  document.querySelector<HTMLElement>('[data-testid="tiers"]')?.focus();
 }
 
 function clear() {
@@ -197,7 +234,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         :center="center"
         :sweep="sweep.progress.value"
         :scanning="scanningView"
-        :bounce-key="sweep.completed.value"
+        :bounce-key="sweep.completed.value + (qc.phase === 'done' ? 1 : 0)"
+        :cleaned="cleaned"
         @select="onSelect"
       />
       <TierToolbar v-model="filter" @clear="clear" />
@@ -211,33 +249,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
     </section>
 
     <template #aside>
-      <section aria-label="Safe to reclaim" class="flex min-h-[276px] flex-col gap-3 rounded-tile-lg bg-surface p-tile-padding">
-        <span class="text-label text-text-secondary">Safe to reclaim</span>
-        <span class="text-stat-md font-bold text-text-hint">—</span>
-        <span class="text-caption text-text-tertiary">P3-UI-02</span>
-      </section>
-      <section aria-label="Selected item" aria-live="polite" class="flex min-h-[200px] flex-col gap-3 rounded-tile-lg bg-surface p-tile-padding-sm" data-testid="selected">
-        <span class="text-label text-text-secondary">{{ selectedItem || selectedCategory ? 'Selected' : 'Nothing selected' }}</span>
-        <template v-if="selectedItem">
-          <span class="text-h3 font-semibold text-ink">{{ selectedItem.name }}</span>
-          <span class="font-mono text-label">{{ formatBytes(selectedItem.bytes) }} · {{ TIERS[selectedItem.tier].label }}</span>
-        </template>
-        <template v-else-if="selectedCategory">
-          <span class="text-h3 font-semibold text-ink">{{ selectedCategory.label }}</span>
-          <span class="font-mono text-label">{{ formatBytes(selectedCategory.bytes) }} · {{ TIERS[selectedCategory.tier].label }}</span>
-        </template>
-        <span v-else class="text-caption text-text-tertiary">Click a segment of the wheel.</span>
-      </section>
-      <section aria-label="By safety tier" class="flex flex-1 flex-col gap-3 rounded-tile-lg bg-surface p-tile-padding-sm">
-        <span class="text-label text-text-secondary">By safety tier</span>
-        <div v-for="t in TIER_KEYS" :key="t" class="flex items-center gap-3">
-          <span
-            class="rounded-chip px-2.5 py-0.5 text-caption font-semibold"
-            :style="{ background: t === 'S3' ? 'var(--color-tier-s3)' : `var(--tier-${t.toLowerCase()}-fill)`, color: TIERS[t].badgeFg }"
-          >{{ TIERS[t].chip }}</span>
-          <span class="text-label text-text-secondary">{{ TIERS[t].hint }}</span>
-        </div>
-      </section>
+      <ForecastAlert v-if="forecast && forecast.days <= ALERT_DAYS" :days="forecast.days" :safe-bytes="regenerable" />
+      <ReclaimHero :bytes="regenerable" :summary="reclaimSummary(candidates)" :scanned="model !== null" />
+      <SelectedDetail :item="selectedItem" :category="selectedCategory" @add="addSelected" @tiers="focusTiers" />
+      <QuickCleanCard :tools="tools" :bridge="bridge" :reduced="reduced" @state="qc = $event" />
+      <TierBreakdown :model="model" tabindex="-1" />
     </template>
   </ScreenLayout>
 </template>

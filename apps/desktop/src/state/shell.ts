@@ -9,6 +9,8 @@ export interface ShellState {
   /** Figures next to nav items. */
   counts: Partial<Record<NavIconName, string>>;
   version: string;
+  /** Bumped on success moments (Quick Clean done): the sidebar logo winks (D-20). */
+  wink: number;
 }
 
 export const NOT_SCANNED = 'not scanned yet';
@@ -17,6 +19,7 @@ export const shell = reactive<ShellState>({
   status: NOT_SCANNED,
   counts: {},
   version: '0.0.0',
+  wink: 0,
 });
 
 export function useShellStatus() {
