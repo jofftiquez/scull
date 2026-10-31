@@ -7,7 +7,9 @@
 //! quarantines into its folder (D-3). [`Operation::finish`] closes the audit.
 
 use crate::executor::Executor;
+use crate::measure::{FreeSpaceSource, Meter, VolumeMeter};
 use crate::quarantine::{QuarantineFolder, QuarantineSettings};
+use crate::trash::TrashLocations;
 use scull_core::{ErrorKind, OperationId, Plan, ScullError};
 use scull_engine::PlatformOwnerOnly;
 use scull_storage::{
@@ -26,6 +28,13 @@ pub struct Operation<'s> {
     pub(crate) folders: Vec<QuarantineFolder>,
     /// The journal intent of the step in progress, until it is closed (SAFE-19).
     pub(crate) open_step: Option<i64>,
+    /// Where the Trash fallback moves items whose quarantine is impossible (D-3). `None`:
+    /// no fallback, such items are blocked.
+    pub(crate) trash: Option<TrashLocations>,
+    /// Measures the free-space delta around `execute_plan` (PHY-02, I-5).
+    pub(crate) meter: Option<Box<dyn Meter>>,
+    /// The measured delta of the last `execute_plan`, recorded by [`Operation::finish`].
+    pub(crate) measured: Option<i64>,
 }
 
 impl Operation<'_> {
@@ -46,6 +55,38 @@ impl Operation<'_> {
         self
     }
 
+    /// Enable the Trash fallback (P2-EXEC-07, D-3): an S1/S2 item whose same-volume quarantine
+    /// is impossible (another volume, no writable or private quarantine location, read-only,
+    /// no no-replace rename) is moved to the Trash at `locations` instead; if that is
+    /// impossible too, it is blocked. Never deleted as a fallback. Without this call there is
+    /// no fallback (such items are blocked). Interfaces pass [`TrashLocations::from_env`];
+    /// tests point it inside their fixture.
+    #[must_use]
+    pub fn with_trash(mut self, locations: TrashLocations) -> Self {
+        self.trash = Some(locations);
+        self
+    }
+
+    /// Measure the free-space delta of the next [`Executor::execute_plan`] with `meter`
+    /// (default: [`VolumeMeter::platform_quick`]). The result is in
+    /// [`ExecutionReport::measurement`](crate::ExecutionReport::measurement) and recorded by
+    /// [`Operation::finish`] (`measured_delta_bytes`, invariant I-5).
+    #[must_use]
+    pub fn with_meter<S: FreeSpaceSource + std::fmt::Debug + Send + 'static>(
+        mut self,
+        meter: VolumeMeter<S>,
+    ) -> Self {
+        self.meter = Some(Box::new(meter));
+        self
+    }
+
+    /// Don't measure the free-space delta (the operation then records none).
+    #[must_use]
+    pub fn without_measurement(mut self) -> Self {
+        self.meter = None;
+        self
+    }
+
     /// Record one item outcome in the audit log.
     pub(crate) fn record(&mut self, rec: &ItemRecord) -> Result<(), ScullError> {
         self.store
@@ -54,12 +95,25 @@ impl Operation<'_> {
             .map_err(ScullError::from)
     }
 
-    /// Close the audit (`end` says whether every item was handled or the run was cancelled),
-    /// then write the on-disk manifest copy of each quarantine folder it used.
+    /// Close the audit (`end` says whether every item was handled or the run was cancelled)
+    /// with the free-space delta measured by the last [`Executor::execute_plan`] (I-5), then
+    /// write the on-disk manifest copy of each quarantine folder it used.
     pub fn finish(
+        self,
+        end: OperationEnd,
+        finished_at: i64,
+    ) -> Result<OperationSummary, ScullError> {
+        let measured = self.measured;
+        self.finish_measured(end, finished_at, measured)
+    }
+
+    /// [`Operation::finish`] with an explicit measured free-space delta in bytes (positive =
+    /// space gained), e.g. from the caller's own [`VolumeMeter`] spanning several runs.
+    pub fn finish_measured(
         mut self,
         end: OperationEnd,
         finished_at: i64,
+        measured_delta_bytes: Option<i64>,
     ) -> Result<OperationSummary, ScullError> {
         let summary = self
             .store
@@ -68,7 +122,7 @@ impl Operation<'_> {
                 &OperationFinish {
                     finished_at,
                     end,
-                    measured_delta_bytes: None,
+                    measured_delta_bytes,
                 },
             )
             .map_err(ScullError::from)?;
@@ -148,6 +202,9 @@ impl Executor {
             quarantine: QuarantineSettings::default(),
             folders: Vec::new(),
             open_step: None,
+            trash: None,
+            meter: Some(Box::new(VolumeMeter::platform_quick())),
+            measured: None,
         })
     }
 }

@@ -27,12 +27,18 @@
 //!   next start, never resuming a deletion or a move, and closes the operation as interrupted.
 //! * Quarantine (D-3, SAFE-16): S1/S2 items move into `.scull-quarantine/<operation-id>/` on
 //!   their own volume by one atomic no-replace rename, recorded in the database manifest of
-//!   record; where that is impossible they are blocked, never deleted.
-//!   [`Executor::purge_quarantine`] removes expired entries and records the freed bytes.
+//!   record; only where that is impossible they fall back to the Trash
+//!   ([`Operation::with_trash`], P2-EXEC-07), and where that is impossible too they are
+//!   blocked, never deleted. [`Executor::purge_quarantine`] removes expired entries and records the freed bytes.
 //!   [`Executor::restore`] moves an entry back to its recorded path only (the database manifest
 //!   is authoritative), after verifying its identity, kind and size and that the original
 //!   folder is the same directory object; it never overwrites (a taken path gets a
 //!   `<name>.scull-restored-<n>` sibling), is idempotent, and logs every attempt (T-32).
+//!
+//! * Measured free-space delta (PHY-02, [`measure`]): every operation measures its volumes
+//!   around `execute_plan` ([`Operation::with_meter`]); the accuracy report is
+//!   [`ExecutionReport::measurement`] and [`Operation::finish`] records the measured delta next
+//!   to the predicted bytes (I-5).
 //!
 //! # Not wired into any interface yet
 //!
@@ -40,10 +46,8 @@
 //! Phase 2 safeguards land; the inspect-only release gate checks that `scull clean` is still a
 //! stub. Missing today, each tracked by its issue:
 //!
-//! * measured free-space delta (PHY-02): P2-EXEC-10, #76;
 //! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
 //!   P2-EXEC-11, #77;
-//! * the Trash fallback: P2-EXEC-07, #73;
 //! * Windows quarantine moves and restore (handle-based rename, with the Windows walker's
 //!   helpers).
 

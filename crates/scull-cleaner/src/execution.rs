@@ -1,15 +1,20 @@
 //! Executing a whole plan: verify it, then revalidate and execute each item in turn
-//! (SAFE-05, SAFE-11, P2-EXEC-03), recording each outcome in the operation's audit (SAFE-08).
+//! (SAFE-05, SAFE-11, P2-EXEC-03), recording each outcome in the operation's audit (SAFE-08),
+//! with the quarantine → Trash → blocked chain (D-3, P2-EXEC-05/07) and the measured
+//! free-space delta (PHY-02, P2-EXEC-10).
 
 use crate::executor::{DeleteTarget, Executor};
 use crate::journal::{StepPoint, at, fingerprint};
+use crate::measure::{ItemExecution, MeasuredDelta, Tally, planned_sizes};
 use crate::operation::Operation;
 use crate::quarantine::{QuarantineRefusal, Quarantined};
 use crate::revalidate::{Revalidated, Revalidation, Skip};
-use scull_core::{Action, ErrorKind, FsPath, ItemId, Plan, PlanId, ScullError, Tier};
+use crate::trash::TrashReport;
+use scull_core::{Action, ErrorKind, FsPath, ItemId, Plan, PlanId, ScullError, Sizes, Tier};
 use scull_engine::{CancelToken, now_unix};
 use scull_platform::remove::{RemoveOutcome, RemoveReport, WalkEvent};
 use scull_platform::{Native, Platform};
+use scull_scanner::ActionReclaim;
 use scull_storage::{
     ItemOutcome as AuditOutcome, ItemRecord, JournalAction, JournalIntent, WalkEnd, WalkSummary,
 };
@@ -34,6 +39,9 @@ pub enum ItemOutcome {
     Deleted(RemoveReport),
     /// Moved into same-volume quarantine (restorable).
     Quarantined(Quarantined),
+    /// Moved to the platform Trash because quarantine was impossible here (D-3: the
+    /// fallback). Its bytes are moved, not freed (PRD §9).
+    Trashed(TrashReport),
     /// Revalidation failed: the item was skipped and nothing was touched.
     Skipped(Skip),
     /// The item passed revalidation but the Executor refused it (nothing was removed), e.g.
@@ -79,7 +87,7 @@ impl ItemReport {
     pub fn succeeded(&self) -> bool {
         match &self.outcome {
             ItemOutcome::Deleted(r) => r.outcome == RemoveOutcome::Complete,
-            ItemOutcome::Quarantined(_) => true,
+            ItemOutcome::Quarantined(_) | ItemOutcome::Trashed(_) => true,
             _ => false,
         }
     }
@@ -92,7 +100,7 @@ impl ItemReport {
                 RemoveOutcome::Incomplete => Some("incomplete"),
                 _ => Some("aborted"),
             },
-            ItemOutcome::Quarantined(_) => None,
+            ItemOutcome::Quarantined(_) | ItemOutcome::Trashed(_) => None,
             ItemOutcome::Skipped(s) => Some(s.code()),
             ItemOutcome::Refused(e) => Some(e.kind.as_str()),
             ItemOutcome::Blocked { code, .. } => Some(code),
@@ -127,6 +135,12 @@ impl ItemReport {
                 rec.moved_bytes = Some(q.bytes);
                 rec
             }
+            ItemOutcome::Trashed(t) => {
+                let mut rec = ItemRecord::new(id, at, AuditOutcome::MovedToTrash)
+                    .with_reason("quarantine_impossible");
+                rec.moved_bytes = Some(t.moved_bytes());
+                rec
+            }
             ItemOutcome::Skipped(s) => ItemRecord::skipped(id, at, s.code()),
             ItemOutcome::Refused(e) => ItemRecord::from_error(id, at, e),
             ItemOutcome::Blocked { code, .. } => {
@@ -135,10 +149,33 @@ impl ItemReport {
             ItemOutcome::NotRun => return None,
         })
     }
+
+    /// What was done, for the measured-delta tally.
+    fn execution(&self) -> ItemExecution {
+        match &self.outcome {
+            ItemOutcome::Deleted(r) => {
+                let removed = r.removed.allocated_bytes;
+                if r.outcome == RemoveOutcome::Complete {
+                    ItemExecution::Done { removed, moved: 0 }
+                } else {
+                    ItemExecution::Partial { removed, moved: 0 }
+                }
+            }
+            ItemOutcome::Quarantined(q) => ItemExecution::Done {
+                removed: 0,
+                moved: q.bytes,
+            },
+            ItemOutcome::Trashed(t) => ItemExecution::Done {
+                removed: 0,
+                moved: t.moved_bytes(),
+            },
+            _ => ItemExecution::NotExecuted,
+        }
+    }
 }
 
 /// The result of [`Executor::execute_plan`]: one report per plan item, in plan order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ExecutionReport {
     /// The executed plan.
@@ -147,6 +184,11 @@ pub struct ExecutionReport {
     pub items: Vec<ItemReport>,
     /// Whether the operation was cancelled before every item was attempted.
     pub cancelled: bool,
+    /// The accuracy report (PHY-02): predicted reclaim, bytes removed and moved, the measured
+    /// free-space delta per volume and in total, the discrepancy and its explanations. `None`
+    /// without an operation or with measurement turned off
+    /// ([`Operation::without_measurement`]).
+    pub measurement: Option<MeasuredDelta>,
 }
 
 impl ExecutionReport {
@@ -190,10 +232,20 @@ impl Executor {
     ///
     /// * [`Action::Delete`] (S0): the removal walker;
     /// * [`Action::Quarantine`] (S1/S2): a same-volume, no-replace move into the operation's
-    ///   quarantine folder, recorded in the manifest of record (D-3, SAFE-16); where that is
-    ///   impossible the item is [`ItemOutcome::Blocked`] (the Trash fallback is #73), never
-    ///   deleted;
-    /// * anything else is refused per item (Trash #73, tool-native #78).
+    ///   quarantine folder, recorded in the manifest of record (D-3, SAFE-16); **only** where
+    ///   that is impossible (another volume, no writable or private quarantine location,
+    ///   read-only, no no-replace rename) it falls back to the Trash
+    ///   ([`Operation::with_trash`], [`ItemOutcome::Trashed`]), and where that is impossible
+    ///   too (or no Trash is configured) the item is [`ItemOutcome::Blocked`]. It is **never**
+    ///   deleted as a fallback. A quarantine refused because the item changed is not retried
+    ///   in the Trash ([`ItemOutcome::Refused`]);
+    /// * [`Action::Trash`]: a move to the configured Trash, else blocked;
+    /// * anything else is refused per item (tool-native #78).
+    ///
+    /// With an operation, the free-space delta of the affected volumes (the scan roots) is
+    /// measured before and after ([`Operation::with_meter`]; PHY-02): the accuracy report is
+    /// [`ExecutionReport::measurement`] and [`Operation::finish`] records the measured delta
+    /// next to the predicted bytes (invariant I-5).
     ///
     /// If the journal or the audit can't be written the run stops at that item and the error
     /// is returned (an intent that can't be journaled means the step is not run at all).
@@ -217,7 +269,13 @@ impl Executor {
             plan_id: plan.id().clone(),
             items: Vec::with_capacity(plan.items().len()),
             cancelled: false,
+            measurement: None,
         };
+        let baseline = operation
+            .as_deref()
+            .and_then(|op| op.meter.as_ref())
+            .map(|m| m.before(&revalidation.root_paths()));
+        let mut tally = Tally::new();
         for item in plan.items() {
             let mut entry = ItemReport {
                 item_id: item.item_id.clone(),
@@ -226,8 +284,14 @@ impl Executor {
                 fresh_tier: None,
                 outcome: ItemOutcome::NotRun,
             };
+            let mut sizes: Sizes = planned_sizes(item);
             if report.cancelled || cancel.is_cancelled() {
                 report.cancelled = true;
+                tally.add(
+                    &ActionReclaim::for_action(&sizes, &item.action),
+                    &[],
+                    ItemExecution::NotExecuted,
+                );
                 report.items.push(entry);
                 continue;
             }
@@ -242,9 +306,15 @@ impl Executor {
                 }
                 Ok(ok) => {
                     entry.fresh_tier = Some(ok.fresh_tier);
+                    sizes = ok.sizes;
                     self.act(&ok, operation.as_deref_mut())
                 }
             };
+            tally.add(
+                &ActionReclaim::for_action(&sizes, &item.action),
+                &[],
+                entry.execution(),
+            );
             if let Some(op) = operation.as_deref_mut()
                 && let Some(rec) = entry.audit_record(now_unix())
             {
@@ -258,6 +328,13 @@ impl Executor {
             }
             report.items.push(entry);
         }
+        if let (Some(op), Some(baseline)) = (operation, baseline)
+            && let Some(meter) = op.meter.as_ref()
+        {
+            let delta = meter.after(baseline, &tally);
+            op.measured = delta.measured_delta_bytes();
+            report.measurement = Some(delta);
+        }
         Ok(report)
     }
 
@@ -270,20 +347,14 @@ impl Executor {
                 }
                 match op.quarantine(ok, now_unix(), self.hook()) {
                     Ok(q) => ItemOutcome::Quarantined(q),
-                    Err(QuarantineRefusal::Impossible(why)) => ItemOutcome::Blocked {
-                        code: "quarantine_impossible",
-                        message: format!(
-                            "quarantine is impossible here ({why}) and the Trash fallback is \
-                             not available in this build (#73): the item was left in place, \
-                             never deleted instead"
-                        ),
-                    },
+                    Err(QuarantineRefusal::Impossible(why)) => self.trash_fallback(ok, op, &why),
                     Err(QuarantineRefusal::Failed(e)) => ItemOutcome::Refused(
                         e.with_item(ok.item.item_id.clone())
                             .with_path(ok.item.path.clone()),
                     ),
                 }
             }
+            (Action::Trash, Some(op)) => self.trash_step(ok, op, None),
             (Action::Quarantine, None) => ItemOutcome::Refused(
                 ScullError::new(
                     ErrorKind::SafetyBlocked,
@@ -326,6 +397,109 @@ impl Executor {
     }
 }
 
+impl Executor {
+    /// Quarantine was impossible (`why`): the Trash fallback, if one is configured, else
+    /// blocked. Never a deletion.
+    fn trash_fallback(&self, ok: &Revalidated, op: &mut Operation<'_>, why: &str) -> ItemOutcome {
+        if op.trash.is_none() {
+            return ItemOutcome::Blocked {
+                code: "quarantine_impossible",
+                message: format!(
+                    "quarantine is impossible here ({why}) and no Trash fallback is configured \
+                     for this operation: the item was left in place, never deleted instead"
+                ),
+            };
+        }
+        // A quarantine attempt that reached the journal changed nothing: close it so the Trash
+        // step is the item's current one (SAFE-19).
+        if let Err(e) = op.journal_close(None, now_unix()) {
+            return ItemOutcome::Refused(e.with_item(ok.item.item_id.clone()));
+        }
+        self.trash_step(ok, op, Some(why))
+    }
+
+    /// Moves a revalidated item to the operation's Trash, journaled. `quarantine_why`: the
+    /// item was planned for quarantine and this is its fallback.
+    fn trash_step(
+        &self,
+        ok: &Revalidated,
+        op: &mut Operation<'_>,
+        quarantine_why: Option<&str>,
+    ) -> ItemOutcome {
+        let Some(locations) = op.trash.clone() else {
+            return ItemOutcome::Blocked {
+                code: "trash_unavailable",
+                message: "no Trash is configured for this operation: the item was left in \
+                          place, never deleted instead"
+                    .into(),
+            };
+        };
+        let id = &ok.item.item_id;
+        at(self.hook(), StepPoint::BeforeIntent(id));
+        let intent = JournalIntent {
+            operation_id: op.id().clone(),
+            item_id: id.clone(),
+            action: JournalAction::Trash,
+            source_path: FsPath::from_path(&ok.path),
+            source_identity: ok.item.identity,
+            source_kind: ok.kind.as_str().to_owned(),
+            source_parent: parent_identity(&ok.path),
+            destination: None,
+            destination_dir: None,
+            tree: None,
+            recorded_at: now_unix(),
+        };
+        if let Err(e) = op.journal_intent(&intent) {
+            return ItemOutcome::Refused(e.with_item(id.clone()));
+        }
+        at(self.hook(), StepPoint::AfterIntent(id));
+        let target = DeleteTarget {
+            anchor: &ok.anchor,
+            anchor_identity: ok.anchor_identity,
+            path: &ok.path,
+        };
+        match self.trash_checked(&ok.item, &target, &locations, Some(ok.kind)) {
+            Ok(t) => {
+                at(self.hook(), StepPoint::AfterMove(id));
+                ItemOutcome::Trashed(t)
+            }
+            // Nothing moved, nothing deleted. "No usable Trash here" is the end of the chain:
+            // blocked. An item that changed is refused like any other.
+            Err(e)
+                if e.kind == ErrorKind::SafetyBlocked || e.kind == ErrorKind::PermissionDenied =>
+            {
+                ItemOutcome::Blocked {
+                    code: if quarantine_why.is_some() {
+                        "quarantine_and_trash_impossible"
+                    } else {
+                        "trash_unavailable"
+                    },
+                    message: match quarantine_why {
+                        Some(why) => format!(
+                            "quarantine is impossible here ({why}) and so is the Trash ({}): the \
+                             item was left in place, never deleted instead",
+                            e.message
+                        ),
+                        None => format!(
+                            "the Trash is unavailable ({}): the item was left in place, never \
+                             deleted instead",
+                            e.message
+                        ),
+                    },
+                }
+            }
+            Err(e) => ItemOutcome::Refused(e),
+        }
+    }
+}
+
+/// Identity of the directory holding `path`, looked up no-follow.
+fn parent_identity(path: &std::path::Path) -> Option<scull_core::FileIdentity> {
+    path.parent()
+        .and_then(|p| Native.metadata(p).ok())
+        .and_then(|m| m.identity)
+}
+
 /// Journals the intent of a removal walk (SAFE-19): path, identity, kind, parent identity and
 /// the tree's fingerprint, so recovery can tell an untouched tree from a partly removed one.
 fn journal_delete(
@@ -342,11 +516,7 @@ fn journal_delete(
         source_path: FsPath::from_path(&ok.path),
         source_identity: ok.item.identity,
         source_kind: ok.kind.as_str().to_owned(),
-        source_parent: ok
-            .path
-            .parent()
-            .and_then(|p| Native.metadata(p).ok())
-            .and_then(|m| m.identity),
+        source_parent: parent_identity(&ok.path),
         destination: None,
         destination_dir: None,
         tree: Some(fingerprint(&ok.path)),

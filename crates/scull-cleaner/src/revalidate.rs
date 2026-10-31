@@ -21,7 +21,7 @@
 //! removal walker, which re-checks identity and kind once more at open time, opening every
 //! component below the anchor no-follow.
 
-use scull_core::{DropReason, ErrorKind, FileIdentity, Plan, PlanItem, Tier, narrow};
+use scull_core::{DropReason, ErrorKind, FileIdentity, Plan, PlanItem, Sizes, Tier, narrow};
 use scull_engine::paths::canon;
 use scull_engine::{CancelToken, Engine, ScanRequest};
 use scull_platform::{EntryKind, Native, Platform};
@@ -80,6 +80,11 @@ impl<'e> Revalidation<'e> {
         self
     }
 
+    /// The trusted scan roots (canonical), e.g. to measure their volumes.
+    pub(crate) fn root_paths(&self) -> Vec<PathBuf> {
+        self.roots.iter().map(|r| r.path.clone()).collect()
+    }
+
     /// Revalidate `item` of `plan` right now. `Ok` is the item as it may be executed (see
     /// [`Revalidated`]); `Err` is why it must be skipped.
     pub fn revalidate(
@@ -111,11 +116,9 @@ impl<'e> Revalidation<'e> {
         if report.cancelled {
             return Err(Skip::Cancelled);
         }
-        let fresh_tier = report
-            .candidates
-            .iter()
-            .find(|c| c.id == item.item_id)
-            .map(|c| c.tier);
+        let fresh = report.candidates.iter().find(|c| c.id == item.item_id);
+        let fresh_tier = fresh.map(|c| c.tier);
+        let fresh_sizes = fresh.map(|c| c.sizes);
         let narrowed = narrow(plan, &report.candidates);
         let kept = match narrowed
             .executable
@@ -159,6 +162,7 @@ impl<'e> Revalidation<'e> {
         }
 
         let fresh = kept.tier;
+        let sizes = fresh_sizes.unwrap_or_else(|| crate::measure::planned_sizes(&kept));
         Ok(Revalidated {
             item: PlanItem {
                 // Executed under the more protective of the planned and fresh tiers (I-8: a
@@ -171,6 +175,7 @@ impl<'e> Revalidation<'e> {
             anchor: root.path.clone(),
             anchor_identity: root.identity,
             kind: md.kind,
+            sizes,
         })
     }
 }
@@ -192,6 +197,9 @@ pub struct Revalidated {
     pub anchor_identity: Option<FileIdentity>,
     /// The item's kind at revalidation; the walker refuses any other kind.
     pub kind: EntryKind,
+    /// The fresh size estimate (logical, allocated, reclaimable with confidence), for the
+    /// operation's predicted reclaim (PHY-02).
+    pub sizes: Sizes,
 }
 
 /// Why an item was skipped at revalidation. Nothing was touched.

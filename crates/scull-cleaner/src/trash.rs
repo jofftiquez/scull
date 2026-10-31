@@ -84,7 +84,8 @@ impl Executor {
     ) -> Result<TrashReport, ScullError> {
         check_trash_item(item)?;
         let relative = check_target(item, target)?;
-        // TODO(#74, P2-EXEC-08): journal intent record before touching the disk.
+        // Journaling (SAFE-19) and the audit row (SAFE-08) are done by `execute_plan`, which
+        // owns the operation; a bare `trash` call has no operation.
         let req = TrashRequest {
             anchor: target.anchor,
             anchor_identity: target.anchor_identity,
@@ -93,7 +94,6 @@ impl Executor {
             expected_kind,
             locations,
         };
-        // TODO(#75, P2-EXEC-09): audit outcome (method "trash", bytes moved, location).
         match trash::move_to_trash(&req) {
             Ok(outcome) => Ok(TrashReport {
                 item_id: item.item_id.clone(),

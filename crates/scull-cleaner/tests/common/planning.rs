@@ -196,6 +196,15 @@ pub fn print_report(fx: &Fixture, r: &ExecutionReport) {
                     .display(),
                 q.bytes
             ),
+            ItemOutcome::Trashed(t) => format!(
+                "TRASHED -> {} ({} B moved, 0 freed)",
+                t.outcome
+                    .location
+                    .as_ref()
+                    .map(|l| l.strip_prefix(fx.base()).unwrap_or(l).display().to_string())
+                    .unwrap_or_default(),
+                t.moved_bytes()
+            ),
             ItemOutcome::Blocked { code, message } => format!("BLOCKED [{code}] {message}"),
             ItemOutcome::NotRun => "not run".into(),
             other => format!("{other:?}"),
@@ -209,6 +218,9 @@ pub fn print_report(fx: &Fixture, r: &ExecutionReport) {
         );
     }
     println!("  exit kind: {:?}", r.error_kind());
+    if let Some(m) = &r.measurement {
+        println!("--- accuracy report ---\n{m}");
+    }
 }
 
 /// I-1 (no S3 in the executed plan), I-2 (canary), I-3 (only `allowed` changed since the last
@@ -234,6 +246,7 @@ pub fn check(
             let action = match i.outcome {
                 ItemOutcome::Deleted(_) => Action::Delete,
                 ItemOutcome::Quarantined(_) => Action::Quarantine,
+                ItemOutcome::Trashed(_) => Action::Trash,
                 _ => return None,
             };
             Some((i.item_id.clone(), i.executed_tier(), action))

@@ -299,6 +299,17 @@ impl VolumeMeter<PlatformFreeSpace> {
     pub fn platform() -> Self {
         Self::new(PlatformFreeSpace, MeasureOptions::default())
     }
+
+    /// A meter on the real platform with default sampling but **no** waiting for delayed frees
+    /// (a measurement costs about 0.2 s): what every [`Operation`](crate::Operation) uses
+    /// unless told otherwise, so predicted and measured bytes are always both recorded (I-5).
+    /// Use [`VolumeMeter::platform`] to also catch delayed frees (Btrfs, ZFS, ext4 commits).
+    pub fn platform_quick() -> Self {
+        Self::new(
+            PlatformFreeSpace,
+            MeasureOptions::default().with_resampling(Duration::ZERO, Duration::ZERO),
+        )
+    }
 }
 
 impl<S: FreeSpaceSource> VolumeMeter<S> {
@@ -437,6 +448,38 @@ impl<S: FreeSpaceSource> VolumeMeter<S> {
         }
         Sample::from_samples(&values)
             .ok_or_else(|| last_err.unwrap_or_else(|| ProbeError("no samples".into())))
+    }
+}
+
+/// What an [`Operation`](crate::Operation) needs from a meter, object-safe so any
+/// [`VolumeMeter`] can be installed with [`Operation::with_meter`](crate::Operation::with_meter).
+pub(crate) trait Meter: fmt::Debug + Send {
+    fn before(&self, paths: &[PathBuf]) -> Baseline;
+    fn after(&self, baseline: Baseline, tally: &Tally) -> MeasuredDelta;
+}
+
+impl<S: FreeSpaceSource + fmt::Debug + Send> Meter for VolumeMeter<S> {
+    fn before(&self, paths: &[PathBuf]) -> Baseline {
+        VolumeMeter::before(self, paths)
+    }
+
+    fn after(&self, baseline: Baseline, tally: &Tally) -> MeasuredDelta {
+        VolumeMeter::after(self, baseline, tally)
+    }
+}
+
+/// The sizes a plan item's own estimate implies (`reclaimable_bytes`, medium confidence), for
+/// items without a fresh estimate (skipped before re-derivation).
+pub(crate) fn planned_sizes(item: &scull_core::PlanItem) -> scull_core::Sizes {
+    let b = item.reclaimable_bytes;
+    scull_core::Sizes {
+        logical: b,
+        allocated: b,
+        reclaimable: scull_core::Reclaimable {
+            bytes: b,
+            confidence: Confidence::Medium,
+            shared_bytes: 0,
+        },
     }
 }
 
