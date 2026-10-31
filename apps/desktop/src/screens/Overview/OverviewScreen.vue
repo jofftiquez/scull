@@ -6,7 +6,7 @@
 // Data: the last scan of this session (core.report) plus the package caches. The bridge has
 // no "last report" call, so the first visit in a session starts a (read-only) scan.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
-import type { CachesReport } from '../../bridge';
+import type { CachesReport, Drive } from '../../bridge';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import StorageWheel from '../../components/overview/StorageWheel.vue';
 import TierToolbar from '../../components/overview/TierToolbar.vue';
@@ -22,7 +22,9 @@ import ReclaimHero from '../../components/overview/ReclaimHero.vue';
 import SelectedDetail from '../../components/overview/SelectedDetail.vue';
 import QuickCleanCard from '../../components/overview/QuickCleanCard.vue';
 import TierBreakdown from '../../components/overview/TierBreakdown.vue';
-import { ALERT_DAYS, forecastFull } from '../../components/overview/forecast';
+import DriveSwitcher from '../../components/overview/DriveSwitcher.vue';
+import { candidatesOn, chosenDrive, driveChoice, driveContext, driveForecast, driveOptions } from '../../components/overview/drives';
+import { ALERT_DAYS } from '../../components/overview/forecast';
 import { quickCleanTools, type Phase, type QuickCleanResult } from '../../components/overview/quickClean';
 import { reclaimSummary } from '../../components/overview/summary';
 import { formatBytes } from '../../lib/format';
@@ -39,7 +41,12 @@ const filter = ref<TierFilter>('all');
 const selected = ref<string | null>(null);
 const announcement = ref('');
 
-const candidates = computed(() => collectCandidates(core.report, caches.value));
+// Drives (P3-UI-12, D-22): the wheel, Quick Clean, forecast and quarantine follow the chosen drive.
+const drives = shallowRef<Drive[]>([]);
+const allCandidates = computed(() => collectCandidates(core.report, caches.value));
+const driveOpts = computed(() => driveOptions(drives.value, allCandidates.value));
+const drive = computed(() => chosenDrive(driveChoice.value, driveOpts.value));
+const candidates = computed(() => candidatesOn(allCandidates.value, drive.value, drives.value));
 const model = computed(() => (core.report || caches.value ? buildWheelModel(candidates.value) : null));
 const arcs = computed(() => (model.value ? layoutWheel(model.value) : []));
 const scanningView = computed(() => core.scanning || sweep.sweeping.value);
@@ -64,7 +71,7 @@ const qc = ref<{ phase: Phase; cleaned: string[]; freed: number; result: QuickCl
   result: null,
 });
 const cleaned = computed(() => new Set(qc.value.cleaned));
-const tools = computed(() => quickCleanTools(caches.value?.candidates ?? []));
+const tools = computed(() => quickCleanTools(candidatesOn(caches.value?.candidates ?? [], drive.value, drives.value)));
 watch(
   () => qc.value.phase,
   (ph, was) => {
@@ -72,7 +79,8 @@ watch(
   },
 );
 
-const forecast = computed(() => forecastFull(core.status?.volumes ?? [], qc.value.freed));
+const forecast = computed(() => driveForecast(drive.value, drives.value, core.status?.volumes ?? [], qc.value.freed));
+watch(drive, () => (selected.value = null));
 const center = computed(() => {
   if (scanningView.value) return wheelCenter({ kind: 'scanning', entries: seenEntries.value, where: where.value });
   if (qc.value.phase === 'done' && qc.value.result) {
@@ -169,6 +177,12 @@ onMounted(async () => {
     const status = core.status ?? (await bridge.status().catch(() => null));
     if (!needsOnboarding(status)) void startScan();
   }
+  bridge
+    .drives()
+    .then((d) => (drives.value = d))
+    .catch(() => {
+      // Without the drive list the Overview shows every drive together (no switcher).
+    });
   try {
     caches.value = await bridge.caches();
   } catch {
@@ -227,6 +241,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       class="flex flex-1 flex-col items-center gap-4 rounded-[28px] bg-surface px-6 pt-6 pb-5"
       data-testid="wheel-tile"
     >
+      <DriveSwitcher v-if="driveOpts.length" v-model="driveChoice" :options="driveOpts" :context="driveContext(drive, driveOpts)" />
       <StorageWheel
         :arcs="arcs"
         :filter="filter"
@@ -249,7 +264,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
     </section>
 
     <template #aside>
-      <ForecastAlert v-if="forecast && forecast.days <= ALERT_DAYS" :days="forecast.days" :safe-bytes="regenerable" />
+      <ForecastAlert
+        v-if="forecast && forecast.days <= ALERT_DAYS"
+        :days="forecast.days"
+        :safe-bytes="regenerable"
+        :drive="driveOpts.length && forecast.drive ? forecast.drive.label : null"
+      />
       <ReclaimHero :bytes="regenerable" :summary="reclaimSummary(candidates)" :scanned="model !== null" />
       <SelectedDetail :item="selectedItem" :category="selectedCategory" @add="addSelected" @tiers="focusTiers" />
       <QuickCleanCard :tools="tools" :bridge="bridge" :reduced="reduced" @state="qc = $event" />

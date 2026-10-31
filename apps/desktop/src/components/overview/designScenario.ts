@@ -91,17 +91,32 @@ function totals(cands: readonly Candidate[]): Totals {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Wrap a mock bridge with the design's data. `stepMs` paces the simulated scan (9 steps). */
-export function designScenarioBridge(base: ScullBridge, stepMs = 300): ScullBridge {
+/** The design's external drive (design 07: Dev SSD), for the drive switcher (P3-UI-12). */
+const SSD = '/Volumes/Dev SSD';
+const SSD_ROWS: readonly Row[] = [
+  ['ssd-win11', 'vm-images/win11.vhdx', 'large_file', 'S2', 63.5, 'Virtual machine disk', null, 'Virtual machine disk. Inspect only; scull never deletes VM disks.'],
+  ['ssd-ubuntu', 'vm-images/ubuntu-24.qcow2', 'large_file', 'S2', 41.0, 'Virtual machine disk', null, 'Virtual machine disk. Inspect only.'],
+  ['ssd-nm', 'projects-archive/node_modules', 'project_artifact', 'S0', 29.6, 'node_modules ×23', null, 'Dependencies of 23 projects untouched for 6+ months.'],
+  ['ssd-target', 'projects-archive/target', 'project_artifact', 'S0', 18.6, 'target ×6', null, 'Rust build output in 6 archived projects.'],
+];
+export const DESIGN_SSD_CANDIDATES: readonly Candidate[] = SSD_ROWS.map((r) => ({ ...candidate(r), path: `${SSD}/${r[1]}` }));
+
+/**
+ * Wrap a mock bridge with the design's data. `stepMs` paces the simulated scan (9 steps).
+ * `secondDrive` (`?scenario=design&drives=2`) adds the Dev SSD's candidates and free-space
+ * samples, for the Overview drive switcher; design 01 itself has one drive's data.
+ */
+export function designScenarioBridge(base: ScullBridge, stepMs = 300, secondDrive = false): ScullBridge {
   let ops = 0;
+  const all = secondDrive ? [...DESIGN_CANDIDATES, ...DESIGN_SSD_CANDIDATES] : DESIGN_CANDIDATES;
   const scanReport = (template: ScanReport): ScanReport => ({
     ...template,
-    candidates: structuredClone(DESIGN_CANDIDATES) as Candidate[],
+    candidates: structuredClone(all) as Candidate[],
     entries_scanned: DESIGN_ENTRIES,
-    roots: [`${HOME}/code`, `${HOME}/work`, `${HOME}/Library`],
+    roots: [`${HOME}/code`, `${HOME}/work`, `${HOME}/Library`, ...(secondDrive ? [SSD] : [])],
     projects: [],
     worktrees: [],
-    totals: totals(DESIGN_CANDIDATES),
+    totals: totals(all),
   });
   return {
     ...base,
@@ -140,6 +155,12 @@ export function designScenarioBridge(base: ScullBridge, stepMs = 300): ScullBrid
         free_bytes: Math.round((41.2 + (7 - i) * 3.5) * GiB),
         sampled_at: s.now - (7 - i) * 86400,
       }));
+      if (secondDrive) {
+        // Dev SSD: 1000 GB, 390 GB free, VM disks growing 14 GB a day (full in about 27 days).
+        for (let i = 0; i < 8; i++) {
+          volumes.push({ volume_id: SSD, total_bytes: 1000 * GiB, free_bytes: Math.round((390 + (7 - i) * 14) * GiB), sampled_at: s.now - (7 - i) * 86400 });
+        }
+      }
       return {
         ...s,
         volumes,
@@ -160,4 +181,11 @@ export function wantsDesignScenario(loc: { search?: string; hash?: string } | un
   if (!loc) return false;
   const q = `${loc.search ?? ''}&${(loc.hash ?? '').split('?')[1] ?? ''}`;
   return /(^|[?&])scenario=design(&|$)/.test(q);
+}
+
+/** Whether the design scenario should include the second drive (`&drives=2`). */
+export function wantsSecondDrive(loc: { search?: string; hash?: string } | undefined = globalThis.location): boolean {
+  if (!loc) return false;
+  const q = `${loc.search ?? ''}&${(loc.hash ?? '').split('?')[1] ?? ''}`;
+  return /(^|[?&])drives=2(&|$)/.test(q);
 }

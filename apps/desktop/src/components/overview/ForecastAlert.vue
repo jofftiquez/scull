@@ -4,7 +4,8 @@
 import { formatBytes } from '../../lib/format';
 import { daysDash } from './forecast';
 
-defineProps<{ days: number; safeBytes: number }>();
+// `drive` names the drive when there is more than one (D-22: one forecast per drive).
+defineProps<{ days: number; safeBytes: number; drive?: string | null }>();
 </script>
 
 <template>
@@ -26,7 +27,7 @@ defineProps<{ days: number; safeBytes: number }>();
       <text x="22" y="26" text-anchor="middle" font-size="12" font-weight="700" fill="#15121A">{{ days }}d</text>
     </svg>
     <span class="flex-1 text-label text-[#3A3440]">
-      <strong class="text-ink">Disk full in about {{ days }} day{{ days === 1 ? '' : 's' }}.</strong>
+      <strong class="text-ink">{{ drive ?? 'Disk' }} full in about {{ days }} day{{ days === 1 ? '' : 's' }}.</strong>
       {{ safeBytes > 0 ? `${formatBytes(safeBytes)} is safe to free now.` : 'Nothing is safe to free right now.' }}
     </span>
     <RouterLink

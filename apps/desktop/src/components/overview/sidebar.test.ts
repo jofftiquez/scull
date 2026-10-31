@@ -192,7 +192,7 @@ describe('overview sidebar', () => {
 
   it('fills alert, hero, detail, quick clean and tiers from the bridge; Quick Clean done winks the logo', async () => {
     const w = await mountOverview(designScenarioBridge(createMockBridge(), 0));
-    expect(w.get('[data-testid="forecast"]').text()).toContain('Disk full in about 9 days.');
+    expect(w.get('[data-testid="forecast"]').text()).toContain('Macintosh HD full in about 9 days.');
     expect(w.get('[data-testid="hero"]').text()).toContain('38.6');
     expect(w.get('[data-testid="tiers"]').text()).toContain('186.0 GiB');
     expect(w.get('[data-testid="selected"]').text()).toContain('Nothing selected');
