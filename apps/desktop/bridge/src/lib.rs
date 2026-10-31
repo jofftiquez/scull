@@ -17,6 +17,10 @@
 //! | `capabilities` | [`Session::capabilities`] | [`CapabilitiesReport`] |
 //! | `history` | [`Session::history`] | [`HistoryView`] (read-only) |
 //! | `settings` | [`Session::settings`] | [`SettingsView`] (read-only) |
+//! | `free_space_history` | [`Session::free_space_history`] | [`FreeSpaceHistory`] |
+//! | `rollup_history` | [`Session::rollup_history`] | [`RollupHistory`] |
+//! | `regrowth` | [`Session::regrowth`] | [`RegrowthHistory`] |
+//! | `footprint_history` | [`Session::footprint_history`] | [`FootprintHistory`] |
 //!
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
@@ -31,6 +35,7 @@
 pub mod db;
 pub mod drives;
 pub mod history;
+pub mod insights;
 pub mod schemas;
 pub mod session;
 pub mod settings;
@@ -38,6 +43,7 @@ pub mod views;
 
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
 pub use history::HistoryView;
+pub use insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
 pub use scull_core::ScullError;
 pub use scull_engine::{CachesReport, ScanReport, now_unix};
 pub use session::{Session, Setup};

@@ -11,8 +11,9 @@
 
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
-    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, HistoryView, OpId, ProgressEvent,
-    ProjectsView, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
+    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, FootprintHistory,
+    FreeSpaceHistory, HistoryView, OpId, ProgressEvent, ProjectsView, RegrowthHistory,
+    RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -110,6 +111,41 @@ async fn settings(session: Shared<'_>) -> Result<SettingsView, ScullError> {
     blocking(move || Ok(session.settings())).await
 }
 
+/// `free_space_history`: one volume's free-space samples since `since` (read-only).
+#[tauri::command]
+async fn free_space_history(
+    session: Shared<'_>,
+    since: i64,
+    volume_id: Option<String>,
+) -> Result<FreeSpaceHistory, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.free_space_history(since, volume_id.as_deref()))).await
+}
+
+/// `rollup_history`: bytes per category per usable scan since `since` (read-only).
+#[tauri::command]
+async fn rollup_history(session: Shared<'_>, since: i64) -> Result<RollupHistory, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.rollup_history(since))).await
+}
+
+/// `regrowth`: artifacts that came back since `since` (read-only).
+#[tauri::command]
+async fn regrowth(session: Shared<'_>, since: i64) -> Result<RegrowthHistory, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.regrowth(since))).await
+}
+
+/// `footprint_history`: scull's own footprint since `since` (read-only).
+#[tauri::command]
+async fn footprint_history(
+    session: Shared<'_>,
+    since: i64,
+) -> Result<FootprintHistory, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.footprint_history(since))).await
+}
+
 /// Run a blocking bridge call on Tauri's blocking pool.
 async fn blocking<T, F>(f: F) -> Result<T, ScullError>
 where
@@ -136,7 +172,11 @@ pub fn run() {
             status,
             capabilities,
             history,
-            settings
+            settings,
+            free_space_history,
+            rollup_history,
+            regrowth,
+            footprint_history
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

@@ -56,6 +56,28 @@ exist. The recorded fixture has no S0 bytes (in-use probes aren't available in t
 with the mock bridge `#/projects?demo=design` loads the design's eight projects to show the
 clean and its animation.
 
+### Insights screen
+
+Insights (`#/insights`, design 05) reads the four history commands for the chosen range (7, 30
+or 90 days), plus six months of rollups for the mix, the last scan's worktrees and `status()`.
+`src/components/insights/model.ts` derives every figure from those samples:
+
+- Cleanups are rises in free space of at least 1 GiB.
+- The forecast is a least-squares fit of the samples since the last cleanup, with a 95% band.
+- "Driven by" is the category that grew most.
+- Regrowth counts rebuilds per path, not restores.
+
+The charts follow D-37: `d3-scale` and `d3-shape` compute the geometry, Vue renders the SVG,
+each chart has a hidden data table, and arrow keys move along the forecast.
+
+Duplication and cleanup accuracy have no data source yet, so they show an empty state. With the
+mock bridge, `#/insights?demo=design` fills them with the design's illustrative values.
+"Stop suggesting it" and "Export" go through `src/components/insights/actions.ts`
+(`neverSuggest`, `exportHistory`). Inside Tauri these stubs reject until the commands exist.
+The mock's history (`src/bridge/fixtures/*-history.json` and `regrowth.json`) is recorded by
+`bridge/tests/insights.rs` from a real history database. The mock shifts it so the last sample
+is now.
+
 ## Rust side
 
 The bridge crate is part of the normal workspace bar:
@@ -104,6 +126,10 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 | `caches({onProgress, signal})` | `caches` | `CachesReport` (`scull caches`) |
 | `status()` | `status` | `DesktopStatus`: last recorded scan and free-space samples |
 | `capabilities()` | `capabilities` | `CapabilitiesReport`: signals, Git, elevation, history (doctor-like) |
+| `freeSpaceHistory(since, volumeId?)` | `free_space_history` | `FreeSpaceHistory`: one volume's free-space samples (Insights forecast) |
+| `rollupHistory(since)` | `rollup_history` | `RollupHistory`: bytes per category per usable scan (growth, mix) |
+| `regrowth(since)` | `regrowth` | `RegrowthHistory`: artifacts that came back after they had gone |
+| `footprintHistory(since)` | `footprint_history` | `FootprintHistory`: scull's own disk use ("What scull knows") |
 | (abort) | `cancel_operation` | `bool` |
 
 - **Progress.** Long operations get a fresh operation ID. The core emits `scull://progress`
@@ -118,7 +144,8 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 - **Config and history.** Configuration loads like the CLI's: `config.toml` in scull's config
   directory, then `SCULL_*` environment variables. Scan roots default to `scan.roots`, and
   broad roots need `allow_broad_roots` (CFG-04). Scans are recorded in the same history
-  database as the CLI's. `status` never creates the database.
+  database as the CLI's. `status` and the four history reads never create the database; a
+  missing one reads `no_database`.
 
 **Types come from Rust.** `scull-desktop-bridge::schemas::all()` writes `schemas/*.schema.json`,
 and `scripts/gen-types.mjs` compiles them into `src/bridge/generated.ts`. Tests keep the chain

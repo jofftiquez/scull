@@ -17,6 +17,12 @@ importers:
       '@tauri-apps/api':
         specifier: 2.12.4
         version: 2.12.4
+      d3-scale:
+        specifier: 4.0.2
+        version: 4.0.2
+      d3-shape:
+        specifier: 3.2.0
+        version: 3.2.0
       vue:
         specifier: 3.5.44
         version: 3.5.44(typescript@6.0.3)
@@ -60,15 +66,9 @@ importers:
       d3-hierarchy:
         specifier: 3.1.2
         version: 3.1.2
-      d3-scale:
-        specifier: 4.0.2
-        version: 4.0.2
       d3-selection:
         specifier: 3.0.0
         version: 3.0.0
-      d3-shape:
-        specifier: 3.2.0
-        version: 3.2.0
       echarts:
         specifier: 6.1.0
         version: 6.1.0
