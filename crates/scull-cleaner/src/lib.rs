@@ -54,8 +54,8 @@
 //!
 //! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
 //!   P2-EXEC-11, #77;
-//! * Windows quarantine moves and restore (handle-based rename, with the Windows walker's
-//!   helpers).
+//! * the Windows quarantine/restore moves (#71/#72) are implemented but their tests have not
+//!   run on Windows yet (CI).
 
 mod execution;
 mod executor;

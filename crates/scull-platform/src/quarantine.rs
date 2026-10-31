@@ -16,9 +16,13 @@
 //! * A rename never copies: across volumes the kernel answers `EXDEV`, reported as
 //!   [`MoveError::CrossDevice`]. Where the filesystem can't do a no-replace rename the move is
 //!   refused ([`MoveError::NoReplaceUnsupported`]); there is no fallback to a plain rename.
-//! * **Windows:** not implemented yet ([`MoveError::Unsupported`]); the handle-based version
-//!   (`SetFileInformationByHandle(FileRenameInfo)` without `ReplaceIfExists` on a handle opened
-//!   with `FILE_FLAG_OPEN_REPARSE_POINT`) belongs with the Windows walker, #68.
+//! * **Windows:** the walker's handle discipline (#68): the source is opened relative to its
+//!   parent handle, no-follow, with `DELETE` access and verified on that handle; the rename is
+//!   `NtSetInformationFile(FileRenameInformationEx, FILE_RENAME_POSIX_SEMANTICS)` **without**
+//!   `FILE_RENAME_REPLACE_IF_EXISTS`, on that handle, into the verified destination handle
+//!   (classic `FileRenameInformation` with `ReplaceIfExists = FALSE` where the extended class
+//!   is unsupported). See `quarantine/windows.rs`. Compiled for Windows; its tests run on
+//!   Windows CI.
 //!
 //! [`quarantine_base`] chooses where a volume's quarantine lives (see its docs).
 
@@ -468,7 +472,11 @@ mod imp {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[path = "quarantine/windows.rs"]
+mod imp;
+
+#[cfg(not(any(unix, windows)))]
 mod imp {
     use super::{MoveError, MoveRequest, Moved};
     use std::io;

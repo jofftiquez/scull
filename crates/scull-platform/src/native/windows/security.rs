@@ -161,6 +161,13 @@ pub(super) fn current_user_sid() -> io::Result<String> {
     }
 }
 
+/// Whether `path` itself (no-follow) is owned by the user this process runs as (the token user
+/// SID), e.g. to choose a per-user quarantine location.
+pub(crate) fn owned_by_current_user(path: &Path) -> io::Result<bool> {
+    let user = current_user_sid()?;
+    Ok(security(path)?.owner.as_deref() == Some(user.as_str()))
+}
+
 /// `TokenElevation` of the process token; [`Elevation::Unknown`](crate::Elevation::Unknown) if
 /// the token can't be opened or queried.
 pub(crate) fn elevation() -> crate::Elevation {

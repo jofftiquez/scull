@@ -104,7 +104,7 @@ static DONT_REPARSE: AtomicBool = AtomicBool::new(true);
 /// (`FILE_OPEN_REPARSE_POINT`), synchronous, and never requests data access to a
 /// non-directory: nothing is read, hydrated or locked for I/O.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Purpose {
+pub(crate) enum Purpose {
     /// Attributes and identity only. Shares everything, so it never conflicts with anyone.
     Probe,
     /// An intermediate path component: traverse only.
@@ -123,6 +123,10 @@ enum Purpose {
         /// `FILE_NON_DIRECTORY_FILE`: fail if it is (now) a directory.
         non_directory: bool,
     },
+    /// An entry of any kind to rename through this handle (quarantine and restore moves,
+    /// `quarantine::windows`): `DELETE` access (required for a rename), attributes, every share
+    /// mode so nobody else is blocked; no data access.
+    Move,
 }
 
 impl Purpose {
@@ -146,6 +150,7 @@ impl Purpose {
                 share_all,
                 FILE_DIRECTORY_FILE,
             ),
+            Purpose::Move => (DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, share_all, 0),
             Purpose::Delete { non_directory } => (
                 DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
                 share_all,
@@ -276,7 +281,7 @@ fn nt_create(
 
 /// Opens `name` in `parent` for `purpose`, retrying a sharing violation briefly (never
 /// forcing anything: a file still held after the retries is reported).
-fn open(parent: &Handle, name: &[u16], purpose: Purpose) -> Result<Handle, NTSTATUS> {
+pub(crate) fn open(parent: &Handle, name: &[u16], purpose: Purpose) -> Result<Handle, NTSTATUS> {
     let (access, share, options) = purpose.params();
     let mut attempts = 0;
     loop {
@@ -292,7 +297,7 @@ fn open(parent: &Handle, name: &[u16], purpose: Purpose) -> Result<Handle, NTSTA
 
 /// The anchor, opened as given (a reparse point *at* the anchor is resolved, like a user-chosen
 /// root; Unix opens it with a plain `open`).
-fn open_anchor(path: &Path) -> io::Result<Handle> {
+pub(crate) fn open_anchor(path: &Path) -> io::Result<Handle> {
     let wide = verbatim(path)?;
     // SAFETY: `verbatim` returns a NUL-terminated UTF-16 path that outlives the call. A null
     // security-attributes pointer and a null template handle are documented as allowed.
@@ -317,7 +322,7 @@ fn open_anchor(path: &Path) -> io::Result<Handle> {
 }
 
 /// An NTSTATUS as an `io::Error` (through its Win32 error code).
-fn nt_error(status: NTSTATUS) -> io::Error {
+pub(crate) fn nt_error(status: NTSTATUS) -> io::Error {
     // SAFETY: a pure conversion of a value; no pointers.
     let code = unsafe { RtlNtStatusToDosError(status) };
     io::Error::from_raw_os_error(code as i32)
@@ -328,23 +333,23 @@ fn nt_error(status: NTSTATUS) -> io::Error {
 // ---------------------------------------------------------------------------------------------
 
 /// What an opened handle refers to.
-struct Opened {
-    id: FileIdentity,
-    attributes: u32,
+pub(crate) struct Opened {
+    pub(crate) id: FileIdentity,
+    pub(crate) attributes: u32,
     /// The reparse tag, for reparse points.
-    tag: Option<u32>,
-    kind: EntryKind,
+    pub(crate) tag: Option<u32>,
+    pub(crate) kind: EntryKind,
 }
 
 /// Attributes and reparse tag of the handle (one `FileAttributeTagInfo` query).
-fn attr_tag(handle: &Handle) -> io::Result<(u32, Option<u32>)> {
+pub(crate) fn attr_tag(handle: &Handle) -> io::Result<(u32, Option<u32>)> {
     let info: FILE_ATTRIBUTE_TAG_INFO = query(handle)?;
     let attributes = info.FileAttributes;
     let tag = (attributes & raw::FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(info.ReparseTag);
     Ok((attributes, tag))
 }
 
-fn inspect(handle: &Handle) -> io::Result<Opened> {
+pub(crate) fn inspect(handle: &Handle) -> io::Result<Opened> {
     let (attributes, tag) = attr_tag(handle)?;
     let id = identity(handle).ok_or_else(no_file_id)?;
     Ok(Opened {
@@ -419,6 +424,12 @@ fn is_volume_mount_point(tuning: &Tuning, handle: &Handle, name: &[u16]) -> bool
     }
     let n = (returned as usize).min(buf.len());
     win_rules::mount_point_target(&buf[..n]) == MountPointTarget::Volume
+}
+
+/// [`is_volume_mount_point`] without test hooks, for other handle-based operations (quarantine
+/// moves).
+pub(crate) fn is_volume_mount_point_handle(handle: &Handle) -> bool {
+    is_volume_mount_point(&Tuning::default(), handle, &[])
 }
 
 /// The path of an open handle (`\\?\C:\…`), for the Restart Manager query only.

@@ -47,8 +47,8 @@
 mod security;
 
 pub(crate) use security::{
-    create_dir_owner_only, create_file_owner_only, elevation, known_folder, owner_only_exposures,
-    restrict_owner_only,
+    create_dir_owner_only, create_file_owner_only, elevation, known_folder, owned_by_current_user,
+    owner_only_exposures, restrict_owner_only,
 };
 
 mod volumes;

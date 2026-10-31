@@ -179,10 +179,10 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 pub(crate) mod unix;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 // Pure decision tables of the Windows walker; compiled for tests on every OS.
 #[cfg(any(windows, test))]
-mod win_rules;
+pub(crate) mod win_rules;
 
 /// Directory handles the walker keeps open at once (Unix). Deeper levels have their handle closed
 /// and re-opened through `..` (identity-checked) when the walk climbs back, so very deep trees
