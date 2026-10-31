@@ -4,6 +4,7 @@
 pub mod caches;
 pub mod doctor;
 pub mod init;
+pub mod mcp;
 pub mod pipeline;
 pub mod projects;
 pub mod render;

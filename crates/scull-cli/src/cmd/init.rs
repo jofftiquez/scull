@@ -768,7 +768,7 @@ pub fn write(
 }
 
 /// Write `text` to a new owner-only temp file next to `path`, then rename it over `path`.
-fn replace_owner_only(path: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn replace_owner_only(path: &Path, text: &str) -> io::Result<()> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

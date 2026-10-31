@@ -75,7 +75,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Doctor => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
-        } => planned("mcp serve", 60),
+        } => None,
         Command::Completions { .. } => None,
     }
 }
@@ -140,6 +140,9 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Rules {
             action: RulesAction::Validate { paths },
         } => crate::cmd::rules::run_validate(ui, paths)?,
+        Command::Mcp {
+            action: McpAction::Serve { allow_destructive },
+        } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
         _ => {}
     }
     cancel::check()
@@ -210,7 +213,6 @@ mod tests {
             (&["data", "show"], "data show", Some(82)),
             (&["data", "export"], "data export", Some(82)),
             (&["data", "purge"], "data purge", Some(82)),
-            (&["mcp", "serve"], "mcp serve", Some(60)),
         ];
         for (args, name, issue) in table {
             assert_eq!(
@@ -239,6 +241,7 @@ mod tests {
         assert_eq!(planned_of(&["rules", "list"]), None);
         assert_eq!(planned_of(&["init", "--yes"]), None);
         assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
+        assert_eq!(planned_of(&["mcp", "serve"]), None);
     }
 
     #[test]

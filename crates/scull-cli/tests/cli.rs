@@ -159,7 +159,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
         (&["agent", "install", "codex"], "(tracked in #110)"),
         (&["schedule", "enable"], "(tracked in #114)"),
         (&["data", "show"], "(tracked in #82)"),
-        (&["mcp", "serve"], "(tracked in #60)"),
     ];
     for (args, want) in cases {
         let o = scull(args);
