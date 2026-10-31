@@ -1,0 +1,7 @@
+{
+  "scan": {
+    "min_tier": {
+      "~/Projects/legacy": "S9"
+    }
+  }
+}

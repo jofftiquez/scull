@@ -11,6 +11,7 @@ SAFE-11). Generated from the `scull-core` types, so they can't drift: the
 | `v1/error.schema.json` | `scull_core::ScullError` | error objects in JSON mode and MCP |
 | `v1/tier-breakdown.schema.json` | `scull_core::TierBreakdown` | per-tier byte rollups (charts, parents) |
 | `v1/drop-reason.schema.json` | `scull_core::DropReason` | why a plan item was dropped at execution |
+| `v1/config.schema.json` | `scull_core::config::ConfigLayer` | the user config file (TOML; editor validation/completion) |
 
 Command-level envelopes (`scull/scan@1`, …) are added with the commands that emit them
 (P1-CLI-02).

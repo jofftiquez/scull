@@ -12,11 +12,14 @@
 //!   that execution can only narrow (PRD §10.4, SAFE-11).
 //! * [`ScullError`] / [`ErrorKind`] / [`ExitCode`]: the shared error model and stable exit
 //!   codes (CLI-05).
+//! * [`config`]: config layers and precedence, untrusted repository policy files and scan-root
+//!   checks (PRD §11, CFG-01…04).
 //!
 //! See `docs/ARCHITECTURE.md` for how these flow through the engine.
 
 mod action;
 mod candidate;
+pub mod config;
 mod error;
 mod evidence;
 mod id;

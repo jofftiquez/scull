@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "ColorChoice": {
+      "description": "When to use color in terminal output.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Color when writing to a terminal and `NO_COLOR` is unset.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "Always color.",
+          "type": "string"
+        },
+        {
+          "const": "never",
+          "description": "Never color.",
+          "type": "string"
+        }
+      ]
+    },
+    "DurationSpec": {
+      "description": "A duration: a whole number followed by s, m, h, d or w (e.g. \"24h\").",
+      "pattern": "^\\s*[0-9]+[smhdw]\\s*$",
+      "type": "string"
+    },
+    "ForgeLayer": {
+      "additionalProperties": false,
+      "description": "`[forge]` in a [`ConfigLayer`].",
+      "properties": {
+        "enabled": {
+          "description": "Whether forge lookups are allowed.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "McpLayer": {
+      "additionalProperties": false,
+      "description": "`[mcp]` in a [`ConfigLayer`].",
+      "properties": {
+        "destructive": {
+          "description": "Destructive tools. Only honored from the user config file (see [`resolve`]).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether the MCP server may run.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hash_names": {
+          "description": "Hash project and directory names in results.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_results": {
+          "description": "Maximum results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "redact_home": {
+          "description": "Replace the home prefix with `~` in results.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OutputLayer": {
+      "additionalProperties": false,
+      "description": "`[output]` in a [`ConfigLayer`].",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When to use color."
+        },
+        "units": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SizeUnits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How to print sizes."
+        }
+      },
+      "type": "object"
+    },
+    "RulesLayer": {
+      "additionalProperties": false,
+      "description": "`[rules]` in a [`ConfigLayer`].",
+      "properties": {
+        "enabled": {
+          "description": "IDs of optional rules to enable (replaces lower layers).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScanLayer": {
+      "additionalProperties": false,
+      "description": "`[scan]` in a [`ConfigLayer`]. See [`super::ScanConfig`] for the meaning of each field.",
+      "properties": {
+        "activity_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Activity window, e.g. `\"24h\"`."
+        },
+        "exclude": {
+          "description": "Paths never scanned (added to lower layers).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "low_resource": {
+          "description": "Low-resource mode.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "min_tier": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Tier"
+          },
+          "description": "Minimum tier per path (added to lower layers; the most protective tier wins).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "protect": {
+          "description": "Protected paths, always S3 (added to lower layers).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "roots": {
+          "description": "Directories to scan (replaces lower layers).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "threads": {
+          "description": "Scanner threads; `0` picks automatically.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SizeUnits": {
+      "description": "How sizes are printed.",
+      "oneOf": [
+        {
+          "const": "binary",
+          "description": "Powers of 1024 (KiB, MiB, GiB).",
+          "type": "string"
+        },
+        {
+          "const": "decimal",
+          "description": "Powers of 1000 (kB, MB, GB).",
+          "type": "string"
+        }
+      ]
+    },
+    "Tier": {
+      "description": "How much risk removing an item carries.\n\nThe ordering is by **protectiveness**: `S0 < S1 < S2 < S3`. Combining evidence always takes\nthe maximum (the most protective tier), and a tier may only ever move *up* this order after a\nscan (invariant I-8: tiers never decrease on revalidation).",
+      "oneOf": [
+        {
+          "const": "S0",
+          "description": "Regenerable: a verified generated artifact, reproducible from tracked inputs.\nPreselected for review, but never executed without confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "S1",
+          "description": "Costly to recreate: reproducible, but needs a significant download or build. Opt-in.",
+          "type": "string"
+        },
+        {
+          "const": "S2",
+          "description": "Uncertain: ownership, activity or reproducibility is unclear. Never preselected.",
+          "type": "string"
+        },
+        {
+          "const": "S3",
+          "description": "Protected: possibly unique data, in active use, or explicitly protected. Never acted on.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://scull.dev/schemas/v1/config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n```",
+  "properties": {
+    "forge": {
+      "$ref": "#/$defs/ForgeLayer",
+      "description": "Git forge lookups."
+    },
+    "mcp": {
+      "$ref": "#/$defs/McpLayer",
+      "description": "The MCP server."
+    },
+    "output": {
+      "$ref": "#/$defs/OutputLayer",
+      "description": "Terminal output."
+    },
+    "rules": {
+      "$ref": "#/$defs/RulesLayer",
+      "description": "Optional rules."
+    },
+    "scan": {
+      "$ref": "#/$defs/ScanLayer",
+      "description": "What to scan and how."
+    }
+  },
+  "title": "ConfigLayer",
+  "type": "object"
+}

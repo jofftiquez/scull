@@ -45,7 +45,7 @@ Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
 
 | Crate | Owns | Status |
 |---|---|---|
-| `scull-core` | Types: `Tier`, `Candidate`, `Evidence`, `TierReason`, `Action`, `Sizes`, IDs, `Plan`/`narrow`, `ScullError`/`ExitCode`. No I/O. | Built: #28, #29, #30 |
+| `scull-core` | Types: `Tier`, `Candidate`, `Evidence`, `TierReason`, `Action`, `Sizes`, IDs, `Plan`/`narrow`, `ScullError`/`ExitCode`; `config` (layers + precedence, untrusted `RepoPolicy`, root checks). No I/O. | Built: #28, #29, #30; config #52 |
 | `scull-platform` | All OS facts: no-follow metadata, identity, allocated size, nlink, entry kinds, directory listing, capabilities | Unix #31; Windows #32; mounts #33; elevation #34; cloud placeholders #35; app dirs #150 |
 | `scull-scanner` | Parallel bounded traversal, sizing, progress, cancellation | #36, #37, #38; reclaim estimator #51 |
 | `scull-detectors` | Data-only rule format + loader; ecosystem detectors | Rules #39; Rust #40; JS #41; caches #42; large files #43 |

@@ -1,0 +1,28 @@
+{
+  "mcp": {
+    "enabled": true,
+    "max_results": 500,
+    "redact_home": true
+  },
+  "output": {
+    "color": "auto"
+  },
+  "scan": {
+    "activity_window": "48h",
+    "exclude": [
+      "~/Projects/huge-monorepo"
+    ],
+    "low_resource": false,
+    "min_tier": {
+      "~/Projects/legacy": "S2"
+    },
+    "protect": [
+      "~/Projects/thesis"
+    ],
+    "roots": [
+      "~/Projects",
+      "~/work"
+    ],
+    "threads": 0
+  }
+}

@@ -32,6 +32,7 @@ fn published() -> Vec<(&'static str, serde_json::Value)> {
         ("error", with_id::<ScullError>("error")),
         ("tier-breakdown", with_id::<TierBreakdown>("tier-breakdown")),
         ("drop-reason", with_id::<DropReason>("drop-reason")),
+        ("config", with_id::<config::ConfigLayer>("config")),
     ]
 }
 
@@ -105,6 +106,32 @@ fn sample_candidate() -> Candidate {
     }
 }
 
+fn sample_user_config() -> config::ConfigLayer {
+    config::ConfigLayer::from_toml(
+        r#"
+[scan]
+roots = ["~/Projects", "~/work"]
+exclude = ["~/Projects/huge-monorepo"]
+protect = ["~/Projects/thesis"]
+activity_window = "48h"
+threads = 0
+low_resource = false
+
+[scan.min_tier]
+"~/Projects/legacy" = "S2"
+
+[mcp]
+enabled = true
+redact_home = true
+max_results = 500
+
+[output]
+color = "auto"
+"#,
+    )
+    .expect("sample config")
+}
+
 fn examples() -> Vec<(&'static str, serde_json::Value)> {
     let c = sample_candidate();
     let plan = Plan::new(
@@ -130,6 +157,10 @@ fn examples() -> Vec<(&'static str, serde_json::Value)> {
         ("plan", serde_json::to_value(&plan).expect("json")),
         ("error", serde_json::to_value(&err).expect("json")),
         ("tier-breakdown", serde_json::to_value(tb).expect("json")),
+        (
+            "config",
+            serde_json::to_value(sample_user_config()).expect("json"),
+        ),
     ]
 }
 
