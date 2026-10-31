@@ -1,6 +1,6 @@
 //! FX-FS end-to-end fixtures (docs/FIXTURES.md §3.3, P1-FX-04): filesystem edge cases run
 //! through the read-only pipelines (`common::Pipeline` for artifacts, `common::worktrees` for
-//! Git), each twice (scan, revalidation), checking I-1, I-2, I-3 and I-8.
+//! Git), each twice (scan, revalidation), checking I-1, I-2, I-3, I-6 and I-8.
 //!
 //! Halves that need the Executor (removing links, read-only or denied entries, very long
 //! paths) run against a `std::fs` stand-in where safe and are tracked in the registry under

@@ -1,7 +1,8 @@
 //! FX-CLS end-to-end fixtures (docs/FIXTURES.md §3.1, P1-FX-02): each builds its tree, runs
 //! the real scanner → detectors → Git/repo-policy/activity signals → rubric (see
 //! `common::Pipeline`), twice (scan, then revalidation), and checks the universal invariants
-//! I-1 (plan), I-2 (canary), I-3 (tree unchanged) and I-8 (tiers never decrease).
+//! I-1 (plan), I-2 (canary), I-3 (tree unchanged), I-6 (no network) and I-8 (tiers never
+//! decrease).
 //!
 //! The per-layer versions of the same scenarios live with their crates; the registry
 //! (`scull_fixtures::registry`) lists both.

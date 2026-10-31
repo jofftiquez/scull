@@ -7,15 +7,20 @@
 //! | I-3 | Implemented: [`root_unchanged_except`]; needs [`Fixture::checkpoint`] |
 //! | I-4 | Stub ([`audit_matches_disk`]): needs the audit log, #75 (P2-EXEC-09) |
 //! | I-5 | Stub ([`bytes_recorded`]): needs operation records, #76 (P2-EXEC-10) / #53 (P1-STORE-01) |
-//! | I-6 | Stub ([`network_blocked`]): needs a network guard, #83 (P2-FX-01) |
+//! | I-6 | Implemented: [`network_blocked`]; a verified OS sandbox, else a best-effort socket detector (see [`crate::net`]) |
 //! | I-7 | Stub ([`spawns_allowlisted`]): needs a process-spawn hook, #78 (P2-QC-01) |
 //! | I-8 | Implemented: [`tiers_never_decrease`]; needs scan-time and execute-time tiers |
 //!
 //! Stubs return [`Outcome::Unimplemented`]. They never report a pass.
+//!
+//! I-6 reports *how* it held through [`Outcome::PassedWith`]: `blocked: ...` when a real
+//! network block was in effect and verified, `best-effort: ...` when only the socket detector
+//! ran. A fixture tagged `net` ([`InvariantInputs::tagged_net`]) is exempt.
 
 use crate::fixture::Fixture;
 use crate::snapshot::{TreeDiff, TreeSnapshot};
 use scull_core::{Action, Candidate, ItemId, Tier};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -90,21 +95,24 @@ impl fmt::Display for InvariantId {
 pub enum Outcome {
     /// Checked and held.
     Passed,
+    /// Checked and held; the note says how it was checked (e.g. I-6: `blocked: <sandbox>` or
+    /// `best-effort: <detector>`), so a weaker check is never mistaken for a stronger one.
+    PassedWith(String),
     /// Checked and violated.
     Failed(String),
     /// Not checked because the fixture gave nothing to check (e.g. no plan was produced).
     NotApplicable(String),
-    /// The check does not exist yet. Never counts as a pass.
+    /// The check does not exist yet, or cannot run on this host. Never counts as a pass.
     Unimplemented {
-        /// The issue that will implement it.
-        tracking: &'static str,
+        /// The issue that will implement it, and why it did not run here.
+        tracking: Cow<'static, str>,
     },
 }
 
 impl Outcome {
     /// Whether the invariant was actually evaluated (passed or failed).
     pub fn ran(&self) -> bool {
-        matches!(self, Self::Passed | Self::Failed(_))
+        matches!(self, Self::Passed | Self::PassedWith(_) | Self::Failed(_))
     }
 
     /// Whether this is a violation.
@@ -112,6 +120,10 @@ impl Outcome {
         matches!(self, Self::Failed(_))
     }
 }
+
+static MISSING: Outcome = Outcome::Unimplemented {
+    tracking: Cow::Borrowed("missing from report"),
+};
 
 /// Outcomes for all eight invariants of one fixture.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,9 +143,7 @@ impl InvariantReport {
             .iter()
             .find(|(i, _)| *i == id)
             .map(|(_, o)| o)
-            .unwrap_or(&Outcome::Unimplemented {
-                tracking: "missing from report",
-            })
+            .unwrap_or(&MISSING)
     }
 
     /// Invariants that were actually evaluated.
@@ -174,6 +184,7 @@ impl fmt::Display for InvariantReport {
         for (id, o) in &self.results {
             let (status, detail) = match o {
                 Outcome::Passed => ("passed", String::new()),
+                Outcome::PassedWith(note) => ("passed", format!(" ({note})")),
                 Outcome::Failed(m) => ("FAILED", format!("\n{m}")),
                 Outcome::NotApplicable(r) => ("n/a", format!(" ({r})")),
                 Outcome::Unimplemented { tracking } => {
@@ -239,6 +250,7 @@ pub struct InvariantInputs {
     allowed: Vec<PathBuf>,
     plans: Option<Vec<PlanEntry>>,
     tiers: Option<(BTreeMap<ItemId, Tier>, BTreeMap<ItemId, Tier>)>,
+    net: bool,
 }
 
 impl InvariantInputs {
@@ -264,6 +276,14 @@ impl InvariantInputs {
         self.plans
             .get_or_insert_with(Vec::new)
             .extend(entries.into_iter().map(Into::into));
+        self
+    }
+
+    /// The fixture is tagged `net` (FIXTURES §1, I-6): it may use the network, so I-6 is
+    /// reported as not applicable. No fixture of FIXTURES §3 is tagged `net` today; a future one
+    /// belongs in its own test binary, because the I-6 socket detector sees the whole process.
+    pub fn tagged_net(mut self) -> Self {
+        self.net = true;
         self
     }
 
@@ -309,7 +329,14 @@ pub fn check_invariants(fx: &Fixture, inputs: &InvariantInputs) -> InvariantRepo
             (InvariantId::I3, i3),
             (InvariantId::I4, audit_matches_disk()),
             (InvariantId::I5, bytes_recorded()),
-            (InvariantId::I6, network_blocked()),
+            (
+                InvariantId::I6,
+                if inputs.net {
+                    Outcome::NotApplicable("fixture is tagged `net`".into())
+                } else {
+                    network_blocked()
+                },
+            ),
             (InvariantId::I7, spawns_allowlisted()),
             (InvariantId::I8, i8),
         ],
@@ -396,29 +423,36 @@ pub fn tiers_never_decrease(
 /// I-4 (stub): the audit log matches the filesystem. Needs the append-only audit log.
 pub fn audit_matches_disk() -> Outcome {
     Outcome::Unimplemented {
-        tracking: "#75 (P2-EXEC-09 append-only audit log)",
+        tracking: Cow::Borrowed("#75 (P2-EXEC-09 append-only audit log)"),
     }
 }
 
 /// I-5 (stub): predicted and measured bytes are both recorded. Needs operation records.
 pub fn bytes_recorded() -> Outcome {
     Outcome::Unimplemented {
-        tracking: "#76 (P2-EXEC-10 measured free-space delta) / #53 (P1-STORE-01)",
+        tracking: Cow::Borrowed("#76 (P2-EXEC-10 measured free-space delta) / #53 (P1-STORE-01)"),
     }
 }
 
-/// I-6 (stub): no network access unless the fixture is tagged `net`. Needs a network guard in
-/// the harness or CI sandbox.
+/// I-6: no network access, for the current process (the caller handles the `net` tag).
+///
+/// * Inside a network sandbox ([`crate::net::active_sandbox`], e.g. a test re-executed by
+///   [`crate::net::run_isolated`]) the block is verified with a zero-traffic route probe; the
+///   result is [`Outcome::PassedWith`] `blocked: ...`, or [`Outcome::Failed`] if the sandbox is
+///   claimed but a route to the outside exists.
+/// * Otherwise only the best-effort socket detector runs: [`Outcome::PassedWith`]
+///   `best-effort: ...` when it saw no non-loopback socket.
+/// * Either way, a non-loopback socket held by this process is a [`Outcome::Failed`].
+/// * Without a sandbox and without a working detector: [`Outcome::Unimplemented`] with the
+///   reason. Never a pass.
 pub fn network_blocked() -> Outcome {
-    Outcome::Unimplemented {
-        tracking: "#83 (P2-FX-01); no dedicated issue yet",
-    }
+    crate::net::check_current_process()
 }
 
 /// I-7 (stub): only allowlisted tools are spawned, from trusted paths. Needs a process-spawn
 /// hook that records every child process.
 pub fn spawns_allowlisted() -> Outcome {
     Outcome::Unimplemented {
-        tracking: "#78 (P2-QC-01 trusted tool resolution)",
+        tracking: Cow::Borrowed("#78 (P2-QC-01 trusted tool resolution)"),
     }
 }

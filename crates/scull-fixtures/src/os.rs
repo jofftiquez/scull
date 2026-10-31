@@ -1,5 +1,6 @@
-//! The only OS-conditional code in the harness. Everything here uses `std` alone: no `libc`,
-//! no `windows-sys`, no `unsafe`.
+//! OS-conditional code of the harness (with the I-6 network guard in `net`, which spawns the
+//! OS sandbox and socket-listing tools). Everything here uses `std` alone: no `libc`, no
+//! `windows-sys`, no `unsafe`.
 //!
 //! This is a deliberate, test-only exception to PLT-11 ("no OS APIs outside
 //! `scull-platform`"): the harness must be able to build and verify trees independently of the

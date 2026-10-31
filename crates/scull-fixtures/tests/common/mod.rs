@@ -463,9 +463,10 @@ pub fn now_unix() -> i64 {
 
 /// Run the universal invariants for a fixture whose pipeline produced `scan` (scan time) and
 /// `revalidated` (a second run standing in for execute-time revalidation): I-1 on the plan,
-/// I-2 canary, I-3 tree (only `allowed` may differ), I-8 tiers. Requires each of them to have
-/// run and passed, and returns the report (I-4…I-7 are reported as unimplemented by the
-/// harness, never as passes).
+/// I-2 canary, I-3 tree (only `allowed` may differ), I-6 network (best-effort socket detector,
+/// or a verified block under `scull_fixtures::isolate_network!`), I-8 tiers. Requires each of
+/// them to have run and passed, and returns the report (I-4, I-5 and I-7 are reported as
+/// unimplemented by the harness, never as passes).
 pub fn check_all(fx: &Fixture, scan: &Run, revalidated: &Run, allowed: &[&str]) -> InvariantReport {
     let mut inputs = InvariantInputs::new()
         .plan(scan.plan().into_iter().map(PlanEntry::from))
@@ -480,6 +481,7 @@ pub fn check_all(fx: &Fixture, scan: &Run, revalidated: &Run, allowed: &[&str]) 
         InvariantId::I1,
         InvariantId::I2,
         InvariantId::I3,
+        InvariantId::I6,
         InvariantId::I8,
     ] {
         assert!(ran.contains(&id), "{id} ran");

@@ -3,7 +3,7 @@
 //! (`common::worktrees`): the real scanner finds the repositories under the scan root,
 //! `scull-git` discovers and analyses each worktree with its hardened runner (never fetching),
 //! `scull-safety` supplies the in-use signal, and the GIT-03 table classifies. Every fixture
-//! runs twice (scan, revalidation) and checks I-1, I-2, I-3 and I-8.
+//! runs twice (scan, revalidation) and checks I-1, I-2, I-3, I-6 and I-8.
 //!
 //! The per-layer versions (analysis, decision table, hardened runner) live in `scull-git`'s
 //! tests; the registry (`scull_fixtures::registry`) lists both.

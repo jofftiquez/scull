@@ -395,6 +395,7 @@ pub fn check_wt(
         scull_fixtures::InvariantId::I1,
         scull_fixtures::InvariantId::I2,
         scull_fixtures::InvariantId::I3,
+        scull_fixtures::InvariantId::I6,
         scull_fixtures::InvariantId::I8,
     ] {
         assert!(ran.contains(&id), "{id} ran");

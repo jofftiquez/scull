@@ -66,7 +66,21 @@ fn untouched_fixture_passes_all_implemented_invariants() {
     let report = fx.check_invariants(&InvariantInputs::new());
     println!("{report}");
     report.assert_ok();
-    assert_eq!(report.ran(), vec![InvariantId::I2, InvariantId::I3]);
+    // I-6 runs in-process here: the best-effort socket detector, or a verified block if the
+    // whole run was started inside a sandbox (`scull_fixtures::net::SANDBOX_ENV`).
+    assert_eq!(
+        report.ran(),
+        vec![InvariantId::I2, InvariantId::I3, InvariantId::I6]
+    );
+    let expected = if scull_fixtures::net::active_sandbox().is_some() {
+        "blocked:"
+    } else {
+        "best-effort:"
+    };
+    assert!(
+        matches!(report.outcome(InvariantId::I6), Outcome::PassedWith(n) if n.starts_with(expected)),
+        "{report}"
+    );
     assert!(matches!(
         report.outcome(InvariantId::I1),
         Outcome::NotApplicable(_)
@@ -75,12 +89,7 @@ fn untouched_fixture_passes_all_implemented_invariants() {
         report.outcome(InvariantId::I8),
         Outcome::NotApplicable(_)
     ));
-    for i in [
-        InvariantId::I4,
-        InvariantId::I5,
-        InvariantId::I6,
-        InvariantId::I7,
-    ] {
+    for i in [InvariantId::I4, InvariantId::I5, InvariantId::I7] {
         assert!(
             matches!(report.outcome(i), Outcome::Unimplemented { .. }),
             "{i} must not claim to pass"
@@ -89,7 +98,7 @@ fn untouched_fixture_passes_all_implemented_invariants() {
 }
 
 #[test]
-fn all_eight_invariants_reported_and_four_run_with_plan_and_tiers() {
+fn all_eight_invariants_reported_and_five_run_with_plan_and_tiers() {
     let mut fx = sample();
     fx.checkpoint().unwrap();
     let inputs = InvariantInputs::new()
@@ -111,6 +120,7 @@ fn all_eight_invariants_reported_and_four_run_with_plan_and_tiers() {
             InvariantId::I1,
             InvariantId::I2,
             InvariantId::I3,
+            InvariantId::I6,
             InvariantId::I8
         ]
     );

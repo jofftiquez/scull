@@ -29,8 +29,12 @@
 //!   Cargo/npm/pnpm project helpers.
 //! * [`TreeSnapshot`] / [`TreeDiff`]: no-follow snapshots (path, kind, size, SHA-256, mtime,
 //!   identity, permissions) and diffs.
-//! * [`check_invariants`]: runs I-2 and I-3 always, I-1 and I-8 when given a plan / tiers, and
-//!   reports I-4…I-7 as [`Outcome::Unimplemented`] with the issue that will implement them.
+//! * [`check_invariants`]: runs I-2 and I-3 always, I-1 and I-8 when given a plan / tiers, I-6
+//!   always (a verified network sandbox or a best-effort socket detector, see [`net`]), and
+//!   reports I-4, I-5 and I-7 as [`Outcome::Unimplemented`] with the issue that will implement
+//!   them.
+//! * [`net`]: the I-6 network guard and [`isolate_network!`], which re-runs a test inside an OS
+//!   network sandbox (Linux network namespace, macOS `sandbox-exec`; none on Windows).
 //!
 //! * [`registry`]: every fixture ID of `docs/FIXTURES.md` §3 this lane tracks, with where it is
 //!   implemented or which issue tracks it (checked against the document by `tests/registry.rs`).
@@ -42,6 +46,7 @@ mod error;
 mod fixture;
 mod git;
 pub mod invariants;
+pub mod net;
 mod os;
 mod projects;
 pub mod registry;
