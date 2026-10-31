@@ -29,7 +29,10 @@ Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
 ## 2. Crates and dependencies
 
 ```text
-                        scull-cli (binary `scull`)
+          scull-cli (binary `scull`)      scull-mcp      desktop (Phase 3)
+                         └──────────────┬──────┴───────────┘
+                                   scull-engine (read-only pipeline, D-29)
+                        (scull-cli alone also links scull-cleaner, Phase 2)
           ┌──────────────┬──────┴───────┬─────────────┬──────────────┐
           ▼              ▼              ▼             ▼              ▼
      scull-mcp      scull-cleaner   scull-scanner  scull-detectors  scull-git
@@ -53,7 +56,8 @@ Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
 | `scull-safety` | Classification rubric (PRD §8.3); activity signals; protected roots; approvals (v1.0) | Rubric #48; activity #49; protected roots #50 |
 | `scull-storage` | SQLite (WAL): scans, rollups, items, plans, approvals, audit, quarantine manifest | #53, #54 |
 | `scull-cleaner` | **Executor**: the only deleter; quarantine; restore; journal; lock | Phase 2 (#67…) |
-| `scull-cli` | `scull` binary: clap commands, tables/JSON/NDJSON, exit codes | #55 → #56…#59 |
+| `scull-engine` | Read-only pipeline shared by CLI, MCP and desktop (D-29): scan → detect → Git → signals (in-use, activity, protected roots, mounts, cloud) → rubric → candidates; reclaim estimates; history recording. Never depends on `scull-cleaner` | #56 |
+| `scull-cli` | `scull` binary: clap commands, tables/JSON/NDJSON, exit codes | #55, #56…#59, #159 |
 | `scull-mcp` | Read-only MCP server (rmcp, stdio); output safety | #60, #61 |
 | `scull-fixtures` | Generated fixture trees, canaries, snapshots, invariants I-1…I-8 | #62 (+ #151 for I-6) |
 
