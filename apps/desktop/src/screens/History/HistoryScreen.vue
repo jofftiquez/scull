@@ -50,10 +50,10 @@ const timers: ReturnType<typeof setTimeout>[] = [];
 
 onMounted(async () => {
   try {
-    // `?demo=empty` (mock only): what this build's real bridge answers, no operations yet.
+    // `?demo=empty` (mock only): what the real bridge answers before any cleanup was recorded.
     const empty = bridge.kind === 'mock' && route?.query.demo === 'empty';
     raw.value = empty
-      ? { state: 'ok', detail: null, now: Math.floor(Date.now() / 1000), audit_api: false, operations: [] }
+      ? { state: 'ok', detail: null, now: Math.floor(Date.now() / 1000), audit_api: true, operations: [] }
       : await bridge.history();
     const ops = raw.value.operations;
     picked.value = (ops.find((o) => o.items.some((i) => isRestorable(i, raw.value!.now))) ?? ops[0])?.operation_id ?? null;

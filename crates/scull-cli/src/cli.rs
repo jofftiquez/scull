@@ -481,18 +481,19 @@ pub struct CleanCachesArgs {
     /// Run the commands without asking (otherwise only show them, or ask on a terminal).
     #[arg(long)]
     pub confirm: bool,
-    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm is never
-    /// wiped).
+    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm and conda
+    /// are never wiped).
     #[arg(long)]
     pub wipe: bool,
     /// Leave this tool's cache alone; repeat for several (npm, pnpm, bun, yarn,
-    /// yarn-classic, yarn-berry).
+    /// yarn-classic, yarn-berry, pip, uv, conda).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub untick: Vec<crate::cmd::clean_caches::Untick>,
     /// Also remove this uninstalled tool's orphaned cache folder, when the preview lists it as
     /// removable (D-36): scull deletes it itself, which is not undoable. Repeat for several.
     /// This is the per-tool confirmation; on a terminal, each orphaned cache not named here
-    /// is asked about separately.
+    /// is asked about separately. conda's `pkgs/` is never removed this way (environments
+    /// hard-link into it).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub remove_orphaned: Vec<crate::cmd::clean_caches::Untick>,
     /// Only show what would run; never ask or run.

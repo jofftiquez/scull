@@ -95,7 +95,8 @@
 //!
 //! The tool runs with a sanitized environment, so its own notion of where the cache is would
 //! differ from what the locator found. Each tool is told the location explicitly through its
-//! own option, which takes precedence over environment and every config file:
+//! own option, which takes precedence over environment and every config file (Bun, Yarn and
+//! conda have no such option: their location variable, which outranks their config files):
 //!
 //! | Tool | Prune (default) | Wipe (only when requested) | Location passed as |
 //! |---|---|---|---|
@@ -104,10 +105,21 @@
 //! | Bun | — | `bun pm cache rm` | `BUN_INSTALL_CACHE_DIR=<dir>` |
 //! | Yarn classic | — | `yarn cache clean` | `YARN_CACHE_FOLDER=<dir>` |
 //! | Yarn Berry | — | `yarn cache clean --mirror` | `YARN_GLOBAL_FOLDER=<dir>` (the folder holding `cache/`) |
+//! | pip | — | `pip cache purge` | `--cache-dir <dir>`, plus `PIP_DISABLE_PIP_VERSION_CHECK=1`, `PIP_NO_INPUT=1` |
+//! | uv | `uv cache prune` | `uv cache clean` | `--cache-dir <dir>` (outranks `UV_CACHE_DIR`), plus `UV_NO_CONFIG=1`, `UV_OFFLINE=1` |
+//! | conda | `conda clean --packages --tarballs --yes` | none: never wipe `pkgs/` | `CONDA_PKGS_DIRS=<dir>`, plus `CONDA_OFFLINE=true` |
 //!
-//! Bun and Yarn have no prune: their only cleanup removes the whole cache, and it is what
-//! Quick Clean runs for them ([`CleanMode::Wipe`] with
-//! [`PlannedTool::wipe_requested`] false). Asking pnpm for a wipe still runs the prune.
+//! conda has no cache-location option, so `CONDA_PKGS_DIRS` names the folder. Residual risk:
+//! conda merges `pkgs_dirs` from every source, so a **system** condarc (`/etc/conda/condarc`,
+//! the install's own `.condarc`) listing other package caches adds them to the run; the user
+//! condarc files are not read (`HOME` and the XDG folders are empty private folders).
+//! `conda clean --packages` only removes extracted packages no environment links to, and
+//! `--tarballs` only downloaded archives, in each of them.
+//!
+//! Bun, Yarn and pip have no prune: their only cleanup removes the whole cache (`pip cache
+//! purge` empties pip's HTTP and wheel caches), and it is what Quick Clean runs for them
+//! ([`CleanMode::Wipe`] with [`PlannedTool::wipe_requested`] false). Asking pnpm or conda for a
+//! wipe still runs the prune.
 //!
 //! # Tool not installed, cache left behind (FX-QC-05)
 //!
@@ -118,7 +130,8 @@
 //!
 //! * the tool runner still skips the tool with [`SkipReason::NotInstalled`] (manual removal);
 //! * when the cache also qualifies (S1 package cache, validated location, not a link, same
-//!   volume, not in use), it is listed in [`QuickCleanPlan::orphaned`] for the preview, with
+//!   volume, not in use, and not conda's `pkgs/`, which environments hard-link into:
+//!   [`crate::orphaned::not_orphan_removable`]), it is listed in [`QuickCleanPlan::orphaned`] for the preview, with
 //!   the not-undoable note;
 //! * only if the user confirms **that tool** does [`QuickClean::remove_orphaned`] gather fresh
 //!   [`OrphanedCacheEvidence`] (every check again, right before) and remove the folder with
@@ -177,7 +190,7 @@ use crate::executor::{DeleteTarget, Executor};
 use crate::journal::{StepPoint, at, fingerprint};
 use crate::measure::{ItemExecution, Tally, planned_sizes};
 use crate::operation::Operation;
-use crate::orphaned::OrphanedCacheEvidence;
+use crate::orphaned::{OrphanedCacheEvidence, not_orphan_removable};
 use process::{Ran, Sandbox, Spec};
 use scull_core::{
     Action, Candidate, Category, FileIdentity, FsPath, ItemId, Plan, PlanItem, PlanParams,
@@ -411,6 +424,9 @@ pub enum SkipReason {
     /// Not one of the items of the operation's plan: not approved, so never started and not
     /// audited (see [Audit](self#audit-safe-08-safe-19)).
     NotApproved,
+    /// D-36 never removes this tool's cache itself (conda's `pkgs/`, which environments
+    /// hard-link into: [`crate::orphaned::not_orphan_removable`]).
+    NotOrphanRemovable(String),
 }
 
 impl fmt::Display for SkipReason {
@@ -462,6 +478,7 @@ impl fmt::Display for SkipReason {
             SkipReason::Cancelled => f.write_str("cancelled"),
             SkipReason::Sandbox(e) => write!(f, "could not create the private sandbox: {e}"),
             SkipReason::NotApproved => f.write_str("not part of the approved operation plan"),
+            SkipReason::NotOrphanRemovable(why) => f.write_str(why),
         }
     }
 }
@@ -883,6 +900,9 @@ impl QuickClean {
         candidates: &[Candidate],
         probe: &dyn ActivityProbe,
     ) -> Option<OrphanedCache> {
+        if not_orphan_removable(c.tool).is_some() {
+            return None;
+        }
         if !c.problems.is_empty() || !c.volume_checked || !c.recognized {
             return None;
         }
@@ -922,6 +942,9 @@ impl QuickClean {
         identity: FileIdentity,
         probe: &dyn ActivityProbe,
     ) -> Result<OrphanedCacheEvidence, SkipReason> {
+        if let Some(why) = not_orphan_removable(tool) {
+            return Err(SkipReason::NotOrphanRemovable(why.into()));
+        }
         match self.trusted.find(tool.binary()) {
             Lookup::NotFound => {}
             Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
@@ -1442,7 +1465,12 @@ fn location_of(c: &LocatedCache) -> Result<PathBuf, SkipReason> {
     let loc = match c.tool {
         CacheTool::Npm => parent_if_named("_cacache")?,
         CacheTool::YarnBerry => parent_if_named("cache")?,
-        CacheTool::Pnpm | CacheTool::Bun | CacheTool::YarnClassic => c.path.clone(),
+        CacheTool::Pnpm
+        | CacheTool::Bun
+        | CacheTool::YarnClassic
+        | CacheTool::Pip
+        | CacheTool::Uv
+        | CacheTool::Conda => c.path.clone(),
     };
     // Absolute, so it can never be read as an option.
     if !loc.is_absolute() {
@@ -1475,6 +1503,28 @@ fn tool_invocation(
         CacheTool::Bun => env.push(("BUN_INSTALL_CACHE_DIR".to_owned(), loc)),
         CacheTool::YarnClassic => env.push(("YARN_CACHE_FOLDER".to_owned(), loc)),
         CacheTool::YarnBerry => env.push(("YARN_GLOBAL_FOLDER".to_owned(), loc)),
+        // pip's general options are accepted after the subcommand; the flag outranks
+        // `PIP_CACHE_DIR` and every pip config file.
+        CacheTool::Pip => {
+            args.push("--cache-dir".into());
+            args.push(loc);
+            env.push(("PIP_DISABLE_PIP_VERSION_CHECK".to_owned(), "1".into()));
+            env.push(("PIP_NO_INPUT".to_owned(), "1".into()));
+        }
+        // uv's global `--cache-dir` outranks `UV_CACHE_DIR` and `uv.toml`; `UV_NO_CONFIG`
+        // stops uv from reading any `uv.toml` (system, user, or an ancestor of the sandbox).
+        CacheTool::Uv => {
+            args.push("--cache-dir".into());
+            args.push(loc);
+            env.push(("UV_NO_CONFIG".to_owned(), "1".into()));
+            env.push(("UV_OFFLINE".to_owned(), "1".into()));
+        }
+        // conda has no cache-location option: `CONDA_PKGS_DIRS` (one entry, this folder) is
+        // its highest-precedence source for `pkgs_dirs`.
+        CacheTool::Conda => {
+            env.push(("CONDA_PKGS_DIRS".to_owned(), loc));
+            env.push(("CONDA_OFFLINE".to_owned(), "true".into()));
+        }
     }
     (args, env)
 }

@@ -463,7 +463,7 @@
   "description": "`history`: every recorded operation, newest first.",
   "properties": {
     "audit_api": {
-      "description": "Whether this build of the core can read operations and their audit chain. `false`\nbefore the Phase 2 audit API: the list is then empty by construction.",
+      "description": "Whether this build of the core can read operations and their audit chain (always\n`true` since the Phase 2 audit API; `false` only from a build without it, whose list\nis empty by construction).",
       "type": "boolean"
     },
     "detail": {

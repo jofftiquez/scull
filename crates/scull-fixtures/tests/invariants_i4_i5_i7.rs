@@ -431,6 +431,32 @@ fn i7_fails_for_a_tool_that_is_not_allowlisted() {
     assert!(failure_text(&report, InvariantId::I7).contains("not an allowlisted tool"));
 }
 
+/// `ollama rm` (tool-native ML removal, P4-DET-01) is never run by scull: a spawn of it fails
+/// I-7 even from a trusted folder, while the Quick Clean package managers pass.
+#[test]
+fn i7_allowlists_quick_clean_tools_but_not_ollama() {
+    let fx = fixture();
+    let t = tools(&fx);
+    let report = fx.check_invariants(
+        &InvariantInputs::new()
+            .spawned([SpawnRecord::new(exe(&t, "ollama"), ["rm", "llama3:latest"])])
+            .trusted_dir(&t),
+    );
+    assert_eq!(failures(&report), vec![InvariantId::I7], "{report}");
+    for tool in ["pip", "uv", "conda"] {
+        let report = fx.check_invariants(
+            &InvariantInputs::new()
+                .spawned([SpawnRecord::new(exe(&t, tool), ["cache"])])
+                .trusted_dir(&t),
+        );
+        assert_eq!(
+            report.outcome(InvariantId::I7),
+            &Outcome::Passed,
+            "{tool}: {report}"
+        );
+    }
+}
+
 /// FX-QC-06's attack: a fake `npm` in a project's `node_modules/.bin` (inside the scanned
 /// root), or earlier in `PATH` from an untrusted folder.
 #[test]

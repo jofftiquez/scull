@@ -18,7 +18,10 @@
 //!   no-follow), on the **same volume** as its anchor, and has the located identity;
 //! * a **fresh** in-use probe says **No** (unknown counts as in use);
 //! * the caller obtained a **per-tool confirmation** showing the not-undoable note
-//!   ([`NOT_UNDOABLE_NOTE`]).
+//!   ([`NOT_UNDOABLE_NOTE`]);
+//! * the tool is **not conda** ([`not_orphan_removable`]): conda environments hard-link (or,
+//!   with `allow_softlinks`, symlink) into `pkgs/`, so it is never removed directly, whether
+//!   conda is installed or not.
 //!
 //! # Why a narrow path, not a core rule
 //!
@@ -42,6 +45,27 @@ pub use scull_detectors::caches::NOT_UNDOABLE_NOTE;
 /// How long gathered evidence stays valid: the in-use probe and the binary lookup must be
 /// fresh when the walker starts.
 pub const MAX_EVIDENCE_AGE: Duration = Duration::from_secs(30);
+
+/// Why D-36 never removes `tool`'s cache itself, or `None` when it may (subject to every other
+/// condition in the [module docs](self)).
+///
+/// conda's `pkgs/` is excluded: environments hard-link (or symlink) into it, and only conda can
+/// tell which packages are still in use (`conda clean --packages`).
+pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
+    match tool {
+        CacheTool::Conda => Some(
+            "conda's package cache is never removed directly: environments hard-link into \
+             pkgs/ (D-36 excludes it); only `conda clean --packages` may prune it",
+        ),
+        CacheTool::Npm
+        | CacheTool::Pnpm
+        | CacheTool::Bun
+        | CacheTool::YarnClassic
+        | CacheTool::YarnBerry
+        | CacheTool::Pip
+        | CacheTool::Uv => None,
+    }
+}
 
 /// Proof, gathered right before the removal, that a package cache is orphaned and safe to
 /// remove under D-36 (see the module docs). Only this crate can gather it (Quick Clean, from a
@@ -124,7 +148,8 @@ impl Executor {
     /// Refused with [`ErrorKind::SafetyBlocked`] (nothing removed) unless:
     ///
     /// * the item is S1, [`Category::PackageCache`], with a tool-command action, for the
-    ///   evidence's tool (rule ID);
+    ///   evidence's tool (rule ID), and that tool is not excluded ([`not_orphan_removable`]:
+    ///   conda);
     /// * the evidence is fresh ([`MAX_EVIDENCE_AGE`]) and is for this very folder: same
     ///   identity, `target.path` is the evidence's cache and `target.anchor` its anchor, with
     ///   the anchor identity the evidence recorded;
@@ -158,6 +183,11 @@ impl Executor {
             return refuse(
                 "D-36 covers caches classified for their tool's own command only".into(),
             );
+        }
+        if let Some(why) = not_orphan_removable(evidence.tool)
+            .or_else(|| CacheTool::from_rule_id(&item.rule.id).and_then(not_orphan_removable))
+        {
+            return refuse(why.into());
         }
         if item.rule.id != evidence.tool.rule_id() {
             return refuse(format!(
@@ -371,6 +401,88 @@ mod tests {
         assert_eq!(r.report.outcome, crate::RemoveOutcome::Complete);
         assert!(!cache.exists());
         let inv = fx.check_invariants(&InvariantInputs::new().allow(CACHE));
+        println!("{inv}");
+        inv.assert_ok();
+    }
+
+    /// D-36 never covers conda's `pkgs/` (environments hard-link into it): refused whether the
+    /// evidence or only the item names conda, with the cache left intact.
+    #[test]
+    fn d36_refuses_conda_pkgs() {
+        let Some(fx) = fixture() else { return };
+        assert!(not_orphan_removable(CacheTool::Conda).is_some());
+        for t in CacheTool::ALL {
+            assert_eq!(
+                not_orphan_removable(t).is_some(),
+                t == CacheTool::Conda,
+                "{t:?}"
+            );
+        }
+        let cache = fx.root().join(CACHE);
+        let anchor = fx.root().join("home");
+        let target = DeleteTarget {
+            anchor: &anchor,
+            anchor_identity: Some(identity(&anchor)),
+            path: &cache,
+        };
+        let exec = locked(&fx);
+        let conda_action = Action::ToolCommand {
+            tool: "conda".into(),
+            args: vec!["clean".into(), "--packages".into()],
+        };
+        // The item classified by conda's rule, evidence for Bun.
+        let mut conda_item = item(&fx, Tier::S1, Category::PackageCache, conda_action);
+        conda_item.rule.id = CacheTool::Conda.rule_id().into();
+        let e = exec
+            .delete_orphaned_cache(&conda_item, &target, evidence(&fx))
+            .expect_err("conda item");
+        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        assert!(e.message.contains("hard-link"), "{e}");
+        // Evidence gathered for conda, matching everything else.
+        let mut ev = evidence(&fx);
+        ev.tool = CacheTool::Conda;
+        let good = item(&fx, Tier::S1, Category::PackageCache, tool_action());
+        let e = exec
+            .delete_orphaned_cache(&good, &target, ev)
+            .expect_err("conda evidence");
+        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");
+        let inv = fx.check_invariants(&InvariantInputs::new());
+        println!("{inv}");
+        inv.assert_ok();
+    }
+
+    /// A tool command Quick Clean does not run (`ollama rm` for Ollama models, P4-DET-01) is
+    /// refused by every Executor path with the explicit reason, and nothing changes.
+    #[test]
+    fn ollama_tool_command_is_skipped_with_a_reason() {
+        let Some(fx) = fixture() else { return };
+        assert!(!crate::is_quick_clean_tool("ollama"));
+        for t in CacheTool::ALL {
+            assert!(crate::is_quick_clean_tool(t.binary()), "{t:?}");
+        }
+        let cache = fx.root().join(CACHE);
+        let anchor = fx.root().join("home");
+        let target = DeleteTarget {
+            anchor: &anchor,
+            anchor_identity: Some(identity(&anchor)),
+            path: &cache,
+        };
+        let ollama = Action::ToolCommand {
+            tool: "ollama".into(),
+            args: vec!["rm".into(), "llama3:latest".into()],
+        };
+        let mut it = item(&fx, Tier::S1, Category::MlCache, ollama);
+        it.rule.id = "ollama.models".into();
+        let exec = locked(&fx);
+        let e = exec.delete(&it, &target).expect_err("ollama via delete");
+        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
+        let e = crate::executor::check_item_for(&it, &Action::Quarantine)
+            .expect_err("ollama via any action");
+        assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
+        assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");
+        let inv = fx.check_invariants(&InvariantInputs::new());
         println!("{inv}");
         inv.assert_ok();
     }

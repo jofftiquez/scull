@@ -1297,8 +1297,9 @@ export interface ScullError {
  */
 export interface HistoryView {
   /**
-   * Whether this build of the core can read operations and their audit chain. `false`
-   * before the Phase 2 audit API: the list is then empty by construction.
+   * Whether this build of the core can read operations and their audit chain (always
+   * `true` since the Phase 2 audit API; `false` only from a build without it, whose list
+   * is empty by construction).
    */
   audit_api: boolean;
   /**

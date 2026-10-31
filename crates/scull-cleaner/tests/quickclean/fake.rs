@@ -1,6 +1,6 @@
 //! Fake package managers.
 //!
-//! The test executable itself plays `npm`, `pnpm`, `bun` and `yarn`: [`install`] hard-links (or
+//! The test executable itself plays `npm`, `pnpm`, `bun`, `yarn`, `pip`, `uv` and `conda`: [`install`] hard-links (or
 //! copies) it into a temp folder under the tool's name, and [`dispatch`] (called first thing in
 //! `main`) notices the name it was started under. A fake never touches anything but:
 //!
@@ -29,7 +29,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Tool names the fake answers to.
-pub const TOOLS: [&str; 4] = ["npm", "pnpm", "bun", "yarn"];
+pub const TOOLS: [&str; 7] = ["npm", "pnpm", "bun", "yarn", "pip", "uv", "conda"];
 
 /// The guard file a fake requires in a cache before touching it.
 pub const GUARD: &str = "FAKE_CACHE";
@@ -273,6 +273,19 @@ fn fake_main(dir: &Path, tool: &str, args: Vec<String>, script: Option<&str>) ->
             env("YARN_GLOBAL_FOLDER").map(|g| (g.join("cache"), true))
         }
         ("yarn", ["cache", "clean"]) => env("YARN_CACHE_FOLDER").map(|c| (c, true)),
+        ("pip", ["cache", "purge"]) => flag("--cache-dir").map(|c| (c, true)),
+        ("uv", ["cache", "prune"]) => flag("--cache-dir").map(|c| (c, false)),
+        ("uv", ["cache", "clean"]) => flag("--cache-dir").map(|c| (c, true)),
+        // conda clean --packages --tarballs --yes: a prune of the one CONDA_PKGS_DIRS entry.
+        ("conda", ["clean"])
+            if ["--packages", "--tarballs", "--yes"]
+                .iter()
+                .all(|f| args.iter().any(|a| a == f)) =>
+        {
+            env("CONDA_PKGS_DIRS")
+                .filter(|d| !d.as_os_str().to_string_lossy().contains(','))
+                .map(|c| (c, false))
+        }
         _ => None,
     };
     let Some((target, wipe)) = job else {

@@ -193,6 +193,18 @@ impl Executor {
     }
 }
 
+/// Why a tool command outside Quick Clean's package caches (e.g. `ollama rm` for Ollama
+/// models, P4-DET-01) is skipped: no trusted-tool runner allow-lists it yet.
+pub const TOOL_NATIVE_UNSUPPORTED: &str = "tool-native ML removal not supported yet";
+
+/// Whether `tool` is one of the package managers Quick Clean runs (resolved from trusted
+/// locations, SAFE-12). Any other tool command is never executed.
+pub fn is_quick_clean_tool(tool: &str) -> bool {
+    scull_detectors::caches::CacheTool::ALL
+        .iter()
+        .any(|t| t.binary() == tool)
+}
+
 /// Tier and action checks (I-1, D-3, D-28) for the walker: only `Delete`.
 fn check_item(item: &PlanItem) -> Result<(), ScullError> {
     check_item_for(item, &Action::Delete)
@@ -213,6 +225,13 @@ pub(crate) fn check_item_for(item: &PlanItem, executing: &Action) -> Result<(), 
         return blocked(format!(
             "action {:?} is not allowed for tier {} (D-3, D-28)",
             item.action, item.tier
+        ));
+    }
+    if let Action::ToolCommand { tool, .. } = &item.action
+        && !is_quick_clean_tool(tool)
+    {
+        return blocked(format!(
+            "`{tool}` commands are never run by scull: {TOOL_NATIVE_UNSUPPORTED}"
         ));
     }
     if item.action != *executing {

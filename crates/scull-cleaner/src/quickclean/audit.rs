@@ -88,6 +88,7 @@ impl SkipReason {
             SkipReason::Cancelled => "cancelled",
             SkipReason::Sandbox(_) => "sandbox_unavailable",
             SkipReason::NotApproved => "not_approved",
+            SkipReason::NotOrphanRemovable(_) => "d36_excluded",
         }
     }
 

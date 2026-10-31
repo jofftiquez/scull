@@ -177,6 +177,18 @@ const TESTS: &[Test] = &[
         "p2_qc_02_untrusted_or_foreign_shims_are_never_run",
         p2_qc_02_untrusted_or_foreign_shims_are_never_run,
     ),
+    (
+        "python_caches_pip_uv_conda_exact_argv_env_and_location",
+        python_caches_pip_uv_conda_exact_argv_env_and_location,
+    ),
+    (
+        "uv_wipe_only_when_requested_and_conda_never_wiped",
+        uv_wipe_only_when_requested_and_conda_never_wiped,
+    ),
+    (
+        "d36_conda_pkgs_is_never_orphan_removable",
+        d36_conda_pkgs_is_never_orphan_removable,
+    ),
 ];
 
 fn main() {
@@ -471,6 +483,46 @@ fn yarn_berry(fx: &mut Fixture) -> PathBuf {
         .unwrap()
         .file(format!("{c}/{}", fake::GUARD), "")
         .unwrap();
+    fx.root().join(c)
+}
+
+fn pip_cache(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.cache/pip";
+    fx.file_of_size(format!("{c}/http-v2/a/b/c/d/e/abcdef0123"), 4096)
+        .unwrap()
+        .file_of_size(format!("{c}/wheels/ab/cd/ef/numpy-1.26-cp312.whl"), 8192)
+        .unwrap()
+        .file(format!("{c}/{}", fake::GUARD), "")
+        .unwrap();
+    fx.root().join(c)
+}
+
+fn uv_cache(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.cache/uv";
+    fx.file_of_size(format!("{c}/wheels-v5/pypi/keep01"), 4096)
+        .unwrap()
+        .file_of_size(format!("{c}/archive-v0/abc123/unused01"), 16 * 1024)
+        .unwrap()
+        .file(format!("{c}/{}", fake::GUARD), "")
+        .unwrap();
+    fx.root().join(c)
+}
+
+fn conda_pkgs(fx: &mut Fixture) -> PathBuf {
+    let c = "home/miniconda3/pkgs";
+    fx.file(
+        format!("{c}/urls.txt"),
+        "https://conda.anaconda.org/x.conda\n",
+    )
+    .unwrap()
+    .file_of_size(format!("{c}/numpy-1.26.4-py312.conda"), 8192)
+    .unwrap()
+    .file(format!("{c}/numpy-1.26.4-py312/info/index.json"), "{}")
+    .unwrap()
+    .file_of_size(format!("{c}/unused-zlib-1.3-0.tar.bz2"), 16 * 1024)
+    .unwrap()
+    .file(format!("{c}/{}", fake::GUARD), "")
+    .unwrap();
     fx.root().join(c)
 }
 
@@ -2506,4 +2558,287 @@ fn p2_qc_02_untrusted_or_foreign_shims_are_never_run() {
     );
     assert!(!fake::ran_in(&tools(&fx)));
     check(&fx, &plan, &cands, &[], &[]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// pip, uv, conda (P4-DET-01/-02 caches, run through the same trusted-tool runner)
+// ---------------------------------------------------------------------------------------------
+
+/// pip, uv and conda are located, planned and run like the Node package managers: resolved
+/// from the trusted folder only, exact structured argv, sanitized environment plus the tool's
+/// location (pip and uv: their `--cache-dir` option, which outranks every config; conda:
+/// `CONDA_PKGS_DIRS`, its only location setting), audited, and only the located folder changes.
+/// The fakes refuse anything but the documented invocation.
+fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let pip = pip_cache(&mut fx);
+    let uv = uv_cache(&mut fx);
+    let conda = conda_pkgs(&mut fx);
+    fx.checkpoint().unwrap();
+    let bins: Vec<PathBuf> = ["pip", "uv", "conda"]
+        .iter()
+        .map(|t| fake::install(&tools(&fx), t))
+        .collect();
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    for tool in [CacheTool::Pip, CacheTool::Uv, CacheTool::Conda] {
+        let c = cands
+            .iter()
+            .find(|c| c.rule.id == tool.rule_id())
+            .unwrap_or_else(|| panic!("{tool:?} located: {scan:#?}"));
+        assert_eq!(c.tier, Tier::S1, "{c:#?}");
+    }
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    assert!(plan.spawned.is_empty(), "planning starts nothing");
+    let mut planned = planned_tools(&plan);
+    planned.sort();
+    assert_eq!(planned, [CacheTool::Pip, CacheTool::Uv, CacheTool::Conda]);
+    let by = |tool| plan.tools.iter().find(|t| t.tool == tool).unwrap();
+    let env = |pairs: &[(&str, OsString)]| -> Vec<(String, OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect()
+    };
+
+    let t = by(CacheTool::Pip);
+    assert_eq!(t.binary, canonical(&bins[0]));
+    assert_eq!(t.location, pip);
+    assert_eq!(
+        t.args,
+        [os(&["cache", "purge", "--cache-dir"]), vec![path_arg(&pip)]].concat()
+    );
+    assert_eq!(
+        t.env,
+        env(&[
+            ("PIP_DISABLE_PIP_VERSION_CHECK", "1".into()),
+            ("PIP_NO_INPUT", "1".into())
+        ])
+    );
+    assert_eq!(t.mode, CleanMode::Wipe, "pip has no prune");
+    assert!(!t.wipe_requested);
+    assert_eq!(t.not_undoable, NOT_UNDOABLE_NOTE);
+
+    let t = by(CacheTool::Uv);
+    assert_eq!(t.binary, canonical(&bins[1]));
+    assert_eq!(
+        t.args,
+        [os(&["cache", "prune", "--cache-dir"]), vec![path_arg(&uv)]].concat()
+    );
+    assert_eq!(
+        t.env,
+        env(&[("UV_NO_CONFIG", "1".into()), ("UV_OFFLINE", "1".into())])
+    );
+    assert_eq!(t.mode, CleanMode::Prune);
+
+    let t = by(CacheTool::Conda);
+    assert_eq!(t.binary, canonical(&bins[2]));
+    assert_eq!(t.location, conda);
+    assert_eq!(t.args, os(&["clean", "--packages", "--tarballs", "--yes"]));
+    assert_eq!(
+        t.env,
+        env(&[
+            ("CONDA_PKGS_DIRS", path_arg(&conda)),
+            ("CONDA_OFFLINE", "true".into())
+        ])
+    );
+    assert_eq!(t.mode, CleanMode::Prune);
+
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(report.results.len(), 3);
+    assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
+    let sandbox = canonical(&sandbox_base(&fx));
+
+    let call = only_call(&fx, "pip");
+    assert_eq!(
+        call.argv,
+        ["cache", "purge", "--cache-dir", &pip.to_string_lossy()]
+    );
+    assert_eq!(
+        env_names(&call.env),
+        expected_env_names(&["PIP_DISABLE_PIP_VERSION_CHECK", "PIP_NO_INPUT"])
+    );
+    assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
+    assert!(!call.env.contains_key("PIP_CACHE_DIR"));
+
+    let call = only_call(&fx, "uv");
+    assert_eq!(
+        call.argv,
+        ["cache", "prune", "--cache-dir", &uv.to_string_lossy()]
+    );
+    assert_eq!(
+        env_names(&call.env),
+        expected_env_names(&["UV_NO_CONFIG", "UV_OFFLINE"])
+    );
+    assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
+
+    let call = only_call(&fx, "conda");
+    assert_eq!(call.argv, ["clean", "--packages", "--tarballs", "--yes"]);
+    assert_eq!(call.env["CONDA_PKGS_DIRS"], conda.to_string_lossy());
+    assert_eq!(
+        env_names(&call.env),
+        expected_env_names(&["CONDA_PKGS_DIRS", "CONDA_OFFLINE"])
+    );
+    assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
+    for k in ["HOME", "XDG_CONFIG_HOME", "APPDATA"] {
+        assert!(Path::new(&call.env[k]).starts_with(&sandbox), "{k}");
+    }
+
+    // pip purged everything; uv and conda pruned only the unused entries.
+    assert_eq!(files_below(&pip), [fake::GUARD]);
+    let left = files_below(&uv);
+    assert!(
+        left.contains(&"wheels-v5/pypi/keep01".to_owned()),
+        "{left:?}"
+    );
+    assert!(!left.iter().any(|f| f.contains("unused")), "{left:?}");
+    let left = files_below(&conda);
+    assert!(
+        left.contains(&"numpy-1.26.4-py312/info/index.json".to_owned()),
+        "{left:?}"
+    );
+    assert!(left.contains(&"urls.txt".to_owned()), "{left:?}");
+    assert!(!left.iter().any(|f| f.contains("unused")), "{left:?}");
+
+    let rows = rows(&fx, &report.rec);
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    assert!(
+        rows.iter().all(|r| r.outcome == ItemOutcome::ToolRun),
+        "{rows:#?}"
+    );
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &pip), rel(&fx, &uv), rel(&fx, &conda)],
+        &[&report.rec],
+    );
+}
+
+/// `uv cache clean` (the wipe) runs only when the user asks for it; conda has no wipe, so a
+/// requested wipe still runs `conda clean --packages --tarballs --yes`.
+fn uv_wipe_only_when_requested_and_conda_never_wiped() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let uv = uv_cache(&mut fx);
+    let conda = conda_pkgs(&mut fx);
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "uv");
+    fake::install(&tools(&fx), "conda");
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let request = QuickCleanRequest {
+        wipe: BTreeSet::from([CacheTool::Uv, CacheTool::Conda]),
+        ..QuickCleanRequest::default()
+    };
+    let plan = q.plan(&scan, &cands, &request, &Probe::idle());
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    let t = plan.tools.iter().find(|t| t.tool == CacheTool::Uv).unwrap();
+    assert_eq!(t.mode, CleanMode::Wipe);
+    assert!(t.wipe_requested);
+    assert_eq!(
+        t.args,
+        [os(&["cache", "clean", "--cache-dir"]), vec![path_arg(&uv)]].concat()
+    );
+    let t = plan
+        .tools
+        .iter()
+        .find(|t| t.tool == CacheTool::Conda)
+        .unwrap();
+    assert_eq!(t.mode, CleanMode::Prune);
+    assert_eq!(t.args, os(&["clean", "--packages", "--tarballs", "--yes"]));
+    assert!(
+        t.notes.iter().any(|n| n.contains("no full wipe")),
+        "{:?}",
+        t.notes
+    );
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
+    assert_eq!(
+        only_call(&fx, "uv").argv,
+        ["cache", "clean", "--cache-dir", &uv.to_string_lossy()]
+    );
+    assert_eq!(files_below(&uv), [fake::GUARD]);
+    assert!(conda.join("numpy-1.26.4-py312.conda").is_file());
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &uv), rel(&fx, &conda)],
+        &[&report.rec],
+    );
+}
+
+/// D-36: conda environments hard-link into `pkgs/`, so an uninstalled conda's package cache is
+/// never offered as orphaned (pip's, with the same checks passing, is). A forged orphaned
+/// entry for it, even confirmed and part of the approved plan, is refused before anything is
+/// gathered or removed, and audited as skipped (`d36_excluded`).
+fn d36_conda_pkgs_is_never_orphan_removable() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let pip = pip_cache(&mut fx);
+    let conda = conda_pkgs(&mut fx);
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap(); // trusted folder without pip or conda
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty());
+    assert_eq!(
+        skip_reason(&plan.skipped, CacheTool::Conda),
+        SkipReason::NotInstalled {
+            manual_removal: conda.clone()
+        }
+    );
+    let orphaned: Vec<CacheTool> = plan.orphaned.iter().map(|o| o.tool).collect();
+    assert_eq!(orphaned, [CacheTool::Pip], "{plan:#?}");
+
+    // Forge a conda entry from the pip one's shape and conda's own classified item.
+    let cand = cands
+        .iter()
+        .find(|c| c.rule.id == CacheTool::Conda.rule_id())
+        .unwrap();
+    assert_eq!(cand.tier, Tier::S1);
+    let mut forged = plan.orphaned[0].clone();
+    forged.tool = CacheTool::Conda;
+    forged.cache = conda.clone();
+    forged.identity = cand.identity;
+    forged.item = scull_core::PlanItem::from_candidate(cand).unwrap();
+    forged.reclaimable_bytes = cand.sizes.reclaimable.bytes;
+    let mut plan = plan;
+    plan.orphaned = vec![forged];
+
+    let exec = locked_executor(&fx);
+    let report = orphans_audited(
+        &fx,
+        &exec,
+        &q,
+        &plan,
+        &confirmed(&[CacheTool::Conda]),
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
+    assert!(report.removed.is_empty(), "{report:#?}");
+    let reason = skip_reason(&report.skipped, CacheTool::Conda);
+    assert!(
+        matches!(&reason, SkipReason::NotOrphanRemovable(why) if why.contains("hard-link")),
+        "{reason:?}"
+    );
+    only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("d36_excluded"));
+    assert!(conda.join("numpy-1.26.4-py312.conda").is_file());
+    assert!(conda.join("urls.txt").is_file());
+    assert!(pip.join("wheels").is_dir(), "pip was not confirmed");
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
