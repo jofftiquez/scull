@@ -162,6 +162,34 @@ roots follow CFG-04: a filesystem root, the home folder or a folder that contain
 ticked by default. Ticking one asks for confirmation first, and only then does the scan send
 `allow_broad_roots`.
 
+## Plan bridge stubs (Cleanup Review, Git Worktrees)
+
+Preparing, approving and executing a cleanup plan are **not** core-bridge commands yet:
+execution will go through the core Executor behind a reviewed plan, never through the desktop.
+Until it is wired, the screens talk to a separate `PlanBridge` (`src/bridge/plan.ts`), which
+keeps `ScullBridge` read-only:
+
+| Method | What it will do |
+|---|---|
+| `preparePlan({items?})` | Build a dry-run plan from the last scan (`PlanPreview`: items as full `Candidate`s, skipped, left-out S3, hash, expiry) |
+| `executePlan({plan_id, hash, items}, {onEvent, signal})` | Execute the selected items of the reviewed plan through the Executor; per-item events, measured result |
+| `approvalRequest(planId)` | An agent's MCP plan waiting for the human (PRD §13.3) and its confirmation code |
+| `approvePlan` / `denyPlan` / `revokeApproval` | Record the human's decision (single use, bound to the hash) |
+| `watchApproval(planId, onEvent)` | Broker events: agent started, per-item outcomes, finished, invalidated (D-34) |
+
+`usePlanBridge()` returns the mock (`src/bridge/planMock.ts`: the design's illustrative plans,
+timers instead of execution, nothing on disk) next to the mock core bridge, and inside Tauri a
+bridge whose every call rejects with `unsupported_platform`, so the screen shows an error rather
+than pretending to clean. The payload types are local and provisional; replace them with
+generated ones when the core exposes plans. In development the mock is also reachable as
+`globalThis.__scullMockPlans` (e.g. `simulateTargetChanged(planId)` for the "plan changed" state).
+
+Cleanup Review has two modes: `/cleanup` (the user's own plan, design 03) and
+`/cleanup?request=<plan-id>` (agent request, design 12; the OS notification will deep-link here).
+Selection rules (D-28: S0 preselected, S1/S2 opt-in, S2 only quarantine/Trash, S3 never
+selectable) are in `src/components/review/plan.ts`; the approval state machine in
+`src/components/review/approval.ts`. Both are unit-tested.
+
 ## Safety checks
 
 - `bridge/tests/safe10.rs` runs in the main workspace on every OS. It walks the manifests of the
