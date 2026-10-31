@@ -29,6 +29,7 @@ import status from './fixtures/status.json';
 import capabilities from './fixtures/capabilities.json';
 import progressEvents from './fixtures/progress-events.json';
 import { withDesignWorktrees } from './worktreesMock';
+import { designHistory } from './historyMock';
 
 const GiB = 1024 ** 3;
 
@@ -73,6 +74,8 @@ export const MOCK_DATA = {
   status: status as unknown as DesktopStatus,
   capabilities: capabilities as unknown as CapabilitiesReport,
   progressEvents: progressEvents as unknown as ProgressEvent[],
+  // Illustrative operations (design 09): this core records none yet (no Executor on main).
+  history: designHistory(),
 };
 
 export interface MockOptions {
@@ -124,5 +127,6 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
     caches: (o?: OperationOptions) => operation(MOCK_DATA.cachesReport, o),
     status: () => later(MOCK_DATA.status),
     capabilities: () => later(MOCK_DATA.capabilities),
+    history: () => later(MOCK_DATA.history),
   };
 }

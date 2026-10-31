@@ -391,6 +391,12 @@ impl Session {
         }
     }
 
+    /// Recorded cleanup operations, newest first, with their audit logs (History screen).
+    /// Read-only: never creates, migrates or writes the database ([`crate::history`]).
+    pub fn history(&self, now: i64) -> crate::history::HistoryView {
+        crate::history::read_history(self.setup.data_dir.as_deref(), now)
+    }
+
     /// What this machine and build can observe (a doctor-like summary for Settings and the
     /// "signals unavailable" disclosure).
     pub fn capabilities(&self) -> CapabilitiesReport {

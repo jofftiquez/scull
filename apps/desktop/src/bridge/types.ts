@@ -14,6 +14,7 @@ import type {
   CapabilitiesReport,
   DesktopStatus,
   Drive,
+  HistoryView,
   ProgressEvent,
   ProjectsView,
   ScanParams,
@@ -80,6 +81,9 @@ export interface ScullBridge {
   status(): Promise<DesktopStatus>;
   /** What this machine and build can observe. */
   capabilities(): Promise<CapabilitiesReport>;
+  /** Recorded cleanup operations with their audit logs, newest first (read-only: restoring
+   * is not a bridge call, see components/history/bridge.ts). */
+  history(): Promise<HistoryView>;
 }
 
 /** Bridge methods and the Tauri command each calls (also used by the parity test). */
@@ -92,6 +96,7 @@ export const COMMANDS = {
   caches: 'caches',
   status: 'status',
   capabilities: 'capabilities',
+  history: 'history',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 
 /** The Tauri command that cancels an operation. */

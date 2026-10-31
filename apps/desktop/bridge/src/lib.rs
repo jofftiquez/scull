@@ -15,6 +15,7 @@
 //! | `caches` | [`Session::caches`] | [`CachesReport`], with [`ProgressEvent`]s |
 //! | `status` | [`Session::status`] | [`DesktopStatus`] |
 //! | `capabilities` | [`Session::capabilities`] | [`CapabilitiesReport`] |
+//! | `history` | [`Session::history`] | [`HistoryView`] (read-only) |
 //!
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
@@ -27,11 +28,13 @@
 //! plan and a human approval, never through the desktop bridge.
 
 pub mod drives;
+pub mod history;
 pub mod schemas;
 pub mod session;
 pub mod views;
 
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
+pub use history::HistoryView;
 pub use scull_core::ScullError;
 pub use scull_engine::{CachesReport, ScanReport, now_unix};
 pub use session::{Session, Setup};

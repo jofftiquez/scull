@@ -5,6 +5,7 @@
 //! `tests/schemas.rs` fails when the committed files are stale. Regenerate them with
 //! `SCULL_UPDATE_SCHEMAS=1 cargo test -p scull-desktop-bridge --test schemas`.
 
+use crate::history::HistoryView;
 use crate::views::{
     CapabilitiesReport, DesktopStatus, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
 };
@@ -48,6 +49,7 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
             "capabilities",
             schema::<CapabilitiesReport>("capabilities", "CapabilitiesReport"),
         ),
+        ("history", schema::<HistoryView>("history", "HistoryView")),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]
 }

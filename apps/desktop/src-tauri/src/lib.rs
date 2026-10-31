@@ -11,7 +11,7 @@
 
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
-    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, OpId, ProgressEvent,
+    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, HistoryView, OpId, ProgressEvent,
     ProjectsView, ScanParams, ScanReport, Session, Setup, WorktreesView, now_unix,
 };
 use std::sync::Arc;
@@ -96,6 +96,13 @@ async fn capabilities(session: Shared<'_>) -> Result<CapabilitiesReport, ScullEr
     blocking(move || Ok(session.capabilities())).await
 }
 
+/// `history`: recorded cleanup operations with their audit logs (read-only).
+#[tauri::command]
+async fn history(session: Shared<'_>) -> Result<HistoryView, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.history(now_unix()))).await
+}
+
 /// Run a blocking bridge call on Tauri's blocking pool.
 async fn blocking<T, F>(f: F) -> Result<T, ScullError>
 where
@@ -120,7 +127,8 @@ pub fn run() {
             projects,
             worktrees,
             status,
-            capabilities
+            capabilities,
+            history
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

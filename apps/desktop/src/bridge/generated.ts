@@ -335,6 +335,52 @@ export type ErrorKind =
   | "unsupported_platform"
   | "internal";
 /**
+ * The outcome of one plan item.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ItemOutcome".
+ */
+export type ItemOutcome =
+  | "removed"
+  | "quarantined"
+  | "moved_to_trash"
+  | "tool_run"
+  | "partial"
+  | "failed"
+  | "refused"
+  | "skipped"
+  | "restored"
+  | "purged";
+/**
+ * What an operation did, for the timeline's icon and wording.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OperationKind".
+ */
+export type OperationKind = "cleanup" | "quick_clean" | "worktrees" | "agent";
+/**
+ * Kind of an audit log line, for its colour.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AuditLineKind".
+ */
+export type AuditLineKind = "approval" | "check" | "action" | "measured" | "warning";
+/**
+ * How an operation ended.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OperationStatus".
+ */
+export type OperationStatus =
+  "completed" | "completed_with_errors" | "failed" | "cancelled" | "interrupted" | "running";
+/**
+ * Whether there is history to show.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HistoryReadState".
+ */
+export type HistoryReadState = "ok" | "no_database" | "unavailable";
+/**
  * Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,
  * and `cancel_operation` takes it.
  *
@@ -703,6 +749,7 @@ export interface BridgePayloads {
   CapabilitiesReport: CapabilitiesReport;
   Drives: Drives;
   ScullError: ScullError;
+  HistoryView: HistoryView;
   ProgressEvent: ProgressEvent;
   ProjectsView: ProjectsView;
   ScanParams: ScanParams;
@@ -1175,6 +1222,190 @@ export interface ScullError {
    * The path involved, if any.
    */
   path?: FsPath | null;
+}
+/**
+ * `history`: every recorded operation, newest first.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HistoryView".
+ */
+export interface HistoryView {
+  /**
+   * Whether this build of the core can read operations and their audit chain. `false`
+   * before the Phase 2 audit API: the list is then empty by construction.
+   */
+  audit_api: boolean;
+  /**
+   * Why it couldn't be, when it couldn't.
+   */
+  detail?: string | null;
+  /**
+   * When this report was produced (Unix seconds).
+   */
+  now: number;
+  /**
+   * Operations, newest first.
+   */
+  operations: HistoryOperation[];
+  state: HistoryReadState;
+}
+/**
+ * One recorded operation.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HistoryOperation".
+ */
+export interface HistoryOperation {
+  /**
+   * The agent that prepared the plan (agent operations).
+   */
+  agent?: string | null;
+  /**
+   * Who approved it (`you`, or the agent that prepared it and `you`).
+   */
+  approver: string;
+  chain: ChainCheck;
+  /**
+   * Why the measured delta differs from the prediction (codes, e.g. `local_snapshot`).
+   */
+  delta_explanations: string[];
+  /**
+   * Finish (Unix seconds), `None` while running.
+   */
+  finished_at?: number | null;
+  /**
+   * Items, in plan order.
+   */
+  items: HistoryItem[];
+  kind: OperationKind;
+  /**
+   * Audit log, in chain order.
+   */
+  log: AuditLine[];
+  /**
+   * Measured change in free space (bytes; may be negative or missing).
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * Where it was approved (`desktop`, `cli`, `desktop_dialog`).
+   */
+  method: string;
+  /**
+   * Operation identifier.
+   */
+  operation_id: string;
+  /**
+   * Where it was started from (`Cleanup Review`, `Overview`, ...), when known.
+   */
+  origin?: string | null;
+  /**
+   * The approved plan it executed.
+   */
+  plan_id: string;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+  /**
+   * Start (Unix seconds).
+   */
+  started_at: number;
+  status: OperationStatus;
+  /**
+   * The plan's one-line description, when it has one.
+   */
+  summary?: string | null;
+}
+/**
+ * Result of verifying an operation's hash chain.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ChainCheck".
+ */
+export interface ChainCheck {
+  /**
+   * No tampering or damage found.
+   */
+  intact: boolean;
+  /**
+   * What was wrong, when something was.
+   */
+  problems: string[];
+  /**
+   * Chain rows checked.
+   */
+  rows: number;
+}
+/**
+ * One item of an operation.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HistoryItem".
+ */
+export interface HistoryItem {
+  /**
+   * Planned action (`delete`, `quarantine`, `trash`, `tool`, `worktree_remove`).
+   */
+  action: string;
+  /**
+   * Bytes freed (deleted or tool-cleaned).
+   */
+  freed_bytes?: number | null;
+  /**
+   * The plan item's identifier.
+   */
+  item_id: string;
+  /**
+   * Short label when the path alone doesn't say it (e.g. `pnpm store (pruned)`).
+   */
+  label?: string | null;
+  /**
+   * Bytes moved (quarantine or Trash).
+   */
+  moved_bytes?: number | null;
+  outcome: ItemOutcome;
+  /**
+   * The path the plan named (or the tool's cache for Quick Clean).
+   */
+  path: string;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+  /**
+   * Reason code for failed, refused, skipped or partial outcomes.
+   */
+  reason?: string | null;
+  /**
+   * For quarantined items: when the quarantine retention ends (Unix seconds).
+   */
+  restorable_until?: number | null;
+  /**
+   * For restored items: where it went back to (the original path, or a
+   * `<name>.scull-restored-<n>` sibling when the original was taken; never overwritten).
+   */
+  restored_to?: string | null;
+  /**
+   * Safety tier at planning time.
+   */
+  tier?: Tier | null;
+}
+/**
+ * One line of an operation's audit log, rendered from its chain rows.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AuditLine".
+ */
+export interface AuditLine {
+  /**
+   * When (Unix seconds).
+   */
+  at: number;
+  kind: AuditLineKind;
+  /**
+   * Text, e.g. `plan 7f3a·c21e approved · desktop`.
+   */
+  text: string;
 }
 /**
  * The `scull://progress` event.
