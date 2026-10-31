@@ -1,14 +1,84 @@
 //! All OS-specific code for scull. No other crate may call OS APIs directly (PLT-11).
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! The rest of the engine asks this crate for filesystem *facts* through the [`Platform`]
+//! trait and never touches `std::os::unix` / `std::os::windows` itself:
+//!
+//! * [`Platform::metadata`]: no-follow metadata for one path ([`Metadata`]): the
+//!   [`EntryKind`], path-independent [`FileIdentity`](scull_core::FileIdentity), logical and
+//!   allocated size, link count, modification time and read-only flag.
+//! * [`Platform::read_dir`]: the entries of one directory, each with its no-follow
+//!   [`EntryKind`]. Symlinks, junctions and other reparse points are never followed, and FIFOs,
+//!   sockets and device nodes are never opened (SAFE-04, SAFE-18).
+//! * [`Platform::capabilities`]: which of these signals this OS build actually provides
+//!   ([`Capabilities`]), for `scull doctor` and for lowering confidence when a signal is
+//!   missing (PLT-08, PLT-09).
+//!
+//! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
+//! fake in their tests.
+//!
+//! # Platform support
+//!
+//! * **Unix (Linux, macOS):** complete for this layer. Identity is `st_dev`/`st_ino`, allocated
+//!   size is `st_blocks * 512`, metadata comes from `lstat`.
+//! * **Windows:** entry kinds (including reparse-point detection), logical size, mtime and the
+//!   read-only flag. File identity, allocated size and link count are reported as `None` and
+//!   flagged unavailable in [`Capabilities`] until P1-PLAT-02 (#32) implements them with
+//!   handle-based Win32 calls (`FILE_ID_INFO`, `GetCompressedFileSizeW`,
+//!   `FILE_STANDARD_INFO::NumberOfLinks`) and distinguishes junctions from symlinks by
+//!   reparse tag.
+
+mod error;
+mod native;
+mod types;
+
+use std::path::Path;
+
+pub use error::{ErrorKind, Operation, PlatformError};
+pub use native::{Native, native_path_bytes};
+pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(super::CRATE_NAME, "scull-platform");
-    }
+/// Result alias for this crate.
+pub type Result<T, E = PlatformError> = std::result::Result<T, E>;
+
+/// Iterator over the entries of one directory, as returned by [`Platform::read_dir`].
+///
+/// Each item is fallible on its own: one unreadable entry does not end the listing.
+pub type DirIter<'a> = Box<dyn Iterator<Item = Result<DirEntry>> + Send + 'a>;
+
+/// OS facts the engine needs, behind one interface per OS (PLT-07, PLT-11).
+///
+/// # Invariants every implementation must keep
+///
+/// 1. **Never follow links.** Neither method resolves a symlink, junction or other reparse
+///    point, at the final path component or in a directory listing. A link is reported as
+///    [`EntryKind::Symlink`] / [`EntryKind::ReparsePoint`] with the link's own metadata.
+/// 2. **Never open special files.** FIFOs, sockets and block/character devices are identified
+///    from metadata only (SAFE-18). Opening a FIFO can block forever; opening a device can
+///    have side effects.
+/// 3. **Never hydrate cloud placeholders** (PLT-04): metadata-only calls, no reads of file
+///    contents.
+/// 4. **Read-only.** Nothing here creates, modifies or deletes anything. Deletion belongs to
+///    the executor in `scull-cleaner` (SAFE-10).
+/// 5. **Don't guess.** A signal the OS can't provide is `None` and reported as unavailable in
+///    [`Platform::capabilities`]; callers then lower confidence or block (PLT-08).
+pub trait Platform: Send + Sync {
+    /// Which signals this platform provides.
+    fn capabilities(&self) -> Capabilities;
+
+    /// Metadata of `path` itself, without following a link at its final component
+    /// (`lstat` semantics).
+    ///
+    /// Errors carry the path and [`Operation::Metadata`]; use [`PlatformError::kind`] to tell
+    /// "not found" from "permission denied" (PLT-01: report inaccessible areas, don't fail).
+    fn metadata(&self, path: &Path) -> Result<Metadata>;
+
+    /// Lists the directory at `path`.
+    ///
+    /// `path` itself must be a real directory: if it is a symlink, junction or other reparse
+    /// point the call fails with [`ErrorKind::NotADirectory`] instead of following it. Entries
+    /// are reported in OS order, without `.` and `..`, each with its no-follow kind.
+    fn read_dir<'a>(&'a self, path: &Path) -> Result<DirIter<'a>>;
 }

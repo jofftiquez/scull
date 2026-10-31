@@ -482,6 +482,9 @@ name = "scull-platform"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
