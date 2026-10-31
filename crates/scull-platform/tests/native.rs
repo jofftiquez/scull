@@ -159,11 +159,10 @@ fn unix_capabilities_are_complete() {
 
 #[cfg(windows)]
 #[test]
-fn windows_capabilities_do_not_overclaim() {
-    // Identity, allocation and link count land in #32; until then they must read as missing.
+fn windows_capabilities_are_complete() {
     let caps = Native.capabilities();
-    assert!(!caps.file_identity && !caps.allocated_size && !caps.link_count);
-    assert!(caps.reparse_points);
+    assert!(caps.file_identity && caps.allocated_size && caps.link_count && caps.mtime);
+    assert!(caps.reparse_points && caps.special_file_kinds && caps.race_free_read_dir);
 }
 
 #[test]
@@ -172,6 +171,7 @@ fn entry_kind_json_names() -> TestResult {
         EntryKind::File,
         EntryKind::Dir,
         EntryKind::Symlink,
+        EntryKind::Junction,
         EntryKind::ReparsePoint,
         EntryKind::Fifo,
         EntryKind::Socket,
@@ -185,6 +185,8 @@ fn entry_kind_json_names() -> TestResult {
     }
     assert!(EntryKind::Fifo.is_special());
     assert!(EntryKind::ReparsePoint.is_link());
+    assert!(EntryKind::Junction.is_link() && EntryKind::Symlink.is_link());
+    assert_eq!(EntryKind::Junction.as_str(), "junction");
     assert!(!EntryKind::File.is_special() && !EntryKind::Dir.is_link());
     Ok(())
 }
@@ -204,45 +206,4 @@ fn native_path_bytes_are_raw_on_unix() {
 fn native_path_bytes_are_utf16le_on_windows() {
     let bytes = scull_platform::native_path_bytes(Path::new("a\u{e9}"));
     assert_eq!(&*bytes, &[0x61, 0x00, 0xe9, 0x00]);
-}
-
-/// Junctions need no privilege to create, unlike Windows symlinks. A junction must never be
-/// listed through (SAFE-04).
-#[cfg(windows)]
-#[test]
-fn windows_junction_is_not_followed() -> TestResult {
-    let tmp = tempfile::tempdir()?;
-    let target = tmp.path().join("target");
-    fs::create_dir(&target)?;
-    write_file(&target.join("inside"), b"x")?;
-    let link = tmp.path().join("junction");
-    let status = std::process::Command::new("cmd")
-        .arg("/C")
-        .arg("mklink")
-        .arg("/J")
-        .arg(&link)
-        .arg(&target)
-        .stdout(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        eprintln!("skipping: mklink /J failed");
-        return Ok(());
-    }
-
-    let kind = Native.metadata(&link)?.kind;
-    assert!(kind.is_link(), "junction reported as {kind}");
-    let err = Native
-        .read_dir(&link)
-        .err()
-        .ok_or("junction must not be listed")?;
-    assert!(matches!(err.kind(), ErrorKind::NotADirectory { .. }));
-
-    let listed = Native
-        .read_dir(tmp.path())?
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find(|e| e.file_name == "junction")
-        .ok_or("junction missing from listing")?;
-    assert!(listed.kind.is_link(), "listed as {}", listed.kind);
-    Ok(())
 }

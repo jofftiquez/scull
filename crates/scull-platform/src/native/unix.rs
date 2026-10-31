@@ -1,6 +1,8 @@
 //! Linux and macOS: `lstat` fields via `std::os::unix::fs::MetadataExt`.
 
-use crate::{Capabilities, EntryKind, Metadata};
+use crate::{
+    Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, PlatformError, Result,
+};
 use scull_core::FileIdentity;
 use std::borrow::Cow;
 use std::fs;
@@ -27,7 +29,7 @@ pub(super) fn capabilities() -> Capabilities {
     }
 }
 
-pub(super) fn kind(ft: fs::FileType) -> EntryKind {
+fn kind(ft: fs::FileType) -> EntryKind {
     if ft.is_symlink() {
         EntryKind::Symlink
     } else if ft.is_dir() {
@@ -47,7 +49,7 @@ pub(super) fn kind(ft: fs::FileType) -> EntryKind {
     }
 }
 
-pub(super) fn convert(md: &fs::Metadata) -> Metadata {
+fn convert(md: &fs::Metadata) -> Metadata {
     Metadata {
         kind: kind(md.file_type()),
         identity: Some(FileIdentity::new(md.dev(), u128::from(md.ino()))),
@@ -56,13 +58,42 @@ pub(super) fn convert(md: &fs::Metadata) -> Metadata {
         nlink: Some(md.nlink()),
         mtime_unix: Some(md.mtime()),
         readonly: md.permissions().readonly(),
+        file_attributes: None,
+        reparse_tag: None,
     }
 }
 
-/// `DirEntry::file_type` uses `d_type` from `readdir` and falls back to `lstat`: never follows,
-/// never opens.
-pub(super) fn entry_kind(entry: &fs::DirEntry) -> io::Result<EntryKind> {
-    entry.file_type().map(kind)
+/// `lstat`: the final component is never followed and special files are never opened.
+pub(super) fn metadata(path: &Path) -> io::Result<Metadata> {
+    fs::symlink_metadata(path).map(|md| convert(&md))
+}
+
+pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
+    // `std::fs::read_dir` follows a symlink at `path`, so check first and refuse links.
+    let found = metadata(path)
+        .map_err(|e| PlatformError::from_io(Operation::Metadata, path, e))?
+        .kind;
+    if found != EntryKind::Dir {
+        return Err(PlatformError::not_a_directory(path, found));
+    }
+    let dir = path.to_path_buf();
+    let rd = fs::read_dir(path).map_err(|e| PlatformError::from_io(Operation::ReadDir, path, e))?;
+    Ok(Box::new(rd.map(move |entry| {
+        let entry = entry.map_err(|e| PlatformError::from_io(Operation::ReadDirEntry, &dir, e))?;
+        let entry_path = entry.path();
+        // `DirEntry::file_type` uses `d_type` from `readdir` and falls back to `lstat`: never
+        // follows, never opens.
+        let kind = entry
+            .file_type()
+            .map(kind)
+            .map_err(|e| PlatformError::from_io(Operation::ReadDirEntry, &entry_path, e))?;
+        Ok(DirEntry {
+            file_name: entry.file_name(),
+            path: entry_path,
+            kind,
+            reparse_tag: None,
+        })
+    })))
 }
 
 pub(super) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {

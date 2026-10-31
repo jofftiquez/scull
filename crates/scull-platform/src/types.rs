@@ -15,11 +15,16 @@ pub enum EntryKind {
     File,
     /// Real directory (not a link to one).
     Dir,
-    /// Symbolic link. On Windows this currently also covers junctions and other name-surrogate
-    /// reparse points (separated in #32).
+    /// Symbolic link. On Windows: a reparse point tagged `IO_REPARSE_TAG_SYMLINK` (file or
+    /// directory symlink). Never followed.
     Symlink,
-    /// Windows reparse point that is not reported as a symlink (e.g. cloud-sync placeholders,
-    /// deduplicated files, app execution aliases). Never followed or opened.
+    /// Windows junction or volume mount point (reparse tag `IO_REPARSE_TAG_MOUNT_POINT`). Like a
+    /// directory symlink, but creatable without privilege, so common in cloned repositories
+    /// and tool caches. Never followed (SAFE-04, T-10).
+    Junction,
+    /// Any other Windows reparse point: cloud-sync placeholders (OneDrive, `IO_REPARSE_TAG_CLOUD*`),
+    /// app execution aliases, deduplicated files, and tags scull doesn't know. The raw tag is in
+    /// [`Metadata::reparse_tag`]. Never followed, opened for data or hydrated (PLT-04).
     ReparsePoint,
     /// Named pipe. Never opened (SAFE-18).
     Fifo,
@@ -34,9 +39,13 @@ pub enum EntryKind {
 }
 
 impl EntryKind {
-    /// Symlinks and reparse points: entries that point somewhere else and are never followed.
+    /// Symlinks, junctions and other reparse points: entries that point somewhere else (or
+    /// whose content lives elsewhere) and are never followed.
     pub fn is_link(self) -> bool {
-        matches!(self, EntryKind::Symlink | EntryKind::ReparsePoint)
+        matches!(
+            self,
+            EntryKind::Symlink | EntryKind::Junction | EntryKind::ReparsePoint
+        )
     }
 
     /// FIFOs, sockets, devices and unknown kinds: entries that must never be opened (SAFE-18).
@@ -57,6 +66,7 @@ impl EntryKind {
             EntryKind::File => "file",
             EntryKind::Dir => "dir",
             EntryKind::Symlink => "symlink",
+            EntryKind::Junction => "junction",
             EntryKind::ReparsePoint => "reparse_point",
             EntryKind::Fifo => "fifo",
             EntryKind::Socket => "socket",
@@ -98,6 +108,12 @@ pub struct Metadata {
     /// Whether the entry is read-only (Unix: no write permission bit set for anyone; Windows:
     /// `FILE_ATTRIBUTE_READONLY`).
     pub readonly: bool,
+    /// Windows only: the raw `FILE_ATTRIBUTE_*` bits (e.g. `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`
+    /// or `FILE_ATTRIBUTE_OFFLINE` on cloud placeholders). `None` on Unix.
+    pub file_attributes: Option<u32>,
+    /// Windows only: the raw reparse tag (`IO_REPARSE_TAG_*`) when the entry is a reparse point,
+    /// e.g. to classify cloud placeholders (PLT-04). `None` for ordinary entries and on Unix.
+    pub reparse_tag: Option<u32>,
 }
 
 /// One entry of a directory listing.
@@ -110,6 +126,9 @@ pub struct DirEntry {
     pub file_name: OsString,
     /// The entry's no-follow kind. Obtained without opening the entry.
     pub kind: EntryKind,
+    /// Windows only: the raw reparse tag when the entry is a reparse point (see
+    /// [`Metadata::reparse_tag`]). `None` for ordinary entries and on Unix.
+    pub reparse_tag: Option<u32>,
 }
 
 /// Which signals this OS build provides, for `scull doctor` (PLT-09) and for downgrading
@@ -132,13 +151,15 @@ pub struct Capabilities {
     pub no_follow_metadata: bool,
     /// FIFOs, sockets and devices are told apart without opening them (SAFE-18).
     pub special_file_kinds: bool,
-    /// Windows reparse points (junctions, placeholders, ...) are detected.
+    /// Windows reparse points are detected and told apart by tag: symlinks, junctions and
+    /// mount points, and other reparse points with their raw tag (placeholders, ...).
     pub reparse_points: bool,
-    /// `read_dir` opens the directory with a no-follow, handle-relative call, so a directory
-    /// swapped for a symlink between the check and the open can't redirect the listing.
-    /// Currently false everywhere: the check uses `lstat` and the open uses `std::fs::read_dir`.
-    /// Listing is read-only, so this race can at worst list a directory outside the scan
-    /// root; candidates are revalidated by identity before deletion (SAFE-05) and deletion uses
-    /// its own handle-relative operations (SAFE-04).
+    /// `read_dir` opens the directory with a no-follow call and checks the opened handle, so a
+    /// directory swapped for a link between the check and the open can't redirect the listing.
+    /// True on Windows (no-follow handle, kind re-checked on the handle, entries enumerated
+    /// from that handle). False on Unix for now: the check uses `lstat` and the open uses
+    /// `std::fs::read_dir`. Listing is read-only, so this race can at worst list a directory
+    /// outside the scan root; candidates are revalidated by identity before deletion (SAFE-05)
+    /// and deletion uses its own handle-relative operations (SAFE-04).
     pub race_free_read_dir: bool,
 }

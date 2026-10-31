@@ -20,12 +20,15 @@
 //!
 //! * **Unix (Linux, macOS):** complete for this layer. Identity is `st_dev`/`st_ino`, allocated
 //!   size is `st_blocks * 512`, metadata comes from `lstat`.
-//! * **Windows:** entry kinds (including reparse-point detection), logical size, mtime and the
-//!   read-only flag. File identity, allocated size and link count are reported as `None` and
-//!   flagged unavailable in [`Capabilities`] until P1-PLAT-02 (#32) implements them with
-//!   handle-based Win32 calls (`FILE_ID_INFO`, `GetCompressedFileSizeW`,
-//!   `FILE_STANDARD_INFO::NumberOfLinks`) and distinguishes junctions from symlinks by
-//!   reparse tag.
+//! * **Windows:** complete for this layer, through handle-based Win32 calls (`windows-sys`)
+//!   on handles opened with `FILE_FLAG_OPEN_REPARSE_POINT` and attribute-only access. Identity
+//!   is the volume serial number + 128-bit file ID (`FILE_ID_INFO`), allocated size is
+//!   `FILE_STANDARD_INFO::AllocationSize` (compressed/sparse files: `FILE_COMPRESSION_INFO`),
+//!   link count is `FILE_STANDARD_INFO::NumberOfLinks`. Reparse points are classified by tag:
+//!   [`EntryKind::Symlink`], [`EntryKind::Junction`] (junctions and mount points), and
+//!   [`EntryKind::ReparsePoint`] with the raw tag in [`Metadata::reparse_tag`] (cloud
+//!   placeholders, app execution aliases, ...). Long paths are sent as `\\?\` paths.
+//!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
 mod error;
 mod native;
@@ -54,7 +57,8 @@ pub type DirIter<'a> = Box<dyn Iterator<Item = Result<DirEntry>> + Send + 'a>;
 ///
 /// 1. **Never follow links.** Neither method resolves a symlink, junction or other reparse
 ///    point, at the final path component or in a directory listing. A link is reported as
-///    [`EntryKind::Symlink`] / [`EntryKind::ReparsePoint`] with the link's own metadata.
+///    [`EntryKind::Symlink`], [`EntryKind::Junction`] or [`EntryKind::ReparsePoint`] with the
+///    link's own metadata.
 /// 2. **Never open special files.** FIFOs, sockets and block/character devices are identified
 ///    from metadata only (SAFE-18). Opening a FIFO can block forever; opening a device can
 ///    have side effects.

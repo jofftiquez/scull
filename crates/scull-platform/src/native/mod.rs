@@ -1,11 +1,7 @@
 //! The real OS implementation of [`Platform`]. Per-OS details live in `unix.rs` / `windows.rs`.
 
-use crate::{
-    Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, Platform, PlatformError,
-    Result,
-};
+use crate::{Capabilities, DirIter, Metadata, Operation, Platform, PlatformError, Result};
 use std::borrow::Cow;
-use std::fs;
 use std::path::Path;
 
 #[cfg(unix)]
@@ -40,34 +36,14 @@ impl Platform for Native {
     }
 
     fn metadata(&self, path: &Path) -> Result<Metadata> {
-        // `symlink_metadata` is `lstat` on Unix and opens with FILE_FLAG_OPEN_REPARSE_POINT on
-        // Windows: the final component is never followed and special files are never opened.
-        let md = fs::symlink_metadata(path)
-            .map_err(|e| PlatformError::from_io(Operation::Metadata, path, e))?;
-        Ok(os::convert(&md))
+        // Unix: `lstat`. Windows: a handle opened with FILE_FLAG_OPEN_REPARSE_POINT and only
+        // FILE_READ_ATTRIBUTES access. Either way the final component is never followed and
+        // no data is read.
+        os::metadata(path).map_err(|e| PlatformError::from_io(Operation::Metadata, path, e))
     }
 
     fn read_dir<'a>(&'a self, path: &Path) -> Result<DirIter<'a>> {
-        // `std::fs::read_dir` follows a symlink at `path`, so check first and refuse links.
-        let kind = self.metadata(path)?.kind;
-        if kind != EntryKind::Dir {
-            return Err(PlatformError::not_a_directory(path, kind));
-        }
-        let dir = path.to_path_buf();
-        let rd =
-            fs::read_dir(path).map_err(|e| PlatformError::from_io(Operation::ReadDir, path, e))?;
-        Ok(Box::new(rd.map(move |entry| {
-            let entry =
-                entry.map_err(|e| PlatformError::from_io(Operation::ReadDirEntry, &dir, e))?;
-            let entry_path = entry.path();
-            let kind = os::entry_kind(&entry)
-                .map_err(|e| PlatformError::from_io(Operation::ReadDirEntry, &entry_path, e))?;
-            Ok(DirEntry {
-                file_name: entry.file_name(),
-                path: entry_path,
-                kind,
-            })
-        })))
+        os::read_dir(path)
     }
 }
 
