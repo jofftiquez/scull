@@ -200,7 +200,8 @@ impl RegisteredFixture {
 
 /// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
 pub const COVERED_SECTIONS: &[&str] = &[
-    "FX-CLS", "FX-GIT", "FX-FS", "FX-RACE", "FX-EXEC", "FX-PHY", "FX-QC", "FX-CFG",
+    "FX-CLS", "FX-GIT", "FX-FS", "FX-RACE", "FX-EXEC", "FX-PHY", "FX-QC", "FX-CFG", "FX-WIN",
+    "FX-MAC", "FX-LNX", "FX-DATA", "FX-OUT",
 ];
 
 const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
@@ -246,10 +247,31 @@ const JOURNAL: &str = "crates/scull-cleaner/tests/journal.rs";
 const QUAR: &str = "crates/scull-cleaner/tests/quarantine.rs";
 const RESTORE: &str = "crates/scull-cleaner/tests/restore.rs";
 const AUDIT: &str = "crates/scull-storage/tests/audit.rs";
+const E2E_WIN: &str = "crates/scull-fixtures/tests/fx_win.rs";
+const E2E_MAC: &str = "crates/scull-fixtures/tests/fx_mac.rs";
+const E2E_LNX: &str = "crates/scull-fixtures/tests/fx_lnx.rs";
+const E2E_DATA: &str = "crates/scull-fixtures/tests/fx_data.rs";
+const E2E_OUT: &str = "crates/scull-fixtures/tests/fx_out.rs";
+const PLAT_WIN: &str = "crates/scull-platform/tests/windows.rs";
+const PLAT_NATIVE_WIN: &str = "crates/scull-platform/src/native/windows.rs";
+const PLAT_REMOVE_WIN: &str = "crates/scull-platform/src/remove/windows/tests.rs";
+const PLAT_TRASH_FORMAT: &str = "crates/scull-platform/src/trash/format.rs";
+const STORE_DATA: &str = "crates/scull-storage/tests/data_fixtures.rs";
+const STORE_UNIT: &str = "crates/scull-storage/src/tests/mod.rs";
+const HISTORY: &str = "crates/scull-storage/tests/history.rs";
+const CLI_DATA: &str = "crates/scull-cli/tests/data.rs";
 
 /// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
 /// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
 const PHASE2_PENDING: &str = "MW";
+
+/// Windows-only fixtures written while the Windows CI was unavailable: type-checked and
+/// clippy-clean for `x86_64-pc-windows-gnu`, never run on Windows yet.
+const WINDOWS_PENDING: &str = "W";
+
+/// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
+/// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
+const MACOS_PENDING: &str = "M";
 
 const fn fx(
     id: &'static str,
@@ -1611,6 +1633,506 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(RULES, "fx_cfg_06_command_fields_rejected_anywhere_in_the_file"),
         ]),
     ),
+    // §3.10 Windows-specific (FX-WIN)
+    fx(
+        "FX-WIN-01",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_WIN,
+                "fx_win_01_junction_inside_candidate_end_to_end_target_intact",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_win_01_junction_inside_candidate_removed_target_intact",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_win_01_junction_item_removes_only_the_junction",
+            ),
+            t(PLAT_WIN, "fx_win_01_junction_detected_and_not_followed"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-02",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_WIN,
+                "fx_win_02_symlinks_inside_candidate_removed_targets_intact",
+            ),
+            t(EXEC_WIN, "fx_win_02_symlink_item_removes_only_the_link"),
+            t(PLAT_WIN, "fx_win_02_symlinks_detected_and_not_followed"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-03",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            EXEC_WIN,
+            "fx_win_03_file_held_open_by_another_process_is_skipped_and_named",
+        )]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-04",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_WIN,
+                "fx_win_04_paths_longer_than_260_characters_are_removed",
+            ),
+            t(PLAT_WIN, "fx_win_04_long_paths"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-05",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(EXEC_WIN, "fx_win_05_short_name_alias_is_refused"),
+            t(
+                PROTECT,
+                "fx_win_05_short_name_alias_cannot_bypass_protection",
+            ),
+            t(
+                PLAT_NATIVE_WIN,
+                "fx_win_05_short_name_alias_has_same_identity",
+            ),
+            t(PLAT_REMOVE_WIN, "fx_win_05_short_names_resolve_by_identity"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-06",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(TRASH, "fx_win_06_recycle_bin_fallback_reported_moved"),
+            t(TRASH, "fx_win_06_no_recycle_bin_blocks"),
+            t(
+                PLAT_TRASH_FORMAT,
+                "fx_win_06_recycle_bin_record_v2_round_trips",
+            ),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx("FX-WIN-07", Gate::V1_0, "W", Mode::Manual, Status::Deferred),
+    fx(
+        "FX-WIN-08",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_WIN,
+            "fx_win_08_scan_completes_with_defender_on_and_timing_is_recorded",
+        )]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx("FX-WIN-09", Gate::V1_0, "W", Mode::Nightly, Status::Deferred),
+    fx(
+        "FX-WIN-10",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_WIN,
+                "fx_win_10_reserved_names_and_trailing_dots_are_removed",
+            ),
+            t(PLAT_WIN, "fx_win_10_reserved_names_are_files"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-11",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                EXEC_WIN,
+                "fx_win_11_read_only_attribute_entries_are_kept_and_reported",
+            ),
+            t(EXEC_WIN, "fx_win_11_read_only_single_file_item_is_kept"),
+        ]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    fx(
+        "FX-WIN-12",
+        Gate::Mvp,
+        "W",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_WIN,
+            "fx_win_12_database_in_local_app_data_with_owner_only_acl",
+        )]),
+    )
+    .pending_ci(WINDOWS_PENDING),
+    // §3.11 macOS-specific (FX-MAC)
+    fx(
+        "FX-MAC-01",
+        Gate::Mvp,
+        "M",
+        Mode::Manual,
+        Status::Tracked {
+            issue: 250,
+            reason: "manual: needs a real macOS desktop session without Full Disk Access; TCC \
+                     permission prompts can't be scripted on hosted runners, so it goes on the \
+                     signed release checklist",
+            partial: &[],
+        },
+    )
+    .missing_os("M"),
+    fx("FX-MAC-02", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
+    fx(
+        "FX-MAC-03",
+        Gate::Mvp,
+        "M",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 249,
+            reason: "the engine dedupes scan roots by path only (canonicalize does not translate \
+                     firmlinks) and candidate IDs include the path, so a root reached through \
+                     /System/Volumes/Data would be counted twice; the fixture is written when \
+                     the engine dedupes by file identity",
+            partial: &[],
+        },
+    )
+    .missing_os("M"),
+    fx(
+        "FX-MAC-04",
+        Gate::Mvp,
+        "M",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_MAC,
+            "fx_mac_04_bundles_are_folders_and_not_candidates_unless_a_rule_matches",
+        )]),
+    )
+    .pending_ci(MACOS_PENDING),
+    fx(
+        "FX-MAC-05",
+        Gate::Mvp,
+        "M",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 250,
+            reason: "nightly: a real external volume needs a mounted disk image; the Trash \
+                     half runs against an injected volume top in CI (not yet run on macOS)",
+            partial: &[
+                t(TRASH, "fx_mac_05_external_volume_uses_its_trashes"),
+                t(TRASH, "fx_mac_05_missing_trashes_is_created"),
+            ],
+        },
+    )
+    .pending_ci(MACOS_PENDING),
+    fx("FX-MAC-06", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
+    // §3.12 Linux-specific (FX-LNX)
+    fx(
+        "FX-LNX-01",
+        Gate::Mvp,
+        "L",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_LNX,
+                "fx_lnx_01_headless_server_without_trash_uses_quarantine",
+            ),
+            t(
+                E2E_LNX,
+                "fx_lnx_01_headless_server_quarantine_impossible_item_blocked",
+            ),
+            t(TRASH, "fx_lnx_01_headless_no_trash_item_blocked"),
+        ]),
+    ),
+    fx(
+        "FX-LNX-02",
+        Gate::Mvp,
+        "L",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 250,
+            reason: "nightly: a Trash on a second real mount needs a loop device and sudo; \
+                     CI covers per-volume Trash selection with an injected volume top and \
+                     /dev/shm",
+            partial: &[
+                t(
+                    TRASH,
+                    "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
+                ),
+                t(
+                    TRASH,
+                    "fx_lnx_02_shared_sticky_trash_uses_uid_subdirectory",
+                ),
+                t(TRASH, "fx_lnx_02_unsafe_shared_trash_is_skipped"),
+                t(
+                    TRASH,
+                    "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
+                ),
+            ],
+        },
+    ),
+    fx(
+        "FX-LNX-03",
+        Gate::Mvp,
+        "L",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 250,
+            reason: "nightly: an NFS, SMB or sshfs mount inside a scan root needs a privileged \
+                     job; no test mounts one yet",
+            partial: &[],
+        },
+    )
+    .missing_os("L"),
+    fx(
+        "FX-LNX-04",
+        Gate::Mvp,
+        "L",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_LNX,
+                "fx_lnx_04_proc_open_file_detection_through_the_engine",
+            ),
+            t(ACTIVITY, "fx_lnx_04_detection_with_and_without_permission"),
+        ]),
+    ),
+    fx("FX-LNX-05", Gate::V1x, "L", Mode::Manual, Status::Deferred),
+    fx(
+        "FX-LNX-06",
+        Gate::Mvp,
+        "L",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 250,
+            reason: "nightly: a real Btrfs subvolume needs mkfs.btrfs on a loop device and \
+                     sudo; only the mount-table parsing is unit-tested today",
+            partial: &[],
+        },
+    )
+    .missing_os("L"),
+    // §3.13 Data store and privacy (FX-DATA)
+    fx(
+        "FX-DATA-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                STORE_UNIT,
+                "fx_data_01_backup_is_taken_before_migration_and_migration_succeeds",
+            ),
+            t(
+                STORE_UNIT,
+                "fx_data_01_older_binary_refuses_the_migrated_schema",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_01_newer_schema_is_refused_and_left_byte_identical",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_01_fresh_database_migrates_from_v0_to_latest",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-DATA-02",
+        Gate::V1_0,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 116,
+            reason: "v1.0: the storage budget comes with the insights engine; only the \
+                     oldest-first downsampling of free-space samples exists",
+            partial: &[t(
+                HISTORY,
+                "fx_data_02_old_free_space_samples_are_downsampled_first",
+            )],
+        },
+    ),
+    fx(
+        "FX-DATA-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_DATA,
+                "fx_data_03_database_files_created_by_the_cli_are_owner_only",
+            ),
+            t(
+                E2E_DATA,
+                "fx_data_03_audit_database_and_mirror_written_by_the_executor_are_owner_only",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_03_owner_only_hooks_cover_dir_db_wal_and_shm",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_03_database_wal_shm_are_0600_and_new_dir_is_0700",
+            ),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-DATA-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            CLI_DATA,
+            "fx_data_04_purge_all_removes_exactly_sculls_files",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-DATA-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                STORE_DATA,
+                "fx_data_05_readers_proceed_while_a_writer_holds_a_transaction",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_05_writer_waits_for_the_lock_then_succeeds",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_05_wal_mode_and_connection_settings_are_active",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-DATA-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_DATA,
+                "fx_data_06_corrupted_database_detected_backup_offered_read_only_scan_works",
+            ),
+            t(
+                STORE_DATA,
+                "fx_data_06_garbage_file_is_detected_untouched_and_backup_offered",
+            ),
+            t(STORE_DATA, "fx_data_06_damaged_pages_are_detected"),
+            t(STORE_DATA, "fx_data_06_restore_refuses_a_bad_backup"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-DATA-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 248,
+            reason: "audit logs, history, exports and every command's output are checked end \
+                     to end for file contents and environment values; `scull doctor --report` \
+                     and its redaction preview do not exist yet",
+            partial: &[
+                t(
+                    E2E_DATA,
+                    "fx_data_07_no_file_contents_or_environment_values_in_data_audit_or_output",
+                ),
+                t(
+                    HISTORY,
+                    "fx_data_07_history_never_records_contents_evidence_or_environment_values",
+                ),
+            ],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
+    // §3.14 Output contracts (FX-OUT)
+    fx(
+        "FX-OUT-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 247,
+            reason: "every --json document and every published NDJSON line schema validates \
+                     against real output (scan to clean, history and restore), as do error \
+                     envelopes, plan files and the config; sixteen commands print NDJSON lines \
+                     with no published line schema yet (the test pins the list)",
+            partial: &[
+                t(
+                    E2E_OUT,
+                    "fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas",
+                ),
+                t(
+                    E2E_OUT,
+                    "fx_out_01_hostile_names_keep_json_and_ndjson_valid_and_terminal_output_escaped",
+                ),
+                t(
+                    E2E_OUT,
+                    "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
+                ),
+            ],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-OUT-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 251,
+            reason: "the binary returns every documented code (0, 1, 2, 3, 4, 5, 6, and 130 on \
+                     Unix); Ctrl-C before the MCP handshake exits 1 instead of 130 (#251), and \
+                     130 is not exercised on Windows (no console Ctrl-C injection in the test)",
+            partial: &[
+                t(
+                    E2E_OUT,
+                    "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
+                ),
+                t(
+                    E2E_OUT,
+                    "fx_out_02_binary_returns_the_documented_exit_codes",
+                ),
+            ],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
+    fx(
+        "FX-OUT-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 108,
+            reason: "classifications and tiers are identical through the CLI binary and its \
+                     MCP server; plan contents can't be compared until the MCP plan tools \
+                     (prepare_cleanup, #108) exist",
+            partial: &[t(
+                E2E_OUT,
+                "fx_out_03_cli_and_mcp_give_identical_classifications",
+            )],
+        },
+    )
+    .pending_ci(PHASE2_PENDING),
 ];
 
 /// The registered fixture with this ID.

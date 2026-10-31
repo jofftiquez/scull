@@ -37,3 +37,7 @@ scull-cli = { path = "../scull-cli" }
 scull-cleaner.workspace = true
 scull-engine.workspace = true
 serde_json.workspace = true
+# FX-OUT / FX-DATA drive the real `scull` binary and validate its output against the published
+# JSON Schemas (both already in the lockfile through scull-cli).
+jsonschema = { version = "0.60", default-features = false }
+toml = "1"

@@ -1341,6 +1341,7 @@ dependencies = [
 name = "scull-fixtures"
 version = "0.0.0"
 dependencies = [
+ "jsonschema",
  "scull-cleaner",
  "scull-cli",
  "scull-core",
@@ -1354,6 +1355,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
