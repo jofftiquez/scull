@@ -2,11 +2,9 @@
 
 use crate::backup::{list_backups, with_suffix};
 use crate::error::{Result, StoreError, is_corruption};
-use crate::migrate::{MIGRATIONS, check_compatible, migrate, user_version};
+use crate::migrate::{MIGRATIONS, Migration, check_compatible, migrate, user_version};
 use crate::perms::OwnerOnly;
-use crate::records::{
-    Approval, ApprovalMethod, AuditEntry, NewApproval, OperationStart, ScanFinish, ScanStart,
-};
+use crate::records::{Approval, ApprovalMethod, NewApproval, ScanFinish, ScanStart};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use scull_core::{Candidate, ContentHash, ErrorKind, Plan, PlanId};
 use serde::Serialize;
@@ -77,7 +75,7 @@ impl Store {
         path: &Path,
         perms: &dyn OwnerOnly,
         options: &StoreOptions,
-        migrations: &[&str],
+        migrations: &[Migration],
     ) -> Result<Store> {
         let known = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
         prepare_location(path, perms)?;
@@ -428,50 +426,6 @@ impl Store {
                 params![plan_id.as_str(), hash.as_str(), now],
             )?;
             Ok(changed == 1)
-        })
-    }
-
-    /// Record the start of an operation (append-only; its hash must match the recorded plan).
-    pub fn record_operation_start(&mut self, op: &OperationStart) -> Result<()> {
-        self.write(|tx| {
-            tx.execute(
-                "INSERT INTO operations (operation_id, plan_id, content_hash, approver, method, \
-                 started_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    op.operation_id.as_str(),
-                    op.plan_id.as_str(),
-                    op.content_hash.as_str(),
-                    op.approver,
-                    op.method.as_str(),
-                    op.started_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Append audit rows (SAFE-08) in one transaction. Rows can never be changed or removed.
-    pub fn append_audit(&mut self, entries: &[AuditEntry]) -> Result<()> {
-        self.write(|tx| {
-            let mut stmt = tx.prepare(
-                "INSERT INTO audit (operation_id, recorded_at, item_id, path, action, outcome, \
-                 reason, predicted_bytes, measured_bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )?;
-            for e in entries {
-                stmt.execute(params![
-                    e.operation_id.as_str(),
-                    e.recorded_at,
-                    e.item_id.as_ref().map(|i| i.as_str()),
-                    e.path.as_ref().map(|p| p.as_str()),
-                    e.action,
-                    e.outcome.as_str(),
-                    e.reason,
-                    e.predicted_bytes.map(int).transpose()?,
-                    e.measured_bytes.map(int).transpose()?,
-                ])?;
-            }
-            Ok(())
         })
     }
 

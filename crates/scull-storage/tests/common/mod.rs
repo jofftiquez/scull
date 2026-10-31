@@ -135,7 +135,19 @@ pub fn candidates() -> Vec<Candidate> {
 
 /// An MCP plan (15-minute expiry) created at `T0`.
 pub fn plan(n: u32) -> Plan {
-    let items = candidates()
+    plan_of(n, &candidates())
+}
+
+/// An MCP plan with `count` S0 delete items.
+pub fn plan_with_items(n: u32, count: u128) -> Plan {
+    let cs: Vec<Candidate> = (1..=count)
+        .map(|i| candidate(i, Tier::S0, Action::Delete))
+        .collect();
+    plan_of(n, &cs)
+}
+
+fn plan_of(n: u32, candidates: &[Candidate]) -> Plan {
+    let items = candidates
         .iter()
         .map(|c| PlanItem::from_candidate(c).unwrap())
         .collect();

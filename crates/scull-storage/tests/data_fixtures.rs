@@ -42,6 +42,7 @@ fn fx_data_01_fresh_database_migrates_from_v0_to_latest() {
         "approvals",
         "operations",
         "audit",
+        "audit_v1",
         "quarantine_manifest",
         "events",
         "metrics",

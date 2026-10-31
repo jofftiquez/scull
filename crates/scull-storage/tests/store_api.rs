@@ -7,8 +7,8 @@ mod common;
 use common::*;
 use scull_core::{Action, Category, ContentHash, ErrorKind, FsPath, OperationId, Tier};
 use scull_storage::{
-    ApprovalMethod, AuditEntry, AuditOutcome, NewApproval, OperationStart, Rollup, ScanFinish,
-    ScanStatus, ScanTotals, Store, StoreError,
+    ApprovalMethod, ItemOutcome, ItemRecord, NewApproval, OperationEnd, OperationFinish,
+    OperationStart, Rollup, ScanFinish, ScanStatus, ScanTotals, Store, StoreError,
 };
 
 fn approval_for(plan: &scull_core::Plan, approved_at: i64, expires_at: i64) -> NewApproval {
@@ -53,40 +53,31 @@ fn populated() -> (tempfile::TempDir, std::path::PathBuf, Store) {
     s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
         .unwrap();
     let op = OperationId::from_suffix("O1").unwrap();
-    s.record_operation_start(&OperationStart {
-        operation_id: op.clone(),
-        plan_id: p.id().clone(),
-        content_hash: p.content_hash().clone(),
-        approver: "dev".into(),
-        method: ApprovalMethod::CliTty,
-        started_at: T0 + 20,
-    })
-    .unwrap();
+    let mut audit = s
+        .begin_operation(
+            &OperationStart {
+                operation_id: op,
+                plan_id: p.id().clone(),
+                content_hash: p.content_hash().clone(),
+                approver: "dev".into(),
+                method: ApprovalMethod::CliTty,
+                started_at: T0 + 20,
+            },
+            &TestPerms::default(),
+        )
+        .unwrap();
     let item = &p.items()[0];
-    s.append_audit(&[
-        AuditEntry {
-            operation_id: op.clone(),
-            recorded_at: T0 + 21,
-            item_id: Some(item.item_id.clone()),
-            path: Some(item.path.clone()),
-            action: Some("delete".into()),
-            outcome: AuditOutcome::Succeeded,
-            reason: None,
-            predicted_bytes: Some(item.reclaimable_bytes),
-            measured_bytes: Some(item.reclaimable_bytes - 1),
+    let mut rec = ItemRecord::new(item.item_id.clone(), T0 + 21, ItemOutcome::Removed);
+    rec.freed_bytes = Some(item.reclaimable_bytes - 1);
+    s.record_item(&mut audit, &rec).unwrap();
+    s.finish_operation(
+        &mut audit,
+        &OperationFinish {
+            finished_at: T0 + 22,
+            end: OperationEnd::Cancelled,
+            measured_delta_bytes: None,
         },
-        AuditEntry {
-            operation_id: op,
-            recorded_at: T0 + 22,
-            item_id: None,
-            path: None,
-            action: None,
-            outcome: AuditOutcome::OperationFinished,
-            reason: None,
-            predicted_bytes: None,
-            measured_bytes: None,
-        },
-    ])
+    )
     .unwrap();
     (dir, path, s)
 }
@@ -100,7 +91,7 @@ fn append_only_triggers_reject_update_and_delete() {
     assert_blocked(&c, "UPDATE plans SET expires_at = expires_at + 1");
     assert_blocked(&c, "UPDATE plans SET canonical_json = '{}'");
     assert_blocked(&c, "DELETE FROM plans");
-    assert_blocked(&c, "UPDATE audit SET measured_bytes = 0");
+    assert_blocked(&c, "UPDATE audit SET freed_bytes = 0");
     assert_blocked(&c, "UPDATE audit SET outcome = 'failed'");
     assert_blocked(&c, "DELETE FROM audit");
     assert_blocked(&c, "UPDATE operations SET approver = 'mallory'");
@@ -120,7 +111,7 @@ fn append_only_triggers_reject_update_and_delete() {
     let rows: i64 = c
         .query_row("SELECT count(*) FROM audit", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(rows, 2);
+    assert_eq!(rows, 3, "started, one item, finished");
 }
 
 #[test]
@@ -361,8 +352,8 @@ fn audit_rows_record_hash_approver_method_and_bytes() {
     let row: (String, String, String, String, i64, i64) = raw(&path)
         .query_row(
             "SELECT o.content_hash, o.approver, o.method, a.outcome, a.predicted_bytes, \
-             a.measured_bytes FROM audit a JOIN operations o USING (operation_id) \
-             WHERE a.item_id IS NOT NULL",
+             a.freed_bytes FROM audit a JOIN operations o USING (operation_id) \
+             WHERE a.kind = 'item'",
             [],
             |r| {
                 Ok((
@@ -379,7 +370,7 @@ fn audit_rows_record_hash_approver_method_and_bytes() {
     assert_eq!(row.0, plan(1).content_hash().as_str());
     assert_eq!(
         (row.1.as_str(), row.2.as_str(), row.3.as_str()),
-        ("dev", "cli_tty", "succeeded")
+        ("dev", "cli_tty", "removed")
     );
     assert_eq!(row.4 - row.5, 1);
 }
@@ -391,14 +382,17 @@ fn operation_must_match_recorded_plan_hash() {
     let p = plan(1);
     s.insert_plan(&p).unwrap();
     let err = s
-        .record_operation_start(&OperationStart {
-            operation_id: OperationId::from_suffix("O1").unwrap(),
-            plan_id: p.id().clone(),
-            content_hash: other_hash(),
-            approver: "dev".into(),
-            method: ApprovalMethod::Desktop,
-            started_at: T0,
-        })
+        .begin_operation(
+            &OperationStart {
+                operation_id: OperationId::from_suffix("O1").unwrap(),
+                plan_id: p.id().clone(),
+                content_hash: other_hash(),
+                approver: "dev".into(),
+                method: ApprovalMethod::Desktop,
+                started_at: T0,
+            },
+            &TestPerms::default(),
+        )
         .unwrap_err();
     assert!(err.to_string().contains("does not match"), "{err}");
 }

@@ -3,14 +3,46 @@
 use crate::backup::backup_to_sibling;
 use crate::error::{Result, StoreError};
 use crate::perms::OwnerOnly;
-use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 use std::path::{Path, PathBuf};
+
+/// One embedded migration: SQL, then an optional Rust step for what SQL cannot do (hashing),
+/// both inside the same transaction.
+#[derive(Clone, Copy)]
+pub(crate) struct Migration {
+    /// SQL run with `execute_batch`.
+    pub(crate) sql: &'static str,
+    /// Runs after `sql`, before `user_version` is bumped.
+    pub(crate) post: Option<fn(&Transaction<'_>) -> Result<()>>,
+}
+
+impl Migration {
+    /// A pure SQL migration.
+    pub(crate) const fn sql(sql: &'static str) -> Self {
+        Self { sql, post: None }
+    }
+
+    /// SQL followed by a Rust step.
+    pub(crate) const fn with_post(
+        sql: &'static str,
+        post: fn(&Transaction<'_>) -> Result<()>,
+    ) -> Self {
+        Self {
+            sql,
+            post: Some(post),
+        }
+    }
+}
 
 /// Embedded migrations; `MIGRATIONS[n]` upgrades schema version `n` to `n + 1`.
 /// Never edit a released migration: append a new one.
-pub(crate) const MIGRATIONS: &[&str] = &[
-    include_str!("migrations/v001_initial.sql"),
-    include_str!("migrations/v002_history.sql"),
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration::sql(include_str!("migrations/v001_initial.sql")),
+    Migration::sql(include_str!("migrations/v002_history.sql")),
+    Migration::with_post(
+        include_str!("migrations/v003_audit.sql"),
+        crate::audit::migrate_v3_legacy,
+    ),
 ];
 
 /// Newest schema version this binary knows. A database with a higher `user_version` is refused.
@@ -66,7 +98,7 @@ pub(crate) fn check_compatible(
 pub(crate) fn migrate(
     conn: &mut Connection,
     path: &Path,
-    migrations: &[&str],
+    migrations: &[Migration],
     perms: &dyn OwnerOnly,
 ) -> Result<Vec<PathBuf>> {
     let target = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
@@ -96,8 +128,11 @@ pub(crate) fn migrate(
             )?;
             backups.push(backup_to_sibling(&src, path, version, perms)?);
         }
-        let sql = migrations[version as usize];
-        tx.execute_batch(sql)?;
+        let m = migrations[version as usize];
+        tx.execute_batch(m.sql)?;
+        if let Some(post) = m.post {
+            post(&tx)?;
+        }
         tx.pragma_update(None, "user_version", version + 1)?;
         tx.commit()?;
     }

@@ -1,7 +1,7 @@
 //! Typed records accepted and returned by [`crate::Store`]. All timestamps are Unix seconds
 //! supplied by the caller, so behavior is deterministic in tests.
 
-use scull_core::{Category, ContentHash, FsPath, ItemId, OperationId, PlanId, ScanId, Tier};
+use scull_core::{Category, ContentHash, FsPath, OperationId, PlanId, ScanId, Tier};
 
 /// Start of a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,7 +172,8 @@ pub struct Approval {
     pub used_at: Option<i64>,
 }
 
-/// Start of an executed operation (SAFE-08). Append-only.
+/// Start of an executed operation (SAFE-08), passed to [`crate::Store::begin_operation`].
+/// Append-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationStart {
     /// Operation identifier.
@@ -187,58 +188,4 @@ pub struct OperationStart {
     pub method: ApprovalMethod,
     /// When execution started.
     pub started_at: i64,
-}
-
-/// Outcome recorded in the audit log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AuditOutcome {
-    /// The item's action completed.
-    Succeeded,
-    /// The item's action failed.
-    Failed,
-    /// Part of the item was processed before an error.
-    Partial,
-    /// The item was dropped before acting (revalidation, SAFE-05); see `reason`.
-    Skipped,
-    /// Operation-level marker: execution finished (no item).
-    OperationFinished,
-}
-
-impl AuditOutcome {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            AuditOutcome::Succeeded => "succeeded",
-            AuditOutcome::Failed => "failed",
-            AuditOutcome::Partial => "partial",
-            AuditOutcome::Skipped => "skipped",
-            AuditOutcome::OperationFinished => "operation_finished",
-        }
-    }
-}
-
-/// One append-only audit row: a per-item outcome or an operation-level event.
-///
-/// Never put file contents or environment values here (INS-07, FX-DATA-07): `reason` is a
-/// stable code (e.g. a `DropReason::code()` or an `ErrorKind` string), not free text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditEntry {
-    /// Operation this row belongs to (must have been started).
-    pub operation_id: OperationId,
-    /// When the outcome was recorded.
-    pub recorded_at: i64,
-    /// Item, or `None` for operation-level rows.
-    pub item_id: Option<ItemId>,
-    /// Item path at execution time.
-    pub path: Option<FsPath>,
-    /// Action taken (`delete`, `trash`, `quarantine`, ...).
-    pub action: Option<String>,
-    /// Outcome.
-    pub outcome: AuditOutcome,
-    /// Stable reason code for skips and failures.
-    pub reason: Option<String>,
-    /// Bytes the plan predicted.
-    pub predicted_bytes: Option<u64>,
-    /// Bytes actually reclaimed (measured).
-    pub measured_bytes: Option<u64>,
 }
