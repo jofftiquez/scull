@@ -48,7 +48,7 @@ pub struct OperationLine {
     pub plan_id: PlanId,
     /// Who approved it.
     pub approver: String,
-    /// How (`cli_interactive`, `cli_tty`, `desktop`).
+    /// How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`).
     pub method: String,
     /// Start (Unix seconds).
     pub started_at: i64,

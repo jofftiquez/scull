@@ -217,9 +217,9 @@ pub(crate) fn check_item_for(item: &PlanItem, executing: &Action) -> Result<(), 
     }
     if item.action != *executing {
         return blocked(format!(
-            "action {:?} is not executed by this path: the walker deletes (S0 only), quarantine \
-             needs an operation (Executor::execute_plan), and Trash (#73) and tool-native \
-             commands (#78) are not implemented yet",
+            "action {:?} is not executed by this path: the walker deletes (S0 only); \
+             quarantine and the Trash fallback need an operation (Executor::execute_plan), and \
+             tool-native commands run through Quick Clean (quickclean::QuickClean::run)",
             item.action
         ));
     }

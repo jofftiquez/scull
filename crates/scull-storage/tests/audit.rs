@@ -173,6 +173,36 @@ fn fx_exec_13_normal_run_records_one_outcome_per_item_and_verifies() {
     assert_eq!(rejected_kind(err), ErrorKind::Usage);
 }
 
+/// Every approval method is stored under its stable string and read back (append-only enum:
+/// `cli_flag` was added without a migration, the column has no CHECK list), and the chain
+/// stays intact with it.
+#[test]
+fn every_approval_method_round_trips() {
+    let strings: Vec<&str> = ApprovalMethod::ALL.iter().map(|m| m.as_str()).collect();
+    assert_eq!(
+        strings,
+        ["cli_tty", "cli_interactive", "desktop", "cli_flag"]
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for (i, method) in ApprovalMethod::ALL.into_iter().enumerate() {
+        let p = plan(1 + i as u32);
+        s.insert_plan(&p).unwrap();
+        let name = format!("M{i}");
+        let mut start = start_for(&p, &name, T0 + 10 + i as i64);
+        start.method = method;
+        let mut audit = s.begin_operation(&start, &TestPerms::default()).unwrap();
+        s.finish_operation(
+            &mut audit,
+            &finish(T0 + 20 + i as i64, OperationEnd::Cancelled),
+        )
+        .unwrap();
+        let op = op_id(&name);
+        assert_eq!(s.operation(&op).unwrap().unwrap().method, method);
+        assert!(s.verify_chain(&op).unwrap().is_intact());
+    }
+}
+
 #[test]
 fn fx_exec_13_audit_is_append_only_at_the_sql_level() {
     let dir = tempfile::tempdir().unwrap();

@@ -102,35 +102,46 @@ pub struct ScanFinish {
 }
 
 /// How a human approved a plan (§13.3). Model-mediated channels are never an approval.
+///
+/// Append-only: variants and their stored strings are never renamed or removed, only added
+/// (rows written by older versions must keep parsing). The `method` columns carry no CHECK
+/// constraint listing the values, so a new variant needs no migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ApprovalMethod {
     /// `scull approve <plan-id>` in an interactive terminal with a typed confirmation code.
     CliTty,
-    /// Interactive confirmation of a CLI `clean` the user started themselves.
+    /// Interactive confirmation (answering the prompt on a terminal) of a CLI `clean` the
+    /// user started themselves.
     CliInteractive,
     /// The desktop Cleanup Review dialog.
     Desktop,
+    /// A CLI run the user started themselves and confirmed up front with `--confirm`, without
+    /// a prompt (non-interactive, CLI-03).
+    CliFlag,
 }
 
 impl ApprovalMethod {
+    /// Every method, in declaration order.
+    pub const ALL: [ApprovalMethod; 4] = [
+        ApprovalMethod::CliTty,
+        ApprovalMethod::CliInteractive,
+        ApprovalMethod::Desktop,
+        ApprovalMethod::CliFlag,
+    ];
+
     /// Stable string stored in the database.
     pub fn as_str(self) -> &'static str {
         match self {
             ApprovalMethod::CliTty => "cli_tty",
             ApprovalMethod::CliInteractive => "cli_interactive",
             ApprovalMethod::Desktop => "desktop",
+            ApprovalMethod::CliFlag => "cli_flag",
         }
     }
 
     pub(crate) fn parse(s: &str) -> Option<Self> {
-        [
-            ApprovalMethod::CliTty,
-            ApprovalMethod::CliInteractive,
-            ApprovalMethod::Desktop,
-        ]
-        .into_iter()
-        .find(|m| m.as_str() == s)
+        Self::ALL.into_iter().find(|m| m.as_str() == s)
     }
 }
 

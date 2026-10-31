@@ -194,7 +194,10 @@ again, so they get their own path, `scull clean caches`:
   and tells you.
 * **This is not undoable**, and the preview says so: "Not undoable. Packages re-download on
   next install; offline installs may fail until then." One confirmation covers all tools.
-* A cache whose tool is no longer installed is listed and left in place for you to remove.
+* A cache whose tool is no longer installed is listed. scull removes it itself only if you
+  confirm **that tool** (`--remove-orphaned TOOL`, or its own question on a terminal), with
+  the same not-undoable note and every check repeated right before; otherwise it is left in
+  place for you to remove.
 
 ## One cleanup at a time
 

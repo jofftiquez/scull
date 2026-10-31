@@ -238,7 +238,7 @@
           ]
         },
         "method": {
-          "description": "How (`cli_interactive`, `cli_tty`, `desktop`).",
+          "description": "How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`).",
           "type": "string"
         },
         "moved_bytes": {

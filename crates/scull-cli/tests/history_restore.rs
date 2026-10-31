@@ -78,8 +78,9 @@ impl Env {
         c
     }
 
+    /// Runs `args` (with `--allow-root` when this test runs elevated: [`allow_root_if_elevated`]).
     fn run(&self, args: &[&str]) -> Output {
-        self.cmd(args).output().unwrap()
+        self.cmd(&allow_root_if_elevated(args)).output().unwrap()
     }
 
     fn json(&self, args: &[&str], schema: &str) -> (i32, Value) {
@@ -124,6 +125,11 @@ impl Env {
                 i["outcome"], "quarantined",
                 "recently built: S1+ (D-28): {i:#}"
             );
+            let q = Path::new(i["quarantine_path"].as_str().unwrap());
+            assert!(
+                q.starts_with(self.fx.base()) && !q.starts_with(self.fx.root()),
+                "the quarantine stays in the temp dir, outside the root: {i:#}"
+            );
         }
         assert!(!self.exists(TARGET) && !self.exists(MODULES));
         run["data"]["operation_id"].as_str().unwrap().to_owned()
@@ -154,6 +160,21 @@ impl Env {
         println!("{report}");
         report.assert_ok();
     }
+}
+
+/// GitHub's Windows runners run the tests as an elevated administrator, where scull refuses
+/// to change anything without `--allow-root` (SAFE-14). When this test process itself runs
+/// elevated, `clean` and `restore` get `--allow-root`, as a user running elevated would have
+/// to pass; everywhere else the arguments are unchanged. The refusal itself is tested with
+/// `SCULL_TEST_ASSUME_ELEVATED` through [`Env::cmd`], which never adds the flag.
+fn allow_root_if_elevated<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut all = args.to_vec();
+    if matches!(args.first(), Some(&("clean" | "restore")))
+        && scull_platform::is_elevated().blocks_destructive()
+    {
+        all.push("--allow-root");
+    }
+    all
 }
 
 fn stderr(o: &Output) -> String {
@@ -225,10 +246,6 @@ fn committed_schemas_match_generated() {
 /// <op>` shows the plan, the intact hash chain, one outcome per item and the quarantine
 /// entries with the restore command.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "needs quarantined items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn history_lists_and_shows_an_operation() {
     let env = Env::new();
     let (code, v) = env.json(&["history", "--json"], "history");
@@ -293,10 +310,6 @@ fn history_lists_and_shows_an_operation() {
 /// one whose original path was taken in the meantime goes to a `.scull-restored-1` sibling and
 /// nothing is overwritten. History then shows them restored; restoring again does nothing.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "needs quarantined items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn restore_puts_items_back_and_never_overwrites() {
     let env = Env::new();
     let before_target = files_below(&env.root().join(TARGET));
@@ -359,10 +372,6 @@ fn restore_puts_items_back_and_never_overwrites() {
 /// Without `--confirm` and without a terminal, restore only previews; `--item` restores a
 /// subset; unknown items, operations and malformed IDs are errors; elevated runs are refused.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "needs quarantined items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn restore_preview_selection_and_refusals() {
     let env = Env::new();
     let op = env.clean();
@@ -424,10 +433,6 @@ fn restore_preview_selection_and_refusals() {
 /// needs `--confirm --allow-permanent` (exit 5 otherwise). Nothing has expired right after a
 /// run; `--include-unexpired` selects everything held. Purged items can't be restored.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "needs quarantined items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn purge_quarantine_needs_elevated_confirmation() {
     let env = Env::new();
     let op = env.clean();

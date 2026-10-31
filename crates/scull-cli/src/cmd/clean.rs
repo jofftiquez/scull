@@ -45,7 +45,8 @@
 //!    reported item by item (exit 3), never "best effort". Ctrl-C stops before the next item
 //!    (exit 130).
 //! 6. **Report** per item, with the measured free-space delta next to the prediction
-//!    (PHY-02) and how to restore quarantined items.
+//!    (PHY-02) and how to restore quarantined items. The same delta is recorded with the
+//!    finished operation (`measured_delta_bytes`, invariant I-5; `scull history` shows it).
 //!
 //! Machine output: `scull/clean-plan@1` (plan and review previews) and `scull/clean-run@1`
 //! (an execution).
@@ -1449,20 +1450,26 @@ fn execute(
     let executor = exec::lock_and_recover(store, ui)?;
     let started_at = now_unix();
     let operation_id = exec::new_operation_id(started_at)?;
-    let mut op = executor.begin_operation(
-        store,
-        plan,
-        &OperationStart {
-            operation_id: operation_id.clone(),
-            plan_id: plan.id().clone(),
-            content_hash: plan.content_hash().clone(),
-            approver: who.user.clone(),
-            // The storage model has one method for a CLI run the user started and confirmed
-            // themselves; `confirmation` in the report says whether by flag or prompt.
-            method: ApprovalMethod::CliInteractive,
-            started_at,
-        },
-    )?;
+    let mut op = executor
+        .begin_operation(
+            store,
+            plan,
+            &OperationStart {
+                operation_id: operation_id.clone(),
+                plan_id: plan.id().clone(),
+                content_hash: plan.content_hash().clone(),
+                approver: who.user.clone(),
+                // `--confirm` without a prompt, or `y` at the prompt on a terminal.
+                method: match confirmed {
+                    Confirmed::Flag => ApprovalMethod::CliFlag,
+                    Confirmed::Prompt => ApprovalMethod::CliInteractive,
+                },
+                started_at,
+            },
+        )?
+        // One measurement: the CLI's own meter below (with resampling for delayed frees) is what
+        // the report shows and what `finish_measured` records (I-5).
+        .without_measurement();
     let predicted = |i: &PlanItem| {
         ActionReclaim::for_action(
             &sizes.get(&i.item_id).copied().unwrap_or_default(),
@@ -1502,13 +1509,14 @@ fn execute(
     }
     let delta = meter.after(baseline, &tally);
     let finished_at = now_unix();
-    op.finish(
+    op.finish_measured(
         if report.cancelled {
             OperationEnd::Cancelled
         } else {
             OperationEnd::Normal
         },
         finished_at,
+        delta.measured_delta_bytes(),
     )?;
     Ok(run_report(
         plan,

@@ -19,8 +19,10 @@
 //!   quarantined (S1/S2) items, i.e. purging the quarantine before or after its retention, is
 //!   the other permanent delete of S1/S2 data and takes the same elevated confirmation.
 //! * **Package caches** (Quick Clean, QC-04) take a single confirmation and no elevated one:
-//!   they hold no unique data. An orphaned cache whose tool is uninstalled (D-36) is listed
-//!   per tool with the not-undoable note and confirmed with the rest.
+//!   they hold no unique data. An orphaned cache whose tool is uninstalled (D-36), which
+//!   scull deletes itself, is listed per tool with the not-undoable note and takes its own
+//!   confirmation per tool (`--remove-orphaned TOOL`, or its own prompt on a terminal); the
+//!   single Quick Clean confirmation never covers it.
 //! * Elevated runs are refused unless `--allow-root` ([`check_not_elevated`], SAFE-14).
 
 use crate::output::Ui;

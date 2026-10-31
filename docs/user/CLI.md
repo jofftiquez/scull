@@ -548,7 +548,7 @@ JSON: `scull/quarantine-purge@1` (`mode` = `preview` or `run`).
 ### `scull clean caches`
 
 ```text
-scull clean caches [--wipe] [--untick TOOL]... [--dry-run | --confirm] [--allow-root]
+scull clean caches [--wipe] [--untick TOOL]... [--remove-orphaned TOOL]... [--dry-run | --confirm] [--allow-root]
 ```
 
 Quick Clean: cleans package-manager caches with each tool's own command, preferring a prune.
@@ -562,6 +562,7 @@ until then." One confirmation covers all tools; no elevated confirmation is need
 | `--dry-run` | Only show what would run; never ask |
 | `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune. pnpm is never wiped. |
 | `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`) |
+| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several |
 | `--allow-root` | Allow running as root or Administrator |
 
 Before each tool runs, scull checks again that its cache is the same folder, not a link, on
@@ -579,7 +580,18 @@ Not run (1):
   npm           /home/me/.npm/_cacache: classified S2: tool commands are allowed at S0/S1 only
 ```
 
-JSON: `scull/clean-caches@1` (`mode` = `preview` or `run`, `tools[]`, `skipped[]`).
+A cache whose tool is no longer installed can't be cleaned with the tool's command. If it is
+still a recognized package cache in its usual place, not a link, on the expected drive and not
+in use, the preview lists it under "Orphaned caches" with its size and the not-undoable note;
+otherwise it is listed under "Not run" and left for you to remove. scull deletes an orphaned
+cache itself only after a confirmation **for that tool**: `--remove-orphaned TOOL` (with
+`--confirm` when there is no terminal), or answering `y` to its own question on a terminal.
+The single Quick Clean confirmation never covers it. scull repeats every check right before
+deleting. A tool named with `--remove-orphaned` that has no removable orphaned cache is listed
+as such and, with `--confirm`, makes the exit code 3.
+
+JSON: `scull/clean-caches@1` (`mode` = `preview` or `run`, `tools[]`, `skipped[]`,
+`results[]`, `orphaned[]`, `orphaned_results[]`, `orphaned_unmatched[]`).
 
 ### `scull history`
 
@@ -608,11 +620,11 @@ Details: scull history <operation>. Restore quarantined items: scull restore <op
 $ scull history op_6ae653f0cf4209dcf71230f4
 Operation op_6ae653f0cf4209dcf71230f4
   plan         plan_6ae653dc05e1bc9672def624 (hash 882b1d70bc52b5a4070e52998830a8500002d98e93ac84989f2f3f2962332b1b)
-  approved by  uid:1000 (cli_interactive)
+  approved by  uid:1000 (cli_flag)
   ran          2026-10-31 20:47 UTC -> 2026-10-31 20:47 UTC
   status       completed
   items        2 planned: 2 done, 0 with errors, 0 skipped
-  bytes        predicted 2.4 MiB, freed 0 B, moved 2.4 MiB, measured -241664 B
+  bytes        predicted 2.4 MiB, freed 0 B, moved 2.4 MiB, measured +3250585 B
   audit        intact (4 rows, hash-chained)
 
 Items:
@@ -636,7 +648,7 @@ after both items were restored:
   "operation_id": "op_6ae653f0cf4209dcf71230f4",
   "plan_id": "plan_6ae653dc05e1bc9672def624",
   "approver": "uid:1000",
-  "method": "cli_interactive",
+  "method": "cli_flag",
   "started_at": 1793479664,
   "finished_at": 1793479665,
   "status": "completed",
@@ -648,7 +660,7 @@ after both items were restored:
   "predicted_bytes": 2527232,
   "freed_bytes": 0,
   "moved_bytes": 2527232,
-  "measured_delta_bytes": -241664,
+  "measured_delta_bytes": 3250585,
   "quarantine_held": 0,
   "chain_intact": true
 }

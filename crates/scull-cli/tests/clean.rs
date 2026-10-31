@@ -7,7 +7,9 @@
 //! directory (beside the root and the canary, never inside them), over a `scull-fixtures` tree.
 //! After each test the safety invariants run: nothing outside the executed items changed in the
 //! root (I-3), the canary is untouched (I-2), nothing S3 was executed (I-1) and no executed
-//! tier is lower than planned (I-8). Quarantine folders land in the fixture's temp directory
+//! tier is lower than planned (I-8); after an execution, the audit matches the disk (I-4) and
+//! the finished operation records the predicted bytes and the measured free-space delta the
+//! run reported (I-5). Quarantine folders land in the fixture's temp directory
 //! (the shallowest folder on the volume the test user owns), outside the root.
 //!
 //! The fixture tiers depend on what the machine can observe (an uninspectable process of the
@@ -20,7 +22,7 @@
 
 use scull_core::{Action, ItemId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, Tier};
 use scull_fixtures::{Fixture, InvariantInputs, NodeLock};
-use scull_storage::{DefaultPermissions, Store};
+use scull_storage::{ApprovalMethod, DefaultPermissions, Store};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,8 +93,9 @@ impl Env {
         c
     }
 
+    /// Runs `args` (with `--allow-root` when this test runs elevated: [`allow_root_if_elevated`]).
     fn run(&self, args: &[&str]) -> Output {
-        self.cmd(args).output().unwrap()
+        self.cmd(&allow_root_if_elevated(args)).output().unwrap()
     }
 
     /// `scull clean --root <root> --allow-network-roots <args>`.
@@ -170,7 +173,8 @@ impl Env {
         self.check_inner(executed, None);
     }
 
-    /// [`Env::check`] plus I-4: the audit of `run`'s operation matches the disk.
+    /// [`Env::check`] plus I-4 (the audit of `run`'s operation matches the disk) and I-5 (its
+    /// predicted and measured bytes are recorded; the measured delta is the reported one).
     fn check_run(&self, run: &Value, executed: &[(&str, Option<&Value>)]) {
         self.check_inner(executed, Some(run));
     }
@@ -182,7 +186,16 @@ impl Env {
                 run["data"]["operation_id"].as_str().unwrap().to_owned(),
             )
             .unwrap();
-            inputs = inputs.audit(&self.store(), &op);
+            let store = self.store();
+            inputs = inputs.audit(&store, &op).operation_bytes(&store, &op);
+            // The recorded delta is the one the run reported (one measurement, PHY-02).
+            let rec = store.operation(&op).unwrap().unwrap();
+            let totals = rec.finished.expect("operation finished").totals;
+            assert_eq!(
+                serde_json::to_value(totals.measured_delta_bytes).unwrap(),
+                run["data"]["measured"]["measured_delta_bytes"],
+                "recorded vs reported measured delta"
+            );
         }
         let mut scan = BTreeMap::new();
         let mut exec = BTreeMap::new();
@@ -212,6 +225,21 @@ impl Env {
         println!("{report}");
         report.assert_ok();
     }
+}
+
+/// GitHub's Windows runners run the tests as an elevated administrator, where scull refuses
+/// to change anything without `--allow-root` (SAFE-14). When this test process itself runs
+/// elevated, `clean` and `restore` get `--allow-root`, as a user running elevated would have
+/// to pass; everywhere else the arguments are unchanged. The refusal itself is tested with
+/// `SCULL_TEST_ASSUME_ELEVATED` through [`Env::cmd`], which never adds the flag.
+fn allow_root_if_elevated<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut all = args.to_vec();
+    if matches!(args.first(), Some(&("clean" | "restore")))
+        && scull_platform::is_elevated().blocks_destructive()
+    {
+        all.push("--allow-root");
+    }
+    all
 }
 
 fn stderr(o: &Output) -> String {
@@ -445,10 +473,6 @@ fn non_interactive_review_never_executes() {
 /// reports the measured free-space delta. Running the same plan again is refused (exit 4):
 /// another operation touched its targets (SAFE-09).
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "executes S1/S2 items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn confirm_executes_audits_and_cannot_replay() {
     let env = Env::new();
     env.plan(&[TARGET, MODULES]);
@@ -495,6 +519,11 @@ fn confirm_executes_audits_and_cannot_replay() {
     let store = env.store();
     let chain = store.verify_chain(&op).unwrap();
     assert!(chain.is_intact(), "{chain:?}");
+    assert_eq!(
+        store.operation(&op).unwrap().unwrap().method,
+        ApprovalMethod::CliFlag,
+        "--confirm without a prompt"
+    );
     assert_eq!(
         store.audit_items(&op).unwrap().len(),
         2,
@@ -711,10 +740,6 @@ fn fx_exec_09_foreign_plans_are_rejected() {
 /// FX-EXEC-10: an item protected after planning (`.scull-protect`, S3) is skipped with a
 /// reason; the other item runs; exit 3.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "executes S1/S2 items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn fx_exec_10_item_now_protected_is_skipped() {
     let env = Env::new();
     env.plan(&[TARGET, MODULES]);
@@ -771,10 +796,6 @@ fn lock_held_exits_6() {
 /// FX-EXEC-12: run as root/administrator (simulated), execution is refused without
 /// `--allow-root` (exit 5) before anything is read or changed; planning still works.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "executes S1/S2 items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn fx_exec_12_elevated_run_refused_without_allow_root() {
     let env = Env::new();
     env.plan(&[TARGET]);
@@ -890,10 +911,6 @@ fn fx_exec_11_irreversible_s1_needs_allow_permanent() {
 /// A plan's roots come from history: executing without `--root` works from any directory,
 /// also after later scans of the same root.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "executes S1/S2 items: quarantine moves are Unix-only so far (Windows blocks them)"
-)]
 fn plan_roots_come_from_history() {
     let env = Env::new();
     env.plan(&[MODULES]);
@@ -990,6 +1007,11 @@ fn terminal_prompts_confirm_and_decline() {
     assert_eq!(o.status.code(), Some(0), "{text}");
     assert!(text.contains("1 of 1 item(s) done"), "{text}");
     assert!(!env.exists(TARGET), "confirmed: executed");
+    let h = json_ok(&env.run(&["history", "--json"]));
+    assert_eq!(
+        h["data"]["operations"][0]["method"], "cli_interactive",
+        "answered at the prompt: {h:#}"
+    );
 
     env.plan(&[MODULES]);
     let plan = env.read_plan();

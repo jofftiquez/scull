@@ -489,6 +489,12 @@ pub struct CleanCachesArgs {
     /// yarn-classic, yarn-berry).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub untick: Vec<crate::cmd::clean_caches::Untick>,
+    /// Also remove this uninstalled tool's orphaned cache folder, when the preview lists it as
+    /// removable (D-36): scull deletes it itself, which is not undoable. Repeat for several.
+    /// This is the per-tool confirmation; on a terminal, each orphaned cache not named here
+    /// is asked about separately.
+    #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
+    pub remove_orphaned: Vec<crate::cmd::clean_caches::Untick>,
     /// Only show what would run; never ask or run.
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,

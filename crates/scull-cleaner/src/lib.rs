@@ -52,17 +52,28 @@
 //!   [`quickclean::QuickClean::remove_orphaned`] run inside its [`Operation`], one audit row per
 //!   tool run or orphaned removal; orphaned removals are journaled first (SAFE-19).
 //!
-//! # Not wired into any interface yet
+//! # Interfaces
 //!
-//! **Do not call the Executor from the CLI, desktop app or MCP server** until the remaining
-//! Phase 2 safeguards land; the inspect-only release gate checks that `scull clean` is still a
-//! stub. Missing today, each tracked by its issue:
+//! The CLI is wired to the Executor on the `phase2` branch: `scull clean --plan FILE
+//! --confirm` (executes through [`Executor::execute_plan`] in an [`Operation`]: lock, journal,
+//! audit, revalidation, quarantine, measured delta), `scull clean caches` (Quick Clean in one audited operation,
+//! and [`quickclean::QuickClean::remove_orphaned`] for D-36), `scull restore` and
+//! `scull clean --purge-quarantine`. The CLI owns the user-facing safeguards around it: the
+//! refusal to run elevated without `--allow-root` (SAFE-14) and the elevated confirmation
+//! (typed count, or `--allow-permanent`) for S1/S2 items that can't be undone (SAFE-07),
+//! P2-EXEC-11 / #77. The Trash fallback (P2-EXEC-07, #73) and the measured free-space delta
+//! (P2-EXEC-10, #76) are in this crate.
 //!
-//! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
-//!   P2-EXEC-11, #77;
-//! * the Windows quarantine/restore moves (#71/#72) are implemented but their tests have not
-//!   run on Windows yet (CI).
-
+//! The desktop app and the MCP server do not call the Executor yet. The inspect-only release
+//! gate (`packaging/check_inspect_only.py`) applies to `main`, where this wiring does not exist;
+//! on `phase2` it is expected to fail.
+//!
+//! Still open:
+//!
+//! * `scull clean` does not enable the Trash fallback ([`Operation::with_trash`]) yet: an
+//!   S1/S2 item whose quarantine is impossible is blocked there;
+//! * the Windows quarantine/restore moves (#71/#72) and the CLI tests that execute them are
+//!   implemented but have not run on Windows CI yet.
 mod execution;
 mod executor;
 pub mod journal;

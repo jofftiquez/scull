@@ -24,8 +24,9 @@
 //! # When quarantine is impossible
 //!
 //! No user-owned directory on the volume, a read-only or unwritable parent, another volume or
-//! mount, or a filesystem without no-replace renames: the Trash fallback is next (P2-EXEC-07,
-//! #73, not in this build), so the item is **blocked** and left in place. It is never deleted
+//! mount, or a filesystem without no-replace renames: the item moves to the Trash instead when
+//! the operation enables the fallback ([`Operation::with_trash`], P2-EXEC-07); otherwise, or
+//! when that is impossible too, it is **blocked** and left in place. It is never deleted
 //! permanently instead.
 //!
 //! # Retention and purge

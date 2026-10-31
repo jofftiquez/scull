@@ -23,9 +23,20 @@
 //!   free-space delta, and for pnpm why a prune may free less than expected. A tool that was
 //!   planned but did not complete makes the exit code 3.
 //!
-//! An orphaned cache whose tool is not installed is listed with "left in place for manual
-//! removal": the Quick Clean runner does not remove it (D-36 is provisional and not
-//! implemented by the runner yet).
+//! # Orphaned caches (D-36, provisional)
+//!
+//! A cache whose tool is not installed can't be cleaned with the tool's command. When it
+//! still qualifies ([`QuickCleanPlan::orphaned`]: S1 package cache, validated location, not a
+//! link, same volume, not in use), the preview lists it under "Orphaned caches" with its size,
+//! folder and the not-undoable note; otherwise it is reported as left in place for manual
+//! removal. scull removes an orphaned cache itself (through the Executor's removal walker,
+//! [`QuickClean::remove_orphaned`], under the execution lock, in the same audited operation
+//! whose plan of record lists the confirmed orphaned caches, with every check repeated right
+//! before) **only after a confirmation for that tool**: `--remove-orphaned TOOL` (with
+//! `--confirm` without a terminal), or `y` at its own prompt on a terminal. Each result is
+//! reported (freed bytes, entries kept, the volume's measured free-space delta). A tool named
+//! with `--remove-orphaned` that has no removable orphaned cache is listed in
+//! `orphaned_unmatched`, and on a run counts as not completed (exit 3).
 //!
 //! Machine output: `scull/clean-caches@1`.
 
@@ -41,9 +52,11 @@ use crate::output::json::SchemaId;
 use crate::output::style::Style;
 use crate::output::table::{Align, Cell, Table};
 use schemars::JsonSchema;
+use scull_cleaner::RemoveOutcome;
 use scull_cleaner::quickclean::{
-    CleanMode, Ended, NOT_UNDOABLE_NOTE, QuickClean, QuickCleanOptions, QuickCleanPlan,
-    QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, ToolResult,
+    CleanMode, Ended, NOT_UNDOABLE_NOTE, OrphanedCache, OrphanedRemoval, OrphanedReport,
+    QuickClean, QuickCleanOptions, QuickCleanPlan, QuickCleanReport, QuickCleanRequest, SkipReason,
+    SkippedTool, ToolResult,
 };
 use scull_core::{ErrorKind, FsPath, PlanOrigin, PlanParams, ScanId, ScullError};
 use scull_detectors::caches::CacheTool;
@@ -56,6 +69,7 @@ use scull_safety::NativeActivityProbe;
 use scull_storage::{ApprovalMethod, OperationEnd, OperationStart};
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -122,6 +136,14 @@ pub struct CleanCachesReport {
     pub skipped: Vec<SkippedLine>,
     /// Run only: what each started tool did.
     pub results: Vec<ResultLine>,
+    /// Orphaned caches of uninstalled tools that scull may remove itself, each only after a
+    /// confirmation for that tool (D-36).
+    pub orphaned: Vec<OrphanedLine>,
+    /// Run only: what each confirmed orphaned-cache removal did.
+    pub orphaned_results: Vec<OrphanedResultLine>,
+    /// Tools named with `--remove-orphaned` that have no removable orphaned cache (see
+    /// `tools` and `skipped` for what happens to them instead).
+    pub orphaned_unmatched: Vec<String>,
     /// Estimated reclaimable bytes of the planned tools.
     pub total_reclaimable_bytes: u64,
     /// "Not undoable. Packages re-download on next install; offline installs may fail until
@@ -215,6 +237,55 @@ pub struct ResultLine {
     pub stderr: Vec<String>,
 }
 
+/// An orphaned cache scull may remove itself (D-36).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrphanedLine {
+    /// Short name of the uninstalled tool.
+    pub tool: String,
+    /// What it is ("pnpm store").
+    pub artifact: String,
+    /// The cache folder.
+    pub cache: FsPath,
+    /// Estimated reclaimable bytes.
+    pub reclaimable_bytes: u64,
+    /// Whether this tool was confirmed with `--remove-orphaned`.
+    pub selected: bool,
+    /// "Not undoable. Packages re-download on next install; offline installs may fail until
+    /// then."
+    pub not_undoable: String,
+}
+
+/// What one confirmed orphaned-cache removal did.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrphanedResultLine {
+    /// Short name of the uninstalled tool.
+    pub tool: String,
+    /// The cache folder.
+    pub cache: FsPath,
+    /// `removed` (everything), `incomplete` (some entries kept), `aborted` (the walk stopped
+    /// at an anomaly), `refused` (the Executor refused; nothing removed) or `skipped` (a check
+    /// failed right before; nothing removed).
+    pub outcome: String,
+    /// Whether the folder is gone.
+    pub succeeded: bool,
+    /// Stable reason code when skipped.
+    pub reason: Option<String>,
+    /// Why it was skipped, refused, incomplete or aborted, in words.
+    pub message: Option<String>,
+    /// Allocated bytes of the removed files.
+    pub freed_bytes: Option<u64>,
+    /// Entries removed (files, folders, links).
+    pub entries_removed: Option<u64>,
+    /// Entries kept.
+    pub entries_kept: Option<u64>,
+    /// Cache allocated bytes before.
+    pub cache_bytes_before: Option<u64>,
+    /// Measured change of the volume's free space (positive: freed; other activity shows too).
+    pub free_space_delta: Option<i64>,
+}
+
 fn skip_code(r: &SkipReason) -> &'static str {
     match r {
         SkipReason::Refused(_) => "refused",
@@ -248,6 +319,103 @@ fn skipped_line(s: &SkippedTool) -> SkippedLine {
             SkipReason::NotInstalled { manual_removal } => Some(FsPath::from_path(manual_removal)),
             _ => None,
         },
+    }
+}
+
+fn orphaned_line(o: &OrphanedCache, selected: &BTreeSet<CacheTool>) -> OrphanedLine {
+    OrphanedLine {
+        tool: tool_name(o.tool).to_owned(),
+        artifact: o.tool.artifact().to_owned(),
+        cache: FsPath::from_path(&o.cache),
+        reclaimable_bytes: o.reclaimable_bytes,
+        selected: selected.contains(&o.tool),
+        not_undoable: o.not_undoable.to_owned(),
+    }
+}
+
+fn orphaned_removed_line(r: &OrphanedRemoval) -> OrphanedResultLine {
+    let free_space_delta = match (r.free_before, r.free_after) {
+        (Some(b), Some(a)) => Some(clamp(i128::from(a) - i128::from(b))),
+        _ => None,
+    };
+    let base = OrphanedResultLine {
+        tool: tool_name(r.tool).to_owned(),
+        cache: FsPath::from_path(&r.cache),
+        outcome: String::new(),
+        succeeded: false,
+        reason: None,
+        message: None,
+        freed_bytes: None,
+        entries_removed: None,
+        entries_kept: None,
+        cache_bytes_before: r.size_before.map(|s| s.allocated),
+        free_space_delta,
+    };
+    match &r.outcome {
+        Err(e) => OrphanedResultLine {
+            outcome: "refused".into(),
+            message: Some(e.message.clone()),
+            ..base
+        },
+        Ok(w) => {
+            let c = &w.removed;
+            let (outcome, message) = match w.outcome {
+                RemoveOutcome::Complete => ("removed", None),
+                RemoveOutcome::Incomplete => (
+                    "incomplete",
+                    Some(format!(
+                        "{} entr{} kept{}",
+                        w.skipped_total,
+                        if w.skipped_total == 1 { "y" } else { "ies" },
+                        w.skipped
+                            .first()
+                            .map(|k| format!(", e.g. {}: {}", k.relative.display(), k.detail))
+                            .unwrap_or_default()
+                    )),
+                ),
+                // Aborted (and anything newer: not complete either).
+                _ => (
+                    "aborted",
+                    Some(match &w.aborted {
+                        Some(a) => format!(
+                            "the removal stopped at {}: {}",
+                            a.relative.display(),
+                            a.anomaly
+                        ),
+                        None => "the removal stopped".to_owned(),
+                    }),
+                ),
+            };
+            OrphanedResultLine {
+                outcome: outcome.into(),
+                succeeded: w.outcome == RemoveOutcome::Complete,
+                message,
+                freed_bytes: Some(c.allocated_bytes),
+                entries_removed: Some(c.files + c.dirs + c.symlinks + c.special),
+                entries_kept: Some(w.skipped_total),
+                ..base
+            }
+        }
+    }
+}
+
+fn orphaned_skipped_line(s: &SkippedTool) -> OrphanedResultLine {
+    OrphanedResultLine {
+        tool: tool_name(s.tool).to_owned(),
+        cache: s
+            .path
+            .as_deref()
+            .map(FsPath::from_path)
+            .unwrap_or_else(|| FsPath::from("")),
+        outcome: "skipped".into(),
+        succeeded: false,
+        reason: Some(skip_code(&s.reason).to_owned()),
+        message: Some(s.reason.to_string()),
+        freed_bytes: None,
+        entries_removed: None,
+        entries_kept: None,
+        cache_bytes_before: None,
+        free_space_delta: None,
     }
 }
 
@@ -376,27 +544,58 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
     let probe = NativeActivityProbe::capture(Limits::default());
     let plan = qc.plan(&located, &caches.candidates, &request, &probe);
 
+    let named: BTreeSet<CacheTool> = args
+        .remove_orphaned
+        .iter()
+        .flat_map(|u| u.0.iter().copied())
+        .collect();
     let mut report = preview(&plan, caches.signals_unavailable.clone());
+    with_orphaned(&mut report, &plan, &named);
 
-    if plan.tools.is_empty() || !wants_run {
-        if !plan.tools.is_empty() {
-            report.next_step = Some(format!(
-                "Nothing was run. To run {}: scull clean caches --confirm{}",
-                if plan.tools.len() == 1 { "it" } else { "them" },
-                if args.wipe { " --wipe" } else { "" }
-            ));
-        }
-        return emit(&report, ui);
+    // Without --confirm a terminal asks about each orphaned cache; with it, only the tools
+    // named with --remove-orphaned are confirmed (D-36: one confirmation per tool).
+    let pending: Vec<CacheTool> = plan
+        .orphaned
+        .iter()
+        .map(|o| o.tool)
+        .filter(|t| !args.confirm || named.contains(t))
+        .collect();
+    if (plan.tools.is_empty() && pending.is_empty()) || !wants_run {
+        report.next_step = preview_next_step(&plan, &named, args.wipe);
+        emit(&report, ui)?;
+        return match unmatched_error(&report) {
+            Some(e) if args.confirm => Err(e),
+            _ => Ok(()),
+        };
     }
+    let mut run_tools = !plan.tools.is_empty();
+    let mut confirmed: BTreeSet<CacheTool> = named.clone();
     if !args.confirm {
-        // Interactive: show the preview, then one confirmation (QC-04).
+        // Interactive: show the preview, then one confirmation for the tools (QC-04) and one
+        // per orphaned cache not already named with --remove-orphaned (D-36).
         exec::check_not_elevated(elevation, args.allow_root, "scull clean caches")?;
         emit(&report, ui)?;
         let n = plan.tools.len();
-        if !exec::prompt_yes_no(&format!(
-            "Run {n} cleanup command{}? This is not undoable.",
-            if n == 1 { "" } else { "s" }
-        ))? {
+        if run_tools
+            && !exec::prompt_yes_no(&format!(
+                "Run {n} cleanup command{}? This is not undoable.",
+                if n == 1 { "" } else { "s" }
+            ))?
+        {
+            run_tools = false;
+        }
+        let stdin = std::io::stdin();
+        confirmed.extend(
+            ask_orphaned(
+                &plan,
+                &named,
+                &mut stdin.lock(),
+                &mut std::io::stderr().lock(),
+            )
+            .map_err(|e| ScullError::from_io(&e))?,
+        );
+        let any_orphan = plan.orphaned.iter().any(|o| confirmed.contains(&o.tool));
+        if !run_tools && !any_orphan {
             info(ui, "Nothing was run.");
             return Err(cancel::cancelled_error());
         }
@@ -405,12 +604,20 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
     // SAFE-09: one executor at a time; reconcile interrupted operations first (SAFE-19).
     let mut store = exec::open_store()?;
     let executor = exec::lock_and_recover(&mut store, ui)?;
+    // What was confirmed: the tools unless declined at the prompt, and the orphaned caches
+    // confirmed per tool (D-36). Only that is approved, recorded and audited.
+    let mut approved = plan.clone();
+    if !run_tools {
+        approved.tools.clear();
+    }
+    approved.orphaned.retain(|o| confirmed.contains(&o.tool));
     // SAFE-08 (P2-EXEC-12): the confirmed preview is recorded as a plan (resolved binary and
-    // exact arguments per tool) and run as one audited operation.
+    // exact arguments per tool, the confirmed orphaned caches) and run as one audited
+    // operation.
     let who = exec::who()?;
     let now = now_unix();
-    let audit_plan = plan.audit_plan(
-        &BTreeSet::new(),
+    let audit_plan = approved.audit_plan(
+        &confirmed,
         PlanParams {
             id: exec::new_plan_id(now)?,
             scan_id: ScanId::from_suffix(&exec::new_id_suffix(now))
@@ -431,53 +638,244 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
             plan_id: audit_plan.id().clone(),
             content_hash: audit_plan.content_hash().clone(),
             approver: who.user.clone(),
-            method: ApprovalMethod::CliInteractive,
+            method: if args.confirm {
+                ApprovalMethod::CliFlag
+            } else {
+                ApprovalMethod::CliInteractive
+            },
             started_at: now,
         },
     )?;
-    if ui.progress {
-        ui.progress(&format!("running {} tool(s)...", plan.tools.len()));
-    }
-    let fresh = NativeActivityProbe::capture(Limits::default());
     let bridge = CancelBridge::start();
-    let ran: QuickCleanReport = qc.run(&mut op, &plan, &fresh, bridge.token())?;
-    drop(bridge);
-    let end = if ran.cancelled {
-        OperationEnd::Cancelled
+    let mut failed = 0;
+    let mut cancelled = false;
+    report.mode = CachesMode::Run;
+    report.next_step = None;
+    if run_tools {
+        if ui.progress {
+            ui.progress(&format!("running {} tool(s)...", approved.tools.len()));
+        }
+        let fresh = NativeActivityProbe::capture(Limits::default());
+        let ran: QuickCleanReport = qc.run(&mut op, &approved, &fresh, bridge.token())?;
+        cancelled |= ran.cancelled;
+        failed += apply_run(&mut report, &approved, &ran);
     } else {
-        OperationEnd::Normal
-    };
-    op.finish(end, now_unix())?;
-    let failed = apply_run(&mut report, &plan, &ran);
+        for t in &plan.tools {
+            report.skipped.push(SkippedLine {
+                tool: tool_name(t.tool).to_owned(),
+                path: Some(FsPath::from_path(&t.cache)),
+                reason: "declined".to_owned(),
+                message: "not confirmed at the prompt".to_owned(),
+                manual_removal: None,
+            });
+        }
+    }
+    if !approved.orphaned.is_empty() {
+        if ui.progress {
+            ui.progress("removing confirmed orphaned cache(s)...");
+        }
+        // A fresh probe again, right before (the evidence is gathered per cache).
+        let fresh = NativeActivityProbe::capture(Limits::default());
+        let removed = qc.remove_orphaned(
+            &executor,
+            &mut op,
+            &approved,
+            &confirmed,
+            &fresh,
+            bridge.token(),
+        )?;
+        cancelled |= removed.cancelled;
+        failed += apply_orphaned(&mut report, &removed);
+    }
+    drop(bridge);
+    cancelled |= cancel::is_cancelled();
+    op.finish(
+        if cancelled {
+            OperationEnd::Cancelled
+        } else {
+            OperationEnd::Normal
+        },
+        now_unix(),
+    )?;
+    drop(executor);
+    let unmatched = report.orphaned_unmatched.len();
     emit(&report, ui)?;
 
     if cancel::is_cancelled() {
         return Err(cancel::cancelled_error());
     }
-    if failed > 0 {
+    if failed + unmatched > 0 {
         return Err(ScullError::new(
             ErrorKind::PartialFailure,
             format!(
-                "{failed} of {} planned tool(s) did not complete; each is listed with the reason",
-                plan.tools.len()
+                "{} planned tool run(s) or orphaned-cache removal(s) did not complete; each is \
+                 listed with the reason",
+                failed + unmatched
             ),
         ));
     }
     Ok(())
 }
 
+/// D-36 on a terminal: ask about each orphaned cache of `plan` not already confirmed with
+/// `--remove-orphaned` (`named`), one prompt per tool with the not-undoable note, reading the
+/// answers from `input`. Returns the tools answered `y`; anything else declines.
+pub fn ask_orphaned(
+    plan: &QuickCleanPlan,
+    named: &BTreeSet<CacheTool>,
+    input: &mut dyn BufRead,
+    err: &mut dyn Write,
+) -> io::Result<BTreeSet<CacheTool>> {
+    let mut yes = BTreeSet::new();
+    for o in plan.orphaned.iter().filter(|o| !named.contains(&o.tool)) {
+        let question = format!(
+            "{} is not installed. Remove its orphaned cache {} ({}) with scull? {}",
+            o.tool.binary(),
+            o.cache.to_string_lossy(),
+            format_bytes(o.reclaimable_bytes),
+            o.not_undoable
+        );
+        if exec::ask_yes_no(input, err, &escape_for_terminal(&question))? {
+            yes.insert(o.tool);
+        }
+    }
+    Ok(yes)
+}
+
+/// Add the orphaned caches of `plan` to `report` (`named`: the tools confirmed with
+/// `--remove-orphaned`), the named tools without a removable orphaned cache, and point the
+/// "left for manual removal" message of a listed orphaned cache at its own section.
+pub fn with_orphaned(
+    report: &mut CleanCachesReport,
+    plan: &QuickCleanPlan,
+    named: &BTreeSet<CacheTool>,
+) {
+    report.orphaned = plan
+        .orphaned
+        .iter()
+        .map(|o| orphaned_line(o, named))
+        .collect();
+    let orphaned: BTreeSet<CacheTool> = plan.orphaned.iter().map(|o| o.tool).collect();
+    report.orphaned_unmatched = named
+        .iter()
+        .filter(|t| !orphaned.contains(t))
+        .map(|t| tool_name(*t).to_owned())
+        .collect();
+    point_at_orphaned(report);
+}
+
+/// A tool that isn't installed but whose cache is listed as orphaned: say so instead of only
+/// "left in place for manual removal".
+fn point_at_orphaned(report: &mut CleanCachesReport) {
+    for s in &mut report.skipped {
+        if s.reason != "not_installed" || !report.orphaned.iter().any(|o| o.tool == s.tool) {
+            continue;
+        }
+        s.message = if report.orphaned_results.iter().any(|r| r.tool == s.tool) {
+            "tool not installed (no trusted binary); its orphaned cache was handled by scull \
+             (see Orphaned caches)"
+                .to_owned()
+        } else {
+            format!(
+                "tool not installed (no trusted binary); scull can remove its orphaned cache \
+                 itself (listed under Orphaned caches, --remove-orphaned {}), or leave it for \
+                 manual removal",
+                s.tool
+            )
+        };
+    }
+}
+
+/// Record what [`QuickClean::remove_orphaned`] did in `report`; returns how many confirmed
+/// removals did not complete (skipped, refused, incomplete or aborted).
+pub fn apply_orphaned(report: &mut CleanCachesReport, removed: &OrphanedReport) -> usize {
+    report.mode = CachesMode::Run;
+    report.next_step = None;
+    let lines: Vec<OrphanedResultLine> = removed
+        .removed
+        .iter()
+        .map(orphaned_removed_line)
+        .chain(removed.skipped.iter().map(orphaned_skipped_line))
+        .collect();
+    let failed = lines.iter().filter(|l| !l.succeeded).count();
+    report.orphaned_results.extend(lines);
+    point_at_orphaned(report);
+    failed
+}
+
+fn unmatched_error(report: &CleanCachesReport) -> Option<ScullError> {
+    (!report.orphaned_unmatched.is_empty()).then(|| {
+        ScullError::new(
+            ErrorKind::PartialFailure,
+            format!(
+                "no removable orphaned cache for {}: see why above; nothing was removed",
+                report.orphaned_unmatched.join(", ")
+            ),
+        )
+    })
+}
+
+/// What to run next after a preview.
+fn preview_next_step(
+    plan: &QuickCleanPlan,
+    named: &BTreeSet<CacheTool>,
+    wipe: bool,
+) -> Option<String> {
+    let selected: Vec<&'static str> = plan
+        .orphaned
+        .iter()
+        .filter(|o| named.contains(&o.tool))
+        .map(|o| tool_name(o.tool))
+        .collect();
+    let unselected: Vec<&'static str> = plan
+        .orphaned
+        .iter()
+        .filter(|o| !named.contains(&o.tool))
+        .map(|o| tool_name(o.tool))
+        .collect();
+    let mut out = Vec::new();
+    let n = plan.tools.len() + selected.len();
+    if n > 0 {
+        let mut cmd = String::from("scull clean caches --confirm");
+        if wipe {
+            cmd.push_str(" --wipe");
+        }
+        for t in &selected {
+            cmd.push_str(" --remove-orphaned ");
+            cmd.push_str(t);
+        }
+        out.push(format!(
+            "Nothing was run. To run {}: {cmd}",
+            if n == 1 { "it" } else { "them" }
+        ));
+    }
+    if !unselected.is_empty() {
+        out.push(format!(
+            "To also remove the orphaned cache of {} (not undoable), add --remove-orphaned \
+             TOOL for each one.",
+            unselected.join(", ")
+        ));
+    }
+    (!out.is_empty()).then(|| out.join("\n"))
+}
+
 /// The preview report of `plan`.
 pub fn preview(plan: &QuickCleanPlan, signals: Vec<SignalUnavailable>) -> CleanCachesReport {
-    CleanCachesReport {
+    let mut r = CleanCachesReport {
         mode: CachesMode::Preview,
         tools: tool_lines(plan),
         skipped: plan.skipped.iter().map(skipped_line).collect(),
         results: Vec::new(),
+        orphaned: Vec::new(),
+        orphaned_results: Vec::new(),
+        orphaned_unmatched: Vec::new(),
         total_reclaimable_bytes: plan.total_reclaimable(),
         not_undoable: NOT_UNDOABLE_NOTE.to_owned(),
         signals_unavailable: signals,
         next_step: None,
-    }
+    };
+    with_orphaned(&mut r, plan, &BTreeSet::new());
+    r
 }
 
 /// Turn `report` into the run report of `ran`; returns how many planned tools did not
@@ -490,6 +888,7 @@ pub fn apply_run(
     report.mode = CachesMode::Run;
     report.next_step = None;
     report.skipped = ran.skipped.iter().map(skipped_line).collect();
+    point_at_orphaned(report);
     report.results = ran.results.iter().map(result_line).collect();
     let planned: BTreeSet<CacheTool> = plan.tools.iter().map(|t| t.tool).collect();
     ran.results.iter().filter(|r| !r.succeeded()).count()
@@ -598,6 +997,51 @@ pub fn render(r: &CleanCachesReport, color: bool) -> String {
             Style::Warn.paint(&escape_for_terminal(&r.not_undoable), color)
         ));
     }
+    if !r.orphaned.is_empty() && r.mode == CachesMode::Preview {
+        out.push_str(&format!(
+            "\n{}\n",
+            Style::Bold.paint(
+                "Orphaned caches (tool not installed; scull can remove them itself, one \
+                 confirmation per tool):",
+                color
+            )
+        ));
+        let mut t = Table::new([
+            ("Tool", Align::Left),
+            ("Reclaimable", Align::Right),
+            ("Cache", Align::Left),
+            ("Confirmed", Align::Left),
+        ]);
+        for o in &r.orphaned {
+            t.push(vec![
+                Cell::text(&o.tool),
+                Cell::bytes(o.reclaimable_bytes),
+                Cell::path(o.cache.as_str()),
+                Cell::text(&if o.selected {
+                    "yes (--remove-orphaned)".to_owned()
+                } else {
+                    format!("no: add --remove-orphaned {}", o.tool)
+                }),
+            ]);
+        }
+        out.push_str(&t.render(color));
+        out.push_str(&format!(
+            "{}\n",
+            Style::Warn.paint(
+                &escape_for_terminal(&format!(
+                    "Removing an orphaned cache deletes the folder. {}",
+                    r.not_undoable
+                )),
+                color
+            )
+        ));
+    }
+    if !r.orphaned_unmatched.is_empty() {
+        out.push_str(&format!(
+            "\nNo removable orphaned cache for: {} (see above for what happens to it instead).\n",
+            r.orphaned_unmatched.join(", ")
+        ));
+    }
     if !r.results.is_empty() {
         let mut t = Table::new([
             ("Tool", Align::Left),
@@ -643,6 +1087,37 @@ pub fn render(r: &CleanCachesReport, color: bool) -> String {
                 for l in x.stderr.iter().take(5) {
                     out.push_str(&format!("    stderr: {l}\n"));
                 }
+            }
+        }
+    }
+    if !r.orphaned_results.is_empty() {
+        out.push_str(&format!(
+            "\n{}\n",
+            Style::Bold.paint("Orphaned caches:", color)
+        ));
+        for x in &r.orphaned_results {
+            let what = match x.outcome.as_str() {
+                "removed" => format!(
+                    "removed {} ({} freed; free space {})",
+                    short(&x.cache.to_path_buf()),
+                    x.freed_bytes.map_or("unknown".into(), format_bytes),
+                    signed_bytes(x.free_space_delta)
+                ),
+                "incomplete" | "aborted" => format!(
+                    "{} {} ({} freed so far)",
+                    x.outcome.to_uppercase(),
+                    short(&x.cache.to_path_buf()),
+                    x.freed_bytes.map_or("unknown".into(), format_bytes)
+                ),
+                other => format!(
+                    "{}: nothing removed from {}",
+                    other.to_uppercase(),
+                    short(&x.cache.to_path_buf())
+                ),
+            };
+            out.push_str(&format!("  {:<13} {what}\n", x.tool));
+            if let Some(m) = &x.message {
+                out.push_str(&format!("  {:<13} {}\n", "", escape_for_terminal(m)));
             }
         }
     }
