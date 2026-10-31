@@ -9,6 +9,11 @@
 //!   the caller (OS APIs live in `scull-platform`).
 //! * Plans, approvals, operations and audit are append-only, enforced by SQLite triggers;
 //!   approvals are single-use and expiring (§13.3).
+//! * History is recorded around every scan from the first one ([`Store::record_scan`]):
+//!   rollups, item lifecycle, free space per volume and scull's own footprint, with cheap
+//!   queries for insights, forecasts and `scull status --short` ([`Store::status_summary`]);
+//!   lifecycle rules, privacy (INS-07) and retention are described in [`history`].
+//!   Retention hooks for background maintenance: [`Store::maintain`] (DATA-06).
 //! * The database location is the caller's job: a local, **non-roaming** per-user data
 //!   directory (never `%APPDATA%\Roaming` on Windows; FX-WIN-12) joined with
 //!   [`DB_FILE_NAME`].
@@ -17,6 +22,7 @@
 
 mod backup;
 mod error;
+pub mod history;
 mod migrate;
 mod perms;
 mod records;
@@ -24,6 +30,11 @@ mod store;
 
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
+pub use history::{
+    Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, MaintenanceReport,
+    RegrowthEvent, RetentionPolicy, RollupPoint, SIZE_CHANGE_FRACTION, SIZE_CHANGE_MIN_BYTES,
+    ScanRecord, ScanRecorded, ScanSummary, StatusSummary, VolumeSample, rollups_from_candidates,
+};
 pub use migrate::{APPLICATION_ID, SCHEMA_VERSION};
 pub use perms::{DefaultPermissions, OwnerOnly};
 pub use records::{

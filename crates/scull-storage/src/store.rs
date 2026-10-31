@@ -173,60 +173,31 @@ impl Store {
                  VALUES (?1, ?2, ?3, 'running')",
                 params![scan.scan_id.as_str(), scan.started_at, roots],
             )?;
-            Ok(())
-        })
-    }
-
-    /// Record the end of a running scan with its totals and byte rollups, atomically.
-    pub fn record_scan_finish(&mut self, finish: &ScanFinish) -> Result<()> {
-        self.write(|tx| {
-            let t = &finish.totals;
-            let changed = tx.execute(
-                "UPDATE scans SET finished_at = ?2, status = ?3, entries_scanned = ?4, \
-                 candidates = ?5, logical_bytes = ?6, allocated_bytes = ?7, \
-                 reclaimable_bytes = ?8, errors = ?9 \
-                 WHERE scan_id = ?1 AND status = 'running'",
-                params![
-                    finish.scan_id.as_str(),
-                    finish.finished_at,
-                    finish.status.as_str(),
-                    int(t.entries_scanned)?,
-                    int(t.candidates)?,
-                    int(t.logical_bytes)?,
-                    int(t.allocated_bytes)?,
-                    int(t.reclaimable_bytes)?,
-                    int(t.errors)?,
-                ],
-            )?;
-            if changed != 1 {
-                return Err(StoreError::rejected(
-                    ErrorKind::NotFound,
-                    format!("no running scan {}", finish.scan_id),
-                ));
-            }
             let mut stmt = tx.prepare(
-                "INSERT INTO scan_rollups (scan_id, category, tier, ecosystem, items, \
-                 logical_bytes, allocated_bytes, reclaimable_bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT OR IGNORE INTO scan_roots (root, started_at, scan_id) \
+                 VALUES (?1, ?2, ?3)",
             )?;
-            for r in &finish.rollups {
+            for root in &scan.roots {
                 stmt.execute(params![
-                    finish.scan_id.as_str(),
-                    serde_name(&r.category)?,
-                    r.tier.to_string(),
-                    r.ecosystem.as_deref().unwrap_or(""),
-                    int(r.items)?,
-                    int(r.logical_bytes)?,
-                    int(r.allocated_bytes)?,
-                    int(r.reclaimable_bytes)?,
+                    root.as_str(),
+                    scan.started_at,
+                    scan.scan_id.as_str()
                 ])?;
             }
             Ok(())
         })
     }
 
+    /// Record the end of a running scan with its totals and byte rollups, atomically.
+    /// [`Store::record_scan`] does this and records the history that goes with it; prefer it.
+    pub fn record_scan_finish(&mut self, finish: &ScanFinish) -> Result<()> {
+        self.write(|tx| finish_scan_tx(tx, finish))
+    }
+
     /// Insert or refresh the lifecycle rows of candidates seen by `scan_id` at `seen_at`.
-    /// First-seen time and scan are kept; everything else reflects the latest sighting.
+    /// First-seen time and scan are kept; everything else reflects the latest sighting. Item
+    /// events and regrowth are recorded as by [`Store::record_scan`], which also marks absent
+    /// items gone and should normally be used instead.
     pub fn upsert_items(
         &mut self,
         scan_id: &scull_core::ScanId,
@@ -234,38 +205,8 @@ impl Store {
         candidates: &[Candidate],
     ) -> Result<()> {
         self.write(|tx| {
-            let mut stmt = tx.prepare(
-                "INSERT INTO items (item_id, path, category, artifact, ecosystem, project_root, \
-                 tier, first_seen_at, last_seen_at, first_seen_scan, last_seen_scan, \
-                 logical_bytes, allocated_bytes, reclaimable_bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?9, ?10, ?11, ?12) \
-                 ON CONFLICT (item_id) DO UPDATE SET \
-                   path = excluded.path, category = excluded.category, \
-                   artifact = excluded.artifact, ecosystem = excluded.ecosystem, \
-                   project_root = excluded.project_root, tier = excluded.tier, \
-                   last_seen_at = max(items.first_seen_at, excluded.last_seen_at), \
-                   last_seen_scan = excluded.last_seen_scan, \
-                   logical_bytes = excluded.logical_bytes, \
-                   allocated_bytes = excluded.allocated_bytes, \
-                   reclaimable_bytes = excluded.reclaimable_bytes",
-            )?;
-            for c in candidates {
-                stmt.execute(params![
-                    c.id.as_str(),
-                    c.path.as_str(),
-                    serde_name(&c.category)?,
-                    c.artifact,
-                    c.project.as_ref().map(|p| p.ecosystem.as_str()),
-                    c.project.as_ref().map(|p| p.root.as_str()),
-                    c.tier.to_string(),
-                    seen_at,
-                    scan_id.as_str(),
-                    int(c.sizes.logical)?,
-                    int(c.sizes.allocated)?,
-                    int(c.sizes.reclaimable.bytes)?,
-                ])?;
-            }
-            Ok(())
+            let mut out = crate::history::ScanRecorded::default();
+            crate::history::observe_items(tx, scan_id, seen_at, candidates, &mut out)
         })
     }
 
@@ -536,7 +477,10 @@ impl Store {
 
     /// Run `f` in a `BEGIN IMMEDIATE` transaction (waits up to the busy timeout for the write
     /// lock up front, so it never fails half-way on lock upgrade) and commit if it succeeds.
-    fn write<T>(&mut self, f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>) -> Result<T> {
+    pub(crate) fn write<T>(
+        &mut self,
+        f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
         let path = &self.path;
         let result = (|| {
             let tx = self
@@ -548,6 +492,57 @@ impl Store {
         })();
         result.map_err(|e| classify(path, e))
     }
+
+    /// Run a read-only query `f`, classifying corruption errors.
+    pub(crate) fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        f(&self.conn).map_err(|e| classify(&self.path, e))
+    }
+}
+
+/// Mark a running scan finished and insert its rollups (inside the caller's transaction).
+pub(crate) fn finish_scan_tx(tx: &rusqlite::Transaction<'_>, finish: &ScanFinish) -> Result<()> {
+    let t = &finish.totals;
+    let changed = tx.execute(
+        "UPDATE scans SET finished_at = ?2, status = ?3, entries_scanned = ?4, \
+             candidates = ?5, logical_bytes = ?6, allocated_bytes = ?7, \
+             reclaimable_bytes = ?8, errors = ?9 \
+             WHERE scan_id = ?1 AND status = 'running'",
+        params![
+            finish.scan_id.as_str(),
+            finish.finished_at,
+            finish.status.as_str(),
+            int(t.entries_scanned)?,
+            int(t.candidates)?,
+            int(t.logical_bytes)?,
+            int(t.allocated_bytes)?,
+            int(t.reclaimable_bytes)?,
+            int(t.errors)?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::rejected(
+            ErrorKind::NotFound,
+            format!("no running scan {}", finish.scan_id),
+        ));
+    }
+    let mut stmt = tx.prepare(
+        "INSERT INTO scan_rollups (scan_id, category, tier, ecosystem, items, \
+             logical_bytes, allocated_bytes, reclaimable_bytes) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
+    for r in &finish.rollups {
+        stmt.execute(params![
+            finish.scan_id.as_str(),
+            serde_name(&r.category)?,
+            r.tier.to_string(),
+            r.ecosystem.as_deref().unwrap_or(""),
+            int(r.items)?,
+            int(r.logical_bytes)?,
+            int(r.allocated_bytes)?,
+            int(r.reclaimable_bytes)?,
+        ])?;
+    }
+    Ok(())
 }
 
 /// Create the parent directory and an empty database file owner-only if they are missing.
@@ -651,13 +646,13 @@ fn classify(path: &Path, e: StoreError) -> StoreError {
     }
 }
 
-fn int(v: u64) -> Result<i64> {
+pub(crate) fn int(v: u64) -> Result<i64> {
     i64::try_from(v)
         .map_err(|_| StoreError::rejected(ErrorKind::Usage, format!("value {v} is too large")))
 }
 
 /// The serde (snake_case) name of a unit enum variant, as used in scull's JSON.
-fn serde_name<T: Serialize>(v: &T) -> Result<String> {
+pub(crate) fn serde_name<T: Serialize>(v: &T) -> Result<String> {
     match serde_json::to_value(v).map_err(internal)? {
         serde_json::Value::String(s) => Ok(s),
         other => Err(StoreError::rejected(
@@ -667,7 +662,7 @@ fn serde_name<T: Serialize>(v: &T) -> Result<String> {
     }
 }
 
-fn internal(e: serde_json::Error) -> StoreError {
+pub(crate) fn internal(e: serde_json::Error) -> StoreError {
     StoreError::rejected(ErrorKind::Internal, e.to_string())
 }
 

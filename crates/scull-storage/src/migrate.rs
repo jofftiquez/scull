@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 /// Embedded migrations; `MIGRATIONS[n]` upgrades schema version `n` to `n + 1`.
 /// Never edit a released migration: append a new one.
-pub(crate) const MIGRATIONS: &[&str] = &[include_str!("migrations/v001_initial.sql")];
+pub(crate) const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/v001_initial.sql"),
+    include_str!("migrations/v002_history.sql"),
+];
 
 /// Newest schema version this binary knows. A database with a higher `user_version` is refused.
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -58,8 +61,8 @@ pub(crate) fn check_compatible(
 /// Before each migration of a database that already has a schema (version ≥ 1), a consistent
 /// copy is written next to it with the online backup API through a separate read-only
 /// connection (WAL lets it read while this connection holds the write lock, so the copy is
-/// exactly the state being migrated). A new, empty database needs no backup. Returns the
-/// backups taken.
+/// exactly the state being migrated). A new, empty database needs no backup, including between
+/// the migrations that create it. Returns the backups taken.
 pub(crate) fn migrate(
     conn: &mut Connection,
     path: &Path,
@@ -74,6 +77,9 @@ pub(crate) fn migrate(
     if user_version(conn)? == target {
         return Ok(backups);
     }
+    // Whether the schema existed before this open. A database this open created from scratch
+    // has nothing worth backing up between its own migrations.
+    let mut had_schema: Option<bool> = None;
     loop {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Re-check under the write lock: another process may have migrated meanwhile.
@@ -83,7 +89,7 @@ pub(crate) fn migrate(
             tx.commit()?;
             return Ok(backups);
         }
-        if version > 0 {
+        if *had_schema.get_or_insert(version > 0) {
             let src = Connection::open_with_flags(
                 path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

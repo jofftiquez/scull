@@ -137,3 +137,147 @@ fn utc_stamp_formats_known_instants() {
     assert_eq!(utc_stamp(1_800_000_000), "20270115T080000Z");
     assert_eq!(utc_stamp(-1), "19691231T235959Z");
 }
+
+// ---- v1 → v2 (history) ---------------------------------------------------------------------
+
+const ITEM_A: &str = "0123456789abcdef0123456789abcdef";
+
+/// A v1 database with one finished scan, one item, free-space samples and a plan.
+fn v1_database(path: &Path) {
+    let s = open_with(path, &MIGRATIONS[..1]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 1);
+    s.conn
+        .execute_batch(&format!(
+            "INSERT INTO scans (scan_id, started_at, finished_at, roots_json, status, \
+               entries_scanned, candidates, logical_bytes, allocated_bytes, reclaimable_bytes, \
+               errors) \
+             VALUES ('scan_S1', 100, 110, '[\"/work\",\"/other\"]', 'completed', 5, 1, 10, 10, \
+                     10, 0); \
+             INSERT INTO scan_rollups (scan_id, category, tier, ecosystem, items, logical_bytes, \
+               allocated_bytes, reclaimable_bytes) \
+             VALUES ('scan_S1', 'project_artifact', 'S0', '', 1, 10, 10, 10); \
+             INSERT INTO items (item_id, path, category, artifact, tier, first_seen_at, \
+               last_seen_at, first_seen_scan, last_seen_scan, logical_bytes, allocated_bytes, \
+               reclaimable_bytes) \
+             VALUES ('{ITEM_A}', '/work/a/target', 'project_artifact', 'Cargo build output', \
+                     'S0', 105, 105, 'scan_S1', 'scan_S1', 10, 10, 10); \
+             INSERT INTO free_space_samples (sampled_at, scan_id, volume, total_bytes, \
+               free_bytes) VALUES (90, NULL, '/', 1000, 600), (110, 'scan_S1', '/', 1000, 500); \
+             INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, expires_at, \
+               item_count, reclaimable_bytes, canonical_json) \
+             VALUES ('plan_P1', '{h}', 'cli', 'scan_S1', 1, 2, 0, 0, '{{}}');",
+            h = "a".repeat(64)
+        ))
+        .unwrap();
+}
+
+#[test]
+fn fx_data_01_v1_database_upgrades_to_v2_with_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v1_database(&path);
+
+    let s = open_with(&path, MIGRATIONS).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 2);
+    assert_eq!(SCHEMA_VERSION, 2);
+    assert_eq!(s.backups_taken().len(), 1);
+    let backup = s.backups_taken()[0].clone();
+    let name = backup.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.ends_with("-v1"), "{name}");
+
+    // The backup is the untouched v1 database.
+    let b = Connection::open(&backup).unwrap();
+    let v: u32 = b
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, 1);
+    let has_v2: i64 = b
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name IN ('scan_roots', 'item_events')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_v2, 0);
+    let items: i64 = b
+        .query_row("SELECT count(*) FROM items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(items, 1);
+
+    // Existing data is carried into the v2 structures.
+    let latest = s
+        .latest_scan(&scull_core::FsPath::from("/work"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.scan_id.as_str(), "scan_S1");
+    assert!(
+        s.latest_scan(&scull_core::FsPath::from("/other"))
+            .unwrap()
+            .is_some()
+    );
+    let item = scull_core::ItemId::try_from(ITEM_A.to_owned()).unwrap();
+    let h = s.item_history(&item).unwrap().unwrap();
+    assert_eq!(h.disappeared_at, None);
+    assert_eq!(h.events.len(), 1, "baseline event");
+    assert_eq!(h.events[0].kind, crate::ItemEventKind::FirstSeen);
+    assert_eq!(h.events[0].at, 105);
+    let st = s.status_summary().unwrap();
+    assert_eq!(st.last_scan.unwrap().safe_reclaimable_bytes, 10);
+    assert_eq!(st.volumes.len(), 1);
+    assert_eq!((st.volumes[0].at, st.volumes[0].free), (110, 500));
+    assert_eq!(
+        s.rollup_history(scull_core::Category::ProjectArtifact, 0)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Append-only invariants survive the migration.
+    for sql in ["UPDATE plans SET origin = 'mcp'", "DELETE FROM plans"] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    s.check_integrity().unwrap();
+    drop(s);
+
+    // Reopening takes no further backup.
+    let again = open_with(&path, MIGRATIONS).unwrap();
+    assert!(again.backups_taken().is_empty());
+    assert_eq!(list_backups(&path).len(), 1);
+}
+
+#[test]
+fn history_queries_use_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("x.db"), &DefaultPermissions).unwrap();
+    let plan = |sql: &str| -> String {
+        let mut stmt = s
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        rows.join(" | ")
+    };
+    let status = plan(
+        "SELECT scan_id FROM scans WHERE status IN ('completed', 'partial') \
+         ORDER BY started_at DESC, scan_id DESC LIMIT 1",
+    );
+    assert!(status.contains("scans_started"), "{status}");
+    assert!(!status.contains("TEMP B-TREE"), "{status}");
+    let latest = plan(
+        "SELECT s.scan_id FROM scan_roots r JOIN scans s ON s.scan_id = r.scan_id \
+         WHERE r.root = '/w' AND s.status IN ('completed', 'partial') \
+         ORDER BY r.started_at DESC, r.scan_id DESC LIMIT 1",
+    );
+    assert!(!latest.contains("TEMP B-TREE"), "{latest}");
+    assert!(!latest.contains("SCAN r"), "{latest}");
+    let free = plan(
+        "SELECT * FROM free_space_samples WHERE volume = '/' AND sampled_at >= 0 \
+         ORDER BY sampled_at, sample_id",
+    );
+    assert!(free.contains("free_space_samples_volume"), "{free}");
+}

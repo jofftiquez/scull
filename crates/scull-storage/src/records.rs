@@ -37,6 +37,17 @@ impl ScanStatus {
             ScanStatus::Cancelled => "cancelled",
         }
     }
+
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        [
+            ScanStatus::Completed,
+            ScanStatus::Partial,
+            ScanStatus::Failed,
+            ScanStatus::Cancelled,
+        ]
+        .into_iter()
+        .find(|v| v.as_str() == s)
+    }
 }
 
 /// Totals of a finished scan.
