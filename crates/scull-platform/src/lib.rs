@@ -61,6 +61,8 @@ mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]
 pub mod remove;
+#[cfg(feature = "delete")]
+pub mod trash;
 mod types;
 pub mod volumes;
 

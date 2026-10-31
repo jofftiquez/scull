@@ -38,6 +38,7 @@ pub mod measure;
 pub mod own_data;
 pub mod quickclean;
 mod revalidate;
+pub mod trash;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{DeleteReport, DeleteTarget, Executor};
