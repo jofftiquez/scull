@@ -291,7 +291,7 @@ pub fn show(dirs: &AppDirs) -> DataShowReport {
     }
 }
 
-fn quarantine_report(q: &[scull_storage::QuarantineEntry]) -> QuarantineReport {
+fn quarantine_report(q: &[scull_storage::QuarantineSummary]) -> QuarantineReport {
     let mut folders: Vec<String> = q
         .iter()
         .map(|e| {

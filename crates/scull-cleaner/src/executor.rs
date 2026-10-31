@@ -145,8 +145,14 @@ impl Executor {
     }
 }
 
-/// Tier and action checks (I-1, D-3, D-28).
+/// Tier and action checks (I-1, D-3, D-28) for the walker: only `Delete`.
 fn check_item(item: &PlanItem) -> Result<(), ScullError> {
+    check_item_for(item, &Action::Delete)
+}
+
+/// Tier and action checks (I-1, D-3, D-28) for an item about to be executed with `executing`,
+/// which must be the item's own action.
+pub(crate) fn check_item_for(item: &PlanItem, executing: &Action) -> Result<(), ScullError> {
     let blocked = |msg: String| {
         Err(ScullError::new(ErrorKind::SafetyBlocked, msg)
             .with_item(item.item_id.clone())
@@ -161,10 +167,11 @@ fn check_item(item: &PlanItem) -> Result<(), ScullError> {
             item.action, item.tier
         ));
     }
-    if item.action != Action::Delete {
+    if item.action != *executing {
         return blocked(format!(
-            "action {:?} is not executed by this build: quarantine (#71), Trash (#73) and \
-             tool-native commands (#78) are not implemented yet",
+            "action {:?} is not executed by this path: the walker deletes (S0 only), quarantine \
+             needs an operation (Executor::execute_plan), and Trash (#73) and tool-native \
+             commands (#78) are not implemented yet",
             item.action
         ));
     }

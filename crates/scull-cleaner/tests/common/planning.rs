@@ -96,7 +96,13 @@ impl Harness {
 
     pub fn execute(&self, fx: &Fixture, plan: &Plan) -> ExecutionReport {
         let report = locked(fx)
-            .execute_plan(plan, &ctx(), &self.revalidation(fx), &CancelToken::new())
+            .execute_plan(
+                plan,
+                &ctx(),
+                &self.revalidation(fx),
+                None,
+                &CancelToken::new(),
+            )
             .unwrap();
         print_report(fx, &report);
         report
@@ -151,13 +157,18 @@ pub fn at<'a>(fx: &Fixture, r: &'a ScanReport, rel_path: &str) -> &'a Candidate 
 
 /// A plan of the candidates at `rels` (as reviewed in the preview).
 pub fn plan(fx: &Fixture, r: &ScanReport, rels: &[&str]) -> Plan {
+    plan_named(fx, r, rels, "01JREVALIDATION")
+}
+
+/// [`plan`] with its own plan ID suffix.
+pub fn plan_named(fx: &Fixture, r: &ScanReport, rels: &[&str], id: &str) -> Plan {
     let items = rels
         .iter()
         .map(|p| PlanItem::from_candidate(at(fx, r, p)).unwrap())
         .collect();
     Plan::new(
         PlanParams {
-            id: PlanId::from_suffix("01JREVALIDATION").unwrap(),
+            id: PlanId::from_suffix(id).unwrap(),
             scan_id: r.scan_id.clone(),
             created_unix: now_unix(),
             ttl_secs: None,
@@ -177,6 +188,15 @@ pub fn print_report(fx: &Fixture, r: &ExecutionReport) {
             ItemOutcome::Deleted(d) => format!("deleted ({:?})", d.outcome),
             ItemOutcome::Skipped(s) => format!("SKIPPED [{}] {s}", s.code()),
             ItemOutcome::Refused(e) => format!("refused [{}] {}", e.kind, e.message),
+            ItemOutcome::Quarantined(q) => format!(
+                "QUARANTINED -> {} ({} B held)",
+                q.quarantine_path
+                    .strip_prefix(fx.base())
+                    .unwrap_or(&q.quarantine_path)
+                    .display(),
+                q.bytes
+            ),
+            ItemOutcome::Blocked { code, message } => format!("BLOCKED [{code}] {message}"),
             ItemOutcome::NotRun => "not run".into(),
             other => format!("{other:?}"),
         };
@@ -210,13 +230,14 @@ pub fn check(
         .map(|i| (i.item_id.clone(), i.executed_tier()))
         .collect();
     let mut inputs = InvariantInputs::new()
-        .plan(
-            report
-                .items
-                .iter()
-                .filter(|i| matches!(i.outcome, ItemOutcome::Deleted(_)))
-                .map(|i| (i.item_id.clone(), i.executed_tier(), Action::Delete)),
-        )
+        .plan(report.items.iter().filter_map(|i| {
+            let action = match i.outcome {
+                ItemOutcome::Deleted(_) => Action::Delete,
+                ItemOutcome::Quarantined(_) => Action::Quarantine,
+                _ => return None,
+            };
+            Some((i.item_id.clone(), i.executed_tier(), action))
+        }))
         .tiers(scan, exec);
     for a in allowed {
         inputs = inputs.allow(*a);

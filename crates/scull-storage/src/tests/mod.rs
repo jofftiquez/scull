@@ -313,8 +313,7 @@ fn fx_data_01_v2_database_upgrades_to_v3_with_backup_and_chains_legacy_audit() {
     let path = dir.path().join(crate::DB_FILE_NAME);
     v2_database_with_audit(&path);
 
-    let s = open_with(&path, MIGRATIONS).unwrap();
-    assert_eq!(SCHEMA_VERSION, 3);
+    let s = open_with(&path, &MIGRATIONS[..3]).unwrap();
     assert_eq!(s.schema_version().unwrap(), 3);
     assert_eq!(s.backups_taken().len(), 1);
     let backup = s.backups_taken()[0].clone();
@@ -366,7 +365,7 @@ fn fx_data_01_v2_database_upgrades_to_v3_with_backup_and_chains_legacy_audit() {
     drop(s);
 
     // Reopening takes no further backup.
-    let again = open_with(&path, MIGRATIONS).unwrap();
+    let again = open_with(&path, &MIGRATIONS[..3]).unwrap();
     assert!(again.backups_taken().is_empty());
     assert_eq!(list_backups(&path).len(), 1);
 }
@@ -400,4 +399,84 @@ fn audit_queries_use_indexes() {
             "{sql}: {p}"
         );
     }
+}
+
+// ---- v3 → v4 (operation targets, quarantine manifest facts) -------------------------------
+
+#[test]
+fn fx_data_01_v3_database_upgrades_to_v4_with_backup_and_keeps_old_manifest_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    {
+        // v3, with a manifest row written the v1 way (no identity facts).
+        let s = open_with(&path, &MIGRATIONS[..3]).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 3);
+        s.conn
+            .execute(
+                "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
+                 quarantine_path, bytes, quarantined_at) \
+                 VALUES ('op_O1', 'item', '/work/a/target', '/work/.scull-quarantine/op_O1/1', \
+                 10, 100)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let s = open_with(&path, MIGRATIONS).unwrap();
+    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(s.schema_version().unwrap(), 4);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v3"), "{name}");
+
+    // The old row is kept but can't be verified, so it is never offered for restore or purge.
+    let n: i64 = s
+        .conn
+        .query_row("SELECT count(*) FROM quarantine_manifest", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    assert!(s.quarantine_entries(None).unwrap().is_empty());
+    // Its recorded paths stay immutable under the v4 trigger, and rows are never deleted.
+    let err = s
+        .conn
+        .execute(
+            "UPDATE quarantine_manifest SET original_path = '/home/me/.ssh'",
+            [],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("immutable"), "{err}");
+    assert!(
+        s.conn
+            .execute("DELETE FROM quarantine_manifest", [])
+            .is_err()
+    );
+    // The new table exists and is append-only.
+    s.conn
+        .execute(
+            "INSERT INTO operation_targets (operation_id, item_id, identity, recorded_at) \
+             VALUES ('op_O1', 'item', '7:1', 1)",
+            [],
+        )
+        .unwrap();
+    for sql in [
+        "UPDATE operation_targets SET identity = '7:2'",
+        "DELETE FROM operation_targets",
+    ] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    assert!(s.verify_all_chains().unwrap().is_empty());
+    s.check_integrity().unwrap();
+    drop(s);
+    assert!(
+        open_with(&path, MIGRATIONS)
+            .unwrap()
+            .backups_taken()
+            .is_empty()
+    );
 }

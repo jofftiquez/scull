@@ -523,13 +523,16 @@ fn purge_refuses_quarantine_contents() {
 fn purge_all_refuses_while_items_are_in_quarantine() {
     let h = Home::new();
     {
-        // No public API writes the manifest yet (#71); the foreign keys are skipped here.
+        // A manifest row as the Executor records it (schema v4 facts included); the plan and
+        // operation rows its foreign keys need are skipped here.
         let conn = rusqlite::Connection::open(db_path(h.home())).expect("open");
         conn.execute_batch(
             "PRAGMA foreign_keys = OFF; \
              INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
-               quarantine_path, bytes, quarantined_at) \
-             VALUES ('op1', 'i1', '/p/a', '/vol/.scull-quarantine/op1/a', 7, 1);",
+               quarantine_path, bytes, quarantined_at, entry_identity, entry_kind, \
+               parent_identity, logical_bytes) \
+             VALUES ('op1', 'i1', '/p/a', '/vol/.scull-quarantine/op1/a', 7, 1, '7:1', 'dir', \
+               '7:2', 7);",
         )
         .expect("insert");
     }

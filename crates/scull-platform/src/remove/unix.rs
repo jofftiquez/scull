@@ -61,7 +61,7 @@ impl Default for Tuning {
 /// `dirfd` itself when `name` is empty. `None` where the kernel or OS cannot tell: then only
 /// `st_dev` is compared (recorded in [`RemoveReport::mount_ids_checked`]).
 #[cfg(target_os = "linux")]
-fn raw_mount_id(dirfd: BorrowedFd<'_>, name: &CStr) -> Option<u64> {
+pub(crate) fn raw_mount_id(dirfd: BorrowedFd<'_>, name: &CStr) -> Option<u64> {
     use rustix::fs::{StatxFlags, statx};
     let flags = if name.is_empty() {
         AtFlags::EMPTY_PATH | AtFlags::SYMLINK_NOFOLLOW
@@ -74,7 +74,7 @@ fn raw_mount_id(dirfd: BorrowedFd<'_>, name: &CStr) -> Option<u64> {
 
 /// macOS (and other Unixes) have no per-mount ID in `stat`; bind mounts don't exist there.
 #[cfg(not(target_os = "linux"))]
-fn raw_mount_id(_dirfd: BorrowedFd<'_>, _name: &CStr) -> Option<u64> {
+pub(crate) fn raw_mount_id(_dirfd: BorrowedFd<'_>, _name: &CStr) -> Option<u64> {
     None
 }
 
@@ -107,7 +107,7 @@ pub(crate) fn mount_ids_supported() -> bool {
 /// Flags for every directory the walker opens below the anchor: never follow a link at the
 /// final component, fail on anything that is not a directory, never block (a FIFO swapped in
 /// cannot hang the walk), never become a controlling terminal, never leak into children.
-fn dir_flags() -> OFlags {
+pub(crate) fn dir_flags() -> OFlags {
     OFlags::RDONLY
         | OFlags::DIRECTORY
         | OFlags::NOFOLLOW
@@ -117,7 +117,7 @@ fn dir_flags() -> OFlags {
 }
 
 /// Retries a call interrupted by a signal (`EINTR`).
-fn retry<T>(mut f: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
+pub(crate) fn retry<T>(mut f: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
     loop {
         match f() {
             Err(Errno::INTR) => continue,
@@ -126,11 +126,11 @@ fn retry<T>(mut f: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<
     }
 }
 
-fn io_err(e: Errno) -> io::Error {
+pub(crate) fn io_err(e: Errno) -> io::Error {
     io::Error::from_raw_os_error(e.raw_os_error())
 }
 
-fn device(st: &Stat) -> u64 {
+pub(crate) fn device(st: &Stat) -> u64 {
     st.st_dev as u64
 }
 
@@ -144,11 +144,11 @@ fn device_of(tuning: &Tuning, st: &Stat, name: &CStr) -> u64 {
     device(st)
 }
 
-fn identity(st: &Stat) -> FileIdentity {
+pub(crate) fn identity(st: &Stat) -> FileIdentity {
     FileIdentity::new(device(st), u128::from(st.st_ino as u64))
 }
 
-fn kind(st: &Stat) -> EntryKind {
+pub(crate) fn kind(st: &Stat) -> EntryKind {
     kind_of(FileType::from_raw_mode(st.st_mode as _))
 }
 

@@ -58,6 +58,7 @@ const TABLES: &[TableSql] = &[
     table!("audit", "seq"),
     table!("audit_v1", "seq"),
     table!("quarantine_manifest", "entry_id"),
+    table!("operation_targets", "operation_id, item_id"),
     table!("events", "event_id"),
     table!("metrics", "metric_id"),
 ];
@@ -82,6 +83,7 @@ pub const EXPORT_TABLES: &[&str] = &[
     "audit",
     "audit_v1",
     "quarantine_manifest",
+    "operation_targets",
     "events",
     "metrics",
 ];
@@ -107,7 +109,7 @@ pub trait ExportSink {
 
 /// A quarantine manifest entry that is neither restored nor purged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct QuarantineEntry {
+pub struct QuarantineSummary {
     /// Operation that quarantined it.
     pub operation_id: String,
     /// Path the item was moved from, as recorded.
@@ -168,7 +170,7 @@ impl Store {
 
     /// Quarantine manifest entries neither restored nor purged, oldest first. Deleting the
     /// database while any exist would lose the only record of where those items came from.
-    pub fn quarantine_outstanding(&self) -> Result<Vec<QuarantineEntry>> {
+    pub fn quarantine_outstanding(&self) -> Result<Vec<QuarantineSummary>> {
         self.read_only(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT operation_id, original_path, quarantine_path, bytes \
@@ -176,7 +178,7 @@ impl Store {
                  WHERE restored_at IS NULL AND purged_at IS NULL ORDER BY entry_id",
             )?;
             let rows = stmt.query_map([], |r| {
-                Ok(QuarantineEntry {
+                Ok(QuarantineSummary {
                     operation_id: r.get(0)?,
                     original_path: r.get(1)?,
                     quarantine_path: r.get(2)?,
@@ -354,25 +356,29 @@ mod tests {
     #[test]
     fn outstanding_quarantine_excludes_restored_and_purged_entries() {
         let (_d, s) = store();
-        // No public API writes the manifest yet (#71): insert directly, without the plan and
-        // operation rows the foreign keys would require.
+        // Insert directly, without the plan and operation rows the foreign keys would require.
+        // Entries start held (schema v4); purge and restore are set afterwards, once.
+        let facts = "entry_identity, entry_kind, parent_identity, logical_bytes";
+        let vals = "'7:1', 'dir', '7:2', 1";
         s.conn
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA foreign_keys = OFF; \
                  INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
-                   quarantine_path, bytes, quarantined_at) VALUES ('op1', 'i1', '/p/a', '/q/a', 7, 1); \
-                 INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
-                   quarantine_path, bytes, quarantined_at, purged_at) VALUES ('op1', 'i2', '/p/b', '/q/b', 9, 1, 2); \
-                 INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
-                   quarantine_path, bytes, quarantined_at, restored_at, restored_to) \
-                   VALUES ('op1', 'i3', '/p/c', '/q/c', 9, 1, 2, '/p/c'); \
-                 PRAGMA foreign_keys = ON;",
-            )
+                   quarantine_path, bytes, quarantined_at, {facts}) \
+                   VALUES ('op1', 'i1', '/p/a', '/q/a', 7, 1, {vals}), \
+                          ('op1', 'i2', '/p/b', '/q/b', 9, 1, {vals}), \
+                          ('op1', 'i3', '/p/c', '/q/c', 9, 1, {vals}); \
+                 UPDATE quarantine_manifest SET purged_at = 2, purged_bytes = 9 \
+                   WHERE item_id = 'i2'; \
+                 UPDATE quarantine_manifest SET restored_at = 2, restored_to = '/p/c' \
+                   WHERE item_id = 'i3'; \
+                 PRAGMA foreign_keys = ON;"
+            ))
             .unwrap();
         let out = s.quarantine_outstanding().unwrap();
         assert_eq!(
             out,
-            vec![QuarantineEntry {
+            vec![QuarantineSummary {
                 operation_id: "op1".into(),
                 original_path: "/p/a".into(),
                 quarantine_path: "/q/a".into(),

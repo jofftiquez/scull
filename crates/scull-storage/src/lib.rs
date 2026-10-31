@@ -31,6 +31,7 @@ mod export;
 pub mod history;
 mod migrate;
 mod perms;
+pub mod quarantine;
 mod records;
 mod store;
 
@@ -43,7 +44,7 @@ pub use audit::{
 };
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
-pub use export::{EXPORT_TABLES, ExportSink, QuarantineEntry, TableCount};
+pub use export::{EXPORT_TABLES, ExportSink, QuarantineSummary, TableCount};
 pub use history::{
     Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, MaintenanceReport,
     RegrowthEvent, RetentionPolicy, RollupPoint, SIZE_CHANGE_FRACTION, SIZE_CHANGE_MIN_BYTES,
@@ -51,6 +52,7 @@ pub use history::{
 };
 pub use migrate::{APPLICATION_ID, SCHEMA_VERSION};
 pub use perms::{DefaultPermissions, OwnerOnly};
+pub use quarantine::{NewQuarantineEntry, QuarantineEntry, identity_key, parse_identity_key};
 pub use records::{
     Approval, ApprovalMethod, NewApproval, OperationStart, Rollup, ScanFinish, ScanStart,
     ScanStatus, ScanTotals,

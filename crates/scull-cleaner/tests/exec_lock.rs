@@ -109,7 +109,13 @@ fn fx_race_05_two_executors_start_at_once_second_exits_6() {
         ErrorKind::LockHeld
     );
     let r = winner
-        .execute_plan(&plan, &ctx(), &h.revalidation(&fx), &CancelToken::new())
+        .execute_plan(
+            &plan,
+            &ctx(),
+            &h.revalidation(&fx),
+            None,
+            &CancelToken::new(),
+        )
         .unwrap();
     print_report(&fx, &r);
     assert_executed(&fx, &r, "app/target");
@@ -151,7 +157,13 @@ fn fx_race_05_other_process_holds_lock_exit_6_then_released_on_death() {
     let scan = h.scan(&fx);
     let plan = plan(&fx, &scan, &["app/target"]);
     let r = exec
-        .execute_plan(&plan, &ctx(), &h.revalidation(&fx), &CancelToken::new())
+        .execute_plan(
+            &plan,
+            &ctx(),
+            &h.revalidation(&fx),
+            None,
+            &CancelToken::new(),
+        )
         .unwrap();
     assert_executed(&fx, &r, "app/target");
     check(&fx, &plan, &r, &["app/target"]);
@@ -183,7 +195,13 @@ fn execute_plan_refuses_without_the_lock() {
     let scan = h.scan(&fx);
     let plan = plan(&fx, &scan, &["app/target"]);
     let e = Executor::new()
-        .execute_plan(&plan, &ctx(), &h.revalidation(&fx), &CancelToken::new())
+        .execute_plan(
+            &plan,
+            &ctx(),
+            &h.revalidation(&fx),
+            None,
+            &CancelToken::new(),
+        )
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::SafetyBlocked);
     fx.check_invariants(&InvariantInputs::new()).assert_ok();

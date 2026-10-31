@@ -158,7 +158,8 @@ fn quarantine_manifest_paths_are_immutable_and_rows_never_deleted() {
     let c = raw(&path);
     c.execute(
         "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, quarantine_path, \
-         bytes, quarantined_at) VALUES ('op_O1', 'i', '/work/p1/target', '/q/1', 10, 5)",
+         bytes, quarantined_at, entry_identity, entry_kind, parent_identity, logical_bytes) \
+         VALUES ('op_O1', 'i', '/work/p1/target', '/q/1', 10, 5, '7:1', 'dir', '7:2', 8)",
         [],
     )
     .unwrap();

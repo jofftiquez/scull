@@ -17,6 +17,14 @@
 //! * [`Executor::acquire`] / [`ExecutionLock`]: the single execution lock per user account
 //!   (SAFE-09), an OS file lock held for the Executor's whole lifetime; a second executor fails
 //!   with `LockHeld` (exit 6) or waits up to a timeout. Plans run only under the lock.
+//! * [`Executor::begin_operation`] / [`Operation`]: one executed operation. It refuses a plan
+//!   whose targets another operation touched since the plan was created (SAFE-09, exit 4),
+//!   records the operation and its target identities, audits every item outcome (SAFE-08) and
+//!   owns the operation's quarantine folders.
+//! * Quarantine (D-3, SAFE-16): S1/S2 items move into `.scull-quarantine/<operation-id>/` on
+//!   their own volume by one atomic no-replace rename, recorded in the database manifest of
+//!   record; where that is impossible they are blocked, never deleted.
+//!   [`Executor::purge_quarantine`] removes expired entries and records the freed bytes.
 //!
 //! # Not wired into any interface yet
 //!
@@ -25,17 +33,19 @@
 //! stub. Missing today, each tracked by its issue:
 //!
 //! * write-ahead journal and crash recovery (SAFE-19): P2-EXEC-08, #74;
-//! * append-only audit log (SAFE-08): P2-EXEC-09, #75;
 //! * measured free-space delta (PHY-02): P2-EXEC-10, #76;
 //! * refusal to run elevated and type-to-confirm for permanent deletes (SAFE-14, SAFE-07):
 //!   P2-EXEC-11, #77;
-//! * quarantine, Trash and tool-native actions: P2-EXEC-05 #71, P2-EXEC-07 #73, P2-QC-01 #78.
+//! * the Trash fallback: P2-EXEC-07, #73;
+//! * Windows quarantine moves (handle-based rename, with the Windows walker's helpers).
 
 mod execution;
 mod executor;
 mod lock;
 pub mod measure;
+mod operation;
 pub mod own_data;
+mod quarantine;
 pub mod quickclean;
 mod revalidate;
 pub mod trash;
@@ -43,7 +53,13 @@ pub mod trash;
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{DeleteReport, DeleteTarget, Executor};
 pub use lock::{ExecutionLock, LockOptions};
+pub use operation::Operation;
+pub use quarantine::{
+    DEFAULT_RETENTION_SECS, DISK_MANIFEST, PurgeOutcome, PurgePolicy, PurgeReport,
+    QuarantineSettings, Quarantined,
+};
 pub use revalidate::{Revalidated, Revalidation, Skip};
+pub use scull_platform::quarantine::QUARANTINE_DIR_NAME;
 pub use scull_platform::remove::{
     AbortReason, Anomaly, RemoveOutcome, RemoveReport, RemovedCounts, SkipReason, SkippedEntry,
     VERIFY_EVERY, WalkEvent,

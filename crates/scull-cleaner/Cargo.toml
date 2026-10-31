@@ -20,6 +20,7 @@ scull-platform = { workspace = true, features = ["delete"] }
 scull-safety.workspace = true
 # Read-only pipeline, used to re-derive candidates at revalidation (SAFE-05, SAFE-11).
 scull-engine.workspace = true
+serde_json.workspace = true
 scull-storage.workspace = true
 # Quick Clean (P2-QC-01): located caches and their commands, cache sizes, cancellation, and a
 # private sandbox folder for the sanitized tool environment.

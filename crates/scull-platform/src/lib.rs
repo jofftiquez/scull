@@ -30,6 +30,9 @@
 //!   SAFE-10): the handle-relative, no-follow removal walker the Executor deletes through
 //!   (SAFE-04, SAFE-05, SAFE-18): `openat`/`unlinkat` on Unix (P2-EXEC-01), `NtCreateFile`
 //!   relative opens and handle-based deletion on Windows (P2-EXEC-02).
+//! * `quarantine` (same feature): atomic, same-volume, no-replace moves for quarantine and
+//!   restore (`renameat2(RENAME_NOREPLACE)` / `renameatx_np(RENAME_EXCL)`; D-3, SAFE-16).
+//!   Unix only for now (Windows: `Unsupported`, the item is blocked).
 //! * `exec_lock` (same feature): the per-user execution lock, an OS file lock (`flock` /
 //!   `LockFileEx`) released by the OS when its holder exits (SAFE-09, P2-EXEC-04).
 //!
@@ -59,6 +62,8 @@ mod error;
 pub mod exec_lock;
 mod native;
 pub mod owner_only;
+#[cfg(feature = "delete")]
+pub mod quarantine;
 #[cfg(feature = "delete")]
 pub mod remove;
 #[cfg(feature = "delete")]

@@ -229,7 +229,7 @@ fn expired_or_foreign_plan_is_rejected_before_any_item() {
         ..ctx()
     };
     let e = locked(&fx)
-        .execute_plan(&plan, &late, &reval, &CancelToken::new())
+        .execute_plan(&plan, &late, &reval, None, &CancelToken::new())
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::PlanExpired);
     let foreign = PlanContext {
@@ -237,7 +237,7 @@ fn expired_or_foreign_plan_is_rejected_before_any_item() {
         ..ctx()
     };
     let e = locked(&fx)
-        .execute_plan(&plan, &foreign, &reval, &CancelToken::new())
+        .execute_plan(&plan, &foreign, &reval, None, &CancelToken::new())
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::PlanForeign);
     assert_eq!(e.exit_code().as_i32(), 4);
@@ -253,7 +253,7 @@ fn item_outside_the_trusted_roots_is_skipped() {
     let plan = plan(&fx, &scan, &["app/target"]);
     let reval = Revalidation::new(&h.engine, &[fx.root().join("lib")]).with_request(request());
     let r = locked(&fx)
-        .execute_plan(&plan, &ctx(), &reval, &CancelToken::new())
+        .execute_plan(&plan, &ctx(), &reval, None, &CancelToken::new())
         .unwrap();
     print_report(&fx, &r);
     assert_eq!(skip_of(&fx, &r, "app/target"), &Skip::OutsideRoots);
@@ -270,7 +270,7 @@ fn cancelled_operation_runs_no_item() {
     let cancel = CancelToken::new();
     cancel.cancel();
     let r = locked(&fx)
-        .execute_plan(&plan, &ctx(), &h.revalidation(&fx), &cancel)
+        .execute_plan(&plan, &ctx(), &h.revalidation(&fx), None, &cancel)
         .unwrap();
     assert!(r.cancelled);
     assert!(r.items.iter().all(|i| i.outcome == ItemOutcome::NotRun));

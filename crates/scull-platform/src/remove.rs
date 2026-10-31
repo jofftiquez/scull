@@ -177,7 +177,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-mod unix;
+pub(crate) mod unix;
 #[cfg(windows)]
 mod windows;
 // Pure decision tables of the Windows walker; compiled for tests on every OS.
@@ -657,7 +657,7 @@ fn imp(
 
 /// The relative path as plain names, or why it is not acceptable.
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
-fn plain_components(relative: &Path) -> Result<Vec<&std::ffi::OsStr>, RemoveError> {
+pub(crate) fn plain_components(relative: &Path) -> Result<Vec<&std::ffi::OsStr>, RemoveError> {
     use std::path::Component;
     let mut out = Vec::new();
     for c in relative.components() {
