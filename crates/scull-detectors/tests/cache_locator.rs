@@ -193,6 +193,35 @@ fn yarn_berry(fx: &mut Fixture, dir: &str) {
         .unwrap();
 }
 
+fn pip_cache(fx: &mut Fixture, dir: &str) {
+    fx.file_of_size(format!("{dir}/http-v2/a/b/c/d/e/abcdef.body"), 2048)
+        .unwrap()
+        .file_of_size(
+            format!("{dir}/wheels/ab/cd/ef/requests-2.32.3-py3-none-any.whl"),
+            1024,
+        )
+        .unwrap();
+}
+
+fn uv_cache(fx: &mut Fixture, dir: &str) {
+    fx.file(format!("{dir}/CACHEDIR.TAG"), scull_fixtures::CACHEDIR_TAG)
+        .unwrap()
+        .file(format!("{dir}/.gitignore"), "*\n")
+        .unwrap()
+        .file_of_size(
+            format!("{dir}/archive-v0/abc123/requests/__init__.py"),
+            2048,
+        )
+        .unwrap()
+        .file(format!("{dir}/simple-v16/pypi/requests.rkyv"), "index")
+        .unwrap()
+        .file(
+            format!("{dir}/wheels-v5/pypi/requests/2.32.3-py3-none-any.msgpack"),
+            "meta",
+        )
+        .unwrap();
+}
+
 fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
     match tool {
         CacheTool::Npm => npm_cache(fx, dir),
@@ -200,6 +229,8 @@ fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
         CacheTool::Bun => bun_cache(fx, dir),
         CacheTool::YarnClassic => yarn_classic(fx, dir),
         CacheTool::YarnBerry => yarn_berry(fx, dir),
+        CacheTool::Pip => pip_cache(fx, dir),
+        CacheTool::Uv => uv_cache(fx, dir),
     }
 }
 
@@ -212,6 +243,8 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Bun, "home/.bun/install/cache"),
             (CacheTool::YarnClassic, "home/.cache/yarn"),
             (CacheTool::YarnBerry, "home/.yarn/berry/cache"),
+            (CacheTool::Pip, "home/.cache/pip"),
+            (CacheTool::Uv, "home/.cache/uv"),
         ],
         Os::Macos => vec![
             (CacheTool::Npm, "home/.npm/_cacache"),
@@ -219,6 +252,8 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Bun, "home/.bun/install/cache"),
             (CacheTool::YarnClassic, "home/Library/Caches/Yarn"),
             (CacheTool::YarnBerry, "home/.yarn/berry/cache"),
+            (CacheTool::Pip, "home/Library/Caches/pip"),
+            (CacheTool::Uv, "home/.cache/uv"),
         ],
         Os::Windows => vec![
             (CacheTool::Npm, "home/AppData/Local/npm-cache/_cacache"),
@@ -226,6 +261,8 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Bun, "home/.bun/install/cache"),
             (CacheTool::YarnClassic, "home/AppData/Local/Yarn/Cache"),
             (CacheTool::YarnBerry, "home/AppData/Local/Yarn/Berry/cache"),
+            (CacheTool::Pip, "home/AppData/Local/pip/Cache"),
+            (CacheTool::Uv, "home/AppData/Local/uv/cache"),
         ],
     }
 }
@@ -253,6 +290,8 @@ fn default_layout_for(os: Os) {
     let want: Vec<(CacheTool, String)> = mine.iter().map(|(t, d)| (*t, (*d).to_owned())).collect();
     assert_eq!(found_rel(&fx, &scan), want, "{os:?} layout");
 
+    let want_len = scan.found.len();
+    assert_eq!(want_len, CacheTool::ALL.len(), "every tool found");
     let mut candidates = Vec::new();
     for c in scan.found {
         assert!(c.recognized, "{} layout recognized", c.tool);
@@ -289,7 +328,7 @@ fn default_layout_for(os: Os) {
                 .unwrap()
                 .items()
                 .len(),
-            5
+            want_len
         );
     }
     check(&fx, &plan_inputs(&candidates));
@@ -1097,5 +1136,348 @@ fn same_folder_reached_twice_is_reported_once() {
     let scan = locate(&e);
     assert_eq!(scan.found.len(), 1);
     assert_eq!(scan.found[0].tool, CacheTool::YarnClassic);
+    check(&fx, &plan_inputs(&[]));
+}
+
+// ---------------------------------------------------------------------------------------------
+// pip and uv (P4-DET-02, PRD §10.5 / QC-03)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn pip_and_uv_commands_and_notes() {
+    let mut fx = Fixture::new().unwrap();
+    pip_cache(&mut fx, "home/.cache/pip");
+    uv_cache(&mut fx, "home/.cache/uv");
+    fx.checkpoint().unwrap();
+    let scan = locate(&env(&fx, Os::Linux, &[]));
+    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+    let pip = the(&scan, CacheTool::Pip).clone();
+    assert_eq!(
+        pip.markers
+            .iter()
+            .map(|m| rel(fx.root(), m))
+            .collect::<Vec<_>>(),
+        ["home/.cache/pip/http-v2", "home/.cache/pip/wheels"]
+    );
+    let uv = the(&scan, CacheTool::Uv).clone();
+    assert_eq!(
+        uv.markers
+            .iter()
+            .map(|m| rel(fx.root(), m))
+            .collect::<Vec<_>>(),
+        [
+            "home/.cache/uv/archive-v0",
+            "home/.cache/uv/simple-v16",
+            "home/.cache/uv/wheels-v5"
+        ]
+    );
+    assert_eq!(pip.activity_processes(), ["pip", "pip3"]);
+    assert_eq!(uv.activity_processes(), ["uv", "uvx"]);
+
+    let pc = pip.into_candidate(&idle(), None);
+    let uc = uv.into_candidate(&idle(), None);
+    for c in [&pc, &uc] {
+        assert!(c.is_consistent());
+        assert_eq!(c.category, Category::PackageCache);
+        assert_eq!(c.tier, expected(Tier::S1), "{} is S1 (QC-02)", c.artifact);
+        assert!(codes(c).contains(&ReasonCode::PackageCache));
+    }
+    assert_eq!(pc.rule.id, "pip.cache");
+    assert_eq!(uc.rule.id, "uv.cache");
+    if identity_available() {
+        assert_eq!(pc.action, tool_action("pip", &["cache", "purge"]));
+        assert_eq!(uc.action, tool_action("uv", &["cache", "prune"]));
+    }
+    assert!(
+        notes(&pc)
+            .iter()
+            .any(|n| n.contains("`pip cache purge` (removes everything)"))
+    );
+    assert!(notes(&uc).iter().any(|n| n.contains(
+        "`uv cache prune` (removes unused entries); full wipe alternative: `uv cache clean`"
+    )));
+    check(&fx, &plan_inputs(&[pc, uc]));
+}
+
+/// pip: `PIP_CACHE_DIR` beats the user config, which beats the default, on every OS layout.
+#[test]
+fn pip_env_beats_user_config_beats_default() {
+    for os in ALL_OS {
+        let mut fx = Fixture::new().unwrap();
+        let default = default_layout(os)
+            .into_iter()
+            .find(|(t, _)| *t == CacheTool::Pip)
+            .unwrap()
+            .1;
+        pip_cache(&mut fx, default);
+        pip_cache(&mut fx, "from-config/pip");
+        pip_cache(&mut fx, "from-env/pip");
+        let conf = match os {
+            Os::Linux => "home/.config/pip/pip.conf",
+            Os::Macos => "home/Library/Application Support/pip/pip.conf",
+            Os::Windows => "home/AppData/Roaming/pip/pip.ini",
+        };
+        fx.file(
+            conf,
+            format!(
+                "[install]\ncache-dir = /never/this\n[global]\ncache-dir = {}\n",
+                abs(&fx, "from-config/pip")
+            ),
+        )
+        .unwrap()
+        .checkpoint()
+        .unwrap();
+
+        let e = env(&fx, os, &[("PIP_CACHE_DIR", abs(&fx, "from-env/pip"))]);
+        let c = the(&locate(&e), CacheTool::Pip).clone();
+        assert_eq!(rel(fx.root(), &c.path), "from-env/pip", "{os:?}");
+        assert_eq!(
+            c.source,
+            CacheSource::Env {
+                var: "PIP_CACHE_DIR".into()
+            }
+        );
+
+        let c = the(&locate(&env(&fx, os, &[])), CacheTool::Pip).clone();
+        assert_eq!(rel(fx.root(), &c.path), "from-config/pip", "{os:?}");
+        assert_eq!(
+            c.source,
+            CacheSource::Config {
+                file: fx.path(conf).unwrap(),
+                key: "cache-dir".into()
+            }
+        );
+
+        // `PIP_CONFIG_FILE=/dev/null` loads no file at all: back to the default.
+        let devnull = if os == Os::Windows {
+            "nul"
+        } else {
+            "/dev/null"
+        };
+        let e = env(&fx, os, &[("PIP_CONFIG_FILE", devnull.into())]);
+        let c = the(&locate(&e), CacheTool::Pip).clone();
+        assert_eq!(rel(fx.root(), &c.path), default, "{os:?}");
+        assert_eq!(c.source, CacheSource::Default);
+        check(&fx, &plan_inputs(&[]));
+    }
+}
+
+#[test]
+fn pip_config_file_variable_and_legacy_file() {
+    let mut fx = Fixture::new().unwrap();
+    pip_cache(&mut fx, "home/.cache/pip");
+    pip_cache(&mut fx, "legacy/pip");
+    pip_cache(&mut fx, "envfile/pip");
+    let (legacy, envfile) = (abs(&fx, "legacy/pip"), abs(&fx, "envfile/pip"));
+    fx.file(
+        "home/.pip/pip.conf",
+        format!("[global]\ncache_dir = {legacy}\n"),
+    )
+    .unwrap()
+    .file(
+        "conf/custom.conf",
+        format!("[global]\ncache-dir = {envfile}\n"),
+    )
+    .unwrap()
+    .file("conf/empty.conf", "[global]\ntimeout = 5\n")
+    .unwrap()
+    .checkpoint()
+    .unwrap();
+    // Only the legacy file sets it.
+    let c = the(&locate(&env(&fx, Os::Linux, &[])), CacheTool::Pip).clone();
+    assert_eq!(rel(fx.root(), &c.path), "legacy/pip");
+    // An existing PIP_CONFIG_FILE is the only file pip reads.
+    let e = env(
+        &fx,
+        Os::Linux,
+        &[("PIP_CONFIG_FILE", abs(&fx, "conf/custom.conf"))],
+    );
+    assert_eq!(
+        rel(fx.root(), &the(&locate(&e), CacheTool::Pip).path),
+        "envfile/pip"
+    );
+    let e = env(
+        &fx,
+        Os::Linux,
+        &[("PIP_CONFIG_FILE", abs(&fx, "conf/empty.conf"))],
+    );
+    assert_eq!(
+        rel(fx.root(), &the(&locate(&e), CacheTool::Pip).path),
+        "home/.cache/pip",
+        "the per-user files are skipped"
+    );
+    // A missing one is ignored (the per-user files apply); a relative one is unknown: refused.
+    let e = env(
+        &fx,
+        Os::Linux,
+        &[("PIP_CONFIG_FILE", abs(&fx, "conf/missing.conf"))],
+    );
+    assert_eq!(
+        rel(fx.root(), &the(&locate(&e), CacheTool::Pip).path),
+        "legacy/pip"
+    );
+    let e = env(&fx, Os::Linux, &[("PIP_CONFIG_FILE", "pip.conf".into())]);
+    let scan = locate(&e);
+    assert!(scan.found.iter().all(|c| c.tool != CacheTool::Pip));
+    assert_eq!(scan.refused[0].tool, CacheTool::Pip);
+    check(&fx, &plan_inputs(&[]));
+}
+
+/// uv: `UV_CACHE_DIR` beats `cache-dir` in the user `uv.toml`, which beats the default.
+#[test]
+fn uv_env_beats_user_config_beats_default() {
+    for os in ALL_OS {
+        let mut fx = Fixture::new().unwrap();
+        let default = default_layout(os)
+            .into_iter()
+            .find(|(t, _)| *t == CacheTool::Uv)
+            .unwrap()
+            .1;
+        uv_cache(&mut fx, default);
+        uv_cache(&mut fx, "from-config/uv");
+        uv_cache(&mut fx, "from-env/uv");
+        let conf = match os {
+            Os::Linux | Os::Macos => "home/.config/uv/uv.toml",
+            Os::Windows => "home/AppData/Roaming/uv/uv.toml",
+        };
+        // A TOML literal string: Windows paths need no escaping.
+        fx.file(
+            conf,
+            format!(
+                "cache-dir = '{}'\n[pip]\nindex-url = 'https://example.invalid/simple'\n",
+                abs(&fx, "from-config/uv")
+            ),
+        )
+        .unwrap()
+        .file("other/uv.toml", "native-tls = true\n")
+        .unwrap()
+        .checkpoint()
+        .unwrap();
+
+        let e = env(&fx, os, &[("UV_CACHE_DIR", abs(&fx, "from-env/uv"))]);
+        assert_eq!(
+            rel(fx.root(), &the(&locate(&e), CacheTool::Uv).path),
+            "from-env/uv",
+            "{os:?}"
+        );
+        let c = the(&locate(&env(&fx, os, &[])), CacheTool::Uv).clone();
+        assert_eq!(rel(fx.root(), &c.path), "from-config/uv", "{os:?}");
+        assert_eq!(
+            c.source,
+            CacheSource::Config {
+                file: fx.path(conf).unwrap(),
+                key: "cache-dir".into()
+            }
+        );
+        // UV_CONFIG_FILE replaces the per-user file.
+        let e = env(&fx, os, &[("UV_CONFIG_FILE", abs(&fx, "other/uv.toml"))]);
+        assert_eq!(
+            rel(fx.root(), &the(&locate(&e), CacheTool::Uv).path),
+            default,
+            "{os:?}"
+        );
+        check(&fx, &plan_inputs(&[]));
+    }
+}
+
+#[test]
+fn uv_unparsable_or_unreadable_config_refuses_uv() {
+    let mut fx = Fixture::new().unwrap();
+    uv_cache(&mut fx, "home/.cache/uv");
+    pip_cache(&mut fx, "home/.cache/pip");
+    fx.file("home/.config/uv/uv.toml", "cache-dir = [\n")
+        .unwrap()
+        .checkpoint()
+        .unwrap();
+    let scan = locate(&env(&fx, Os::Linux, &[]));
+    assert_eq!(
+        scan.refused.iter().map(|r| r.tool).collect::<Vec<_>>(),
+        [CacheTool::Uv]
+    );
+    assert!(scan.refused[0].reason.contains("can't be parsed"));
+    assert!(
+        scan.found.iter().any(|c| c.tool == CacheTool::Pip),
+        "other tools are unaffected"
+    );
+    check(&fx, &plan_inputs(&[]));
+
+    let mut fx = Fixture::new().unwrap();
+    uv_cache(&mut fx, "home/.cache/uv");
+    fx.dir("home/.config/uv/uv.toml")
+        .unwrap()
+        .checkpoint()
+        .unwrap();
+    let scan = locate(&env(&fx, Os::Linux, &[]));
+    assert_eq!(scan.refused[0].tool, CacheTool::Uv);
+    assert!(scan.found.is_empty());
+    check(&fx, &plan_inputs(&[]));
+}
+
+/// T-23 / QC-05: a pip or uv location pointing at home or a shared folder refuses the tool.
+#[test]
+fn pip_and_uv_redirects_to_home_or_shared_folders_are_refused() {
+    let mut fx = Fixture::new().unwrap();
+    pip_cache(&mut fx, "home/.cache/pip");
+    uv_cache(&mut fx, "home/.cache/uv");
+    fx.file(
+        "home/.config/uv/uv.toml",
+        format!("cache-dir = '{}'\n", abs(&fx, "home/.cache")),
+    )
+    .unwrap()
+    .checkpoint()
+    .unwrap();
+    let e = env(&fx, Os::Linux, &[("PIP_CACHE_DIR", abs(&fx, "home"))]);
+    let scan = locate(&e);
+    assert!(scan.found.is_empty(), "{:?}", scan.found);
+    let refused: Vec<(CacheTool, &str)> = scan
+        .refused
+        .iter()
+        .map(|r| (r.tool, r.reason.as_str()))
+        .collect();
+    assert_eq!(refused.len(), 2);
+    assert_eq!(refused[0].0, CacheTool::Pip);
+    assert!(refused[0].1.contains("home folder"));
+    assert_eq!(refused[1].0, CacheTool::Uv);
+    assert!(refused[1].1.contains("shared folder"));
+    check(&fx, &plan_inputs(&[]));
+}
+
+#[test]
+fn pip_and_uv_xdg_and_windows_variables() {
+    let mut fx = Fixture::new().unwrap();
+    pip_cache(&mut fx, "xdg-cache/pip");
+    uv_cache(&mut fx, "xdg-cache/uv");
+    pip_cache(&mut fx, "lad/pip/Cache");
+    uv_cache(&mut fx, "lad/uv/cache");
+    fx.checkpoint().unwrap();
+    let e = env(&fx, Os::Linux, &[("XDG_CACHE_HOME", abs(&fx, "xdg-cache"))]);
+    let scan = locate(&e);
+    assert_eq!(
+        rel(fx.root(), &the(&scan, CacheTool::Pip).path),
+        "xdg-cache/pip"
+    );
+    assert_eq!(
+        rel(fx.root(), &the(&scan, CacheTool::Uv).path),
+        "xdg-cache/uv"
+    );
+    // macOS: uv honours XDG_CACHE_HOME too; pip uses ~/Library/Caches.
+    let scan = locate(&env(
+        &fx,
+        Os::Macos,
+        &[("XDG_CACHE_HOME", abs(&fx, "xdg-cache"))],
+    ));
+    assert_eq!(
+        rel(fx.root(), &the(&scan, CacheTool::Uv).path),
+        "xdg-cache/uv"
+    );
+    assert!(scan.found.iter().all(|c| c.tool != CacheTool::Pip));
+    let scan = locate(&env(&fx, Os::Windows, &[("LOCALAPPDATA", abs(&fx, "lad"))]));
+    assert_eq!(
+        found_rel(&fx, &scan),
+        [
+            (CacheTool::Pip, "lad/pip/Cache".to_owned()),
+            (CacheTool::Uv, "lad/uv/cache".to_owned())
+        ]
+    );
     check(&fx, &plan_inputs(&[]));
 }

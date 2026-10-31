@@ -1,4 +1,5 @@
-//! Package-manager caches: npm, pnpm, Bun and Yarn (P1-DET-04, PRD §10.8 QC-01…05, T-23).
+//! Package-manager caches: npm, pnpm, Bun, Yarn, pip and uv (P1-DET-04, P4-DET-02, PRD §10.8
+//! QC-01…05, T-23).
 //!
 //! Global package caches hold no unique data, so they form the Quick Clean category
 //! ([`Category::PackageCache`]): **S1**, cleaned with the tool's **own** command (QC-02, QC-03),
@@ -18,9 +19,12 @@
 //! | Bun | `BUN_INSTALL_CACHE_DIR`; `$BUN_INSTALL/install/cache` | `~/.bun/install/cache` |
 //! | Yarn classic | `YARN_CACHE_FOLDER`; `cache-folder` in `~/.yarnrc` | `$XDG_CACHE_HOME/yarn` or `~/.cache/yarn` / `~/Library/Caches/Yarn` / `%LocalAppData%\Yarn\Cache` |
 //! | Yarn Berry | global folder from `YARN_GLOBAL_FOLDER` or `globalFolder` in `~/.yarnrc.yml` (the cache is its `cache/`) | `$XDG_DATA_HOME/yarn/berry` or `~/.yarn/berry` / `~/.yarn/berry` / `%LocalAppData%\Yarn\Berry` |
+//! | pip | `PIP_CACHE_DIR`; `cache-dir` in `[global]` of the user pip config (`PIP_CONFIG_FILE` alone when it names an existing file; otherwise `$XDG_CONFIG_HOME/pip/pip.conf` or `~/.config/pip/pip.conf`, macOS first `~/Library/Application Support/pip/pip.conf`, Windows `%AppData%\pip\pip.ini`, then the legacy `~/.pip/pip.conf` / `~\pip\pip.ini`) | `$XDG_CACHE_HOME/pip` or `~/.cache/pip` / `~/Library/Caches/pip` / `%LocalAppData%\pip\Cache` |
+//! | uv | `UV_CACHE_DIR`; top-level `cache-dir` in the user `uv.toml` (`UV_CONFIG_FILE`, else `$XDG_CONFIG_HOME/uv/uv.toml` or `~/.config/uv/uv.toml`, Windows `%AppData%\uv\uv.toml`) | `$XDG_CACHE_HOME/uv` or `~/.cache/uv` (Linux and macOS) / `%LocalAppData%\uv\cache` |
 //!
 //! Configuration files are read through the [`DetectContext::config_reader`] as data only.
-//! **Project** configuration (a project's `.npmrc`, `.yarnrc.yml`) is never consulted: the
+//! **Project** configuration (a project's `.npmrc`, `.yarnrc.yml`, `[tool.uv]` in
+//! `pyproject.toml`, a virtual environment's `pip.conf`) is never consulted: the
 //! cache commands run from a neutral directory, so only user-level configuration applies (T-23).
 //!
 //! # Validation (QC-05, T-23)
@@ -85,16 +89,22 @@ pub enum CacheTool {
     YarnClassic,
     /// Yarn 2+ (Berry) global cache (the "mirror").
     YarnBerry,
+    /// pip's HTTP and wheel cache.
+    Pip,
+    /// uv's global cache.
+    Uv,
 }
 
 impl CacheTool {
     /// Every tool, in reporting order.
-    pub const ALL: [CacheTool; 5] = [
+    pub const ALL: [CacheTool; 7] = [
         CacheTool::Npm,
         CacheTool::Pnpm,
         CacheTool::Bun,
         CacheTool::YarnClassic,
         CacheTool::YarnBerry,
+        CacheTool::Pip,
+        CacheTool::Uv,
     ];
 
     /// Rule ID recorded on its candidates.
@@ -105,6 +115,8 @@ impl CacheTool {
             CacheTool::Bun => "bun.cache",
             CacheTool::YarnClassic => "yarn.classic-cache",
             CacheTool::YarnBerry => "yarn.berry-cache",
+            CacheTool::Pip => "pip.cache",
+            CacheTool::Uv => "uv.cache",
         }
     }
 
@@ -120,6 +132,8 @@ impl CacheTool {
             CacheTool::Pnpm => "pnpm",
             CacheTool::Bun => "bun",
             CacheTool::YarnClassic | CacheTool::YarnBerry => "yarn",
+            CacheTool::Pip => "pip",
+            CacheTool::Uv => "uv",
         }
     }
 
@@ -131,6 +145,8 @@ impl CacheTool {
             CacheTool::Bun => "Bun install cache",
             CacheTool::YarnClassic => "Yarn classic cache",
             CacheTool::YarnBerry => "Yarn Berry global cache",
+            CacheTool::Pip => "pip cache",
+            CacheTool::Uv => "uv cache",
         }
     }
 
@@ -141,6 +157,8 @@ impl CacheTool {
             CacheTool::Pnpm => &["pnpm", "pnpx"],
             CacheTool::Bun => &["bun", "bunx"],
             CacheTool::YarnClassic | CacheTool::YarnBerry => &["yarn"],
+            CacheTool::Pip => &["pip", "pip3"],
+            CacheTool::Uv => &["uv", "uvx"],
         }
     }
 }
@@ -227,6 +245,17 @@ fn commands_for_tool(tool: CacheTool) -> CacheCommands {
             preferred_prunes: false,
             wipe: None,
         },
+        // pip has no prune: `pip cache purge` empties the HTTP and wheel caches.
+        CacheTool::Pip => CacheCommands {
+            preferred: c("pip", &["cache", "purge"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::Uv => CacheCommands {
+            preferred: c("uv", &["cache", "prune"]),
+            preferred_prunes: true,
+            wipe: Some(c("uv", &["cache", "clean"])),
+        },
     }
 }
 
@@ -300,6 +329,24 @@ impl CacheEnv {
         self.var(name)
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
+    }
+
+    /// `%AppData%`, or `~\AppData\Roaming` when unset.
+    fn roaming_app_data(&self) -> PathBuf {
+        self.abs_var("APPDATA")
+            .unwrap_or_else(|| self.home.join("AppData").join("Roaming"))
+    }
+
+    /// `$XDG_CONFIG_HOME`, or `~/.config` when unset.
+    fn xdg_config(&self) -> PathBuf {
+        self.abs_var("XDG_CONFIG_HOME")
+            .unwrap_or_else(|| self.home.join(".config"))
+    }
+
+    /// `$XDG_CACHE_HOME`, or `~/.cache` when unset.
+    fn xdg_cache(&self) -> PathBuf {
+        self.abs_var("XDG_CACHE_HOME")
+            .unwrap_or_else(|| self.home.join(".cache"))
     }
 
     /// `%LocalAppData%`, or `~\AppData\Local` when unset.
@@ -453,6 +500,8 @@ pub fn locate_caches(
             CacheTool::Bun => Ok(bun_spots(env)),
             CacheTool::YarnClassic => yarn_classic_spots(env, platform, ctx),
             CacheTool::YarnBerry => yarn_berry_spots(env, platform, ctx),
+            CacheTool::Pip => pip_spots(env, platform, ctx),
+            CacheTool::Uv => uv_spots(env, platform, ctx),
         };
         let spots = match spots {
             Ok(s) => s,
@@ -789,6 +838,142 @@ fn yarn_berry_spots(env: &CacheEnv, platform: &dyn Platform, ctx: &DetectContext
     Ok(vec![spot])
 }
 
+/// The pip config files that can set the cache location, highest precedence first (pip reads
+/// them in the opposite order, later ones overriding earlier ones). Site-wide files
+/// (`/etc/pip.conf`) are not consulted.
+///
+/// * `PIP_CONFIG_FILE` set to `/dev/null` (`nul` on Windows): no file at all.
+/// * `PIP_CONFIG_FILE` naming an existing file: only that file; pip then skips the per-user
+///   files. Naming a missing file: the per-user files, as if unset.
+/// * Otherwise the per-user file(s), then the legacy per-user file.
+fn pip_config_files(
+    env: &CacheEnv,
+    platform: &dyn Platform,
+) -> Result<Vec<PathBuf>, Box<RefusedCache>> {
+    if let Some((var, v)) = env.first_var(&["PIP_CONFIG_FILE"]) {
+        if matches!(v.as_str(), "/dev/null" | "nul" | "NUL") {
+            return Ok(Vec::new());
+        }
+        let p = PathBuf::from(&v);
+        if !p.is_absolute() {
+            return Err(refused(
+                CacheTool::Pip,
+                None,
+                CacheSource::Env { var },
+                format!("`{v}` is not an absolute path, so the pip config in effect is unknown"),
+            ));
+        }
+        match platform.metadata(&p) {
+            Err(e) if e.is_not_found() => {}
+            _ => return Ok(vec![p]),
+        }
+    }
+    let mut files = match env.os {
+        Os::Linux => vec![env.xdg_config().join("pip").join("pip.conf")],
+        Os::Macos => vec![
+            env.home
+                .join("Library")
+                .join("Application Support")
+                .join("pip")
+                .join("pip.conf"),
+            env.xdg_config().join("pip").join("pip.conf"),
+        ],
+        Os::Windows => vec![env.roaming_app_data().join("pip").join("pip.ini")],
+    };
+    files.push(match env.os {
+        Os::Windows => env.home.join("pip").join("pip.ini"),
+        Os::Linux | Os::Macos => env.home.join(".pip").join("pip.conf"),
+    });
+    Ok(files)
+}
+
+fn pip_spots(env: &CacheEnv, platform: &dyn Platform, ctx: &DetectContext<'_>) -> Spots {
+    let tool = CacheTool::Pip;
+    if let Some((var, v)) = env.first_var(&["PIP_CACHE_DIR"]) {
+        let (root, source) = configured(env, tool, &v, CacheSource::Env { var })?;
+        return Ok(vec![Spot::new(tool, root, source)]);
+    }
+    for file in pip_config_files(env, platform)? {
+        let rc = UserRc::read(file, platform, ctx);
+        if let Some((file, v)) = rc.lookup(tool, "cache-dir", parse_pip_conf)? {
+            let source = CacheSource::Config {
+                file,
+                key: "cache-dir".into(),
+            };
+            let (root, source) = configured(env, tool, &v, source)?;
+            return Ok(vec![Spot::new(tool, root, source)]);
+        }
+    }
+    let root = match env.os {
+        Os::Linux => env.xdg_cache().join("pip"),
+        Os::Macos => env.home.join("Library").join("Caches").join("pip"),
+        Os::Windows => env.local_app_data().join("pip").join("Cache"),
+    };
+    Ok(vec![Spot::new(tool, root, CacheSource::Default)])
+}
+
+fn uv_spots(env: &CacheEnv, platform: &dyn Platform, ctx: &DetectContext<'_>) -> Spots {
+    let tool = CacheTool::Uv;
+    if let Some((var, v)) = env.first_var(&["UV_CACHE_DIR"]) {
+        let (root, source) = configured(env, tool, &v, CacheSource::Env { var })?;
+        return Ok(vec![Spot::new(tool, root, source)]);
+    }
+    let file = match env.first_var(&["UV_CONFIG_FILE"]) {
+        Some((_, v)) => PathBuf::from(v),
+        None => match env.os {
+            Os::Windows => env.roaming_app_data().join("uv").join("uv.toml"),
+            Os::Linux | Os::Macos => env.xdg_config().join("uv").join("uv.toml"),
+        },
+    };
+    let source = |file: &Path| CacheSource::Config {
+        file: file.to_path_buf(),
+        key: "cache-dir".into(),
+    };
+    let rc = if file.is_absolute() {
+        UserRc::read(file, platform, ctx)
+    } else {
+        UserRc::Unreadable { file }
+    };
+    match rc {
+        UserRc::Absent => {}
+        UserRc::Unreadable { file } => {
+            return Err(refused(
+                tool,
+                None,
+                source(&file),
+                format!(
+                    "{} can't be read as a small regular file, so the effective cache location \
+                     is unknown",
+                    file.display()
+                ),
+            ));
+        }
+        UserRc::Text { file, text } => match parse_uv_toml(&text) {
+            Ok(Some(v)) => {
+                let (root, source) = configured(env, tool, &v, source(&file))?;
+                return Ok(vec![Spot::new(tool, root, source)]);
+            }
+            Ok(None) => {}
+            Err(why) => {
+                return Err(refused(
+                    tool,
+                    None,
+                    source(&file),
+                    format!(
+                        "{} can't be parsed ({why}), so the effective cache location is unknown",
+                        file.display()
+                    ),
+                ));
+            }
+        },
+    }
+    let root = match env.os {
+        Os::Linux | Os::Macos => env.xdg_cache().join("uv"),
+        Os::Windows => env.local_app_data().join("uv").join("cache"),
+    };
+    Ok(vec![Spot::new(tool, root, CacheSource::Default)])
+}
+
 /// T-23 / QC-05 location checks on a spot's configured root.
 fn validate(env: &CacheEnv, s: &Spot) -> Result<(), RefusedCache> {
     let refuse = |reason: &str| RefusedCache {
@@ -893,6 +1078,17 @@ fn is_version_dir(name: &str) -> bool {
     name.len() > 1 && name.starts_with('v') && name[1..].bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Whether `name` is a versioned uv cache bucket such as `wheels-v5`, `archive-v0` or
+/// `simple-v16`.
+fn is_uv_bucket(name: &str) -> bool {
+    name.rsplit_once("-v").is_some_and(|(kind, v)| {
+        !kind.is_empty()
+            && kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+            && !v.is_empty()
+            && v.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 /// Check the folder's entries against the tool's layout.
 fn recognize(c: &mut LocatedCache, inside: &Listing) {
     let dirs = || {
@@ -918,6 +1114,10 @@ fn recognize(c: &mut LocatedCache, inside: &Listing) {
             .map(|(n, _)| n.as_str())
             .take(1)
             .collect(),
+        CacheTool::Pip => dirs()
+            .filter(|n| matches!(*n, "http" | "http-v2" | "wheels"))
+            .collect(),
+        CacheTool::Uv => dirs().filter(|n| is_uv_bucket(n)).collect(),
     };
     c.recognized = !markers.is_empty();
     if c.tool == CacheTool::Pnpm && c.recognized {
@@ -1229,6 +1429,44 @@ pub(crate) fn parse_yarnrc(text: &str) -> BTreeMap<String, String> {
     out
 }
 
+/// The `[global]` section of a pip config file (ini), keys lower-cased with `_` read as `-`
+/// (`cache_dir` = `cache-dir`), last assignment wins. Pure: the file is data, never executed.
+pub(crate) fn parse_pip_conf(text: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut in_global = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with([';', '#']) {
+            continue;
+        }
+        if let Some(section) = line.strip_prefix('[') {
+            in_global = section
+                .trim_end_matches(']')
+                .trim()
+                .eq_ignore_ascii_case("global");
+            continue;
+        }
+        if !in_global {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(['=', ':']) {
+            let key = k.trim().to_ascii_lowercase().replace('_', "-");
+            out.insert(key, unquote(v).to_owned());
+        }
+    }
+    out
+}
+
+/// The top-level `cache-dir` of a `uv.toml`. Pure: the file is data, never executed.
+pub(crate) fn parse_uv_toml(text: &str) -> Result<Option<String>, String> {
+    let table: toml::Table = toml::from_str(text).map_err(|e| e.message().to_owned())?;
+    match table.get("cache-dir") {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err("`cache-dir` is not a string".into()),
+    }
+}
+
 /// Top-level `key: value` scalars of a `.yarnrc.yml` (nested keys and lists are skipped).
 pub(crate) fn parse_yarnrc_yml(text: &str) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -1331,7 +1569,14 @@ mod tests {
             s("yarn.berry-cache").preferred.to_string(),
             "yarn cache clean --mirror"
         );
+        // pip has no prune (§10.5): its only cleanup empties everything.
+        assert_eq!(s("pip.cache").preferred.to_string(), "pip cache purge");
+        assert!(!s("pip.cache").preferred_prunes && s("pip.cache").wipe.is_none());
+        assert_eq!(s("uv.cache").preferred.to_string(), "uv cache prune");
+        assert!(s("uv.cache").preferred_prunes);
+        assert_eq!(s("uv.cache").wipe.unwrap().to_string(), "uv cache clean");
         assert!(commands_for_rule("rust.target").is_none());
+        assert!(commands_for_rule("python.venv").is_none());
         for t in CacheTool::ALL {
             assert_eq!(CacheTool::from_rule_id(t.rule_id()), Some(t));
             assert_eq!(
@@ -1345,6 +1590,60 @@ mod tests {
     fn version_dirs() {
         assert!(is_version_dir("v3") && is_version_dir("v10"));
         assert!(!is_version_dir("v") && !is_version_dir("vx") && !is_version_dir("files"));
+    }
+
+    #[test]
+    fn uv_buckets() {
+        for ok in [
+            "wheels-v5",
+            "archive-v0",
+            "simple-v16",
+            "sdists-v9",
+            "git-v0",
+        ] {
+            assert!(is_uv_bucket(ok), "{ok}");
+        }
+        for no in [
+            "wheels",
+            "-v1",
+            "wheels-v",
+            "Wheels-v5",
+            "wheels-vx",
+            "v5",
+            "a-v1b",
+        ] {
+            assert!(!is_uv_bucket(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn pip_conf_global_section_only() {
+        let m = parse_pip_conf(
+            "# comment\n[install]\ncache-dir = /not/this\n[global]\ntimeout = 60\n\
+             Cache_Dir = \"/c/pip\"\n; other\n[freeze]\ncache-dir=/nor/this\n",
+        );
+        assert_eq!(m.get("cache-dir").map(String::as_str), Some("/c/pip"));
+        assert_eq!(m.get("timeout").map(String::as_str), Some("60"));
+        let w = parse_pip_conf("[global]\ncache-dir = C:\\pip\\cache\n");
+        assert_eq!(
+            w.get("cache-dir").map(String::as_str),
+            Some("C:\\pip\\cache")
+        );
+        assert!(parse_pip_conf("cache-dir = /no/section\n").is_empty());
+    }
+
+    #[test]
+    fn uv_toml_cache_dir() {
+        assert_eq!(
+            parse_uv_toml("cache-dir = '/c/uv'\n[pip]\nindex-url = 'x'\n").unwrap(),
+            Some("/c/uv".to_owned())
+        );
+        assert_eq!(parse_uv_toml("native-tls = true\n").unwrap(), None);
+        assert_eq!(parse_uv_toml("").unwrap(), None);
+        assert!(parse_uv_toml("cache-dir = 3\n").is_err());
+        assert!(parse_uv_toml("cache-dir = \n").is_err());
+        // A nested `cache-dir` is not the global setting.
+        assert_eq!(parse_uv_toml("[pip]\ncache-dir = '/x'\n").unwrap(), None);
     }
 
     #[test]

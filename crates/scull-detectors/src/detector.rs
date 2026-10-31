@@ -536,6 +536,7 @@ impl Detectors {
             .into_iter()
             .map(|r| {
                 crate::node::detector_for(r)
+                    .or_else(|| crate::python::detector_for(r))
                     .unwrap_or_else(|| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
             })
             .collect();

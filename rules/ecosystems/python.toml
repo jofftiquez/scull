@@ -1,0 +1,241 @@
+# Python rules. Format: rules/README.md.
+# The pip and uv download caches are package caches (Quick Clean), located by Rust code in
+# `scull_detectors::caches` (rule IDs `pip.cache`, `uv.cache`), not rules (CLS-02).
+#
+# Rust detectors in `scull_detectors::python` add to these rules, never loosen them:
+# * `python.venv`: when none of the lockfiles below sits beside the project, a
+#   `requirements*.txt` whose every requirement is pinned (`name==version`, read as data) counts
+#   as the lockfile. Otherwise the environment stays "no lockfile" (S2, FX-CLS-07).
+# * `python.pycache`: the source of every compiled module must sit beside the cache
+#   (`core.cpython-312.pyc` needs `core.py`), and nothing but compiled modules may be inside;
+#   otherwise "no lockfile" (S2).
+#
+# A virtual environment is only a candidate inside a project: `pyvenv.cfg` (written by `venv`,
+# `virtualenv` and uv) inside it, and a project manifest beside it. One outside a project (e.g.
+# `~/.virtualenvs/x`, conda environments) is never a candidate: nothing says what it was built
+# from.
+
+schema_version = 1
+
+[[rule]]
+id = "python.venv"
+version = 1
+artifact = "Python virtual environment"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["{.venv,venv}"]
+
+[rule.markers]
+all = ["pyvenv.cfg"]
+any = ["../{pyproject.toml,setup.py,setup.cfg,Pipfile}", "../requirements*.txt"]
+
+[rule.lockfiles]
+any = [
+  "../{uv.lock,poetry.lock,Pipfile.lock,pdm.lock,pylock.toml}",
+  "../pylock.*.toml",
+  "../requirements*.lock",
+]
+
+[rule.exclude]
+within = ["node_modules", "site-packages", "dist-packages", ".tox", ".nox"]
+
+[rule.activity]
+processes = ["python", "python3", "pip", "pip3", "uv", "poetry", "pdm", "pipenv", "hatch"]
+
+[rule.regeneration]
+instructions = "Recreate it with the project's tool (`uv sync`, `poetry install`, `pdm install`, `pipenv sync`, or `python -m venv .venv` then `pip install -r requirements.txt`)."
+# Reinstalling downloads every package again (or rebuilds wheels): costly, so S1 at best.
+network = true
+long_build = false
+
+[[rule]]
+id = "python.pycache"
+version = 1
+artifact = "Python bytecode cache"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["__pycache__"]
+
+[rule.markers]
+# Compiled modules inside, and a project manifest in the package directory or up to three
+# levels above it (`src/pkg/sub/__pycache__`). Deeper packages are not offered.
+all = ["*.pyc"]
+any = [
+  "../{pyproject.toml,setup.py,setup.cfg,Pipfile}",
+  "../requirements*.txt",
+  "../../{pyproject.toml,setup.py,setup.cfg,Pipfile}",
+  "../../requirements*.txt",
+  "../../../{pyproject.toml,setup.py,setup.cfg,Pipfile}",
+  "../../../requirements*.txt",
+  "../../../../{pyproject.toml,setup.py,setup.cfg,Pipfile}",
+  "../../../../requirements*.txt",
+]
+
+[rule.lockfiles]
+# The sources the bytecode is compiled from. Without any `.py` beside it the `.pyc` files may be
+# the only copy of the code (a sourceless distribution): no lockfile, so at least S2.
+any = ["../*.py"]
+
+[rule.exclude]
+# Bytecode inside an environment or a dependency tree belongs to that artifact.
+within = ["site-packages", "dist-packages", "node_modules", ".tox", ".nox"]
+
+[rule.activity]
+processes = ["python", "python3"]
+
+[rule.regeneration]
+instructions = "Python recompiles it from the `.py` sources on the next import."
+network = false
+long_build = false
+
+[[rule]]
+id = "python.pytest-cache"
+version = 1
+artifact = "pytest cache"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".pytest_cache"]
+
+[rule.markers]
+# pytest tags its cache directory (CACHEDIR.TAG) and creates it in the project's root directory.
+all = ["CACHEDIR.TAG"]
+any = [
+  "../{pyproject.toml,setup.py,setup.cfg,tox.ini,pytest.ini,conftest.py}",
+  "../requirements*.txt",
+]
+
+[rule.activity]
+processes = ["pytest", "python", "python3"]
+
+[rule.regeneration]
+instructions = "pytest recreates it on the next run (the `--lf` failed-test list starts empty)."
+network = false
+long_build = false
+
+[[rule]]
+id = "python.mypy-cache"
+version = 1
+artifact = "mypy cache"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".mypy_cache"]
+
+[rule.markers]
+all = ["CACHEDIR.TAG"]
+any = [
+  "../{pyproject.toml,setup.py,setup.cfg,mypy.ini,.mypy.ini}",
+  "../requirements*.txt",
+]
+
+[rule.activity]
+processes = ["mypy", "dmypy", "python", "python3"]
+
+[rule.regeneration]
+instructions = "mypy rebuilds it on the next run (the first run is slower)."
+network = false
+long_build = false
+
+[[rule]]
+id = "python.ruff-cache"
+version = 1
+artifact = "Ruff cache"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".ruff_cache"]
+
+[rule.markers]
+all = ["CACHEDIR.TAG"]
+any = [
+  "../{pyproject.toml,setup.py,setup.cfg,ruff.toml,.ruff.toml}",
+  "../requirements*.txt",
+]
+
+[rule.activity]
+processes = ["ruff"]
+
+[rule.regeneration]
+instructions = "Ruff rebuilds it on the next run."
+network = false
+long_build = false
+
+[[rule]]
+id = "python.tox"
+version = 1
+artifact = "tox environments"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".tox"]
+
+[rule.markers]
+# tox reads tox.ini / tox.toml, or `[tool.tox]` in pyproject.toml / `[tox:tox]` in setup.cfg.
+any = ["../{tox.ini,tox.toml}", "../{pyproject.toml,setup.cfg}"]
+
+[rule.activity]
+processes = ["tox", "python", "python3"]
+
+[rule.regeneration]
+instructions = "tox recreates its environments on the next run (`tox -r` forces it)."
+# Every environment reinstalls its dependencies: costly, so S1 at best.
+network = true
+long_build = false
+
+[[rule]]
+id = "python.nox"
+version = 1
+artifact = "nox sessions"
+ecosystem = "python"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".nox"]
+
+[rule.markers]
+all = ["../noxfile.py"]
+
+[rule.activity]
+processes = ["nox", "python", "python3"]
+
+[rule.regeneration]
+instructions = "nox recreates its session environments on the next run."
+network = true
+long_build = false
