@@ -97,6 +97,34 @@ pub(crate) fn parse_oid_lines(out: &[u8]) -> Result<Vec<ObjectId>, String> {
         .collect()
 }
 
+/// One line of `git cherry` output (see [`GitRunner::cherry`](crate::GitRunner::cherry)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CherryCommit {
+    /// The commit on the head side.
+    pub oid: ObjectId,
+    /// Whether the upstream side has a patch-equivalent commit (`-` in `git cherry` output).
+    pub equivalent: bool,
+}
+
+/// Parses `git cherry` output: `+ <oid>` or `- <oid>` per line.
+pub(crate) fn parse_cherry(out: &[u8]) -> Result<Vec<CherryCommit>, String> {
+    String::from_utf8_lossy(out)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let bad = || format!("bad cherry line: {l:?}");
+            let (sign, oid) = l.split_once(' ').ok_or_else(bad)?;
+            let equivalent = match sign {
+                "-" => true,
+                "+" => false,
+                _ => return Err(bad()),
+            };
+            let oid = ObjectId::parse(oid.trim()).ok_or_else(bad)?;
+            Ok(CherryCommit { oid, equivalent })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +163,17 @@ mod tests {
         assert_eq!(refs[1].symref.as_deref(), Some("refs/remotes/origin/main"));
         assert!(parse_refs(b"refs/heads/x\0nothex\0commit\0\0\n").is_err());
         assert!(parse_refs(b"just one field\n").is_err());
+    }
+
+    #[test]
+    fn cherry_parses() {
+        let out = format!("+ {A}\n- {A}\n");
+        let c = parse_cherry(out.as_bytes()).expect("parse");
+        assert_eq!(c.len(), 2);
+        assert!(!c[0].equivalent && c[1].equivalent);
+        assert!(parse_cherry(b"? abc\n").is_err());
+        assert!(parse_cherry(b"+ nothex\n").is_err());
+        assert!(parse_cherry(b"+\n").is_err());
     }
 
     #[test]

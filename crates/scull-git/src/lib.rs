@@ -10,17 +10,30 @@
 //!   neutral folder, and repository config can't execute anything: fsmonitor, hooks, filter
 //!   drivers, external diff, pagers, credential helpers and every network transport are
 //!   disabled (SAFE-12, SAFE-15, T-21, T-22, FX-GIT-15).
+//! * [`analyze_worktree`] / [`analyze_repo`]: everything GIT-02 reports about a worktree, as a
+//!   serializable [`WorktreeState`]: HEAD, upstream, lock, activity ([`sample_activity`]),
+//!   tracked changes, untracked and ignored files, submodules, unpushed commits, merge status
+//!   and how it was determined, detached-HEAD reachability. Any Git failure makes the affected
+//!   fact [`Observed::Unknown`], never "clean". Never fetches.
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
+mod activity;
 mod meta;
 mod refs;
 mod resolve;
 mod runner;
+mod state;
 mod status;
 mod worktree;
 
-pub use refs::{ObjectId, RefEntry};
+pub use activity::{Activity, DEFAULT_ACTIVITY_SAMPLE, sample_activity};
+pub use state::{
+    AnalyzeOptions, CommitList, HeadState, MergeStatus, Observed, ParentRepo, PathList,
+    Reachability, Submodule, Upstream, WorktreeState, analyze_repo, analyze_worktree,
+};
+
+pub use refs::{CherryCommit, ObjectId, RefEntry};
 pub use runner::{
     DEFAULT_MAX_OUTPUT, DEFAULT_TIMEOUT, GitError, GitRunner, GitVersion, MIN_GIT_VERSION,
     RunnerOptions,

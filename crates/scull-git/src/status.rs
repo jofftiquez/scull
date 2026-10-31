@@ -241,6 +241,28 @@ pub(crate) fn parse_status(out: &[u8]) -> Result<Status, String> {
     Ok(status)
 }
 
+/// Parses `git ls-files --stage -z` output and keeps the gitlinks (mode `160000`).
+///
+/// Each record is `<mode> <oid> <stage>\t<path>`.
+pub(crate) fn parse_gitlinks(out: &[u8]) -> Result<Vec<GitPath>, String> {
+    let mut links: Vec<GitPath> = Vec::new();
+    for rec in out.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+        let tab = rec
+            .iter()
+            .position(|&b| b == b'\t')
+            .filter(|&t| t + 1 < rec.len())
+            .ok_or_else(|| format!("bad ls-files record: {:?}", String::from_utf8_lossy(rec)))?;
+        if rec.starts_with(b"160000 ") {
+            let path = GitPath(rec[tab + 1..].to_vec());
+            // Conflicted gitlinks appear once per stage.
+            if links.last() != Some(&path) {
+                links.push(path);
+            }
+        }
+    }
+    Ok(links)
+}
+
 /// Splits `rec` into exactly `n` space-separated fields; the last one (the path) may contain
 /// spaces.
 fn fields(rec: &[u8], n: usize) -> Option<Vec<&[u8]>> {
@@ -374,6 +396,21 @@ mod tests {
             ok.to_path(Path::new("/w")),
             Some(Path::new("/w").join("a").join("b c").join("d"))
         );
+    }
+
+    #[test]
+    fn gitlinks_parse() {
+        let out = format!(
+            "100644 {H} 0\tREADME\x00160000 {H} 0\tlibs/sub mod\x00\
+             160000 {H} 1\tc\x00160000 {H} 2\tc\x00"
+        );
+        let links = parse_gitlinks(out.as_bytes()).expect("parse");
+        assert_eq!(
+            links,
+            vec![GitPath::from("libs/sub mod"), GitPath::from("c")]
+        );
+        assert!(parse_gitlinks(b"160000 abc 0 no-tab\x00").is_err());
+        assert!(parse_gitlinks(b"").expect("empty").is_empty());
     }
 
     #[test]

@@ -43,7 +43,7 @@
 //! reported; analyse each submodule's work tree with its own `status` call.
 //!
 //! **Commands.** Only read-only plumbing is run: `status`, `rev-parse`, `for-each-ref`,
-//! `merge-base`, `rev-list`, `config --list`. None writes to the repository
+//! `merge-base`, `rev-list`, `cherry`, `ls-files`, `config --list`. None writes to the repository
 //! (`GIT_OPTIONAL_LOCKS=0` stops `status` from refreshing the index), none touches the network.
 //! Every call has a timeout and an output cap.
 //!
@@ -51,9 +51,9 @@
 //! user fails with [`GitError::DubiousOwnership`] (the repository can't opt itself in, since
 //! `safe.directory` is only read from system/global config, which is disabled).
 
-use crate::refs::{self, ObjectId, REF_FORMAT, RefEntry};
+use crate::refs::{self, CherryCommit, ObjectId, REF_FORMAT, RefEntry};
 use crate::resolve;
-use crate::status::{self, IgnoredMode, Status, StatusOptions, UntrackedMode};
+use crate::status::{self, GitPath, IgnoredMode, Status, StatusOptions, UntrackedMode};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
@@ -510,6 +510,35 @@ impl GitRunner {
         args.extend([tip.as_str(), "--not", "--remotes"].map(OsString::from));
         let out = self.run_ok(Some(&repo), &[], &args, "rev-list")?;
         refs::parse_oid_lines(&out).map_err(GitError::Parse)
+    }
+
+    /// `git cherry <upstream> <head>`: the commits on `head` that are not on `upstream`, oldest
+    /// first, each marked with whether `upstream` has a **patch-equivalent** commit (same
+    /// `git patch-id`), as after a squash or rebase merge.
+    ///
+    /// Patch equivalence is a heuristic, never proof of a merge (GIT-03, T-02). Patch ids are
+    /// computed from objects already in the repository: no work-tree file is read, so no filter
+    /// driver runs, and neither textconv nor an external diff is used.
+    pub fn cherry(
+        &self,
+        repo: &Path,
+        upstream: &ObjectId,
+        head: &ObjectId,
+    ) -> Result<Vec<CherryCommit>, GitError> {
+        let repo = repo_dir(repo)?;
+        let args = ["cherry", upstream.as_str(), head.as_str()].map(OsString::from);
+        let out = self.run_ok(Some(&repo), &[], &args, "cherry")?;
+        refs::parse_cherry(&out).map_err(GitError::Parse)
+    }
+
+    /// Paths of the submodules (gitlinks, mode `160000`) recorded in the index of the work tree
+    /// whose top folder is `worktree`, in index order. Whether each one is initialized (has a
+    /// `.git`) is up to the caller to check.
+    pub fn gitlinks(&self, worktree: &Path) -> Result<Vec<GitPath>, GitError> {
+        let repo = repo_dir(worktree)?;
+        let args = ["ls-files", "--stage", "-z"].map(OsString::from);
+        let out = self.run_ok(Some(&repo), &[], &args, "ls-files")?;
+        status::parse_gitlinks(&out).map_err(GitError::Parse)
     }
 
     fn list_refs(
