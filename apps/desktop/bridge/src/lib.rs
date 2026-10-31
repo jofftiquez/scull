@@ -16,6 +16,7 @@
 //! | `status` | [`Session::status`] | [`DesktopStatus`] |
 //! | `capabilities` | [`Session::capabilities`] | [`CapabilitiesReport`] |
 //! | `history` | [`Session::history`] | [`HistoryView`] (read-only) |
+//! | `settings` | [`Session::settings`] | [`SettingsView`] (read-only) |
 //!
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
@@ -27,10 +28,12 @@
 //! `tests/safe10.rs` fails the build if either changes. Cleanups reach the Executor through a
 //! plan and a human approval, never through the desktop bridge.
 
+pub mod db;
 pub mod drives;
 pub mod history;
 pub mod schemas;
 pub mod session;
+pub mod settings;
 pub mod views;
 
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
@@ -38,6 +41,7 @@ pub use history::HistoryView;
 pub use scull_core::ScullError;
 pub use scull_engine::{CachesReport, ScanReport, now_unix};
 pub use session::{Session, Setup};
+pub use settings::SettingsView;
 pub use views::{
     CapabilitiesReport, DesktopStatus, OpId, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
 };

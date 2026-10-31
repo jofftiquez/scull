@@ -20,6 +20,7 @@ import type {
   ScanParams,
   ScanReport,
   ScullError,
+  SettingsView,
   WorktreesView,
 } from './generated';
 
@@ -84,6 +85,10 @@ export interface ScullBridge {
   /** Recorded cleanup operations with their audit logs, newest first (read-only: restoring
    * is not a bridge call, see components/history/bridge.ts). */
   history(): Promise<HistoryView>;
+  /** Effective configuration with the origin of every value, built-in protection and scull's
+   * own data (read-only: changing a setting is not a bridge call, see
+   * components/settings/bridge.ts). */
+  settings(): Promise<SettingsView>;
 }
 
 /** Bridge methods and the Tauri command each calls (also used by the parity test). */
@@ -97,6 +102,7 @@ export const COMMANDS = {
   status: 'status',
   capabilities: 'capabilities',
   history: 'history',
+  settings: 'settings',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 
 /** The Tauri command that cancels an operation. */

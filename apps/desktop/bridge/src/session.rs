@@ -8,7 +8,7 @@ use crate::views::{
     CapabilitiesReport, DesktopStatus, GitInfo, HistoryState, LastScan, OpId, ProgressEvent,
     ProjectsView, ScanParams, StatusState, VolumeSampleView, WorktreesView,
 };
-use scull_core::config::{Config, ConfigLayer, EnvLayer, resolve, validate_roots};
+use scull_core::config::{Config, ConfigLayer, EnvLayer, ResolvedConfig, resolve, validate_roots};
 use scull_core::{ErrorKind, FsPath, ScullError};
 use scull_detectors::CacheEnv;
 use scull_detectors::rules::Platform as RulesOs;
@@ -136,6 +136,16 @@ impl Session {
     /// The effective configuration: user config file > `SCULL_*` environment > defaults, with
     /// `~` expanded. An invalid file or variable is a configuration error.
     pub fn config(&self) -> Result<Config, ScullError> {
+        let resolved = self.resolved_config()?;
+        Ok(match &self.setup.home {
+            Some(h) => resolved.config.with_home_expanded(h),
+            None => resolved.config,
+        })
+    }
+
+    /// The effective configuration as written (`~` not expanded) and where each value came
+    /// from (`scull config show`). Reads the config file; never writes it.
+    pub fn resolved_config(&self) -> Result<ResolvedConfig, ScullError> {
         let mut user = ConfigLayer::default();
         if let Some(path) = &self.setup.config_file {
             match std::fs::read_to_string(path) {
@@ -155,11 +165,13 @@ impl Session {
         }
         let env = Arc::clone(&self.setup.env);
         let env = EnvLayer::from_lookup(move |k| env(k))?;
-        let resolved = resolve(&ConfigLayer::default(), &env, &user);
-        Ok(match &self.setup.home {
-            Some(h) => resolved.config.with_home_expanded(h),
-            None => resolved.config,
-        })
+        Ok(resolve(&ConfigLayer::default(), &env, &user))
+    }
+
+    /// Settings screen: effective configuration with origins, built-in protection and scull's
+    /// own data (read-only; [`crate::settings`]).
+    pub fn settings(&self) -> crate::settings::SettingsView {
+        crate::settings::settings_view(self)
     }
 
     fn register(&self, op: &OpId) -> Result<(CancelToken, OpGuard<'_>), ScullError> {

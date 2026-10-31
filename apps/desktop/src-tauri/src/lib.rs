@@ -12,7 +12,7 @@
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
     AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, HistoryView, OpId, ProgressEvent,
-    ProjectsView, ScanParams, ScanReport, Session, Setup, WorktreesView, now_unix,
+    ProjectsView, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -103,6 +103,13 @@ async fn history(session: Shared<'_>) -> Result<HistoryView, ScullError> {
     blocking(move || Ok(session.history(now_unix()))).await
 }
 
+/// `settings`: effective configuration with origins and scull's own data (read-only).
+#[tauri::command]
+async fn settings(session: Shared<'_>) -> Result<SettingsView, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.settings())).await
+}
+
 /// Run a blocking bridge call on Tauri's blocking pool.
 async fn blocking<T, F>(f: F) -> Result<T, ScullError>
 where
@@ -128,7 +135,8 @@ pub fn run() {
             worktrees,
             status,
             capabilities,
-            history
+            history,
+            settings
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

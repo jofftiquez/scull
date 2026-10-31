@@ -25,12 +25,10 @@
 //! command goes through the core (never overwriting: a taken path restores to the sibling
 //! `<name>.scull-restored-<n>`, P2-EXEC-06).
 
+use crate::db::DbState;
 use schemars::JsonSchema;
 use scull_core::Tier;
-use scull_platform::{EntryKind, Native, Platform};
-use scull_storage::{APPLICATION_ID, SCHEMA_VERSION};
 use serde::Serialize;
-use std::io::Read;
 use std::path::Path;
 
 /// Whether there is history to show.
@@ -244,109 +242,34 @@ impl HistoryView {
     }
 }
 
-/// What the database file looks like from its header (no SQLite involved).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Probe {
-    /// Nothing there (or an empty, never-initialised file).
-    Missing,
-    /// A current scull database.
-    Current,
-    /// Something this build can't read, and why.
-    NotCurrent(String),
-}
-
-const MAGIC: &[u8; 16] = b"SQLite format 3\0";
-
-/// Classify the first 100 bytes of a database file (SQLite's documented header: the magic
-/// string, `user_version` at offset 60, `application_id` at 68, both big-endian).
-pub fn classify_header(header: &[u8]) -> Probe {
-    if header.is_empty() {
-        return Probe::Missing;
-    }
-    if header.len() < 100 || &header[..16] != MAGIC {
-        return Probe::NotCurrent("not a SQLite database".into());
-    }
-    let word = |at: usize| [header[at], header[at + 1], header[at + 2], header[at + 3]];
-    let version = u32::from_be_bytes(word(60));
-    let app = i32::from_be_bytes(word(68));
-    match (app, version) {
-        (0, 0) => Probe::Missing,
-        (id, _) if id != APPLICATION_ID => {
-            Probe::NotCurrent("not a scull database (another application's)".into())
-        }
-        (_, v) if v == SCHEMA_VERSION => Probe::Current,
-        (_, v) => Probe::NotCurrent(format!(
-            "schema version {v} (this build reads {SCHEMA_VERSION}); run `scull status` in a \
-             terminal"
-        )),
-    }
-}
-
-/// Probe the database at `path` with a plain read of its header. The entry's kind comes from
-/// the platform's no-follow metadata, so a link at `path` is reported, never followed; nothing
-/// is created.
-pub fn probe(path: &Path) -> Probe {
-    match Native.metadata(path) {
-        Ok(md) if md.kind == EntryKind::File => {}
-        Ok(_) => return Probe::NotCurrent("not a regular file".into()),
-        Err(e) if e.is_not_found() => return Probe::Missing,
-        Err(e) => return Probe::NotCurrent(format!("cannot read it: {e}")),
-    }
-    let mut header = Vec::with_capacity(100);
-    match std::fs::File::open(path).and_then(|f| f.take(100).read_to_end(&mut header)) {
-        Ok(_) => classify_header(&header),
-        Err(e) => Probe::NotCurrent(format!("cannot read it: {e}")),
-    }
-}
-
 /// Read the operation history from the database in `data_dir` (read-only; see the module
 /// docs). `None`: no data directory, so nothing was ever recorded.
 pub fn read_history(data_dir: Option<&Path>, now: i64) -> HistoryView {
     let Some(dir) = data_dir else {
         return HistoryView::empty(now, HistoryReadState::NoDatabase, None);
     };
-    match probe(&dir.join(scull_storage::DB_FILE_NAME)) {
-        Probe::Missing => HistoryView::empty(now, HistoryReadState::NoDatabase, None),
-        Probe::NotCurrent(why) => HistoryView::empty(now, HistoryReadState::Unavailable, Some(why)),
+    let probe = crate::db::probe(&dir.join(scull_storage::DB_FILE_NAME));
+    match probe.state {
+        DbState::Missing | DbState::Empty => {
+            HistoryView::empty(now, HistoryReadState::NoDatabase, None)
+        }
+        DbState::NewerSchema
+        | DbState::NeedsMigration
+        | DbState::NotScull
+        | DbState::Unreadable => {
+            HistoryView::empty(now, HistoryReadState::Unavailable, probe.detail)
+        }
         // This core has no audit API (Phase 2, P2-EXEC-09) and no Executor, so a current
         // database holds no operations. With the API: open it without creating or migrating
         // anything, then `operations(0)` newest first, `audit_items` and `verify_chain` for
         // each.
-        Probe::Current => HistoryView::empty(now, HistoryReadState::Ok, None),
+        DbState::Ok => HistoryView::empty(now, HistoryReadState::Ok, None),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn header(version: u32, app: i32) -> Vec<u8> {
-        let mut h = vec![0u8; 100];
-        h[..16].copy_from_slice(MAGIC);
-        h[60..64].copy_from_slice(&version.to_be_bytes());
-        h[68..72].copy_from_slice(&app.to_be_bytes());
-        h
-    }
-
-    #[test]
-    fn headers_are_classified() {
-        assert_eq!(classify_header(b""), Probe::Missing);
-        assert!(matches!(classify_header(b"hello"), Probe::NotCurrent(_)));
-        assert_eq!(classify_header(&header(0, 0)), Probe::Missing);
-        assert_eq!(
-            classify_header(&header(SCHEMA_VERSION, APPLICATION_ID)),
-            Probe::Current
-        );
-        let Probe::NotCurrent(why) = classify_header(&header(SCHEMA_VERSION + 1, APPLICATION_ID))
-        else {
-            panic!("newer schema must not read as current");
-        };
-        assert!(why.contains("schema version"), "{why}");
-        assert!(matches!(
-            classify_header(&header(SCHEMA_VERSION, 7)),
-            Probe::NotCurrent(_)
-        ));
-    }
 
     #[test]
     fn missing_database_is_never_created() {

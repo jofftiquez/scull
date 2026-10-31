@@ -733,6 +733,71 @@ export type Observed2 =
       status: "unknown";
     };
 /**
+ * When to use color in terminal output.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ColorChoice".
+ */
+export type ColorChoice = "auto" | "always" | "never";
+/**
+ * How sizes are printed.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "SizeUnits".
+ */
+export type SizeUnits = "binary" | "decimal";
+/**
+ * A duration: a whole number followed by s, m, h, d or w (e.g. "24h").
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DurationSpec".
+ */
+export type DurationSpec = string;
+/**
+ * State of the user config file.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ConfigFileState".
+ */
+export type ConfigFileState = "present" | "missing" | "invalid" | "unknown";
+/**
+ * How the database file looks (the same states as `scull data show`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DbState".
+ */
+export type DbState = "ok" | "missing" | "empty" | "newer_schema" | "needs_migration" | "not_scull" | "unreadable";
+/**
+ * What kind of file one of scull's own files is.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OwnFileKind".
+ */
+export type OwnFileKind = "database" | "wal" | "shm" | "backup" | "damaged";
+/**
+ * Where an effective config value came from.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Origin".
+ */
+export type Origin =
+  | {
+      source: "default";
+    }
+  | {
+      source: "user_config";
+    }
+  | {
+      source: "env";
+      /**
+       * The variable name.
+       */
+      var: string;
+    }
+  | {
+      source: "cli";
+    };
+/**
  * Whether there is a scan to show.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -754,6 +819,7 @@ export interface BridgePayloads {
   ProjectsView: ProjectsView;
   ScanParams: ScanParams;
   ScanReport: ScanReport;
+  SettingsView: SettingsView;
   DesktopStatus: DesktopStatus;
   WorktreesView: WorktreesView;
 }
@@ -1883,6 +1949,214 @@ export interface Upstream {
    * Full ref name, e.g. `refs/remotes/origin/feature`.
    */
   name: string;
+}
+/**
+ * `settings`: the Settings screen's data.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "SettingsView".
+ */
+export interface SettingsView {
+  /**
+   * Folders protected on this OS whatever the config says (credentials, system folders
+   * under home), with their contents.
+   */
+  builtin_protected: string[];
+  config: Config;
+  /**
+   * Why it can't be used, when it can't (the CLI's message).
+   */
+  config_error?: string | null;
+  /**
+   * The user config file, when a location is known.
+   */
+  config_file?: string | null;
+  config_state: ConfigFileState;
+  data: DataInfo;
+  /**
+   * For every config key (`scan.roots`, `mcp.redact_home`, ...): where the value came from,
+   * most important first.
+   */
+  origins: {
+    [k: string]: Origin[] | undefined;
+  };
+}
+/**
+ * The effective configuration after merging every source.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Config".
+ */
+export interface Config {
+  forge?: ForgeConfig;
+  mcp?: McpConfig;
+  output?: OutputConfig;
+  rules?: RulesConfig;
+  scan?: ScanConfig;
+}
+/**
+ * Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ForgeConfig".
+ */
+export interface ForgeConfig {
+  /**
+   * Whether scull may query a forge API over the network.
+   */
+  enabled?: boolean;
+}
+/**
+ * MCP server settings (PRD §13).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "McpConfig".
+ */
+export interface McpConfig {
+  /**
+   * Destructive tools; also needs the `--allow-destructive` launch flag. File-only setting.
+   */
+  destructive?: boolean;
+  /**
+   * Whether `scull mcp serve` may run at all.
+   */
+  enabled?: boolean;
+  /**
+   * Hash project and directory names in results.
+   */
+  hash_names?: boolean;
+  /**
+   * Maximum number of results per tool call.
+   */
+  max_results?: number;
+  /**
+   * Replace the home directory prefix with `~` in results (on by default, PRD §13.5).
+   */
+  redact_home?: boolean;
+}
+/**
+ * Terminal output preferences.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OutputConfig".
+ */
+export interface OutputConfig {
+  color?: ColorChoice;
+  units?: SizeUnits;
+}
+/**
+ * Optional (user or community) rules. Disabled until enabled here (CLS-04).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RulesConfig".
+ */
+export interface RulesConfig {
+  /**
+   * IDs of optional rules the user turned on.
+   */
+  enabled?: string[];
+}
+/**
+ * Scan settings.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ScanConfig".
+ */
+export interface ScanConfig {
+  activity_window?: DurationSpec;
+  /**
+   * Paths never scanned (and so never candidates).
+   */
+  exclude?: string[];
+  /**
+   * Low-resource mode: fewer threads and lower I/O priority.
+   */
+  low_resource?: boolean;
+  /**
+   * Minimum tier for everything inside a path (e.g. `"~/Projects/legacy" = "S2"`).
+   */
+  min_tier?: {
+    [k: string]: Tier | undefined;
+  };
+  /**
+   * Protected paths: everything inside is S3 (PRD §8.3).
+   */
+  protect?: string[];
+  /**
+   * Directories to scan. Empty by default: roots must be explicit (CFG-04).
+   */
+  roots?: string[];
+  /**
+   * Scanner threads; `0` picks automatically.
+   */
+  threads?: number;
+}
+/**
+ * scull's own data (`scull data show`, without opening the database).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DataInfo".
+ */
+export interface DataInfo {
+  /**
+   * Configuration directory (`config.toml`). Never purged.
+   */
+  config_dir?: string | null;
+  /**
+   * Data directory (database, backups).
+   */
+  data_dir?: string | null;
+  database: DatabaseInfo;
+  /**
+   * scull's own files that exist.
+   */
+  files: OwnFile[];
+  /**
+   * Their total size in bytes.
+   */
+  footprint_bytes: number;
+}
+/**
+ * The database, from its header.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DatabaseInfo".
+ */
+export interface DatabaseInfo {
+  /**
+   * Why it isn't usable, when it isn't.
+   */
+  detail?: string | null;
+  /**
+   * Database file, when a data directory is known.
+   */
+  path?: string | null;
+  /**
+   * Its schema version, when known.
+   */
+  schema_version?: number | null;
+  state: DbState;
+  /**
+   * The schema version this build uses.
+   */
+  supported_schema_version: number;
+}
+/**
+ * One of scull's own files.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OwnFile".
+ */
+export interface OwnFile {
+  /**
+   * Logical size in bytes.
+   */
+  bytes: number;
+  kind: OwnFileKind;
+  /**
+   * Where it is.
+   */
+  path: string;
 }
 /**
  * `status`: the header's freshness line and the nav figures come from here.

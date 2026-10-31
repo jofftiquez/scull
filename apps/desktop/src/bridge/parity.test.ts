@@ -79,6 +79,7 @@ describe('mock bridge answers in the real shapes', () => {
     expectValid('status', await b.status());
     expectValid('capabilities', await b.capabilities());
     expectValid('history', await b.history());
+    expectValid('settings', await b.settings());
   });
 
   it('streams progress events that validate, tagged with one operation ID', async () => {

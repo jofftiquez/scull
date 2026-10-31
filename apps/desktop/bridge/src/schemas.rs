@@ -6,6 +6,7 @@
 //! `SCULL_UPDATE_SCHEMAS=1 cargo test -p scull-desktop-bridge --test schemas`.
 
 use crate::history::HistoryView;
+use crate::settings::SettingsView;
 use crate::views::{
     CapabilitiesReport, DesktopStatus, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
 };
@@ -50,6 +51,10 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
             schema::<CapabilitiesReport>("capabilities", "CapabilitiesReport"),
         ),
         ("history", schema::<HistoryView>("history", "HistoryView")),
+        (
+            "settings",
+            schema::<SettingsView>("settings", "SettingsView"),
+        ),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]
 }

@@ -74,5 +74,6 @@ export function createTauriBridge(t: TauriTransport = realTransport): ScullBridg
     status: () => call(COMMANDS.status),
     capabilities: () => call(COMMANDS.capabilities),
     history: () => call(COMMANDS.history),
+    settings: () => call(COMMANDS.settings),
   };
 }
