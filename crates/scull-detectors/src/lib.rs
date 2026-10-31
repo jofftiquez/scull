@@ -2,6 +2,8 @@
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
+pub mod rules;
+
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 

@@ -1,0 +1,67 @@
+# JavaScript / TypeScript rules. Format: rules/README.md.
+# Package-manager caches and the pnpm store need Rust detectors (CLS-02), not rules.
+
+schema_version = 1
+
+[[rule]]
+id = "node.node-modules"
+version = 1
+artifact = "Installed npm dependencies"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["node_modules"]
+
+[rule.markers]
+all = ["../package.json"]
+
+[rule.lockfiles]
+any = ["../package-lock.json", "../pnpm-lock.yaml", "../yarn.lock", "../bun.lockb", "../bun.lock"]
+
+[rule.exclude]
+# A node_modules inside another node_modules belongs to the outer one.
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "npm", "pnpm", "yarn", "bun"]
+
+[rule.regeneration]
+instructions = "Reinstall with your package manager (`npm ci`, `pnpm install`, `yarn install`)."
+network = true
+
+[[rule]]
+id = "node.next"
+version = 1
+artifact = "Next.js build output"
+ecosystem = "node"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".next"]
+
+[rule.markers]
+all = ["../package.json"]
+any = ["../next.config.{js,mjs,cjs,ts}", "../next-env.d.ts"]
+
+[rule.lockfiles]
+any = ["../package-lock.json", "../pnpm-lock.yaml", "../yarn.lock", "../bun.lockb", "../bun.lock"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["node", "next"]
+
+[rule.regeneration]
+instructions = "Run `next build` (or `next dev`) in the project to rebuild."
+network = false
+long_build = false
