@@ -172,14 +172,11 @@ pub enum Command {
         top: usize,
     },
 
-    /// Show past cleanup operations.
-    History,
+    /// Show past cleanup operations, or one operation in detail (read-only).
+    History(HistoryArgs),
 
-    /// Restore items from a past operation (Trash or quarantine).
-    Restore {
-        /// Operation ID from `scull history`.
-        operation_id: String,
-    },
+    /// Restore quarantined items of a past operation to where they were (never overwriting).
+    Restore(RestoreArgs),
 
     /// Approve a plan prepared by an MCP client (interactive terminal only).
     Approve {
@@ -367,6 +364,7 @@ pub enum WorktreesAction {
 /// on a terminal.
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
+#[command(group(clap::ArgGroup::new("confirm_target").args(["plan", "purge_quarantine"])))]
 pub struct CleanArgs {
     /// Optional subcommand.
     #[command(subcommand)]
@@ -408,8 +406,8 @@ pub struct CleanArgs {
     #[arg(long, value_name = "FILE")]
     pub plan: Option<PathBuf>,
 
-    /// Execute --plan without asking.
-    #[arg(long, requires = "plan")]
+    /// Execute --plan (or --purge-quarantine) without asking.
+    #[arg(long, requires = "confirm_target")]
     pub confirm: bool,
 
     /// Confirm items that can't be undone at S1/S2 without typing their count (elevated
@@ -417,6 +415,53 @@ pub struct CleanArgs {
     #[arg(long, requires = "confirm")]
     pub allow_permanent: bool,
 
+    /// Allow running as root/administrator (refused by default, SAFE-14).
+    #[arg(long)]
+    pub allow_root: bool,
+
+    /// Permanently delete quarantined items whose retention has expired (or, with
+    /// --older-than, that were quarantined more than AGE ago). Not undoable: needs the
+    /// elevated confirmation (typed count, or --allow-permanent with --confirm).
+    #[arg(long, conflicts_with_all = ["plan", "output", "items", "include_s1", "roots"])]
+    pub purge_quarantine: bool,
+
+    /// With --purge-quarantine: also purge items quarantined more than AGE ago (90m, 12h,
+    /// 30d, 2w), even before their retention ends.
+    #[arg(long, value_name = "AGE", requires = "purge_quarantine",
+          value_parser = crate::cmd::data::parse_age)]
+    pub older_than: Option<u64>,
+
+    /// With --purge-quarantine: purge every held item, also those whose retention hasn't
+    /// ended (empties the quarantine).
+    #[arg(long, requires = "purge_quarantine", conflicts_with = "older_than")]
+    pub include_unexpired: bool,
+}
+
+/// Arguments for `scull history`.
+#[derive(Debug, Clone, Args)]
+pub struct HistoryArgs {
+    /// Show this operation in detail (items, audit chain, quarantine entries).
+    pub operation_id: Option<String>,
+    /// Only operations started within AGE (90m, 12h, 30d, 2w).
+    #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age, conflicts_with = "operation_id")]
+    pub since: Option<u64>,
+}
+
+/// Arguments for `scull restore`.
+#[derive(Debug, Clone, Args)]
+pub struct RestoreArgs {
+    /// Operation ID from `scull history`.
+    pub operation_id: String,
+    /// Restore only this item (item ID, original path, or quarantine entry number); repeat
+    /// for several.
+    #[arg(long = "item", value_name = "ITEM")]
+    pub items: Vec<String>,
+    /// Restore without asking (required without a terminal).
+    #[arg(long)]
+    pub confirm: bool,
+    /// Only show what would be restored.
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
     /// Allow running as root/administrator (refused by default, SAFE-14).
     #[arg(long)]
     pub allow_root: bool,
@@ -524,8 +569,8 @@ pub enum DataAction {
         /// Delete without asking (required without a terminal or with --json/--ndjson).
         #[arg(long)]
         confirm: bool,
-        /// Also purge quarantine contents (not available until the Executor's quarantine
-        /// purge, #71; refused).
+        /// Also purge quarantine contents (refused: use `scull clean --purge-quarantine`,
+        /// which goes through the Executor's purge, #71).
         #[arg(long)]
         include_quarantine: bool,
     },

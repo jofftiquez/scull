@@ -1042,8 +1042,9 @@ pub fn purge(
 ) -> Result<DataPurgeReport, ScullError> {
     if opts.include_quarantine {
         return Err(blocked(
-            "--include-quarantine is not available yet: quarantine contents are only ever \
-             removed by the Executor's quarantine purge (#71). Nothing was deleted.",
+            "--include-quarantine is refused: quarantine contents are only ever removed by the \
+             Executor's quarantine purge (#71), with its own confirmation: use `scull clean \
+             --purge-quarantine`. Nothing was deleted.",
         ));
     }
     let native = Native::new();

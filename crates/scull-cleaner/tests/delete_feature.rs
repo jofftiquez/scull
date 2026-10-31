@@ -129,6 +129,7 @@ const CLI_CLEANER_MODULES: &[&str] = &[
     "cmd/clean.rs",
     "cmd/clean_caches.rs",
     "cmd/exec.rs",
+    "cmd/restore.rs",
 ];
 
 /// The CLI reaches deletion only through `scull-cleaner` (never the walker directly), and
