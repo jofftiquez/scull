@@ -114,7 +114,9 @@ impl ExecutionReport {
 }
 
 impl Executor {
-    /// Execute `plan`: verify it ([`Plan::verify`]: edited, expired or foreign plans are
+    /// Execute `plan` while holding the execution lock (an Executor made with
+    /// [`Executor::acquire`]; otherwise [`ErrorKind::SafetyBlocked`]). Verify the plan
+    /// ([`Plan::verify`]: edited, expired or foreign plans are
     /// rejected with an exit-code-4 error and nothing is touched), then for **each** item in
     /// turn, immediately before acting on it, revalidate it against the disk
     /// ([`Revalidation::revalidate`]: bounded re-derivation, [`scull_core::narrow`], identity,
@@ -130,6 +132,13 @@ impl Executor {
         revalidation: &Revalidation<'_>,
         cancel: &CancelToken,
     ) -> Result<ExecutionReport, ScullError> {
+        if self.lock().is_none() {
+            return Err(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                "plans are executed only while holding the execution lock (SAFE-09): use \
+                 Executor::acquire",
+            ));
+        }
         plan.verify(ctx.now_unix, ctx.machine_id, ctx.user)?;
         let mut report = ExecutionReport {
             plan_id: plan.id().clone(),

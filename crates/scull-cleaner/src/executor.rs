@@ -1,5 +1,7 @@
 //! [`Executor`]: delete one verified plan item through the platform removal walker.
 
+use crate::lock::{ExecutionLock, LockOptions};
+
 use scull_core::{
     Action, ErrorKind, FileIdentity, FsPath, ItemId, PlanItem, ScullError, action_allowed_for,
 };
@@ -37,17 +39,35 @@ pub struct DeleteReport {
 
 /// The only code path in scull that deletes (SAFE-10). See the crate docs for what is still
 /// missing before it may be wired into any interface.
+///
+/// Plans are executed only by an Executor made with [`Executor::acquire`], which holds the
+/// per-user execution lock (SAFE-09) for its whole lifetime.
 #[derive(Debug, Default)]
 #[non_exhaustive]
-pub struct Executor {}
+pub struct Executor {
+    lock: Option<ExecutionLock>,
+}
 
 impl Executor {
-    /// A new Executor.
-    //
-    // TODO(#70, P2-EXEC-04): take the per-user execution lock here and hold it for the
-    // Executor's lifetime; a second executor must wait or fail with `LockHeld`.
+    /// An Executor **without** the execution lock: it can run the single-item primitives
+    /// ([`Executor::delete`]) but [`Executor::execute_plan`] refuses to run. Use
+    /// [`Executor::acquire`] to execute plans.
     pub fn new() -> Self {
-        Self {}
+        Self { lock: None }
+    }
+
+    /// An Executor holding the per-user execution lock (SAFE-09) until it is dropped. Fails
+    /// with [`ErrorKind::LockHeld`] (exit code 6) if another executor holds it, after waiting
+    /// up to [`LockOptions::wait`].
+    pub fn acquire(opts: &LockOptions) -> Result<Self, ScullError> {
+        Ok(Self {
+            lock: Some(ExecutionLock::acquire(opts)?),
+        })
+    }
+
+    /// The execution lock this Executor holds, if any.
+    pub fn lock(&self) -> Option<&ExecutionLock> {
+        self.lock.as_ref()
     }
 
     /// Deletes one plan item. `item` must come from [`scull_core::narrow`] (verified plan,

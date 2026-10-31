@@ -29,6 +29,8 @@
 //! * `remove` (only with the `delete` cargo feature, which only `scull-cleaner` enables,
 //!   SAFE-10): the fd-relative, no-follow removal walker the Executor deletes through
 //!   (SAFE-04, SAFE-05, SAFE-18; P2-EXEC-01). Unix only for now; Windows is #68.
+//! * `exec_lock` (same feature): the per-user execution lock, an OS file lock (`flock` /
+//!   `LockFileEx`) released by the OS when its holder exits (SAFE-09, P2-EXEC-04).
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -52,6 +54,8 @@ pub mod app_dirs;
 pub mod cloud;
 pub mod elevation;
 mod error;
+#[cfg(feature = "delete")]
+pub mod exec_lock;
 mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]

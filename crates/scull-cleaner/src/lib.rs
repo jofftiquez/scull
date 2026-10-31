@@ -12,6 +12,9 @@
 //!   tracking, a fresh in-use probe, activity, protection), [`scull_core::narrow`], and a
 //!   no-follow identity and kind check. Items that fail are skipped and reported with a reason
 //!   ([`Skip`]), never executed "best effort".
+//! * [`Executor::acquire`] / [`ExecutionLock`]: the single execution lock per user account
+//!   (SAFE-09), an OS file lock held for the Executor's whole lifetime; a second executor fails
+//!   with `LockHeld` (exit 6) or waits up to a timeout. Plans run only under the lock.
 //!
 //! # Not wired into any interface yet
 //!
@@ -19,7 +22,6 @@
 //! Phase 2 safeguards land; the inspect-only release gate checks that `scull clean` is still a
 //! stub. Missing today, each tracked by its issue:
 //!
-//! * single execution lock per user (SAFE-09): P2-EXEC-04, #70;
 //! * write-ahead journal and crash recovery (SAFE-19): P2-EXEC-08, #74;
 //! * append-only audit log (SAFE-08): P2-EXEC-09, #75;
 //! * measured free-space delta (PHY-02): P2-EXEC-10, #76;
@@ -30,10 +32,12 @@
 
 mod execution;
 mod executor;
+mod lock;
 mod revalidate;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{DeleteReport, DeleteTarget, Executor};
+pub use lock::{ExecutionLock, LockOptions};
 pub use revalidate::{Revalidated, Revalidation, Skip};
 pub use scull_platform::remove::{
     AbortReason, Anomaly, RemoveOutcome, RemoveReport, RemovedCounts, SkipReason, SkippedEntry,
