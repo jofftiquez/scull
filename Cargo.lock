@@ -1272,6 +1272,7 @@ dependencies = [
  "scull-engine",
  "scull-fixtures",
  "scull-git",
+ "scull-insights",
  "scull-mcp",
  "scull-platform",
  "scull-proactive",
@@ -1374,6 +1375,20 @@ dependencies = [
  "scull-detectors",
  "scull-fixtures",
  "scull-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "scull-insights"
+version = "0.0.0"
+dependencies = [
+ "schemars",
+ "scull-core",
+ "scull-insights",
+ "scull-proactive",
+ "scull-storage",
  "serde",
  "serde_json",
  "tempfile",

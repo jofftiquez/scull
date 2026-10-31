@@ -6,6 +6,7 @@ pub mod check;
 pub mod doctor;
 pub mod forecast;
 pub mod init;
+pub mod insights;
 pub mod mcp;
 pub mod pipeline;
 pub mod projects;
