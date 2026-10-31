@@ -214,6 +214,11 @@ pub enum IssueKind {
     Loop,
     /// Depth limit: not descended.
     MaxDepth,
+    /// A cloud-sync placeholder (iCloud/File Provider dataless, OneDrive recall-on-access):
+    /// never listed so nothing gets downloaded (PLT-04); counted from metadata only.
+    CloudPlaceholder,
+    /// Not descended for another scanner reason.
+    NotDescended,
     /// A Git operation failed.
     Git,
     /// Something outside the scan roots that was not measured.

@@ -770,6 +770,16 @@
           "type": "string"
         },
         {
+          "const": "cloud_placeholder",
+          "description": "A cloud-sync placeholder (iCloud/File Provider dataless, OneDrive recall-on-access):\nnever listed so nothing gets downloaded (PLT-04); counted from metadata only.",
+          "type": "string"
+        },
+        {
+          "const": "not_descended",
+          "description": "Not descended for another scanner reason.",
+          "type": "string"
+        },
+        {
           "const": "git",
           "description": "A Git operation failed.",
           "type": "string"

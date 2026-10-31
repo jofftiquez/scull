@@ -215,7 +215,14 @@ impl Collector {
                         )
                     }
                     BoundaryReason::Loop => (IssueKind::Loop, "directory loop; not descended"),
-                    _ => (IssueKind::MaxDepth, "depth limit reached; not descended"),
+                    BoundaryReason::MaxDepth => {
+                        (IssueKind::MaxDepth, "depth limit reached; not descended")
+                    }
+                    BoundaryReason::CloudPlaceholder => (
+                        IssueKind::CloudPlaceholder,
+                        "cloud placeholder; not listed so nothing is downloaded (counted from metadata)",
+                    ),
+                    _ => (IssueKind::NotDescended, "not descended"),
                 };
                 st.issue(&b.path, kind, what.to_owned());
             }

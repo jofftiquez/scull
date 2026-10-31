@@ -110,8 +110,9 @@
       "type": "string"
     },
     "ItemId": {
-      "description": "Stable ID of a candidate: a hash of its identity and its path bytes.\n\nBinding both means an item ID stops matching if the object at the path is replaced\n(new identity) *or* the same object is moved (new path). Plans refer to items by `ItemId`,\nnever by path alone (SAFE-11): a lossy or edited path in a plan file can't redirect deletion.",
-      "type": "string"
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
     },
     "ScullError": {
       "description": "A serializable error: kind, human message and optional context.\n\n```\nuse scull_core::{ErrorKind, ExitCode, FsPath, ScullError};\n\nlet e = ScullError::new(ErrorKind::PlanExpired, \"plan expired 3 minutes ago\")\n    .with_path(FsPath::from(\"/home/me/plan.json\"));\nassert_eq!(e.exit_code(), ExitCode::PlanRejected);\nassert_eq!(e.exit_code().as_i32(), 4);\n```",
