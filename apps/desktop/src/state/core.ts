@@ -1,7 +1,7 @@
 // What the shell knows from the core: the last status, a running scan (progress, cancel) and
 // the figures next to nav items. Screens read `core` and call `rescan` / `cancelScan`.
-import { reactive } from 'vue';
-import type { DesktopStatus, ProgressEvent, ScullBridge, TierBreakdown } from '../bridge';
+import { markRaw, reactive } from 'vue';
+import type { DesktopStatus, ProgressEvent, ScanReport, ScullBridge, TierBreakdown } from '../bridge';
 import { toBridgeError } from '../bridge';
 import { formatBytes } from '../lib/format';
 import { NOT_SCANNED, shell } from './shell';
@@ -12,9 +12,12 @@ export interface CoreState {
   progress: ProgressEvent | null;
   /** The last operation's error, shown in the header. */
   error: string | null;
+  /** The last scan report of this session (a cancelled one only until a complete one exists),
+   * kept raw (not deeply reactive): the Overview draws its wheel from it. */
+  report: ScanReport | null;
 }
 
-export const core = reactive<CoreState>({ status: null, scanning: false, progress: null, error: null });
+export const core = reactive<CoreState>({ status: null, scanning: false, progress: null, error: null, report: null });
 
 let controller: AbortController | null = null;
 
@@ -88,7 +91,7 @@ export async function rescan(bridge: ScullBridge): Promise<void> {
   core.progress = null;
   publish();
   try {
-    await bridge.scan(
+    const report = await bridge.scan(
       {},
       {
         signal: controller.signal,
@@ -98,6 +101,7 @@ export async function rescan(bridge: ScullBridge): Promise<void> {
         },
       },
     );
+    if (!report.cancelled || !core.report) core.report = markRaw(report);
   } catch (e) {
     core.error = toBridgeError(e).message;
   } finally {
