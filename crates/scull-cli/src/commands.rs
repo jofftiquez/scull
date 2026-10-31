@@ -54,7 +54,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
-        Command::Check => planned("check", 114),
+        Command::Check => None,
         Command::Insights { action } => match action {
             None => planned("insights", 116),
             Some(InsightsAction::Export) => planned("insights export", 116),
@@ -133,6 +133,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Check => crate::cmd::check::run(ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
@@ -203,7 +204,6 @@ mod tests {
             (&["history"], "history", Some(81)),
             (&["restore", "op-1"], "restore", Some(81)),
             (&["approve", "plan-1"], "approve", Some(108)),
-            (&["check"], "check", Some(114)),
             (&["insights"], "insights", Some(116)),
             (&["insights", "export"], "insights export", Some(116)),
             (&["insights", "purge"], "insights purge", Some(116)),

@@ -1274,6 +1274,7 @@ dependencies = [
  "scull-git",
  "scull-mcp",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-scanner",
  "scull-storage",
@@ -1412,6 +1413,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys",
+]
+
+[[package]]
+name = "scull-proactive"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+ "schemars",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ scull-storage = { path = "crates/scull-storage" }
 scull-mcp = { path = "crates/scull-mcp" }
 scull-fixtures = { path = "crates/scull-fixtures" }
 scull-engine = { path = "crates/scull-engine" }
+scull-proactive = { path = "crates/scull-proactive" }
 
 # third-party (licenses checked by cargo-deny, P1-CI-02)
 serde = { version = "1.0.229", features = ["derive"] }

@@ -2,7 +2,9 @@
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
 pub mod caches;
+pub mod check;
 pub mod doctor;
+pub mod forecast;
 pub mod init;
 pub mod mcp;
 pub mod pipeline;

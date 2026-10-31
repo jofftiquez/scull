@@ -1,0 +1,341 @@
+{
+  "$defs": {
+    "Alert": {
+      "additionalProperties": false,
+      "description": "One alert.",
+      "properties": {
+        "key": {
+          "description": "Stable identity for de-duplication and responses: `<kind>:<subject>`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AlertKind",
+          "description": "What it is about."
+        },
+        "message": {
+          "description": "One plain sentence for people (not terminal-escaped: callers escape on output).",
+          "type": "string"
+        },
+        "raised_at": {
+          "description": "When it was raised (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "How urgent it is."
+        },
+        "subject": {
+          "description": "The volume, category or path it concerns.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "severity",
+        "key",
+        "subject",
+        "message",
+        "raised_at"
+      ],
+      "type": "object"
+    },
+    "AlertKind": {
+      "description": "What an alert is about.",
+      "oneOf": [
+        {
+          "const": "disk_full_forecast",
+          "description": "A volume is forecast to drop below its reserve soon (PRO-01: time-based, default\nwithin 14 days).",
+          "type": "string"
+        },
+        {
+          "const": "low_space",
+          "description": "A volume is already below its reserve (measured).",
+          "type": "string"
+        }
+      ]
+    },
+    "CheckReport": {
+      "additionalProperties": false,
+      "description": "`scull check` output.",
+      "properties": {
+        "alerts": {
+          "description": "Alerts raised, most severe first.",
+          "items": {
+            "$ref": "#/$defs/Alert"
+          },
+          "type": "array"
+        },
+        "forecasts": {
+          "description": "Disk-full forecast of every volume ever sampled, by volume id.",
+          "items": {
+            "$ref": "#/$defs/ForecastReport"
+          },
+          "type": "array"
+        },
+        "not_sampled": {
+          "description": "Volumes known from history that could not be sampled now.",
+          "items": {
+            "$ref": "#/$defs/NotSampled"
+          },
+          "type": "array"
+        },
+        "now": {
+          "description": "When the check ran (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "sampled": {
+          "description": "Free space sampled now (and recorded in history).",
+          "items": {
+            "$ref": "#/$defs/VolumeReport"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "now",
+        "sampled",
+        "not_sampled",
+        "forecasts",
+        "alerts"
+      ],
+      "type": "object"
+    },
+    "Confidence": {
+      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "Not enough history to say anything.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Shown in status lines and may alert.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Long, regular history and a short extrapolation.",
+          "type": "string"
+        }
+      ]
+    },
+    "ForecastReport": {
+      "additionalProperties": false,
+      "description": "One volume's disk-full forecast.",
+      "properties": {
+        "as_of": {
+          "description": "When the latest sample was taken (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence",
+          "description": "`unknown`, `low`, `medium` or `high`. Status lines and alerts use `medium` and up."
+        },
+        "days_until_threshold": {
+          "description": "Whole days until free space drops below the reserve (`filling`: at least 1;\n`below_reserve`: 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fill_bytes_per_day": {
+          "description": "Free space lost per day by the trend, in bytes (negative when free space grows).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "free_bytes": {
+          "description": "Latest free space (bytes), plus bytes known to be freed since.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reserve_bytes": {
+          "description": "The free space the forecast counts down to (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "samples": {
+          "description": "Samples the forecast used.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "span_secs": {
+          "description": "Seconds between the first and the latest sample used.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ForecastState",
+          "description": "`not_enough_history`, `not_filling`, `filling` or `below_reserve`."
+        },
+        "threshold_at": {
+          "description": "When free space is forecast to drop below the reserve (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "state",
+        "confidence",
+        "reserve_bytes",
+        "samples",
+        "span_secs"
+      ],
+      "type": "object"
+    },
+    "ForecastState": {
+      "description": "What the forecast concluded.",
+      "oneOf": [
+        {
+          "const": "not_enough_history",
+          "description": "Too few samples or too short a span in the window; no extrapolation.",
+          "type": "string"
+        },
+        {
+          "const": "not_filling",
+          "description": "Free space is stable or growing, or would take longer than the horizon to run out.",
+          "type": "string"
+        },
+        {
+          "const": "filling",
+          "description": "Free space is shrinking: see `days_until_threshold`.",
+          "type": "string"
+        },
+        {
+          "const": "below_reserve",
+          "description": "Free space is already at or below the reserve (measured, not forecast).",
+          "type": "string"
+        }
+      ]
+    },
+    "NotSampled": {
+      "additionalProperties": false,
+      "description": "A volume known from history that was not sampled.",
+      "properties": {
+        "reason": {
+          "description": "Why: e.g. `not connected`.",
+          "type": "string"
+        },
+        "volume_id": {
+          "description": "Volume identifier as recorded.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "description": "How urgent an alert is. Ordered: `Info < Warning < Critical`.",
+      "oneOf": [
+        {
+          "const": "info",
+          "description": "Worth knowing.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "Act within days.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "Act now.",
+          "type": "string"
+        }
+      ]
+    },
+    "VolumeReport": {
+      "additionalProperties": false,
+      "description": "One volume's latest free-space sample.",
+      "properties": {
+        "free_bytes": {
+          "description": "Bytes available to the user.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sampled_at": {
+          "description": "When it was sampled (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "Volume size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "total_bytes",
+        "free_bytes",
+        "sampled_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/CheckReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/check@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/check@1",
+  "type": "object"
+}
