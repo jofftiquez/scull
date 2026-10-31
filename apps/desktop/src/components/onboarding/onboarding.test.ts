@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
 import { BRIDGE_KEY, type ScanParams, type ScullBridge } from '../../bridge';
@@ -194,13 +194,24 @@ describe('onboarding screen', () => {
       },
     };
     const { wrapper, router } = await mountApp('/', bridge);
-    await new Promise((r) => setTimeout(r, 600));
-    await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/onboarding');
-    await new Promise((r) => setTimeout(r, 200));
-    await flushPromises();
+    // Wait for conditions, not fixed sleeps: the suite runs in parallel and timings vary.
+    await vi.waitFor(
+      async () => {
+        await flushPromises();
+        expect(router.currentRoute.value.path).toBe('/onboarding');
+      },
+      { timeout: 5000, interval: 25 },
+    );
+    await vi.waitFor(
+      async () => {
+        await flushPromises();
+        // Detection pre-fills the answers asynchronously.
+        expect(wrapper.find('[data-testid="answered"]').text()).toBe('5 of 5 answered');
+        expect(wrapper.find('[data-testid="found"]').text()).toContain('494.0 GiB');
+      },
+      { timeout: 5000, interval: 25 },
+    );
     expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="answered"]').text()).toBe('5 of 5 answered');
     expect(wrapper.get('[data-testid="found"]').text()).toContain('494.0 GiB · 41.2 GiB free');
 
     // Ticking the home folder asks first (CFG-04); declining leaves it out.
@@ -212,8 +223,13 @@ describe('onboarding screen', () => {
     expect(wrapper.find('[data-testid="broad-confirm"]').exists()).toBe(false);
 
     await wrapper.get('[data-testid="start-scan"]').trigger('click');
-    await new Promise((r) => setTimeout(r, 1800));
-    await flushPromises();
+    await vi.waitFor(
+      async () => {
+        await flushPromises();
+        expect(wrapper.get('[data-testid="scan"]').text()).toContain('Scan complete');
+      },
+      { timeout: 10000, interval: 50 },
+    );
     expect(calls).toEqual([{ roots: ['/Users/ada/code', '/Users/ada/work'], allow_broad_roots: false }]);
     expect(wrapper.get('[data-testid="scan"]').text()).toContain('Scan complete');
     expect(wrapper.get('[data-testid="found-chips"]').text()).toContain(`${MOCK_DATA.scanReport.projects.length} projects`);
