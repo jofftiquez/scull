@@ -8,14 +8,23 @@
 //!   whether it was modified within the activity window ([`check_in_use`],
 //!   [`recent_activity`]).
 //!
+//! * [`protect`]: protected roots, `.scull-protect` markers and user exclusions compared by
+//!   file identity (SAFE-03, SAFE-13): [`ProtectedSet::check`] gives the rubric's
+//!   `in_protected_root`, `protect_marker` and `user_excluded` signals.
+//!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
 pub mod activity;
+pub mod protect;
 pub mod rubric;
 
 pub use activity::{
     ActivityProbe, ActivitySignal, GapPolicy, Holder, InUse, MtimeSample, NativeActivityProbe,
     ProbeResult, RecentActivity, Unavailable, check_in_use, recent_activity, sample_newest_mtime,
+};
+pub use protect::{
+    DefaultProtection, PROTECT_MARKER, ProtectedPath, ProtectedSet, Protection, Scope, Source,
+    TargetOs, default_protected,
 };
 pub use rubric::{
     ActivityWindow, Classification, GitTracking, Regen, Signals, Tri, apply, classify,
