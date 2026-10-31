@@ -1138,12 +1138,14 @@ dependencies = [
 name = "scull-fixtures"
 version = "0.0.0"
 dependencies = [
+ "scull-cli",
  "scull-core",
  "scull-detectors",
  "scull-git",
  "scull-platform",
  "scull-safety",
  "scull-scanner",
+ "serde_json",
  "sha2",
  "tempfile",
 ]

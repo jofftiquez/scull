@@ -114,8 +114,9 @@ pub(crate) fn junction(_target: &Path, _link: &Path) -> io::Result<()> {
 }
 
 /// Set the modification time of `path` itself, never following a link: files and directories
-/// through `File::set_modified`; links through `touch -h -r <reference>` (stable `std` has no
-/// `lutimes`), where `reference` already carries the wanted time.
+/// through `File::set_modified`; links and special files (FIFOs, sockets: opening a FIFO can
+/// block forever) through `touch -h -r <reference>` (stable `std` has no `lutimes`), where
+/// `reference` already carries the wanted time.
 #[cfg(unix)]
 pub(crate) fn set_mtime_nofollow(
     path: &Path,
@@ -123,7 +124,7 @@ pub(crate) fn set_mtime_nofollow(
     mtime: std::time::SystemTime,
     reference: &Path,
 ) -> io::Result<()> {
-    if kind.is_symlink() {
+    if !kind.is_file() && !kind.is_dir() {
         let out = std::process::Command::new("touch")
             .arg("-h")
             .arg("-r")

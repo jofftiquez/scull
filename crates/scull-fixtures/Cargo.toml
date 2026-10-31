@@ -25,3 +25,7 @@ scull-scanner.workspace = true
 scull-detectors.workspace = true
 scull-git.workspace = true
 scull-safety.workspace = true
+# Output escaping and argument parsing for FX-FS-09/10/13 (a dev-dependency: scull-cli itself
+# dev-depends on scull-fixtures).
+scull-cli = { path = "../scull-cli" }
+serde_json.workspace = true

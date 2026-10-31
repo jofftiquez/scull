@@ -131,7 +131,7 @@ impl RegisteredFixture {
 }
 
 /// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
-pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT"];
+pub const COVERED_SECTIONS: &[&str] = &["FX-CLS", "FX-GIT", "FX-FS"];
 
 const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
     TestRef { file, test_fn }
@@ -150,6 +150,11 @@ const GIT_CLS: &str = "crates/scull-git/tests/classify_fixtures.rs";
 const GIT_STATE: &str = "crates/scull-git/tests/state.rs";
 const GIT_DISC: &str = "crates/scull-git/tests/discovery.rs";
 const GIT_HARD: &str = "crates/scull-git/tests/hardened.rs";
+const E2E_FS: &str = "crates/scull-fixtures/tests/fx_fs.rs";
+const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
+const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
+const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
+const LARGE: &str = "crates/scull-detectors/tests/large_files.rs";
 
 const fn fx(
     id: &'static str,
@@ -618,6 +623,237 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_GIT,
             "fx_git_17_sixty_agent_worktrees_in_mixed_states",
         )]),
+    ),
+    // §3.3 Filesystem edge cases (FX-FS)
+    fx(
+        "FX-FS-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "scan and classify are end-to-end (link counted, never followed, canary bytes not attributed) and removal runs on a std::fs stand-in; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[t(
+                E2E_FS,
+                "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
+            )],
+        },
+    ),
+    fx(
+        "FX-FS-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_FS,
+                "fx_fs_02_symlink_loops_terminate_and_are_recorded_once",
+            ),
+            t(
+                SCAN_SPECIAL,
+                "fx_fs_02_symlink_loops_chains_and_dangling_links",
+            ),
+            t(
+                SCAN_SPECIAL,
+                "fx_fs_02_directory_hardlink_loops_are_reported_once_and_not_descended",
+            ),
+            t(
+                SCAN_SPECIAL,
+                "fx_fs_02_links_are_never_followed_even_where_the_os_would",
+            ),
+            t(SCAN_UNIX, "fx_fs_02_symlink_loops_are_not_followed"),
+            t(SCAN_WIN, "fx_fs_02_junction_loops_are_never_descended"),
+        ]),
+    ),
+    fx(
+        "FX-FS-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 56,
+            reason: "the scanner never follows a link, so such a candidate is never found by a scan (tested); a path given explicitly through a link (e.g. a clean target) gets the link_escape signal from the shared engine, P1-CLI-02 / scull-engine (D-29), not merged yet",
+            partial: &[t(
+                E2E_FS,
+                "fx_fs_03_candidate_behind_an_escaping_link_is_never_reached",
+            )],
+        },
+    ),
+    fx(
+        "FX-FS-04",
+        Gate::Mvp,
+        "L (M via disk image)",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 189,
+            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet",
+            partial: &[],
+        },
+    ),
+    fx(
+        "FX-FS-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "bytes attributed once (shared, not freed) is end-to-end; the canary keeping its content and link after the candidate is removed needs the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[
+                t(E2E_FS, "fx_fs_05_hardlink_to_canary_bytes_attributed_once"),
+                t(
+                    HARDLINKS,
+                    "fx_fs_05_link_to_canary_is_shared_and_counted_once",
+                ),
+            ],
+        },
+    ),
+    fx(
+        "FX-FS-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(E2E_FS, "fx_fs_06_sparse_file_estimate_uses_allocated_size"),
+            t(LARGE, "fx_fs_06_sparse_file_reported_by_allocated_size"),
+        ]),
+    ),
+    fx(
+        "FX-FS-07",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "scan and classify with read-only entries are end-to-end and I-3 proves no permission changed; deleting them within the candidate needs the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[t(
+                E2E_FS,
+                "fx_fs_07_read_only_entries_inside_candidate_permissions_untouched",
+            )],
+        },
+    ),
+    fx(
+        "FX-FS-08",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "the scan reports the denied folder with its reason, marks the item incomplete and never lowers protection (end-to-end, Unix); the item's partial/failed outcome is an Executor result; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[
+                t(
+                    E2E_FS,
+                    "fx_fs_08_permission_denied_subfolder_is_reported_not_escalated",
+                ),
+                t(
+                    SCAN_UNIX,
+                    "fx_fs_08_unreadable_directory_is_reported_and_scan_continues",
+                ),
+            ],
+        },
+    ),
+    fx(
+        "FX-FS-09",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_FS,
+                "fx_fs_09_unicode_names_identity_and_rtl_override_flagged",
+            ),
+            t(
+                PROTECT,
+                "fx_fs_09_unicode_normalization_alias_cannot_bypass_protection",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-FS-10",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(
+            E2E_FS,
+            "fx_fs_10_control_characters_in_names_are_escaped_and_json_stays_valid",
+        )]),
+    ),
+    fx(
+        "FX-FS-11",
+        Gate::Mvp,
+        "MW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_FS,
+                "fx_fs_11_protected_folder_by_case_alias_is_still_protected",
+            ),
+            t(PROTECT, "fx_fs_11_case_alias_cannot_bypass_protection"),
+        ]),
+    ),
+    fx(
+        "FX-FS-12",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "a >260-character candidate path is scanned and classified end-to-end; paths beyond the OS limit (4096 bytes on Linux) need handle-relative traversal and deletion, i.e. the Executor; the removal half needs the Executor (#67 Unix, #68 Windows); the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[t(
+                E2E_FS,
+                "fx_fs_12_long_path_candidate_is_scanned_and_classified",
+            )],
+        },
+    ),
+    fx(
+        "FX-FS-13",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[t(E2E_FS, "fx_fs_13_option_like_folder_names_are_paths")]),
+    ),
+    fx(
+        "FX-FS-14",
+        Gate::Mvp,
+        "ML",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_FS,
+                "fx_fs_14_fifo_and_socket_inside_candidate_never_opened",
+            ),
+            t(
+                SCAN_SPECIAL,
+                "fx_fs_14_devices_sockets_and_fifos_inside_a_candidate_are_never_opened",
+            ),
+            t(
+                SCAN_UNIX,
+                "fx_fs_14_fifo_without_writer_is_never_opened_and_scan_is_fast",
+            ),
+            t(SCAN_UNIX, "fx_fs_14_special_files_are_never_opened"),
+            t(
+                SCAN_UNIX,
+                "fx_fs_14_device_nodes_are_classified_from_metadata_only",
+            ),
+            t(
+                SCAN_UNIX,
+                "fx_fs_14_special_file_roots_are_refused_without_opening",
+            ),
+            t(
+                SCAN_WIN,
+                "fx_fs_14_af_unix_socket_file_is_a_special_never_opened",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-FS-15",
+        Gate::Mvp,
+        "MLW",
+        Mode::Nightly,
+        Status::Tracked {
+            issue: 189,
+            reason: "a 1M-entry tree takes minutes; it belongs in the nightly job, which doesn't exist yet",
+            partial: &[],
+        },
     ),
 ];
 

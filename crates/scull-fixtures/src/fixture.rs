@@ -258,6 +258,10 @@ impl Fixture {
     ///
     /// Use it after building a subtree that should look idle: creating entries updates every
     /// directory's mtime, and scanners (rightly) count directory mtimes as activity.
+    ///
+    /// A hard-linked file shares its time with every other link: don't age a subtree holding a
+    /// link to a file outside the root (age it before linking, then [`Fixture::age_one`] the
+    /// directory).
     pub fn age(&mut self, rel: impl AsRef<Path>, mtime: SystemTime) -> Result<&mut Self> {
         let top = self.writable_path(rel.as_ref())?;
         // Links are aged by copying the time of a reference file (Unix `touch -h -r`). It lives
@@ -291,6 +295,27 @@ impl Fixture {
             os::set_mtime_nofollow(&p, ft, mtime, &reference)
                 .map_err(|e| FixtureError::io("set mtime (no-follow)", &p, e))?;
         }
+        let _ = fs::remove_file(&reference);
+        Ok(self)
+    }
+
+    /// Like [`Fixture::age`] for `rel` itself only (a directory's contents are left alone).
+    /// Use it where the subtree holds a hard link to a file outside the root (e.g. the canary):
+    /// setting that file's time through the link would change the canary too.
+    pub fn age_one(&mut self, rel: impl AsRef<Path>, mtime: SystemTime) -> Result<&mut Self> {
+        let p = self.writable_path(rel.as_ref())?;
+        let ft = fs::symlink_metadata(&p)
+            .map_err(|e| FixtureError::io("lstat", &p, e))?
+            .file_type();
+        let reference = self.base.join(".mtime-reference");
+        fs::write(&reference, b"").map_err(|e| FixtureError::io("write", &reference, e))?;
+        fs::File::options()
+            .write(true)
+            .open(&reference)
+            .and_then(|f| f.set_modified(mtime))
+            .map_err(|e| FixtureError::io("set_modified", &reference, e))?;
+        os::set_mtime_nofollow(&p, ft, mtime, &reference)
+            .map_err(|e| FixtureError::io("set mtime (no-follow)", &p, e))?;
         let _ = fs::remove_file(&reference);
         Ok(self)
     }
