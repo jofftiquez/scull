@@ -4,7 +4,7 @@ import vue from 'eslint-plugin-vue';
 import vueParser from 'vue-eslint-parser';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'src-tauri/**', 'bridge/**', 'docker/**'] },
+  { ignores: ['dist/**', 'bench/dist/**', 'node_modules/**', 'src-tauri/**', 'bridge/**', 'docker/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
@@ -23,6 +23,13 @@ export default tseslint.config(
   {
     files: ['scripts/**/*.mjs'],
     languageOptions: { globals: { process: 'readonly', console: 'readonly' } },
+  },
+  {
+    // Benchmark drivers (node); page.evaluate callbacks run in the browser.
+    files: ['bench/**/*.mjs'],
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', setTimeout: 'readonly', URL: 'readonly', window: 'readonly', document: 'readonly' },
+    },
   },
   {
     rules: {
