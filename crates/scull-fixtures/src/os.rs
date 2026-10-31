@@ -112,3 +112,77 @@ pub(crate) fn junction(_target: &Path, _link: &Path) -> io::Result<()> {
         "junctions exist only on Windows",
     ))
 }
+
+/// Set the modification time of `path` itself, never following a link: files and directories
+/// through `File::set_modified`; links through `touch -h -r <reference>` (stable `std` has no
+/// `lutimes`), where `reference` already carries the wanted time.
+#[cfg(unix)]
+pub(crate) fn set_mtime_nofollow(
+    path: &Path,
+    kind: std::fs::FileType,
+    mtime: std::time::SystemTime,
+    reference: &Path,
+) -> io::Result<()> {
+    if kind.is_symlink() {
+        let out = std::process::Command::new("touch")
+            .arg("-h")
+            .arg("-r")
+            .arg(reference)
+            .arg(path)
+            .output()?;
+        return if out.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "touch -h failed ({}): {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )))
+        };
+    }
+    let f = if kind.is_dir() {
+        std::fs::File::open(path)?
+    } else {
+        std::fs::File::options().write(true).open(path)?
+    };
+    f.set_modified(mtime)
+}
+
+/// Set the modification time of `path` itself, never following a link: opened with
+/// `FILE_WRITE_ATTRIBUTES` only, `FILE_FLAG_BACKUP_SEMANTICS` (needed for directories) and,
+/// for links and junctions, `FILE_FLAG_OPEN_REPARSE_POINT`.
+#[cfg(windows)]
+pub(crate) fn set_mtime_nofollow(
+    path: &Path,
+    kind: std::fs::FileType,
+    mtime: std::time::SystemTime,
+    _reference: &Path,
+) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
+    if kind.is_symlink() {
+        flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+    }
+    let f = std::fs::File::options()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(flags)
+        .open(path)?;
+    f.set_modified(mtime)
+}
+
+/// Setting modification times is not supported on this target.
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn set_mtime_nofollow(
+    _path: &Path,
+    _kind: std::fs::FileType,
+    _mtime: std::time::SystemTime,
+    _reference: &Path,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "setting modification times is not supported on this target",
+    ))
+}

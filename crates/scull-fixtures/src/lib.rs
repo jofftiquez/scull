@@ -32,6 +32,9 @@
 //! * [`check_invariants`]: runs I-2 and I-3 always, I-1 and I-8 when given a plan / tiers, and
 //!   reports I-4…I-7 as [`Outcome::Unimplemented`] with the issue that will implement them.
 //!
+//! * [`registry`]: every fixture ID of `docs/FIXTURES.md` §3 this lane tracks, with where it is
+//!   implemented or which issue tracks it (checked against the document by `tests/registry.rs`).
+//!
 //! OS gaps that stable `std` cannot fill (Windows file identity) are documented on
 //! [`Entry::identity`] and left to #32 (P1-PLAT-02).
 
@@ -41,6 +44,7 @@ mod git;
 pub mod invariants;
 mod os;
 mod projects;
+pub mod registry;
 mod snapshot;
 
 pub use error::{FixtureError, Result};

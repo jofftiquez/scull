@@ -252,6 +252,49 @@ impl Fixture {
         Ok(self)
     }
 
+    /// Set the modification time of `rel` and of **everything beneath it** (files, directories
+    /// and the links themselves, never their targets) to `mtime`, deepest first, so that a
+    /// directory's own mtime isn't refreshed after it was set.
+    ///
+    /// Use it after building a subtree that should look idle: creating entries updates every
+    /// directory's mtime, and scanners (rightly) count directory mtimes as activity.
+    pub fn age(&mut self, rel: impl AsRef<Path>, mtime: SystemTime) -> Result<&mut Self> {
+        let top = self.writable_path(rel.as_ref())?;
+        // Links are aged by copying the time of a reference file (Unix `touch -h -r`). It lives
+        // beside the root, never inside it or the canary.
+        let reference = self.base.join(".mtime-reference");
+        fs::write(&reference, b"").map_err(|e| FixtureError::io("write", &reference, e))?;
+        fs::File::options()
+            .write(true)
+            .open(&reference)
+            .and_then(|f| f.set_modified(mtime))
+            .map_err(|e| FixtureError::io("set_modified", &reference, e))?;
+
+        // Post-order: children before their directory.
+        let mut order = Vec::new();
+        let mut stack = vec![(top, false)];
+        while let Some((p, expanded)) = stack.pop() {
+            let ft = fs::symlink_metadata(&p)
+                .map_err(|e| FixtureError::io("lstat", &p, e))?
+                .file_type();
+            if ft.is_dir() && !expanded {
+                stack.push((p.clone(), true));
+                for e in fs::read_dir(&p).map_err(|e| FixtureError::io("read_dir", &p, e))? {
+                    let e = e.map_err(|e| FixtureError::io("read_dir", &p, e))?;
+                    stack.push((e.path(), false));
+                }
+            } else {
+                order.push((p, ft));
+            }
+        }
+        for (p, ft) in order {
+            os::set_mtime_nofollow(&p, ft, mtime, &reference)
+                .map_err(|e| FixtureError::io("set mtime (no-follow)", &p, e))?;
+        }
+        let _ = fs::remove_file(&reference);
+        Ok(self)
+    }
+
     /// Create a symlink at `link` (relative to the root) pointing to `target`, which is stored
     /// verbatim: relative targets resolve against the link's parent, absolute targets (e.g.
     /// [`Canary::symlink_target_dir`]) are allowed because creating a link never modifies its

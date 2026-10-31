@@ -1,0 +1,509 @@
+//! The fixture registry: every fixture ID of `docs/FIXTURES.md` §3 that this lane tracks, with
+//! its gate, OSs and mode, and where it is implemented (crate + test function) or which open
+//! issue tracks it.
+//!
+//! `docs/FIXTURES.md` is the source of truth. The tests in `tests/registry.rs` parse its tables
+//! ([`parse_fixture_matrix`]) and fail when:
+//!
+//! * a fixture of a [covered section](COVERED_SECTIONS) is missing here, or its gate, OS or mode
+//!   differs from the document;
+//! * an MVP-gated CI fixture is neither [`Status::Implemented`] nor [`Status::Tracked`] with an
+//!   issue number and a reason;
+//! * a registered test function does not exist in the file it names.
+//!
+//! Test paths are relative to the workspace root, so a registry entry is also a pointer for a
+//! reader: `crates/scull-detectors/tests/rust_detector.rs` + `fx_cls_01_...`.
+
+use std::fmt;
+
+/// The release that first requires a fixture to pass (FIXTURES §2, "Gate column").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Gate {
+    /// MVP release gate (PRD §21.3).
+    Mvp,
+    /// v1.0.
+    V1_0,
+    /// v1.x.
+    V1x,
+}
+
+impl Gate {
+    /// Parse a FIXTURES.md gate cell (`MVP`, `v1.0`, `v1.x`).
+    pub fn parse(cell: &str) -> Option<Self> {
+        match cell.trim() {
+            "MVP" => Some(Self::Mvp),
+            "v1.0" => Some(Self::V1_0),
+            "v1.x" => Some(Self::V1x),
+            _ => None,
+        }
+    }
+}
+
+/// Where a fixture runs (FIXTURES §2, "Modes").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mode {
+    /// Every pull request, all three OSs.
+    Ci,
+    /// Slower or privileged tests.
+    Nightly,
+    /// Needs a real desktop session or account state.
+    Manual,
+}
+
+impl Mode {
+    /// Parse a FIXTURES.md mode cell (`CI`, `Nightly`, `Manual`).
+    pub fn parse(cell: &str) -> Option<Self> {
+        match cell.trim() {
+            "CI" => Some(Self::Ci),
+            "Nightly" => Some(Self::Nightly),
+            "Manual" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
+/// A test function, by workspace-relative source file and function name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TestRef {
+    /// Source file, relative to the workspace root, `/`-separated.
+    pub file: &'static str,
+    /// The `#[test]` function name.
+    pub test_fn: &'static str,
+}
+
+impl fmt::Display for TestRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.file, self.test_fn)
+    }
+}
+
+/// How far a fixture is implemented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// Fully implemented by these tests. The first listed is the end-to-end fixture when one
+    /// exists; the others cover the same scenario at one layer (detector, rubric, Git, ...).
+    Implemented(&'static [TestRef]),
+    /// Not (fully) implemented yet; an open issue owns the rest. `partial` lists tests that
+    /// already cover part of the scenario.
+    Tracked {
+        /// The GitHub issue that will finish it.
+        issue: u32,
+        /// What is missing and why.
+        reason: &'static str,
+        /// Tests covering part of the scenario today.
+        partial: &'static [TestRef],
+    },
+    /// Not required at the MVP CI gate (later gate, or nightly/manual mode) and not started.
+    Deferred,
+}
+
+impl Status {
+    /// Every test this status names.
+    pub fn tests(&self) -> &'static [TestRef] {
+        match self {
+            Status::Implemented(t) => t,
+            Status::Tracked { partial, .. } => partial,
+            Status::Deferred => &[],
+        }
+    }
+}
+
+/// One registered fixture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisteredFixture {
+    /// Fixture ID, e.g. `FX-CLS-01`.
+    pub id: &'static str,
+    /// Release gate.
+    pub gate: Gate,
+    /// OS cell as written in FIXTURES.md (`MLW`, `MW`, `L (M via disk image)`, ...).
+    pub os: &'static str,
+    /// Mode.
+    pub mode: Mode,
+    /// Implementation status.
+    pub status: Status,
+}
+
+impl RegisteredFixture {
+    /// Whether the MVP CI gate requires this fixture.
+    pub fn is_mvp_ci(&self) -> bool {
+        self.gate == Gate::Mvp && self.mode == Mode::Ci
+    }
+}
+
+/// Sections of FIXTURES.md §3 whose every fixture must be registered (ID prefix).
+pub const COVERED_SECTIONS: &[&str] = &["FX-CLS"];
+
+const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
+    TestRef { file, test_fn }
+}
+
+const E2E_CLS: &str = "crates/scull-fixtures/tests/fx_cls.rs";
+const RUST_DET: &str = "crates/scull-detectors/tests/rust_detector.rs";
+const NODE_DET: &str = "crates/scull-detectors/tests/node_detector.rs";
+const RUBRIC: &str = "crates/scull-safety/src/rubric.rs";
+const ACTIVITY: &str = "crates/scull-safety/tests/activity.rs";
+const CORE_CFG: &str = "crates/scull-core/tests/config.rs";
+const HARDLINKS: &str = "crates/scull-scanner/tests/hardlinks.rs";
+const PROTECT: &str = "crates/scull-safety/tests/protect.rs";
+
+const fn fx(
+    id: &'static str,
+    gate: Gate,
+    os: &'static str,
+    mode: Mode,
+    status: Status,
+) -> RegisteredFixture {
+    RegisteredFixture {
+        id,
+        gate,
+        os,
+        mode,
+        status,
+    }
+}
+
+/// Every registered fixture, in FIXTURES.md order.
+pub const REGISTRY: &[RegisteredFixture] = &[
+    // §3.1 Classification (FX-CLS)
+    fx(
+        "FX-CLS-01",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_01_idle_cargo_target_with_lockfile_is_s0_in_plan",
+            ),
+            t(RUST_DET, "fx_cls_01_cargo_target_with_lockfile_idle_is_s0"),
+            t(RUST_DET, "fx_cls_01_cargo_target_without_lockfile_is_s2"),
+            t(RUBRIC, "fx_cls_01_cargo_target_with_lockfile_idle_is_s0"),
+        ]),
+    ),
+    fx(
+        "FX-CLS-02",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_02_target_full_of_photos_is_not_a_candidate",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_02_target_with_photos_and_no_cargo_toml_is_not_a_candidate",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_02_symlink_named_target_is_never_a_candidate",
+            ),
+            t(RUBRIC, "fx_cls_02_no_marker_is_not_a_candidate_and_s3"),
+        ]),
+    ),
+    fx(
+        "FX-CLS-03",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_03_git_tracked_dist_is_s3_and_never_planned",
+            ),
+            t(RUBRIC, "fx_cls_03_git_tracked_dist_is_s3"),
+        ]),
+    ),
+    fx(
+        "FX-CLS-04",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_04_shared_target_dir_is_one_candidate_counted_once",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_04_shared_cargo_target_dir_is_one_candidate_for_both_projects",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_04_project_target_used_by_another_project_is_merged_not_duplicated",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_04_declared_dirs_that_hold_projects_or_data_are_never_reported",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-CLS-05",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_05_node_modules_with_lockfile_s0_without_lockfile_s2",
+            ),
+            t(NODE_DET, "fx_cls_05_node_modules_with_lockfile_is_s0"),
+            t(NODE_DET, "fx_cls_05_node_modules_without_lockfile_is_s2"),
+            t(RUBRIC, "fx_cls_05_node_modules_with_lockfile_s0_without_s2"),
+        ]),
+    ),
+    fx(
+        "FX-CLS-06",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Tracked {
+            issue: 83,
+            reason: "classification and link recording are end-to-end; the removal half \
+                     (\"deleting node_modules removes the links only\") runs against a \
+                     std::fs stand-in until the Executor exists (#67 Unix, #68 Windows); \
+                     the FX-EXEC fixtures (#83) re-run it through the real executor",
+            partial: &[
+                t(
+                    E2E_CLS,
+                    "fx_cls_06_linked_workspace_sources_survive_node_modules_removal",
+                ),
+                t(
+                    NODE_DET,
+                    "fx_cls_06_workspace_and_link_symlinks_are_recorded_never_followed",
+                ),
+            ],
+        },
+    ),
+    fx("FX-CLS-07", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-08",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_08_pnpm_monorepo_30_packages_found_once_totals_match",
+            ),
+            t(
+                NODE_DET,
+                "fx_cls_08_pnpm_monorepo_with_30_packages_every_candidate_found_once",
+            ),
+            t(
+                HARDLINKS,
+                "fx_cls_08_pnpm_monorepo_sizes_match_independent_dedup",
+            ),
+        ]),
+    ),
+    fx(
+        "FX-CLS-09",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_09_target_touched_an_hour_ago_is_bumped_to_s1",
+            ),
+            t(
+                RUST_DET,
+                "fx_cls_09_target_with_file_modified_an_hour_ago_is_bumped_to_s1",
+            ),
+            t(ACTIVITY, "fx_cls_09_recent_file_in_target_bumps_s0_to_s1"),
+            t(RUBRIC, "fx_cls_09_recent_activity_bumps_s0_to_s1"),
+        ]),
+    ),
+    fx("FX-CLS-10", Gate::V1x, "MLW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-11",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_11_scull_protect_makes_every_candidate_inside_s3",
+            ),
+            t(PROTECT, "fx_cls_11_protect_marker_covers_everything_inside"),
+            t(
+                CORE_CFG,
+                "fx_cls_11_scull_protect_marker_makes_everything_inside_s3",
+            ),
+            t(RUBRIC, "fx_cls_11_scull_protect_marker_is_s3"),
+        ]),
+    ),
+    fx(
+        "FX-CLS-12",
+        Gate::Mvp,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_12_home_scan_needs_confirmation_and_secrets_are_never_candidates",
+            ),
+            t(
+                PROTECT,
+                "fx_cls_12_home_os_folders_and_secrets_are_protected",
+            ),
+            t(
+                CORE_CFG,
+                "fx_cls_12_home_and_filesystem_roots_require_confirmation",
+            ),
+        ]),
+    ),
+    fx("FX-CLS-13", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
+    fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
+];
+
+/// The registered fixture with this ID.
+pub fn lookup(id: &str) -> Option<&'static RegisteredFixture> {
+    REGISTRY.iter().find(|f| f.id == id)
+}
+
+/// One row of a FIXTURES.md §3 table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocFixture {
+    /// Fixture ID, e.g. `FX-GIT-15`.
+    pub id: String,
+    /// The `### 3.x` heading the row is under.
+    pub section: String,
+    /// Scenario text.
+    pub scenario: String,
+    /// OS cell; for the OS-specific sections without an OS column, the implied OS (`W`, `M`,
+    /// `L`).
+    pub os: String,
+    /// Gate cell, parsed.
+    pub gate: Option<Gate>,
+    /// Mode cell, parsed.
+    pub mode: Option<Mode>,
+}
+
+impl DocFixture {
+    /// Whether the MVP CI gate requires this fixture.
+    pub fn is_mvp_ci(&self) -> bool {
+        self.gate == Some(Gate::Mvp) && self.mode == Some(Mode::Ci)
+    }
+
+    /// The ID prefix (`FX-CLS`).
+    pub fn prefix(&self) -> &str {
+        self.id
+            .rsplit_once('-')
+            .map_or(self.id.as_str(), |(p, _)| p)
+    }
+}
+
+/// Parse every fixture row of the `docs/FIXTURES.md` §3 tables.
+///
+/// A row is any Markdown table row whose first cell is an `FX-...` ID; columns are found by
+/// the table's header (`ID`, `Scenario`, `OS`, `Gate`, `Mode`). Tables without an `OS` column
+/// (the OS-specific sections) get the OS implied by the ID prefix.
+pub fn parse_fixture_matrix(markdown: &str) -> Vec<DocFixture> {
+    let mut out = Vec::new();
+    let mut section = String::new();
+    let mut header: Vec<String> = Vec::new();
+    for line in markdown.lines() {
+        let line = line.trim();
+        if let Some(h) = line.strip_prefix("### ") {
+            section = h.trim().to_owned();
+            header.clear();
+            continue;
+        }
+        if !line.starts_with('|') {
+            header.clear();
+            continue;
+        }
+        let cells: Vec<String> = line
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_owned())
+            .collect();
+        if cells.first().is_some_and(|c| c == "ID") {
+            header = cells;
+            continue;
+        }
+        let Some(id) = cells.first().filter(|c| c.starts_with("FX-")) else {
+            continue;
+        };
+        let col = |name: &str| {
+            header
+                .iter()
+                .position(|h| h == name)
+                .and_then(|i| cells.get(i))
+                .map(String::as_str)
+        };
+        let os = match col("OS") {
+            Some(os) => os.to_owned(),
+            None => implied_os(id).to_owned(),
+        };
+        out.push(DocFixture {
+            id: id.clone(),
+            section: section.clone(),
+            scenario: col("Scenario").unwrap_or_default().to_owned(),
+            os,
+            gate: col("Gate").and_then(Gate::parse),
+            mode: col("Mode").and_then(Mode::parse),
+        });
+    }
+    out
+}
+
+fn implied_os(id: &str) -> &'static str {
+    if id.starts_with("FX-WIN-") {
+        "W"
+    } else if id.starts_with("FX-MAC-") {
+        "M"
+    } else if id.starts_with("FX-LNX-") {
+        "L"
+    } else {
+        ""
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = "\
+### 3.1 Classification (FX-CLS)
+
+| ID | Scenario | Expected | OS | Gate | Mode |
+|---|---|---|---|---|---|
+| FX-CLS-01 | `target/` idle | S0 | MLW | MVP | CI |
+| FX-CLS-07 | `.venv` | S1 | MLW | v1.0 | CI |
+
+### 3.10 Windows-specific (FX-WIN)
+
+| ID | Scenario | Expected | Gate | Mode |
+|---|---|---|---|---|
+| FX-WIN-07 | OneDrive | S2 | v1.0 | Manual |
+";
+
+    #[test]
+    fn parses_rows_with_and_without_an_os_column() {
+        let rows = parse_fixture_matrix(SAMPLE);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].id, "FX-CLS-01");
+        assert_eq!(rows[0].section, "3.1 Classification (FX-CLS)");
+        assert_eq!(rows[0].os, "MLW");
+        assert!(rows[0].is_mvp_ci());
+        assert_eq!(rows[0].prefix(), "FX-CLS");
+        assert_eq!(rows[1].gate, Some(Gate::V1_0));
+        assert!(!rows[1].is_mvp_ci());
+        assert_eq!(rows[2].os, "W");
+        assert_eq!(rows[2].mode, Some(Mode::Manual));
+    }
+
+    #[test]
+    fn registry_ids_are_unique() {
+        for (i, a) in REGISTRY.iter().enumerate() {
+            assert!(
+                REGISTRY[i + 1..].iter().all(|b| b.id != a.id),
+                "duplicate {}",
+                a.id
+            );
+        }
+    }
+}

@@ -16,3 +16,12 @@ workspace = true
 scull-core.workspace = true
 sha2.workspace = true
 tempfile = "3"
+
+# End-to-end fixtures (tests/) drive the real pipeline pieces. Dev-dependencies only, so crates
+# that dev-depend on scull-fixtures get no cycle.
+[dev-dependencies]
+scull-platform.workspace = true
+scull-scanner.workspace = true
+scull-detectors.workspace = true
+scull-git.workspace = true
+scull-safety.workspace = true

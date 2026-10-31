@@ -1139,6 +1139,11 @@ name = "scull-fixtures"
 version = "0.0.0"
 dependencies = [
  "scull-core",
+ "scull-detectors",
+ "scull-git",
+ "scull-platform",
+ "scull-safety",
+ "scull-scanner",
  "sha2",
  "tempfile",
 ]
