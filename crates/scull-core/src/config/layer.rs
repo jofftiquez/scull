@@ -1,6 +1,6 @@
 //! Config layers (CLI, environment, user file), the merge (CFG-02) and value origins.
 
-use super::{ColorChoice, Config, DurationSpec, FIELDS, SizeUnits};
+use super::{ColorChoice, Config, DurationSpec, FIELDS, QUARANTINE_BASE_ENV, SizeUnits};
 use crate::error::{ErrorKind, ScullError};
 use crate::tier::Tier;
 use schemars::JsonSchema;
@@ -42,6 +42,12 @@ use std::path::PathBuf;
 /// [output]
 /// color = "auto"           # auto | always | never
 /// units = "binary"         # binary | decimal
+///
+/// [quarantine]             # optional; see `QuarantineConfig`
+/// base = "~/.scull-q"
+///
+/// [quarantine.bases]       # optional, per volume
+/// "/Volumes/Data" = "/Volumes/Data/me/.q"
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +67,9 @@ pub struct ConfigLayer {
     /// Terminal output.
     #[serde(default, skip_serializing_if = "OutputLayer::is_empty")]
     pub output: OutputLayer,
+    /// Where quarantined items are kept.
+    #[serde(default, skip_serializing_if = "QuarantineLayer::is_empty")]
+    pub quarantine: QuarantineLayer,
 }
 
 /// `[scan]` in a [`ConfigLayer`]. See [`super::ScanConfig`] for the meaning of each field.
@@ -141,6 +150,25 @@ pub struct OutputLayer {
     pub units: Option<SizeUnits>,
 }
 
+/// `[quarantine]` in a [`ConfigLayer`]. See [`super::QuarantineConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuarantineLayer {
+    /// Directory that holds `.scull-quarantine` for items on its volume (replaces lower
+    /// layers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<PathBuf>,
+    /// Per volume (or directory) → base directory (replaces lower layers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bases: Option<BTreeMap<PathBuf, PathBuf>>,
+}
+
+impl QuarantineLayer {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 impl ScanLayer {
     fn is_empty(&self) -> bool {
         *self == Self::default()
@@ -213,7 +241,7 @@ pub struct EnvVar {
 /// accept `1/0`, `true/false`, `yes/no`, `on/off`. For `output.color`, `SCULL_COLOR` wins over
 /// `SCULL_NO_COLOR`, which wins over the standard `NO_COLOR`. There is deliberately no variable
 /// for `mcp.destructive` or `scan.min_tier`.
-pub const ENV_VARS: [EnvVar; 16] = [
+pub const ENV_VARS: [EnvVar; 17] = [
     EnvVar {
         name: "SCULL_ROOTS",
         field: "scan.roots",
@@ -293,6 +321,11 @@ pub const ENV_VARS: [EnvVar; 16] = [
         name: "SCULL_UNITS",
         field: "output.units",
         help: "binary or decimal",
+    },
+    EnvVar {
+        name: QUARANTINE_BASE_ENV,
+        field: "quarantine.base",
+        help: "absolute directory holding .scull-quarantine (same volume as the items)",
     },
 ];
 
@@ -444,6 +477,18 @@ impl EnvLayer {
             l.output.units = Some(parse_enum("SCULL_UNITS", &v, "binary or decimal")?);
             set("output.units", "SCULL_UNITS");
         }
+        if let Some(v) = get(QUARANTINE_BASE_ENV) {
+            let p = PathBuf::from(v.trim());
+            if !p.is_absolute() {
+                return Err(env_err(
+                    QUARANTINE_BASE_ENV,
+                    &v,
+                    "expected an absolute directory",
+                ));
+            }
+            l.quarantine.base = Some(p);
+            set("quarantine.base", QUARANTINE_BASE_ENV);
+        }
         Ok(out)
     }
 }
@@ -560,6 +605,18 @@ pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> Resolve
     pick!(forge.enabled, scalar);
     pick!(output.color, scalar);
     pick!(output.units, scalar);
+    pick!(quarantine.bases);
+    if let Some((i, v)) = layers
+        .iter()
+        .enumerate()
+        .find_map(|(i, l)| l.quarantine.base.as_ref().map(|v| (i, v)))
+    {
+        config.quarantine.base = Some(v.clone());
+        origins.insert(
+            "quarantine.base".into(),
+            vec![origin_of(i, "quarantine.base")],
+        );
+    }
 
     // File-only: destructive MCP tools.
     if let Some(v) = user.mcp.destructive {

@@ -109,6 +109,15 @@ fn check_paths(e: &QuarantineEntry) -> Result<Checked, (&'static str, ScullError
     let (Some(folder), Some(entry_name)) = (quarantined.parent(), quarantined.file_name()) else {
         return Err(bad("quarantine path"));
     };
+    if let Some(why) = crate::quarantine::outside_test_sandbox(&quarantined)
+        .or_else(|| crate::quarantine::outside_test_sandbox(&original))
+    {
+        return Err(refused(
+            "outside_test_sandbox",
+            ErrorKind::SafetyBlocked,
+            why,
+        ));
+    }
     let in_quarantine = folder.file_name() == Some(OsStr::new(e.entry.operation_id.as_str()))
         && folder.parent().and_then(Path::file_name) == Some(OsStr::new(QUARANTINE_DIR_NAME));
     if !in_quarantine {

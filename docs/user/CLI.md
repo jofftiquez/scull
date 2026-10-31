@@ -954,7 +954,20 @@ enabled = false                          # network lookups on a Git host; off by
 [output]
 color = "auto"                           # auto, always, never
 units = "binary"                         # binary (MiB) or decimal (MB)
+
+[quarantine]                             # optional: where quarantined items go
+base = "~/.scull-q"                      # for items on the drive holding this folder
+
+[quarantine.bases]                       # optional, per drive: longest matching prefix wins
+"/Volumes/Data" = "/Volumes/Data/me/.scull-q"
 ```
+
+Without `[quarantine]`, scull picks the quarantine folder itself: the shallowest folder you
+own above the item, on its drive (usually your home folder). A configured base holds
+`.scull-quarantine/` and is used only for items **on its own drive**: an item on another drive
+goes to the Trash instead, or is left in place. Nothing is ever moved across drives or deleted
+because of it. The base is created readable by you only, must not be a link, and must not be
+inside something being cleaned. `scull data show` prints where new quarantines go.
 
 The schema is [`schemas/v1/config.schema.json`](../../schemas/v1/config.schema.json).
 `exclude`, `protect` and `min_tier` add up across sources; other fields override.
@@ -976,6 +989,7 @@ The schema is [`schemas/v1/config.schema.json`](../../schemas/v1/config.schema.j
 | `SCULL_COLOR` | `output.color` | `auto`, `always`, `never` |
 | `SCULL_NO_COLOR`, `NO_COLOR` | `output.color` | Any non-empty value means `never` |
 | `SCULL_UNITS` | `output.units` | `binary` or `decimal` |
+| `SCULL_QUARANTINE_BASE` | `quarantine.base` | Absolute folder holding `.scull-quarantine` (same drive as the items) |
 | `SCULL_HOME` | all of scull's folders | Absolute path; puts config, data, cache and state under it |
 
 Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`. `SCULL_COLOR` beats `SCULL_NO_COLOR`,
@@ -984,7 +998,7 @@ tier.
 
 Per-repository files can only add protection: a `.scull-protect` file makes its folder S3,
 and `.scull.toml` can add exclusions, protected paths or higher tiers. Neither can lower a
-tier, add roots or enable rules.
+tier, add roots, enable rules or move the quarantine.
 
 ## JSON Schemas
 

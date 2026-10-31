@@ -105,6 +105,16 @@ impl Cli {
         self
     }
 
+    /// Run every command in `fx`'s sandbox (P2-EXEC-13, [`scull_fixtures::Fixture::sandbox_env`]):
+    /// quarantine and the Trash fallback stay inside the fixture's temp dir.
+    pub fn sandboxed(mut self, fx: &scull_fixtures::Fixture) -> Self {
+        for (k, v) in fx.sandbox_env() {
+            self.extra_env
+                .push((k.to_owned(), v.to_string_lossy().into_owned()));
+        }
+        self
+    }
+
     /// Write `config/config.toml`.
     pub fn write_config(&self, text: &str) {
         let dir = self.scull_home.path().join("config");

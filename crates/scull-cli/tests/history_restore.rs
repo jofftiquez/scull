@@ -75,6 +75,8 @@ impl Env {
             }
         }
         c.env("SCULL_HOME", self.home());
+        // P2-EXEC-13: quarantine (and the Trash fallback) stay inside the fixture's temp dir.
+        self.fx.sandbox(&mut c);
         c
     }
 
@@ -133,6 +135,48 @@ impl Env {
         }
         assert!(!self.exists(TARGET) && !self.exists(MODULES));
         run["data"]["operation_id"].as_str().unwrap().to_owned()
+    }
+
+    /// Plan both artifacts and execute with `env` changed on the execution (`None` removes the
+    /// variable): returns the exit code and the `clean-run` document.
+    fn clean_with(&self, env: &[(&str, Option<&Path>)]) -> (i32, Value) {
+        let root = self.root();
+        let t = root.join(TARGET);
+        let m = root.join(MODULES);
+        let o = self.run(&[
+            "clean",
+            "--root",
+            root.to_str().unwrap(),
+            "--allow-network-roots",
+            "--item",
+            t.to_str().unwrap(),
+            "--item",
+            m.to_str().unwrap(),
+            "--output",
+            "plan.json",
+            "--json",
+        ]);
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        let mut c = self.cmd(&allow_root_if_elevated(&[
+            "clean",
+            "--plan",
+            "plan.json",
+            "--confirm",
+            "--allow-network-roots",
+            "--json",
+        ]));
+        for (k, v) in env {
+            match v {
+                Some(v) => c.env(k, v),
+                None => c.env_remove(k),
+            };
+        }
+        let o = c.output().unwrap();
+        let run: Value = serde_json::from_slice(&o.stdout)
+            .unwrap_or_else(|_| panic!("clean-run JSON; stderr: {}", stderr(&o)));
+        validate("clean-run", &run);
+        println!("{:#}", run["data"]["items"]);
+        (o.status.code().unwrap(), run)
     }
 
     fn exists(&self, rel: &str) -> bool {
@@ -529,6 +573,157 @@ fn purge_quarantine_needs_elevated_confirmation() {
     );
     assert!(!env.exists(TARGET) && !env.exists(MODULES));
     env.check(&[TARGET, MODULES], None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// P2-EXEC-13: where the quarantine lives; the test-harness guard; the Trash fallback.
+// ---------------------------------------------------------------------------------------------
+
+/// `SCULL_QUARANTINE_BASE` (here: a folder that doesn't exist yet, in the fixture's temp dir)
+/// is where `scull clean` quarantines: the folder is created owner-only and every quarantine
+/// path is below it. Nothing appears outside the temp dir (I-2).
+#[test]
+fn quarantine_goes_to_the_configured_base() {
+    let env = Env::new();
+    let base = env.fx.base().join("configured-q");
+    let (code, run) = env.clean_with(&[("SCULL_QUARANTINE_BASE", Some(&base))]);
+    assert_eq!(code, 0, "{run:#}");
+    for i in run["data"]["items"].as_array().unwrap() {
+        assert_eq!(i["outcome"], "quarantined", "{i:#}");
+        let q = Path::new(i["quarantine_path"].as_str().unwrap());
+        assert!(
+            q.starts_with(base.join(".scull-quarantine")),
+            "quarantined below the configured base: {i:#}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&base), 0o700, "the base is created owner-only");
+        assert_eq!(mode(&base.join(".scull-quarantine")), 0o700);
+    }
+    assert!(!env.exists(TARGET) && !env.exists(MODULES));
+    let op = run["data"]["operation_id"].as_str().unwrap().to_owned();
+    env.check(&[TARGET, MODULES], Some(&op));
+}
+
+/// The guard: under the test harness (`SCULL_TEST_SANDBOX` set by the fixtures) with no
+/// quarantine base configured, quarantine is blocked instead of using the automatic location
+/// (which on CI runners is outside the temp dir). Both items stay where they were; nothing is
+/// created anywhere (I-2, I-3).
+#[test]
+fn under_the_test_harness_no_base_means_blocked() {
+    let env = Env::new();
+    let (code, run) = env.clean_with(&[("SCULL_QUARANTINE_BASE", None)]);
+    assert_eq!(code, 3, "partial failure: {run:#}");
+    for i in run["data"]["items"].as_array().unwrap() {
+        assert_eq!(i["outcome"], "blocked", "{i:#}");
+        assert_eq!(i["reason_code"], "quarantine_base_required", "{i:#}");
+        assert!(i["quarantine_path"].is_null(), "{i:#}");
+    }
+    assert!(env.exists(TARGET) && env.exists(MODULES), "left in place");
+    assert!(!env.fx.base().join(".scull-quarantine").exists());
+    let op = run["data"]["operation_id"].as_str().unwrap().to_owned();
+    env.check(&[], Some(&op));
+}
+
+/// A configured base inside an item being cleaned is refused (quarantine impossible), so
+/// `scull clean` falls back to the Trash, which under the test harness is `<temp>/Trash`, never
+/// the real one (D-3: quarantine → Trash → blocked). On Windows the sandbox has no Recycle Bin,
+/// so the chain ends in "blocked". Never deleted either way.
+#[test]
+fn impossible_quarantine_falls_back_to_the_sandbox_trash() {
+    let env = Env::new();
+    let inside_item = env.root().join(TARGET).join("q");
+    let (code, run) = env.clean_with(&[("SCULL_QUARANTINE_BASE", Some(&inside_item))]);
+    let trash = env.fx.base().join("Trash");
+    for i in run["data"]["items"].as_array().unwrap() {
+        if cfg!(windows) {
+            assert_eq!(i["outcome"], "blocked", "{i:#}");
+            assert_eq!(i["reason_code"], "quarantine_and_trash_impossible", "{i:#}");
+        } else {
+            assert_eq!(i["outcome"], "trashed", "{i:#}");
+            assert_eq!(i["restorability"], "via_trash", "{i:#}");
+            let at = Path::new(i["trash_path"].as_str().unwrap());
+            assert!(at.starts_with(&trash), "into the sandbox Trash: {i:#}");
+            assert!(at.exists(), "{i:#}");
+        }
+    }
+    assert!(!inside_item.exists(), "the refused base was never created");
+    let op = run["data"]["operation_id"].as_str().unwrap().to_owned();
+    if cfg!(windows) {
+        assert_eq!(code, 3, "{run:#}");
+        assert!(env.exists(TARGET) && env.exists(MODULES));
+        env.check(&[], Some(&op));
+    } else {
+        assert_eq!(code, 0, "{run:#}");
+        assert!(!env.exists(TARGET) && !env.exists(MODULES));
+        env.check(&[TARGET, MODULES], Some(&op));
+    }
+}
+
+/// Under the test harness, `scull restore` and `--purge-quarantine` touch no quarantine entry
+/// outside the sandbox: with the sandbox pointed elsewhere, both refuse (or keep) every entry
+/// and nothing moves or is deleted.
+#[test]
+fn restore_and_purge_refuse_entries_outside_the_test_sandbox() {
+    let env = Env::new();
+    let op = env.clean();
+    let elsewhere = env.fx.base().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let held: Vec<PathBuf> = env
+        .store()
+        .quarantine_held()
+        .unwrap()
+        .iter()
+        .map(|e| e.entry.quarantine_path.to_path_buf())
+        .collect();
+    assert_eq!(held.len(), 2);
+
+    let o = env
+        .cmd(&allow_root_if_elevated(&[
+            "restore",
+            &op,
+            "--confirm",
+            "--json",
+        ]))
+        .env("SCULL_TEST_SANDBOX", &elsewhere)
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|_| panic!("restore JSON; stderr: {}", stderr(&o)));
+    println!("{:#}", v["data"]["entries"]);
+    assert_ne!(o.status.code(), Some(0), "{v:#}");
+    for e in v["data"]["entries"].as_array().unwrap() {
+        assert_eq!(e["outcome"], "refused", "{e:#}");
+        assert!(
+            e["message"].as_str().unwrap().contains("test sandbox"),
+            "{e:#}"
+        );
+    }
+
+    let o = env
+        .cmd(&allow_root_if_elevated(&[
+            "clean",
+            "--purge-quarantine",
+            "--include-unexpired",
+            "--confirm",
+            "--allow-permanent",
+            "--json",
+        ]))
+        .env("SCULL_TEST_SANDBOX", &elsewhere)
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|_| panic!("purge JSON; stderr: {}", stderr(&o)));
+    println!("{:#}", v["data"]["entries"]);
+    for e in v["data"]["entries"].as_array().unwrap() {
+        assert_eq!(e["outcome"], "kept", "{e:#}");
+    }
+    assert!(held.iter().all(|p| p.exists()), "nothing moved or deleted");
+    assert!(!env.exists(TARGET) && !env.exists(MODULES));
+    env.check(&[TARGET, MODULES], Some(&op));
 }
 
 /// Relative paths of every file below `dir`, with sizes, sorted.

@@ -293,6 +293,9 @@ pub enum RunOutcome {
     PartlyDeleted,
     /// Moved into quarantine (restorable).
     Quarantined,
+    /// Moved to the Trash because quarantine was impossible here (D-3); restorable from the
+    /// Trash, outside scull.
+    Trashed,
     /// Failed revalidation; nothing was touched.
     Skipped,
     /// Refused by the Executor; nothing was removed.
@@ -331,6 +334,8 @@ pub struct RunItem {
     pub quarantine_path: Option<FsPath>,
     /// Its quarantine manifest entry.
     pub quarantine_entry: Option<i64>,
+    /// Where a trashed item is now, when known.
+    pub trash_path: Option<FsPath>,
     /// How what was done can be undone.
     pub restorability: Restorability,
 }
@@ -499,6 +504,7 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
     let sizes = sizes_by_id(&scan.candidates);
     let run = execute(
         &plan,
+        &loaded,
         &who,
         &roots,
         &engine,
@@ -608,7 +614,7 @@ fn plan_file_cmd(file: &Path, args: &CleanArgs, ui: &Ui) -> Result<(), ScullErro
     }
     let sizes = sizes_by_id(&scan.candidates);
     let run = execute(
-        &plan, &who, &roots, &engine, &mut store, &sizes, confirmed, elevated, ui,
+        &plan, &loaded, &who, &roots, &engine, &mut store, &sizes, confirmed, elevated, ui,
     )?;
     finish_run(&run, ui)
 }
@@ -1438,6 +1444,7 @@ fn sizes_by_id(cands: &[Candidate]) -> BTreeMap<ItemId, Sizes> {
 #[allow(clippy::too_many_arguments)]
 fn execute(
     plan: &Plan,
+    loaded: &Loaded,
     who: &Who,
     roots: &[PathBuf],
     engine: &Engine,
@@ -1469,7 +1476,11 @@ fn execute(
         )?
         // One measurement: the CLI's own meter below (with resampling for delayed frees) is what
         // the report shows and what `finish_measured` records (I-5).
-        .without_measurement();
+        .without_measurement()
+        // The configured quarantine location (P2-EXEC-13), and the Trash where quarantine is
+        // impossible (D-3: quarantine → Trash → blocked, never deleted).
+        .with_quarantine(exec::quarantine_settings(&loaded.config.quarantine))
+        .with_trash(exec::trash_locations());
     let predicted = |i: &PlanItem| {
         ActionReclaim::for_action(
             &sizes.get(&i.item_id).copied().unwrap_or_default(),
@@ -1545,6 +1556,10 @@ fn item_execution(r: &ItemReport) -> ItemExecution {
             removed: 0,
             moved: q.bytes,
         },
+        ItemOutcome::Trashed(t) => ItemExecution::Done {
+            removed: 0,
+            moved: t.moved_bytes(),
+        },
         _ => ItemExecution::NotExecuted,
     }
 }
@@ -1580,6 +1595,7 @@ fn run_report(
                 moved_bytes: 0,
                 quarantine_path: None,
                 quarantine_entry: None,
+                trash_path: None,
                 restorability: Restorability::NotApplicable,
             };
             match &r.outcome {
@@ -1608,6 +1624,22 @@ fn run_report(
                     item.quarantine_path = Some(FsPath::from_path(&q.quarantine_path));
                     item.quarantine_entry = Some(q.entry_id);
                     item.restorability = Restorability::Restorable;
+                    totals.succeeded += 1;
+                }
+                ItemOutcome::Trashed(tr) => {
+                    item.outcome = RunOutcome::Trashed;
+                    item.moved_bytes = tr.moved_bytes();
+                    item.trash_path = Some(FsPath::from_path(
+                        tr.outcome
+                            .location
+                            .as_deref()
+                            .unwrap_or(&tr.outcome.trash_dir),
+                    ));
+                    item.message = Some(
+                        "quarantine was impossible here: moved to the Trash (restore it from there)"
+                            .into(),
+                    );
+                    item.restorability = tr.restorability();
                     totals.succeeded += 1;
                 }
                 ItemOutcome::Skipped(s) => {
@@ -1714,6 +1746,7 @@ fn outcome_label(o: RunOutcome) -> &'static str {
         RunOutcome::Deleted => "deleted",
         RunOutcome::PartlyDeleted => "PARTLY deleted",
         RunOutcome::Quarantined => "quarantined",
+        RunOutcome::Trashed => "moved to Trash",
         RunOutcome::Skipped => "skipped",
         RunOutcome::Refused => "refused",
         RunOutcome::Blocked => "blocked",
@@ -1745,10 +1778,13 @@ pub fn render_run(r: &CleanRunReport, color: bool) -> String {
     ]);
     for i in &r.items {
         let style = match i.outcome {
-            RunOutcome::Deleted | RunOutcome::Quarantined => Style::Plain,
+            RunOutcome::Deleted | RunOutcome::Quarantined | RunOutcome::Trashed => Style::Plain,
             _ => Style::Warn,
         };
-        let why = match (&i.quarantine_path, &i.message) {
+        let why = match (
+            i.quarantine_path.as_ref().or(i.trash_path.as_ref()),
+            &i.message,
+        ) {
             (Some(q), _) => format!("-> {}", q.as_str()),
             (None, Some(m)) => match &i.reason_code {
                 Some(code) => format!("[{code}] {m}"),

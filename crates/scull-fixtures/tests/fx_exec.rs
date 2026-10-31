@@ -79,7 +79,13 @@ fn fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported() {
     );
     let baseline = meter.before([fx.root()]);
     let exec = locked(&fx);
-    let mut operation = exec.begin_operation(&mut s, &p, &start(&p, &op)).unwrap();
+    let mut operation = exec
+        .begin_operation(&mut s, &p, &start(&p, &op))
+        .unwrap()
+        .with_quarantine(scull_cleaner::QuarantineSettings {
+            base: Some(fx.quarantine_base().to_path_buf()),
+            ..scull_cleaner::QuarantineSettings::default()
+        });
     let r = exec
         .execute_plan(
             &p,

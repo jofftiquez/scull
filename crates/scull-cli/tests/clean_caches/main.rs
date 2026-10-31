@@ -216,6 +216,8 @@ impl Env {
             .env("npm_config_cache", self.fx.root().join(NPM))
             .env("BUN_INSTALL_CACHE_DIR", self.fx.root().join(BUN))
             .env("npm_config_store_dir", self.fx.root().join(PNPM));
+        // P2-EXEC-13: nothing outside the fixture's temp dir.
+        self.fx.sandbox(&mut c);
         c
     }
 

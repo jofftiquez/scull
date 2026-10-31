@@ -319,7 +319,7 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
 /// one operation), `restore` (preview and confirmed), `clean --purge-quarantine` (preview) and
 /// `clean caches --dry-run`. The executed operation's audit is checked against the disk (I-4)
 /// before the restore; every invariant runs at the end.
-fn clean_history_restore_outputs(schemas: &Schemas, cli: &Cli) {
+fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
     let mut fx = Fixture::new().unwrap();
     // `lib/target`: idle Cargo output (S0, deleted; S2 where "in use" is unknown).
     // `web/node_modules`: npm without a lockfile (S2 everywhere, so quarantined).
@@ -336,6 +336,8 @@ fn clean_history_restore_outputs(schemas: &Schemas, cli: &Cli) {
         .age("web", days_ago(5))
         .unwrap();
     fx.checkpoint().unwrap();
+    // Its own environment, sandboxed in this fixture (P2-EXEC-13).
+    let cli = &Cli::new().sandboxed(&fx);
     let r = s(fx.root());
     // Named one by one (`--item`): the only way to plan S2 items.
     let lib = s(&fx.root().join("lib/target"));
@@ -936,7 +938,7 @@ fn exec_exit_codes(
             .unwrap();
     }
     fx.checkpoint().unwrap();
-    let cli = Cli::new();
+    let cli = Cli::new().sandboxed(&fx);
     let r = s(fx.root());
     let plan = |file: &str, items: &[&str]| {
         let path = s(&fx.base().join(file));

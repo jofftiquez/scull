@@ -68,7 +68,7 @@ impl InvariantId {
     pub fn description(self) -> &'static str {
         match self {
             Self::I1 => "no S3 item in an executable plan",
-            Self::I2 => "canary outside the root untouched",
+            Self::I2 => "canary outside the root untouched; nothing created outside the fixture",
             Self::I3 => "root unchanged except plan items",
             Self::I4 => "audit log matches disk",
             Self::I5 => "predicted and measured bytes recorded",
@@ -316,6 +316,18 @@ struct AuditInput {
     data: Fallible<(DiskExpectations, Option<OperationStatus>)>,
 }
 
+/// Quarantine paths recorded in a store (I-2: they must lie inside the fixture's temp dir).
+fn recorded_quarantine_paths(store: &Store, op: Option<&OperationId>) -> Fallible<Vec<PathBuf>> {
+    store
+        .quarantine_entries(op)
+        .map(|es| {
+            es.iter()
+                .map(|e| e.entry.quarantine_path.to_path_buf())
+                .collect()
+        })
+        .map_err(|e| format!("could not read the quarantine manifest: {e}"))
+}
+
 /// What a fixture produced, for the invariants that need more than the filesystem.
 #[derive(Debug, Clone, Default)]
 pub struct InvariantInputs {
@@ -324,6 +336,7 @@ pub struct InvariantInputs {
     tiers: Option<(BTreeMap<ItemId, Tier>, BTreeMap<ItemId, Tier>)>,
     net: bool,
     audits: Vec<AuditInput>,
+    quarantine_paths: Vec<Fallible<Vec<PathBuf>>>,
     bytes: Vec<Fallible<BytesRecord>>,
     spawned: Option<Vec<SpawnRecord>>,
     trusted_dirs: Vec<PathBuf>,
@@ -387,6 +400,17 @@ impl InvariantInputs {
             operation: op.clone(),
             data,
         });
+        self.quarantine_paths
+            .push(recorded_quarantine_paths(store, Some(op)));
+        self
+    }
+
+    /// Every quarantine path recorded in `store` (I-2, P2-EXEC-13): each must lie inside the
+    /// fixture's temp dir. Read now, so add it after the runs. [`InvariantInputs::audit`] adds
+    /// the paths of its operation already.
+    pub fn quarantine(mut self, store: &Store) -> Self {
+        self.quarantine_paths
+            .push(recorded_quarantine_paths(store, None));
         self
     }
 
@@ -526,6 +550,12 @@ pub fn check_invariants(fx: &Fixture, inputs: &InvariantInputs) -> InvariantRepo
         Ok(after) => canary_untouched(fx.canary_baseline(), &after),
         Err(e) => Outcome::Failed(format!("could not snapshot the canary: {e}")),
     };
+    let i2 = match (i2, nothing_outside(fx, &inputs.quarantine_paths)) {
+        (Outcome::Failed(a), Outcome::Failed(b)) => Outcome::Failed(format!("{a}\n{b}")),
+        (Outcome::Failed(a), _) => Outcome::Failed(a),
+        (_, Outcome::Failed(b)) => Outcome::Failed(b),
+        (ok, _) => ok,
+    };
 
     let i3 = match (fx.root_baseline(), fx.snapshot_root()) {
         (None, _) => Outcome::Failed(
@@ -590,6 +620,43 @@ where
             bad.join("\n")
         ))
     }
+}
+
+/// I-2 (P2-EXEC-13): nothing appeared in the automatic quarantine or Trash locations above the
+/// fixture's temp dir, and every recorded quarantine path lies inside it.
+fn nothing_outside(fx: &Fixture, recorded: &[Fallible<Vec<PathBuf>>]) -> Outcome {
+    let mut problems = Vec::new();
+    let added = fx.outside_additions();
+    if !added.is_empty() {
+        problems.push(format!(
+            "created outside the fixture's temp dir {} (automatic quarantine or Trash \
+             locations):\n{}",
+            fx.base().display(),
+            added
+                .iter()
+                .map(|p| format!("  + {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    for r in recorded {
+        match r {
+            Err(e) => problems.push(e.clone()),
+            Ok(paths) => {
+                for p in paths
+                    .iter()
+                    .filter(|p| !crate::outside::inside(p, fx.base()))
+                {
+                    problems.push(format!(
+                        "quarantined outside the fixture's temp dir {}: {}",
+                        fx.base().display(),
+                        p.display()
+                    ));
+                }
+            }
+        }
+    }
+    combine(problems)
 }
 
 /// I-2: the canary snapshot after the run equals the one before it (content hash, size, mtime,

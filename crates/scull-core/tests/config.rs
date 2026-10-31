@@ -336,17 +336,26 @@ enabled = true
 [output]
 color = "always"
 units = "decimal"
+
+[quarantine]
+base = {qb:?}
+[quarantine.bases]
+{qk:?} = {qv:?}
 "#,
         root = abs("/u/root").to_str().unwrap(),
         ex = abs("/u/ex").to_str().unwrap(),
         prot = abs("/u/prot").to_str().unwrap(),
         shared = abs("/shared").to_str().unwrap(),
         umt = abs("/u/mt").to_str().unwrap(),
+        qb = abs("/u/qbase").to_str().unwrap(),
+        qk = abs("/vol").to_str().unwrap(),
+        qv = abs("/vol/u-q").to_str().unwrap(),
     ))
     .expect("user config parses")
 }
 
 fn full_env() -> EnvLayer {
+    let qbase = abs("/e/qbase");
     let root = abs("/e/root");
     let ex = abs("/e/ex");
     let prot = abs("/e/prot");
@@ -365,6 +374,7 @@ fn full_env() -> EnvLayer {
         ("SCULL_FORGE", "false"),
         ("SCULL_COLOR", "never"),
         ("SCULL_UNITS", "binary"),
+        ("SCULL_QUARANTINE_BASE", qbase.to_str().unwrap()),
     ])
 }
 
@@ -386,6 +396,8 @@ fn full_cli() -> ConfigLayer {
     l.forge.enabled = Some(true);
     l.output.color = Some(ColorChoice::Auto);
     l.output.units = Some(SizeUnits::Decimal);
+    l.quarantine.base = Some(abs("/c/qbase"));
+    l.quarantine.bases = Some([(abs("/vol"), abs("/vol/c-q"))].into_iter().collect());
     l
 }
 
@@ -466,6 +478,13 @@ fn precedence_table_every_field_every_layer() {
             json!(30),
         ),
         (
+            "quarantine.base",
+            json!(null),
+            p("/u/qbase"),
+            p("/e/qbase"),
+            p("/c/qbase"),
+        ),
+        (
             "forge.enabled",
             json!(false),
             json!(true),
@@ -534,10 +553,28 @@ fn precedence_table_every_field_every_layer() {
     let r = resolve(&none, &env, &none);
     assert_eq!(r.config.scan.threads, 3);
 
-    // The table plus the additive fields and mcp.destructive cover every field.
+    // quarantine.bases has no environment variable: user, then CLI.
+    assert_eq!(field(&stages[0].config, "quarantine.bases"), json!({}));
+    for (i, want, origin) in [
+        (1, "/vol/u-q", Origin::UserConfig),
+        (2, "/vol/u-q", Origin::UserConfig),
+        (3, "/vol/c-q", Origin::Cli),
+    ] {
+        let r = &stages[i];
+        assert_eq!(
+            r.config.quarantine.bases.get(&abs("/vol")),
+            Some(&abs(want)),
+            "stage {i}"
+        );
+        assert_eq!(r.origin("quarantine.bases"), &[origin], "stage {i}");
+    }
+
+    // The table plus the additive fields, mcp.destructive and quarantine.bases cover every
+    // field.
     let mut covered: Vec<&str> = table.iter().map(|t| t.0).collect();
     covered.extend(ADDITIVE_FIELDS);
     covered.push("mcp.destructive");
+    covered.push("quarantine.bases");
     covered.sort();
     let mut all = FIELDS.to_vec();
     all.sort();
@@ -973,4 +1010,72 @@ proptest! {
         let d = DurationSpec::from_secs(secs);
         prop_assert_eq!(d.to_string().parse::<DurationSpec>().unwrap(), d);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// P2-EXEC-13: where the quarantine lives.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn quarantine_base_for_picks_the_longest_matching_prefix_then_the_global_base() {
+    let mut q = QuarantineConfig::default();
+    assert!(!q.is_configured());
+    assert_eq!(q.base_for(&abs("/home/me/p/target")), None, "automatic");
+    q.base = Some(abs("/home/me/.q"));
+    q.bases.insert(abs("/vol"), abs("/vol/me/q"));
+    q.bases.insert(abs("/vol/deep"), abs("/vol/deep/me/q"));
+    assert!(q.is_configured());
+    assert_eq!(
+        q.base_for(&abs("/home/me/p/target")),
+        Some(abs("/home/me/.q").as_path())
+    );
+    assert_eq!(
+        q.base_for(&abs("/vol/p/target")),
+        Some(abs("/vol/me/q").as_path())
+    );
+    assert_eq!(
+        q.base_for(&abs("/vol/deep/p/target")),
+        Some(abs("/vol/deep/me/q").as_path())
+    );
+    // Component-wise prefixes only: /volume is not under /vol.
+    assert_eq!(
+        q.base_for(&abs("/volume/p")),
+        Some(abs("/home/me/.q").as_path())
+    );
+}
+
+#[test]
+fn quarantine_settings_parse_expand_home_and_reject_relative_env() {
+    let l = ConfigLayer::from_toml(
+        "[quarantine]\nbase = \"~/.q\"\n[quarantine.bases]\n\"~/vol\" = \"~/vol/q\"\n",
+    )
+    .unwrap();
+    let r = resolve(&ConfigLayer::default(), &EnvLayer::default(), &l);
+    let home = abs("/home/me");
+    let c = r.config.with_home_expanded(&home);
+    assert_eq!(c.quarantine.base, Some(home.join(".q")));
+    assert_eq!(
+        c.quarantine.bases.get(&home.join("vol")),
+        Some(&home.join("vol").join("q"))
+    );
+    assert!(ConfigLayer::from_toml("[quarantine]\nbasis = \"/x\"\n").is_err());
+
+    let e = EnvLayer::from_lookup(|k| (k == QUARANTINE_BASE_ENV).then(|| "relative/q".into()))
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Config);
+    assert!(e.message.contains(QUARANTINE_BASE_ENV), "{}", e.message);
+}
+
+#[test]
+fn repository_files_cannot_move_the_quarantine() {
+    let r = RepoPolicy::parse_toml("[quarantine]\nbase = \"/tmp/evil\"\n");
+    assert!(r.policy.is_empty(), "{:?}", r.policy);
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.key.starts_with("quarantine")
+                && w.message.contains("where the quarantine lives")),
+        "{:?}",
+        r.warnings
+    );
 }

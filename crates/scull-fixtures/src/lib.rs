@@ -34,6 +34,11 @@
 //!   input: I-1 a plan, I-4 an operation's audit ([`InvariantInputs::audit`]), I-5 recorded
 //!   predicted and measured bytes, I-7 the spawned processes ([`InvariantInputs::spawned`]),
 //!   I-8 tiers. Without the input an invariant is reported not applicable, never passed.
+//! * Nothing outside the fixture (P2-EXEC-13): every scull process a test starts gets
+//!   [`Fixture::sandbox_env`] (the test sandbox and the quarantine base, both the fixture's temp
+//!   dir; the Executor then refuses any location outside it), and I-2 also fails when anything
+//!   appears in the automatic quarantine or Trash locations above the temp dir, or when an
+//!   audited quarantine path lies outside it.
 //! * [`net`]: the I-6 network guard and [`isolate_network!`], which re-runs a test inside an OS
 //!   network sandbox (Linux network namespace, macOS `sandbox-exec`; none on Windows).
 //!
@@ -49,6 +54,7 @@ mod git;
 pub mod invariants;
 pub mod net;
 mod os;
+mod outside;
 mod projects;
 pub mod registry;
 mod snapshot;

@@ -396,7 +396,11 @@ fn walk_events() -> u64 {
     }));
     let mut operation = exec
         .begin_operation(&mut s, &plan, &start(&plan, "W1"))
-        .unwrap();
+        .unwrap()
+        .with_quarantine(QuarantineSettings {
+            base: Some(fx.quarantine_base().to_path_buf()),
+            ..QuarantineSettings::default()
+        });
     let r = exec
         .execute_plan(
             &plan,

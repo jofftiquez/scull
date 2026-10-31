@@ -57,10 +57,11 @@ pub fn start(plan: &Plan, op: &str) -> OperationStart {
     }
 }
 
-/// The quarantine base used by these tests: the fixture's temp dir, beside the root.
+/// The quarantine base used by these tests: the fixture's temp dir, beside the root
+/// ([`Fixture::quarantine_base`], P2-EXEC-13). Never the automatic location.
 pub fn settings(fx: &Fixture) -> QuarantineSettings {
     QuarantineSettings {
-        base: Some(fx.base().to_path_buf()),
+        base: Some(fx.quarantine_base().to_path_buf()),
         ..QuarantineSettings::default()
     }
 }

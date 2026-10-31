@@ -348,6 +348,9 @@ impl Executor {
                 match op.quarantine(ok, now_unix(), self.hook()) {
                     Ok(q) => ItemOutcome::Quarantined(q),
                     Err(QuarantineRefusal::Impossible(why)) => self.trash_fallback(ok, op, &why),
+                    Err(QuarantineRefusal::Blocked { code, message }) => {
+                        ItemOutcome::Blocked { code, message }
+                    }
                     Err(QuarantineRefusal::Failed(e)) => ItemOutcome::Refused(
                         e.with_item(ok.item.item_id.clone())
                             .with_path(ok.item.path.clone()),
@@ -434,6 +437,12 @@ impl Executor {
                     .into(),
             };
         };
+        if let Some(why) = trash_outside_test_sandbox(&locations) {
+            return ItemOutcome::Blocked {
+                code: "outside_test_sandbox",
+                message: format!("{why}: the item was left in place, never deleted instead"),
+            };
+        }
         let id = &ok.item.item_id;
         at(self.hook(), StepPoint::BeforeIntent(id));
         let intent = JournalIntent {
@@ -491,6 +500,23 @@ impl Executor {
             Err(e) => ItemOutcome::Refused(e),
         }
     }
+}
+
+/// Under the test harness, why the Trash at `locations` may not be used: its home trash or its
+/// volume top directory is outside the sandbox, or the top directory is left to the platform
+/// (the item's mount point, the real per-volume Trash / Recycle Bin).
+fn trash_outside_test_sandbox(locations: &crate::trash::TrashLocations) -> Option<String> {
+    crate::quarantine::test_sandbox()?;
+    let Some(top) = &locations.topdir else {
+        return Some(
+            "running under the test harness: the real per-volume Trash is never used there".into(),
+        );
+    };
+    locations
+        .home
+        .iter()
+        .chain(std::iter::once(top))
+        .find_map(|p| crate::quarantine::outside_test_sandbox(p))
 }
 
 /// Identity of the directory holding `path`, looked up no-follow.

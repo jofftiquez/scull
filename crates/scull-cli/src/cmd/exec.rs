@@ -26,7 +26,9 @@
 //! * Elevated runs are refused unless `--allow-root` ([`check_not_elevated`], SAFE-14).
 
 use crate::output::Ui;
-use scull_cleaner::{Executor, LockOptions};
+use scull_cleaner::trash::TrashLocations;
+use scull_cleaner::{Executor, LockOptions, QuarantineSettings};
+use scull_core::config::{QuarantineConfig, TEST_SANDBOX_ENV};
 use scull_core::{Action, ErrorKind, OperationId, PlanId, Restorability, ScullError, Tier};
 use scull_platform::{AppDirs, Elevation, current_user, is_elevated, machine_id};
 use scull_storage::Store;
@@ -197,6 +199,30 @@ pub fn new_plan_id(now_unix: i64) -> Result<PlanId, ScullError> {
 pub fn new_operation_id(now_unix: i64) -> Result<OperationId, ScullError> {
     OperationId::from_suffix(&new_id_suffix(now_unix))
         .map_err(|e| ScullError::new(ErrorKind::Internal, e))
+}
+
+/// The quarantine settings of a run (P2-EXEC-13): the configured `[quarantine]` base and
+/// per-volume bases (`SCULL_QUARANTINE_BASE` included); nothing configured means the automatic
+/// location (the shallowest folder above the item, on its volume, that the user owns).
+pub fn quarantine_settings(config: &QuarantineConfig) -> QuarantineSettings {
+    QuarantineSettings::from_config(config)
+}
+
+/// Where the Trash fallback moves an S1/S2 item whose quarantine is impossible (D-3,
+/// P2-EXEC-07): the user's real Trash ([`TrashLocations::from_env`]). Under the test harness
+/// ([`TEST_SANDBOX_ENV`], set by the test fixtures) a Trash inside the sandbox instead
+/// (`<sandbox>/Trash` and the sandbox as the volume's top directory), never the real one.
+pub fn trash_locations() -> TrashLocations {
+    match std::env::var_os(TEST_SANDBOX_ENV).filter(|v| !v.is_empty()) {
+        Some(sandbox) => {
+            let sandbox = std::path::PathBuf::from(sandbox);
+            TrashLocations {
+                home: Some(sandbox.join("Trash")),
+                topdir: Some(sandbox),
+            }
+        }
+        None => TrashLocations::from_env(),
+    }
 }
 
 /// An Executor holding the current user's execution lock (SAFE-09); fails at once with

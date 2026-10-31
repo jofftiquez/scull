@@ -545,3 +545,54 @@ fn i7_git_runner_resolved_binary_is_allowlisted() {
         "{report}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// I-2, P2-EXEC-13: nothing quarantined outside the fixture's temp dir.
+// ---------------------------------------------------------------------------------------------
+
+/// A recorded quarantine path outside the fixture's temp dir makes I-2 fail; one inside passes.
+/// Only manifest rows are written (into the fixture's own store): nothing on disk outside.
+#[test]
+fn i2_fails_when_a_recorded_quarantine_path_is_outside_the_fixture() {
+    let fx = fixture();
+    // A recorded operation for the manifest rows to belong to.
+    let run = Run::begin(&fx, &[fx.root().join("a")]);
+    let (mut store, op) = (run.store, run.op);
+    let entry = |q: &Path| scull_storage::NewQuarantineEntry {
+        operation_id: op.clone(),
+        item_id: ItemId::derive(scull_core::FileIdentity::new(1, 2), b"/x"),
+        original_path: FsPath::from_path(&fx.root().join("a")),
+        quarantine_path: FsPath::from_path(q),
+        entry_identity: scull_core::FileIdentity::new(1, 2),
+        entry_kind: "dir".into(),
+        parent_identity: scull_core::FileIdentity::new(1, 3),
+        bytes: 1,
+        logical_bytes: 1,
+        quarantined_at: T0,
+        expires_at: None,
+    };
+    let inside = fx.base().join(".scull-quarantine").join("op").join("0001");
+    store.insert_quarantine_entry(&entry(&inside)).unwrap();
+    let report = fx.check_invariants(&InvariantInputs::new().quarantine(&store));
+    assert_eq!(
+        report.outcome(InvariantId::I2),
+        &Outcome::Passed,
+        "{report}"
+    );
+
+    // The automatic location on a CI runner: the folder above the temp dir.
+    let outside = fx
+        .base()
+        .parent()
+        .unwrap()
+        .join(".scull-quarantine")
+        .join("op")
+        .join("0002");
+    store.insert_quarantine_entry(&entry(&outside)).unwrap();
+    let report = fx.check_invariants(&InvariantInputs::new().quarantine(&store));
+    println!("{report}");
+    match report.outcome(InvariantId::I2) {
+        Outcome::Failed(m) => assert!(m.contains("quarantined outside"), "{m}"),
+        other => panic!("I-2 must fail: {other:?}"),
+    }
+}

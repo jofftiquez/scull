@@ -4,6 +4,7 @@
 use crate::error::{FixtureError, Result};
 use crate::invariants::{InvariantInputs, InvariantReport};
 use crate::os;
+use crate::outside::OutsideSnapshot;
 use crate::snapshot::TreeSnapshot;
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
@@ -93,6 +94,7 @@ pub struct Fixture {
     canary: Canary,
     canary_baseline: TreeSnapshot,
     root_baseline: Option<TreeSnapshot>,
+    outside_baseline: OutsideSnapshot,
     skipped: Vec<Skipped>,
     checked: Cell<bool>,
     // Declared last so the directory is removed after everything else is dropped.
@@ -118,12 +120,14 @@ impl Fixture {
         mkdir(&root)?;
         let canary = build_canary(&base.join("canary"))?;
         let canary_baseline = TreeSnapshot::capture(&canary.dir)?;
+        let outside_baseline = OutsideSnapshot::capture(&base);
         Ok(Self {
             base,
             root,
             canary,
             canary_baseline,
             root_baseline: None,
+            outside_baseline,
             skipped: Vec::new(),
             checked: Cell::new(false),
             _tmp: tmp,
@@ -138,6 +142,47 @@ impl Fixture {
     /// The temporary directory containing the root, the canary and the git home.
     pub fn base(&self) -> &Path {
         &self.base
+    }
+
+    /// The quarantine base for code under test (P2-EXEC-13): the temp dir, beside the root
+    /// and the canary, so quarantine lands in `<temp>/.scull-quarantine/`.
+    pub fn quarantine_base(&self) -> &Path {
+        &self.base
+    }
+
+    /// The environment for every scull process a test runs against this fixture (P2-EXEC-13):
+    ///
+    /// * `SCULL_TEST_SANDBOX` = the temp dir: the Executor uses nothing outside it (no automatic
+    ///   quarantine location, no real Trash; `scull clean` puts its Trash fallback at
+    ///   `<temp>/Trash`);
+    /// * `SCULL_QUARANTINE_BASE` = [`Fixture::quarantine_base`].
+    pub fn sandbox_env(&self) -> [(&'static str, &Path); 2] {
+        [
+            (scull_core::config::TEST_SANDBOX_ENV, &self.base),
+            (
+                scull_core::config::QUARANTINE_BASE_ENV,
+                self.quarantine_base(),
+            ),
+        ]
+    }
+
+    /// Apply [`Fixture::sandbox_env`] to `cmd`.
+    pub fn sandbox<'c>(&self, cmd: &'c mut std::process::Command) -> &'c mut std::process::Command {
+        for (k, v) in self.sandbox_env() {
+            cmd.env(k, v);
+        }
+        cmd
+    }
+
+    /// What appeared in the automatic quarantine and Trash locations above the temp dir since
+    /// the fixture was created (see [`check_invariants`](crate::check_invariants), I-2).
+    pub(crate) fn outside_additions(&self) -> Vec<PathBuf> {
+        let now = OutsideSnapshot::capture(&self.base);
+        self.outside_baseline
+            .added(&now)
+            .into_iter()
+            .map(Path::to_path_buf)
+            .collect()
     }
 
     /// The canary directory beside the root.
