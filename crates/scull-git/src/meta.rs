@@ -151,7 +151,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 }
 
 /// `\\?\C:\x` → `C:\x`, `\\?\UNC\srv\share\x` → `\\srv\share\x`. No-op elsewhere.
-fn strip_verbatim(p: PathBuf) -> PathBuf {
+pub(crate) fn strip_verbatim(p: PathBuf) -> PathBuf {
     let Some(s) = p.to_str() else { return p };
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));

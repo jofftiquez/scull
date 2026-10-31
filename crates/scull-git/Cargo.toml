@@ -17,7 +17,8 @@ scull-core.workspace = true
 scull-platform.workspace = true
 serde.workspace = true
 schemars.workspace = true
+# Private, auto-removed sandbox (empty HOME, hooks dir) for hardened `git` calls.
+tempfile = "3"
 
 [dev-dependencies]
 serde_json.workspace = true
-tempfile = "3"

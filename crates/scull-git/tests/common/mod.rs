@@ -50,8 +50,21 @@ impl Sandbox {
 
     /// Runs `git <args>` in `cwd` and returns trimmed stdout. Panics on failure.
     pub fn git(&self, cwd: &Path, args: &[&str]) -> String {
+        let out = self.git_output(cwd, args);
+        assert!(
+            out.status.success(),
+            "git {args:?} failed in {}: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+    }
+
+    /// Runs `git <args>` in `cwd` (isolated from the machine's config but *not* hardened
+    /// against the repository's config) and returns the raw output, whatever the exit code.
+    pub fn git_output(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
         let home = self.tmp.path().join("home");
-        let out = Command::new("git")
+        Command::new("git")
             .current_dir(cwd)
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", &home)
@@ -77,14 +90,7 @@ impl Sandbox {
             ])
             .args(args)
             .output()
-            .expect("spawn git");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed in {}: {}",
-            cwd.display(),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+            .expect("spawn git")
     }
 
     /// `git init <name>` plus one empty commit; returns the repo folder.
