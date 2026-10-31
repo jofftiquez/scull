@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorEnvelope",
+  "description": "The error document written to stderr in `--json`/`--ndjson` mode.",
+  "type": "object",
+  "properties": {
+    "error": {
+      "description": "The error, with a stable `kind` code.",
+      "$ref": "#/$defs/ScullError"
+    },
+    "schema": {
+      "description": "Always `scull/error@1`.",
+      "type": "string",
+      "const": "scull/error@1"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "error"
+  ],
+  "$defs": {
+    "ErrorKind": {
+      "description": "What went wrong, as a stable machine code. Serialized as the snake_case string returned by\n[`ErrorKind::as_str`]. See [`ExitCode`] for the exit code of each kind.",
+      "oneOf": [
+        {
+          "description": "Invalid command-line usage or arguments.",
+          "type": "string",
+          "const": "usage"
+        },
+        {
+          "description": "Invalid or unreadable configuration.",
+          "type": "string",
+          "const": "config"
+        },
+        {
+          "description": "An I/O error not covered by a more specific kind.",
+          "type": "string",
+          "const": "io"
+        },
+        {
+          "description": "The OS denied access.",
+          "type": "string",
+          "const": "permission_denied"
+        },
+        {
+          "description": "A path, item, plan or operation does not exist.",
+          "type": "string",
+          "const": "not_found"
+        },
+        {
+          "description": "The plan is past its expiry time.",
+          "type": "string",
+          "const": "plan_expired"
+        },
+        {
+          "description": "The plan's content hash does not match (it was edited).",
+          "type": "string",
+          "const": "plan_tampered"
+        },
+        {
+          "description": "The plan was created on another machine or by another user.",
+          "type": "string",
+          "const": "plan_foreign"
+        },
+        {
+          "description": "Another operation touched the plan's targets after it was created (SAFE-09).",
+          "type": "string",
+          "const": "plan_invalidated"
+        },
+        {
+          "description": "The safety policy refused the action.",
+          "type": "string",
+          "const": "safety_blocked"
+        },
+        {
+          "description": "The execution lock is held by another operation (SAFE-09).",
+          "type": "string",
+          "const": "lock_held"
+        },
+        {
+          "description": "The user cancelled.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "The operation completed but some items failed.",
+          "type": "string",
+          "const": "partial_failure"
+        },
+        {
+          "description": "The operation is not supported on this platform or filesystem.",
+          "type": "string",
+          "const": "unsupported_platform"
+        },
+        {
+          "description": "A bug in scull.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable ID of a candidate: a hash of its identity and its path bytes.\n\nBinding both means an item ID stops matching if the object at the path is replaced\n(new identity) *or* the same object is moved (new path). Plans refer to items by `ItemId`,\nnever by path alone (SAFE-11): a lossy or edited path in a plan file can't redirect deletion.",
+      "type": "string"
+    },
+    "ScullError": {
+      "description": "A serializable error: kind, human message and optional context.\n\n```\nuse scull_core::{ErrorKind, ExitCode, FsPath, ScullError};\n\nlet e = ScullError::new(ErrorKind::PlanExpired, \"plan expired 3 minutes ago\")\n    .with_path(FsPath::from(\"/home/me/plan.json\"));\nassert_eq!(e.exit_code(), ExitCode::PlanRejected);\nassert_eq!(e.exit_code().as_i32(), 4);\n```",
+      "type": "object",
+      "properties": {
+        "item_id": {
+          "description": "The item involved, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Stable machine code.",
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "message": {
+          "description": "Human-readable explanation.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The path involved, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "message"
+      ]
+    }
+  }
+}
