@@ -82,7 +82,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             DataAction::Export => planned("data export", 82),
             DataAction::Purge => planned("data purge", 82),
         },
-        Command::Doctor => planned("doctor", 59),
+        Command::Doctor => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
         } => planned("mcp serve", 60),
@@ -113,10 +113,13 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         ui.debug(&format!("could not install Ctrl-C handler: {e}"));
     }
     ui.debug(&format!("command: {:?}", cli.command));
-    match planned_for(&cli.command) {
-        Some(p) => Err(not_implemented(p)),
-        None => cancel::check(),
+    if let Some(p) = planned_for(&cli.command) {
+        return Err(not_implemented(p));
     }
+    if let Command::Doctor = cli.command {
+        crate::cmd::doctor::run(ui)?;
+    }
+    cancel::check()
 }
 
 fn completions(shell: clap_complete::Shell) -> Result<(), ScullError> {
@@ -199,7 +202,6 @@ mod tests {
             (&["data", "show"], "data show", Some(82)),
             (&["data", "export"], "data export", Some(82)),
             (&["data", "purge"], "data purge", Some(82)),
-            (&["doctor"], "doctor", Some(59)),
             (&["mcp", "serve"], "mcp serve", Some(60)),
         ];
         for (args, name, issue) in table {
@@ -213,6 +215,7 @@ mod tests {
             );
         }
         assert_eq!(planned_of(&["completions", "bash"]), None);
+        assert_eq!(planned_of(&["doctor"]), None);
     }
 
     #[test]

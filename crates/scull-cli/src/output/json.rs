@@ -160,6 +160,15 @@ impl<W: Write> NdjsonWriter<W> {
     }
 }
 
+/// The JSON Schema (2020-12) of a `--json` document: [`Envelope`] around `T`, with `schema`
+/// pinned to `id`. Commands publish this under `crates/scull-cli/schemas/`.
+pub fn document_schema<T: JsonSchema>(id: SchemaId) -> serde_json::Value {
+    let mut v = serde_json::to_value(schemars::schema_for!(Envelope<T>)).unwrap_or_default();
+    v["title"] = id.to_string().into();
+    v["properties"]["schema"]["const"] = id.to_string().into();
+    v
+}
+
 /// The JSON Schema (2020-12) of [`ErrorEnvelope`], as published for P0-ARCH-02.
 pub fn error_envelope_schema() -> schemars::Schema {
     schemars::schema_for!(ErrorEnvelope)

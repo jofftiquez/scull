@@ -170,7 +170,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
         (&["agent", "install", "codex"], "(tracked in #110)"),
         (&["schedule", "enable"], "(tracked in #114)"),
         (&["data", "show"], "(tracked in #82)"),
-        (&["doctor"], "(tracked in #59)"),
         (&["mcp", "serve"], "(tracked in #60)"),
     ];
     for (args, want) in cases {
@@ -208,29 +207,29 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
 
 #[test]
 fn quiet_still_reports_errors() {
-    let o = scull(&["doctor", "-q"]);
+    let o = scull(&["check", "-q"]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("tracked in #59"));
+    assert!(stderr(&o).contains("tracked in #114"));
     // -q and -v are mutually exclusive.
-    assert_eq!(scull(&["doctor", "-q", "-v"]).status.code(), Some(2));
-    assert_eq!(scull(&["-q", "doctor", "-v"]).status.code(), Some(2));
+    assert_eq!(scull(&["check", "-q", "-v"]).status.code(), Some(2));
+    assert_eq!(scull(&["-q", "check", "-v"]).status.code(), Some(2));
 }
 
 #[test]
 fn color_never_and_no_color_produce_no_escapes() {
-    let o = scull(&["doctor", "--color", "never"]);
+    let o = scull(&["check", "--color", "never"]);
     assert!(!stderr(&o).contains('\x1b'));
     let o = Command::new(env!("CARGO_BIN_EXE_scull"))
-        .args(["doctor"])
+        .args(["check"])
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
         .output()
         .expect("run");
     assert!(!String::from_utf8_lossy(&o.stderr).contains('\x1b'));
-    let o = scull(&["doctor", "--color", "always"]);
+    let o = scull(&["check", "--color", "always"]);
     assert!(stderr(&o).contains("\x1b["), "--color always forces color");
     assert_eq!(
-        scull(&["doctor", "--color", "rainbow"]).status.code(),
+        scull(&["check", "--color", "rainbow"]).status.code(),
         Some(2)
     );
 }

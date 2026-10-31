@@ -33,6 +33,7 @@ unicode-width = "0.2"
 [dev-dependencies]
 proptest.workspace = true
 jsonschema = { version = "0.60", default-features = false }
+tempfile = "3"
 
 [[bin]]
 name = "scull"
