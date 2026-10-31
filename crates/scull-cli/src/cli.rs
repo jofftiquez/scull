@@ -426,14 +426,30 @@ pub struct CleanArgs {
 #[derive(Debug, Subcommand)]
 pub enum CleanAction {
     /// Quick Clean: prune package-manager caches with their native commands.
-    Caches {
-        /// Run the commands (otherwise only show them).
-        #[arg(long)]
-        confirm: bool,
-        /// Wipe caches entirely instead of pruning.
-        #[arg(long, requires = "confirm")]
-        wipe: bool,
-    },
+    Caches(CleanCachesArgs),
+}
+
+/// Arguments for `scull clean caches` (QC-04). Without `--confirm` (and without a terminal
+/// to ask on) it only shows what would run.
+#[derive(Debug, Clone, Args)]
+pub struct CleanCachesArgs {
+    /// Run the commands without asking (otherwise only show them, or ask on a terminal).
+    #[arg(long)]
+    pub confirm: bool,
+    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm is never
+    /// wiped).
+    #[arg(long)]
+    pub wipe: bool,
+    /// Leave this tool's cache alone; repeat for several (npm, pnpm, bun, yarn,
+    /// yarn-classic, yarn-berry).
+    #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
+    pub untick: Vec<crate::cmd::clean_caches::Untick>,
+    /// Only show what would run; never ask or run.
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+    /// Allow running as root/administrator (refused by default, SAFE-14).
+    #[arg(long)]
+    pub allow_root: bool,
 }
 
 /// `scull rules` subcommands.
@@ -585,18 +601,33 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["scull", "clean", "--dry-run", "--confirm"]).is_err());
-        let cli = Cli::try_parse_from(["scull", "clean", "caches", "--confirm", "--wipe"])
-            .expect("parses");
-        assert!(matches!(
-            cli.command,
-            Command::Clean(CleanArgs {
-                action: Some(CleanAction::Caches {
-                    confirm: true,
-                    wipe: true
-                }),
-                ..
-            })
-        ));
-        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--wipe"]).is_err());
+        let cli = Cli::try_parse_from([
+            "scull",
+            "clean",
+            "caches",
+            "--confirm",
+            "--wipe",
+            "--untick",
+            "pnpm",
+            "--untick",
+            "yarn",
+        ])
+        .expect("parses");
+        let Command::Clean(CleanArgs {
+            action: Some(CleanAction::Caches(a)),
+            ..
+        }) = cli.command
+        else {
+            panic!("not clean caches");
+        };
+        assert!(a.confirm && a.wipe);
+        assert_eq!(a.untick.len(), 2);
+        assert_eq!(a.untick[1].0.len(), 2, "yarn = classic + berry");
+        // A dry-run preview of the wipe is allowed; an unknown tool is not.
+        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--wipe"]).is_ok());
+        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--untick", "cargo"]).is_err());
+        assert!(
+            Cli::try_parse_from(["scull", "clean", "caches", "--dry-run", "--confirm"]).is_err()
+        );
     }
 }

@@ -45,7 +45,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         } => planned("worktrees register", 111),
         Command::Clean(args) => match args.action {
             None => None,
-            Some(CleanAction::Caches { .. }) => planned("clean caches", 80),
+            Some(CleanAction::Caches(_)) => None,
         },
         Command::LargeFiles { .. } => None,
         Command::History => planned("history", 81),
@@ -123,7 +123,10 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             ..
         } => crate::cmd::worktrees::inspect(path, ui)?,
         Command::Caches => crate::cmd::caches::run(ui)?,
-        Command::Clean(args) if args.action.is_none() => crate::cmd::clean::run(args, ui)?,
+        Command::Clean(args) => match &args.action {
+            None => crate::cmd::clean::run(args, ui)?,
+            Some(CleanAction::Caches(a)) => crate::cmd::clean_caches::run(a, ui)?,
+        },
         Command::LargeFiles {
             path,
             min_size,
@@ -210,7 +213,6 @@ mod tests {
                 "worktrees register",
                 Some(111),
             ),
-            (&["clean", "caches"], "clean caches", Some(80)),
             (&["history"], "history", Some(81)),
             (&["restore", "op-1"], "restore", Some(81)),
             (&["approve", "plan-1"], "approve", Some(108)),
@@ -248,6 +250,8 @@ mod tests {
             &["clean"],
             &["clean", "--dry-run", "--output", "p.json"],
             &["clean", "--plan", "p.json", "--confirm"],
+            &["clean", "caches"],
+            &["clean", "caches", "--confirm", "--wipe"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }

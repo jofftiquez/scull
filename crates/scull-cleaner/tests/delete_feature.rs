@@ -124,7 +124,12 @@ fn interface_crates_do_not_enable_the_delete_feature() {
 
 /// The CLI modules that may use `scull-cleaner`: `scull data purge`, `scull clean` and the
 /// shared setup of destructive commands (execution lock, P2-CLI-01).
-const CLI_CLEANER_MODULES: &[&str] = &["cmd/data.rs", "cmd/clean.rs", "cmd/exec.rs"];
+const CLI_CLEANER_MODULES: &[&str] = &[
+    "cmd/data.rs",
+    "cmd/clean.rs",
+    "cmd/clean_caches.rs",
+    "cmd/exec.rs",
+];
 
 /// The CLI reaches deletion only through `scull-cleaner` (never the walker directly), and
 /// only from the modules that delete ([`CLI_CLEANER_MODULES`]).

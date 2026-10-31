@@ -49,6 +49,13 @@ tempfile = "3"
 name = "scull"
 path = "src/main.rs"
 
+# `scull clean caches` end to end: the test executable doubles as fake package managers, so it
+# needs its own `main` (see tests/clean_caches/main.rs).
+[[test]]
+name = "clean_caches"
+path = "tests/clean_caches/main.rs"
+harness = false
+
 # Release packaging (P1-REL-01): the workspace is `publish = false` (nothing goes to
 # crates.io), which cargo-dist reads as "not distributable" unless opted in here. Only this
 # crate ships a binary; config lives in dist-workspace.toml.

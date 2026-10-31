@@ -3,6 +3,7 @@
 
 pub mod caches;
 pub mod clean;
+pub mod clean_caches;
 pub mod data;
 pub mod doctor;
 pub mod exec;

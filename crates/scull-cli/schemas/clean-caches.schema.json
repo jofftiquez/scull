@@ -1,0 +1,390 @@
+{
+  "$defs": {
+    "CachesMode": {
+      "description": "Preview or run.",
+      "oneOf": [
+        {
+          "const": "preview",
+          "description": "Nothing ran.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "The planned tools were run.",
+          "type": "string"
+        }
+      ]
+    },
+    "CleanCachesReport": {
+      "additionalProperties": false,
+      "description": "`scull clean caches` (`scull/clean-caches@1`).",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CachesMode",
+          "description": "Preview or run."
+        },
+        "next_step": {
+          "description": "What to run next, if anything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not_undoable": {
+          "description": "\"Not undoable. Packages re-download on next install; offline installs may fail until\nthen.\" (QC-02).",
+          "type": "string"
+        },
+        "results": {
+          "description": "Run only: what each started tool did.",
+          "items": {
+            "$ref": "#/$defs/ResultLine"
+          },
+          "type": "array"
+        },
+        "signals_unavailable": {
+          "description": "Signals the cache scan could not observe.",
+          "items": {
+            "$ref": "#/$defs/SignalUnavailable"
+          },
+          "type": "array"
+        },
+        "skipped": {
+          "description": "Tools that won't run (or didn't), and why.",
+          "items": {
+            "$ref": "#/$defs/SkippedLine"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "description": "The tools that will run (preview) or were planned (run), one line each.",
+          "items": {
+            "$ref": "#/$defs/ToolLine"
+          },
+          "type": "array"
+        },
+        "total_reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes of the planned tools.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "tools",
+        "skipped",
+        "results",
+        "total_reclaimable_bytes",
+        "not_undoable",
+        "signals_unavailable"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ResultLine": {
+      "additionalProperties": false,
+      "description": "What one started tool did.",
+      "properties": {
+        "args": {
+          "description": "Its arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "binary": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The binary that ran."
+        },
+        "cache": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The cache folder."
+        },
+        "cache_bytes_after": {
+          "description": "Cache allocated bytes after.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_bytes_before": {
+          "description": "Cache allocated bytes before.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_bytes_freed": {
+          "description": "Allocated bytes the cache shrank by (negative: it grew).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "elapsed_ms": {
+          "description": "Wall-clock milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ended": {
+          "description": "`exited`, `timed_out`, `cancelled` or `spawn_failed`.",
+          "type": "string"
+        },
+        "exit_code": {
+          "description": "Exit code, when it exited.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "explanation": {
+          "description": "Why less was freed than one might expect (pnpm, QC-06).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "free_space_delta": {
+          "description": "Measured change of the volume's free space (positive: freed; other activity shows too).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "`prune` or `wipe`.",
+          "type": "string"
+        },
+        "stderr": {
+          "description": "Captured stderr (escaped, capped).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stdout": {
+          "description": "Captured stdout (escaped, capped).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "succeeded": {
+          "description": "Whether it exited with status 0.",
+          "type": "boolean"
+        },
+        "tool": {
+          "description": "Short name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "cache",
+        "binary",
+        "args",
+        "mode",
+        "ended",
+        "succeeded",
+        "elapsed_ms",
+        "stdout",
+        "stderr"
+      ],
+      "type": "object"
+    },
+    "SignalUnavailable": {
+      "additionalProperties": false,
+      "description": "A safety signal the run could not observe.",
+      "properties": {
+        "affected": {
+          "description": "How many candidates it affected.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why, and what scull did instead.",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Stable signal name (`in_use`, `git`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal",
+        "reason",
+        "affected"
+      ],
+      "type": "object"
+    },
+    "SkippedLine": {
+      "additionalProperties": false,
+      "description": "One tool that won't run.",
+      "properties": {
+        "manual_removal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The folder left for manual removal when the tool isn't installed."
+        },
+        "message": {
+          "description": "Why, in words.",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its cache folder, if known."
+        },
+        "reason": {
+          "description": "Stable reason code.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Short name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "reason",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ToolLine": {
+      "additionalProperties": false,
+      "description": "One planned tool.",
+      "properties": {
+        "args": {
+          "description": "The exact arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "artifact": {
+          "description": "What it is (\"npm cache\").",
+          "type": "string"
+        },
+        "binary": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The resolved binary (SAFE-12)."
+        },
+        "cache": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The cache folder."
+        },
+        "command_line": {
+          "description": "The command as shown (display only; never run through a shell).",
+          "type": "string"
+        },
+        "env": {
+          "description": "Location variables added to the sanitized environment.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "description": "`prune` or `wipe`.",
+          "type": "string"
+        },
+        "notes": {
+          "description": "Extra facts (e.g. \"pnpm has no wipe\").",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "description": "Short name (`npm`, `pnpm`, `bun`, `yarn-classic`, `yarn-berry`).",
+          "type": "string"
+        },
+        "wipe_requested": {
+          "description": "Whether the wipe was asked for (`--wipe`); Bun and Yarn only have a wipe.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tool",
+        "artifact",
+        "cache",
+        "mode",
+        "wipe_requested",
+        "binary",
+        "args",
+        "env",
+        "command_line",
+        "reclaimable_bytes",
+        "notes"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/CleanCachesReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/clean-caches@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/clean-caches@1",
+  "type": "object"
+}
