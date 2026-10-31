@@ -165,6 +165,18 @@ const TESTS: &[Test] = &[
         "p2_exec_12_unapproved_command_never_runs",
         p2_exec_12_unapproved_command_never_runs,
     ),
+    (
+        "p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell",
+        p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell,
+    ),
+    (
+        "p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path",
+        p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path,
+    ),
+    (
+        "p2_qc_02_untrusted_or_foreign_shims_are_never_run",
+        p2_qc_02_untrusted_or_foreign_shims_are_never_run,
+    ),
 ];
 
 fn main() {
@@ -329,6 +341,11 @@ fn identity_available() -> bool {
 
 fn home(fx: &Fixture) -> PathBuf {
     fx.root().join("home")
+}
+
+/// A second trusted folder holding only `node` (Windows: Node's install folder).
+fn node_dir(fx: &Fixture) -> PathBuf {
+    fx.base().join("nodejs")
 }
 
 /// The trusted tools folder (outside the root and the canary).
@@ -520,7 +537,8 @@ fn check(
     let mut inputs = InvariantInputs::new()
         .plan(entries)
         .spawned(spawn_records(&plan.spawned))
-        .trusted_dir(tools(fx));
+        .trusted_dir(tools(fx))
+        .trusted_dir(node_dir(fx));
     for a in allowed {
         inputs = inputs.allow(a.clone());
     }
@@ -2196,4 +2214,296 @@ fn p2_exec_12_unapproved_command_never_runs() {
         ..audited.rec.clone()
     };
     check(&fx, &approved, &cands, &[], &[&nothing_run]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// P2-QC-02: Windows `.cmd` shims, resolved to `node <script>` without a shell
+// ---------------------------------------------------------------------------------------------
+//
+// These run on every OS: `QuickCleanOptions::cmd_shims` (on by default on Windows only) turns
+// the shim resolution on, the shims are real-world `.cmd` texts, and the fake tool doubles as
+// `node`. Nothing runs a shim or a shell: the spawn records show it.
+
+/// Options whose search list is `dirs`, with `.cmd` shims resolved.
+fn shim_options(fx: &Fixture, dirs: &[PathBuf]) -> QuickCleanOptions {
+    let mut o = options(fx, dirs);
+    o.cmd_shims = true;
+    o
+}
+
+/// The canonical path of the script a shim of `style` for `tool` in `dir` runs.
+fn shim_script_path(dir: &Path, tool: &str, style: fake::ShimStyle) -> PathBuf {
+    let rel = fake::shim_script(tool, style);
+    canonical(&rel.split('/').fold(dir.to_path_buf(), |p, c| p.join(c)))
+}
+
+/// No process but `node` was started: never a shell or a shim.
+fn assert_only_node_spawned(spawned: &[Spawn]) {
+    for s in spawned {
+        let stem = s
+            .binary
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        assert_eq!(stem, "node", "{s:?}");
+        let ext = s
+            .binary
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase());
+        assert!(
+            !matches!(ext.as_deref(), Some("cmd" | "bat" | "ps1")),
+            "{s:?}"
+        );
+    }
+}
+
+/// FX-QC-01 with npm installed as a `.cmd` shim (cmd-shim, and Node's bundled `npm.cmd`), with
+/// `node.exe` beside it: the preview shows Node and the script, the run starts exactly
+/// `node <script> cache verify --cache <dir>`, the audit records that command, and every
+/// invariant holds (I-7: Node running the npm script from the trusted folder).
+fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
+    if !identity_available() {
+        return;
+    }
+    for style in [fake::ShimStyle::CmdShim, fake::ShimStyle::NodeNpm] {
+        let mut fx = Fixture::new().unwrap();
+        let cache = npm_cache(&mut fx);
+        fx.checkpoint().unwrap();
+        let node = fake::install(&tools(&fx), "node");
+        let shim = fake::install_shim(&tools(&fx), "npm", style);
+        let script = shim_script_path(&tools(&fx), "npm", style);
+        let scan = locate(&fx);
+        let cands = candidates(&scan);
+        let q = quick(shim_options(&fx, &[tools(&fx)]));
+        let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        assert!(plan.skipped.is_empty(), "{style:?}: {:?}", plan.skipped);
+        let t = &plan.tools[0];
+        let location = home(&fx).join(".npm");
+        assert_eq!(t.binary, canonical(&node), "{style:?}");
+        assert_eq!(t.script.as_deref(), Some(script.as_path()));
+        assert_eq!(t.shim.as_deref(), Some(shim.as_path()));
+        assert_eq!(
+            t.args,
+            [
+                vec![path_arg(&script)],
+                os(&["cache", "verify", "--cache"]),
+                vec![path_arg(&location)]
+            ]
+            .concat()
+        );
+        assert!(
+            t.notes.iter().any(|n| n.contains("without a shell")),
+            "{:?}",
+            t.notes
+        );
+        println!("  preview ({style:?}): {}", t.command_line());
+
+        let report = run_ok(&fx, &q, &plan);
+        assert!(report.results[0].succeeded(), "{report:?}");
+        let call = only_call(&fx, "npm");
+        assert_eq!(
+            call.argv,
+            ["cache", "verify", "--cache", &location.to_string_lossy()]
+        );
+        assert_eq!(call.script.as_deref(), Some(&*script.to_string_lossy()));
+        assert_eq!(env_names(&call.env), expected_env_names(&[]));
+        assert!(!files_below(&cache).iter().any(|f| f.contains("unused")));
+        assert_only_node_spawned(&report.spawned);
+        let row = only_row(&fx, &report.rec, ItemOutcome::ToolRun, None);
+        assert_eq!(row.item_id, t.item_id);
+        let store = open_store(&fx);
+        let plan_id = store.operation(&report.rec.op).unwrap().unwrap().plan_id;
+        let recorded = store.get_plan(&plan_id).unwrap().unwrap();
+        match &recorded.items()[0].action {
+            Action::ToolCommand { tool, args } => {
+                assert_eq!(tool, &*canonical(&node).to_string_lossy());
+                assert_eq!(args[0], script.to_string_lossy());
+            }
+            a => panic!("{a:?}"),
+        }
+        check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
+    }
+}
+
+/// Yarn's installer shim (`node "%~dp0\yarn.js" %*`) and a cmd-shim pnpm without `node.exe`
+/// beside them: Node comes from another trusted folder on the search path. The Yarn version
+/// probe runs through Node too.
+fn p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let yarn = yarn_classic(&mut fx);
+    let pnpm = pnpm_store(&mut fx);
+    fx.checkpoint().unwrap();
+    let node = fake::install(&node_dir(&fx), "node");
+    fake::install_shim(&tools(&fx), "yarn", fake::ShimStyle::YarnMsi);
+    fake::install_shim(&tools(&fx), "pnpm", fake::ShimStyle::CmdShim);
+    let yarn_js = shim_script_path(&tools(&fx), "yarn", fake::ShimStyle::YarnMsi);
+    let pnpm_js = shim_script_path(&tools(&fx), "pnpm", fake::ShimStyle::CmdShim);
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(shim_options(&fx, &[tools(&fx), node_dir(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    let mut planned = planned_tools(&plan);
+    planned.sort();
+    assert_eq!(planned, [CacheTool::Pnpm, CacheTool::YarnClassic]);
+    for t in &plan.tools {
+        assert_eq!(t.binary, canonical(&node), "{t:?}");
+    }
+    // The version probe: `node <yarn.js> --version`.
+    assert_eq!(plan.spawned.len(), 1);
+    assert_eq!(plan.spawned[0].binary, canonical(&node));
+    assert_eq!(
+        plan.spawned[0].args,
+        [path_arg(&yarn_js), OsString::from("--version")]
+    );
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
+    // Calls are recorded beside the fake that ran: Node's folder.
+    let pnpm_calls = fake::calls(&node_dir(&fx), "pnpm");
+    assert_eq!(pnpm_calls.len(), 1, "{pnpm_calls:?}");
+    assert_eq!(
+        pnpm_calls[0].script.as_deref(),
+        Some(&*pnpm_js.to_string_lossy())
+    );
+    assert_eq!(
+        pnpm_calls[0].argv,
+        ["store", "prune", "--store-dir", &pnpm.to_string_lossy()]
+    );
+    let yarn_calls = fake::calls(&node_dir(&fx), "yarn");
+    assert_eq!(yarn_calls.len(), 2, "version probe + clean: {yarn_calls:?}");
+    assert_eq!(yarn_calls[1].argv, ["cache", "clean"]);
+    assert_eq!(files_below(&yarn), [fake::GUARD]);
+    assert_only_node_spawned(&plan.spawned);
+    assert_only_node_spawned(&report.spawned);
+    assert_eq!(rows(&fx, &report.rec).len(), 2);
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &yarn), rel(&fx, &pnpm)],
+        &[&report.rec],
+    );
+}
+
+/// One fixture with an npm cache and a planted npm script in the scan root, `setup` run on it,
+/// searched along `search`: npm must be skipped as `ShellShimOnly`, and nothing may start.
+fn assert_shim_never_runs(
+    what: &str,
+    setup: &dyn Fn(&Fixture),
+    search: &dyn Fn(&Fixture) -> Vec<PathBuf>,
+) {
+    let mut fx = Fixture::new().unwrap();
+    npm_cache(&mut fx);
+    fx.file("proj/node_modules/npm/bin/npm-cli.js", "// planted\n")
+        .unwrap();
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap();
+    setup(&fx);
+    let mut o = shim_options(&fx, &search(&fx));
+    o.cwd = Some(fx.base().join("cwd"));
+    let q = quick(o);
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty(), "{what}: {plan:#?}");
+    let reason = skip_reason(&plan.skipped, CacheTool::Npm);
+    assert!(
+        matches!(reason, SkipReason::ShellShimOnly(_)),
+        "{what}: {reason:?}"
+    );
+    println!("  {what}: {reason}");
+    let report = run_ok(&fx, &q, &plan);
+    assert!(
+        report.spawned.is_empty() && plan.spawned.is_empty(),
+        "{what}"
+    );
+    for d in [tools(&fx), node_dir(&fx), fx.base().join("cwd")] {
+        assert!(!fake::ran_in(&d), "{what}: a fake ran in {}", d.display());
+    }
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+/// Shims Quick Clean must not run: a script outside the trusted folder (`..` into the scan
+/// root, or a link there), a program other than Node, Node only in an untrusted folder, a
+/// `.bat`. Each is skipped as `ShellShimOnly` and nothing starts; with shim resolution off the
+/// tool is simply not installed.
+fn p2_qc_02_untrusted_or_foreign_shims_are_never_run() {
+    if !identity_available() {
+        return;
+    }
+    let tools_only = |fx: &Fixture| vec![tools(fx)];
+    assert_shim_never_runs(
+        "script outside the trusted folder",
+        &|fx| {
+            fake::install(&tools(fx), "node");
+            let text = "@echo off\r\nnode \"%~dp0\\..\\root\\proj\\node_modules\\npm\\bin\\npm-cli.js\" %*\r\n";
+            fs::write(tools(fx).join("npm.cmd"), text).unwrap();
+        },
+        &tools_only,
+    );
+    assert_shim_never_runs(
+        "program other than node",
+        &|fx| {
+            fake::install(&tools(fx), "node");
+            let shim = fake::install_shim(&tools(fx), "npm", fake::ShimStyle::CmdShim);
+            let text = fs::read_to_string(&shim)
+                .unwrap()
+                .replace("_prog=node\"", "_prog=sh\"");
+            fs::write(&shim, text).unwrap();
+        },
+        &tools_only,
+    );
+    assert_shim_never_runs(
+        "node only in the current directory",
+        &|fx| {
+            fake::install(&fx.base().join("cwd"), "node");
+            fake::install_shim(&tools(fx), "npm", fake::ShimStyle::CmdShim);
+        },
+        &|fx| vec![fx.base().join("cwd"), tools(fx)],
+    );
+    #[cfg(unix)]
+    assert_shim_never_runs(
+        "script linked into the scan root",
+        &|fx| {
+            fake::install(&tools(fx), "node");
+            fake::install_shim(&tools(fx), "npm", fake::ShimStyle::CmdShim);
+            let pkg = tools(fx).join("node_modules/npm");
+            fs::remove_dir_all(&pkg).unwrap();
+            std::os::unix::fs::symlink(fx.root().join("proj/node_modules/npm"), &pkg).unwrap();
+        },
+        &tools_only,
+    );
+    assert_shim_never_runs(
+        "batch file",
+        &|fx| {
+            fake::install(&tools(fx), "node");
+            fs::write(tools(fx).join("npm.bat"), "@node \"%~dp0\\x.js\" %*\r\n").unwrap();
+        },
+        &tools_only,
+    );
+
+    // Shim resolution off (the default outside Windows): not installed, nothing runs.
+    let mut fx = Fixture::new().unwrap();
+    let cache = npm_cache(&mut fx);
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "node");
+    fake::install_shim(&tools(&fx), "npm", fake::ShimStyle::CmdShim);
+    let mut o = options(&fx, &[tools(&fx)]);
+    o.cmd_shims = false;
+    let q = quick(o);
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert_eq!(
+        skip_reason(&plan.skipped, CacheTool::Npm),
+        SkipReason::NotInstalled {
+            manual_removal: cache
+        }
+    );
+    assert!(!fake::ran_in(&tools(&fx)));
+    check(&fx, &plan, &cands, &[], &[]);
 }

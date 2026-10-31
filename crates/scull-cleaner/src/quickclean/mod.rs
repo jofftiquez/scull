@@ -48,9 +48,17 @@
 //! Resolved from the injected search list ([`QuickCleanOptions::search_path`], the CLI passes
 //! `PATH`) by [`TrustedDirs`]: never an empty or relative entry, the current directory, a
 //! `node_modules` folder or a scan root, and a symlink is checked after resolving it. Only
-//! real executables: on Windows the `.cmd` shims npm, pnpm and Yarn install would need
-//! `cmd.exe`, so those tools are skipped with [`SkipReason::ShellShimOnly`] (running
-//! `node.exe` on the package's JS entry point directly is possible future work).
+//! real executables are started, never through a shell.
+//!
+//! **Windows `.cmd` shims (P2-QC-02).** npm, pnpm and Yarn usually install `.cmd` shims, which
+//! would need `cmd.exe`. Quick Clean never runs them: it **reads** an npm-style shim
+//! (cmd-shim, Node's bundled `npm.cmd`, Yarn's installer, pnpm's own), takes the Node program
+//! and the JavaScript entry point it names, checks both with the trusted-locations rules (Node:
+//! the shim folder's `node.exe` or a trusted `node` executable; the script: a regular file
+//! inside the shim's trusted directory, not the current directory or a scan root) and starts
+//! `node.exe <script> <args>` itself with structured arguments ([`Lookup::NodeScript`],
+//! [`PlannedTool::script`]). Any other shim, and `.bat`/`.ps1`, is still skipped with
+//! [`SkipReason::ShellShimOnly`]. `cmd.exe` is never started.
 //!
 //! This is a local copy of `scull-git`'s resolver (generalized to any tool name); a shared
 //! helper would have to live in another lane's crate.
@@ -156,12 +164,14 @@ mod audit;
 mod output;
 mod process;
 mod resolve;
+mod shim;
 
 pub use audit::{MAX_AUDIT_ARG_CHARS, MAX_AUDIT_ARGS};
 pub use output::{CapturedOutput, escape_line, needs_escape};
 pub use process::Ended;
-pub use resolve::{Lookup, TrustedDirs};
+pub use resolve::{Lookup, NodeScript, TrustedDirs};
 pub use scull_detectors::caches::NOT_UNDOABLE_NOTE;
+pub use shim::MAX_SHIM_BYTES;
 
 use crate::executor::{DeleteTarget, Executor};
 use crate::journal::{StepPoint, at, fingerprint};
@@ -233,6 +243,9 @@ pub struct QuickCleanOptions {
     pub passthrough_env: Vec<(String, OsString)>,
     /// Run even when elevated (SAFE-14, `--allow-root`).
     pub allow_elevated: bool,
+    /// Resolve npm-style `.cmd` shims to `node <script>` (P2-QC-02). On by default on Windows
+    /// only (where these shims are installed); the fixtures turn it on elsewhere.
+    pub cmd_shims: bool,
 }
 
 impl QuickCleanOptions {
@@ -253,6 +266,7 @@ impl QuickCleanOptions {
             sandbox_base: None,
             passthrough_env,
             allow_elevated: false,
+            cmd_shims: cfg!(windows),
         }
     }
 }
@@ -301,9 +315,15 @@ pub struct PlannedTool {
     /// The folder handed to the tool as its cache location (npm: the folder holding
     /// `_cacache`; Yarn Berry: the global folder holding `cache/`; otherwise the cache).
     pub location: PathBuf,
-    /// The resolved binary: canonical absolute path from a trusted directory (SAFE-12).
+    /// The resolved binary: canonical absolute path from a trusted directory (SAFE-12). For a
+    /// tool installed as a `.cmd` shim, the trusted Node executable.
     pub binary: PathBuf,
-    /// The exact arguments after the binary.
+    /// For a `.cmd` shim (P2-QC-02): the tool's JavaScript entry point that Node runs; it is
+    /// also the first of [`PlannedTool::args`].
+    pub script: Option<PathBuf>,
+    /// For a `.cmd` shim: the shim it was resolved from (read, never run).
+    pub shim: Option<PathBuf>,
+    /// The exact arguments after the binary (for a shim: the script, then the tool's own).
     pub args: Vec<OsString>,
     /// Tool-specific variables (the location) added to the sanitized environment.
     pub env: Vec<(String, OsString)>,
@@ -371,7 +391,9 @@ pub enum SkipReason {
         /// The folder left in place.
         manual_removal: PathBuf,
     },
-    /// Only a shell shim (`.cmd`, `.bat`, `.ps1`) exists; running it needs a shell (SAFE-12).
+    /// Only a shim scull can't run without a shell exists (SAFE-12): a `.bat`/`.ps1`, or a
+    /// `.cmd` that is not an npm-style Node shim or whose Node or script isn't trusted
+    /// (P2-QC-02).
     ShellShimOnly(PathBuf),
     /// The binary's version doesn't match this cache (e.g. Yarn 1 for the Berry cache).
     WrongVersion {
@@ -670,7 +692,8 @@ impl QuickClean {
     /// The trusted directories are resolved once, here.
     pub fn new(opts: QuickCleanOptions, platform: Arc<dyn Platform>) -> Self {
         let trusted =
-            TrustedDirs::new(&opts.search_path, opts.cwd.as_deref(), &opts.excluded_roots);
+            TrustedDirs::new(&opts.search_path, opts.cwd.as_deref(), &opts.excluded_roots)
+                .with_cmd_shims(opts.cmd_shims);
         Self {
             opts,
             trusted,
@@ -780,8 +803,16 @@ impl QuickClean {
             ));
         }
         let location = location_of(c)?;
-        let binary = match self.trusted.find(c.tool.binary()) {
-            Lookup::Found(b) => b,
+        let mut notes = Vec::new();
+        let (binary, script, shim) = match self.trusted.find(c.tool.binary()) {
+            Lookup::Found(b) => (b, None, None),
+            Lookup::NodeScript(n) => {
+                notes.push(format!(
+                    "{} is a .cmd shim: scull runs Node on its script directly, without a shell",
+                    n.shim.display()
+                ));
+                (n.node, Some(n.script), Some(n.shim))
+            }
             Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
             Lookup::NotFound => {
                 return Err(SkipReason::NotInstalled {
@@ -790,13 +821,12 @@ impl QuickClean {
             }
         };
         if matches!(c.tool, CacheTool::YarnClassic | CacheTool::YarnBerry) {
-            self.check_yarn_version(c.tool, &binary, sandbox, spawned)?;
+            self.check_yarn_version(c.tool, &binary, script.as_deref(), sandbox, spawned)?;
         }
         in_use(&location, probe)?;
 
         let commands = c.commands();
         let wipe_requested = request.wipe.contains(&c.tool);
-        let mut notes = Vec::new();
         let (cmd, mode): (NativeCommand, CleanMode) = match (wipe_requested, commands.wipe) {
             (true, Some(w)) => (w, CleanMode::Wipe),
             (true, None) if commands.preferred_prunes => {
@@ -815,7 +845,12 @@ impl QuickClean {
                     .into(),
             );
         }
-        let (args, env) = tool_invocation(c.tool, cmd, &location);
+        let (tool_args, env) = tool_invocation(c.tool, cmd, &location);
+        let args: Vec<OsString> = script
+            .iter()
+            .map(|s| s.as_os_str().to_owned())
+            .chain(tool_args)
+            .collect();
         let item = PlanItem::from_candidate(cand)
             .map_err(|_| SkipReason::NotEligible { tier: cand.tier })?;
         let item = audit::tool_item(item, &binary, &args);
@@ -827,6 +862,8 @@ impl QuickClean {
             anchor: c.anchor.clone(),
             location,
             binary,
+            script,
+            shim,
             args,
             env,
             mode,
@@ -888,7 +925,7 @@ impl QuickClean {
         match self.trusted.find(tool.binary()) {
             Lookup::NotFound => {}
             Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
-            Lookup::Found(b) => {
+            Lookup::Found(b) | Lookup::NodeScript(NodeScript { shim: b, .. }) => {
                 return Err(SkipReason::Changed(format!(
                     "`{}` is installed now ({}): use its own command",
                     tool.binary(),
@@ -1029,11 +1066,13 @@ impl QuickClean {
         Ok(report)
     }
 
-    /// Runs `yarn --version` (sandboxed) and checks the major version against the cache.
+    /// Runs `yarn --version` (sandboxed; `node <script> --version` for a shim) and checks the
+    /// major version against the cache.
     fn check_yarn_version(
         &self,
         tool: CacheTool,
         binary: &Path,
+        script: Option<&Path>,
         sandbox: &mut Option<Result<Sandbox, String>>,
         spawned: &mut Vec<Spawn>,
     ) -> Result<(), SkipReason> {
@@ -1043,7 +1082,11 @@ impl QuickClean {
             })
             .as_ref()
             .map_err(|e| SkipReason::Sandbox(e.clone()))?;
-        let args = vec![OsString::from("--version")];
+        let args: Vec<OsString> = script
+            .map(|s| s.as_os_str().to_owned())
+            .into_iter()
+            .chain([OsString::from("--version")])
+            .collect();
         let env = self.base_env(sb);
         spawned.push(Spawn {
             binary: binary.to_path_buf(),
@@ -1220,9 +1263,11 @@ impl QuickClean {
     /// SAFE-05-style checks right before starting a tool.
     fn revalidate(&self, t: &PlannedTool, probe: &dyn ActivityProbe) -> Result<(), SkipReason> {
         self.check_location(&t.cache, &t.anchor, t.identity)?;
-        if self.trusted.find(t.tool.binary()) != Lookup::Found(t.binary.clone()) {
+        if self.trusted.find(t.tool.binary()).program()
+            != Some((t.binary.clone(), t.script.clone()))
+        {
             return Err(SkipReason::Changed(format!(
-                "the trusted `{}` binary is no longer {}",
+                "the trusted `{}` program is no longer {}",
                 t.tool.binary(),
                 t.binary.display()
             )));
@@ -1584,6 +1629,8 @@ mod tests {
             anchor: PathBuf::from("/"),
             location: PathBuf::from("/c"),
             binary: PathBuf::from("/usr/bin/bun"),
+            script: None,
+            shim: None,
             args: vec!["pm".into(), "cache".into(), "rm".into()],
             env: vec![("BUN_INSTALL_CACHE_DIR".into(), "/c".into())],
             mode: CleanMode::Wipe,

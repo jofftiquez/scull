@@ -794,11 +794,69 @@ fn same_dir(a: &Path, b: &Path) -> bool {
         )
 }
 
+/// The `node` rule of [`spawns_allowlisted`]: the script it runs.
+fn node_runs_allowlisted_script<P: AsRef<Path>>(
+    r: &SpawnRecord,
+    trusted: &[P],
+    root: &Path,
+) -> std::result::Result<(), String> {
+    let script = r
+        .args
+        .first()
+        .map(PathBuf::from)
+        .ok_or("node started without a script")?;
+    let js = script
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["js", "cjs", "mjs"].contains(&e.to_ascii_lowercase().as_str()));
+    if !script.is_absolute() || !js {
+        return Err(format!(
+            "node's first argument {} is not an absolute JavaScript file",
+            script.display()
+        ));
+    }
+    if strip_root(&script, root).is_some() {
+        return Err(format!(
+            "node's script is inside the scanned root {}",
+            root.display()
+        ));
+    }
+    let real = std::fs::canonicalize(&script).map_err(|e| format!("node's script: {e}"))?;
+    let below = trusted.iter().find_map(|t| {
+        let t = std::fs::canonicalize(t.as_ref()).ok()?;
+        real.strip_prefix(&t).ok().map(Path::to_path_buf)
+    });
+    let Some(below) = below else {
+        return Err("node's script is not inside a trusted directory".to_owned());
+    };
+    let names_tool = below.components().any(|c| match c {
+        Component::Normal(n) => n.to_str().is_some_and(|n| ALLOWED_TOOLS.contains(&n)),
+        _ => false,
+    }) || below
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.split(['-', '.']).next())
+        .is_some_and(|s| ALLOWED_TOOLS.contains(&s));
+    if !names_tool {
+        return Err(format!(
+            "node's script {} is not an allowlisted tool's",
+            below.display()
+        ));
+    }
+    Ok(())
+}
+
 /// I-7: every spawned process is an allowlisted tool ([`ALLOWED_TOOLS`]) started by absolute
 /// path from a trusted directory: the binary sits directly in one of `trusted`, no component of
 /// its path is `node_modules`, and it is not inside `root` (the scanned tree; project content is
 /// never trusted, SAFE-12). With spawn records but no trusted directory declared, nothing is
 /// trusted and every spawn fails.
+///
+/// `node` counts as an allowlisted tool only when it runs one (a Windows `.cmd` shim resolved
+/// by Quick Clean, P2-QC-02): its first argument must be an absolute `.js`/`.cjs`/`.mjs` file
+/// inside one of `trusted` (after resolving links), outside `root`, whose path below that
+/// directory names an allowlisted tool (a folder such as `node_modules/npm/`, or the file's
+/// stem such as `yarn.js` / `npm-cli.js`). Node itself must pass every rule above.
 pub fn spawns_allowlisted<P: AsRef<Path>>(
     records: &[SpawnRecord],
     trusted: &[P],
@@ -810,6 +868,11 @@ pub fn spawns_allowlisted<P: AsRef<Path>>(
         let mut why = Vec::new();
         match tool_name(b) {
             Some(n) if ALLOWED_TOOLS.contains(&n) => {}
+            Some("node") => {
+                if let Err(e) = node_runs_allowlisted_script(r, trusted, root) {
+                    why.push(e);
+                }
+            }
             n => why.push(format!("{n:?} is not an allowlisted tool")),
         }
         if !b.is_absolute() {

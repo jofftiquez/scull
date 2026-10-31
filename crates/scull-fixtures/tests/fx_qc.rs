@@ -5,9 +5,10 @@
 //! (every process Quick Clean started is an allowlisted tool from the trusted folder).
 //!
 //! **No real package manager runs.** The fake tools are small `/bin/sh` scripts installed in a
-//! trusted folder beside the root (Unix only: on Windows Quick Clean runs only real
-//! executables, never `.cmd` shims; the Windows runs of FX-QC-01…08 are the custom-harness
-//! fixtures in `crates/scull-cleaner/tests/quickclean/`, whose test binary doubles as the fake).
+//! trusted folder beside the root (Unix only; the Windows runs of FX-QC-01…08, and the `.cmd`
+//! shim resolution of P2-QC-02, are the custom-harness fixtures in
+//! `crates/scull-cleaner/tests/quickclean/`, whose test binary doubles as the fake tools and
+//! `node`).
 //! A fake only touches a cache that carries its guard file, and every planted (untrusted) fake
 //! drops a sentinel inside the root if it ever runs, which I-3 would also report.
 

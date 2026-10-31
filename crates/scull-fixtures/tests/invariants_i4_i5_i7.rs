@@ -474,6 +474,54 @@ fn i7_fails_for_a_relative_binary_or_without_trusted_dirs() {
     assert!(m.contains("no trusted directory declared"), "{m}");
 }
 
+/// P2-QC-02: Node is allowlisted only while it runs an allowlisted tool's script from a
+/// trusted folder (a Windows `.cmd` shim resolved by Quick Clean).
+#[test]
+fn i7_node_only_runs_a_tool_script_from_the_trusted_folder() {
+    let fx = fixture();
+    let t = tools(&fx);
+    let node = exe(&t, "node");
+    let script = |rel: &str| {
+        let p = t.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, "// entry point\n").unwrap();
+        p
+    };
+    let npm_cli = script("node_modules/npm/bin/npm-cli.js");
+    let yarn_js = script("yarn.js");
+    let other = script("node_modules/evil/index.js");
+    let in_root = fx.root().join("web/node_modules/npm/bin/npm-cli.js");
+    let ok = fx.check_invariants(
+        &InvariantInputs::new()
+            .spawned([
+                SpawnRecord::new(&node, [npm_cli.as_os_str(), "cache".as_ref()]),
+                SpawnRecord::new(&node, [yarn_js.as_os_str(), "--version".as_ref()]),
+            ])
+            .trusted_dir(&t),
+    );
+    assert_eq!(ok.outcome(InvariantId::I7), &Outcome::Passed, "{ok}");
+    for (args, why) in [
+        (vec![], "without a script"),
+        (vec![other.into_os_string()], "not an allowlisted tool's"),
+        (vec![in_root.into_os_string()], "inside the scanned root"),
+        (
+            vec!["-e".into(), "x".into()],
+            "not an absolute JavaScript file",
+        ),
+    ] {
+        let bad = fx.check_invariants(
+            &InvariantInputs::new()
+                .spawned([SpawnRecord::new(&node, args)])
+                .trusted_dir(&t),
+        );
+        assert_eq!(failures(&bad), vec![InvariantId::I7], "{why}: {bad}");
+        assert!(
+            failure_text(&bad, InvariantId::I7).contains(why),
+            "{why}: {bad}"
+        );
+    }
+}
+
 /// The hardened Git runner's resolved binary (the only binary it ever starts) is `git` from an
 /// absolute `PATH` entry outside the fixture.
 #[test]
