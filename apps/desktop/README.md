@@ -178,6 +178,26 @@ ticked by default. Ticking one asks for confirmation first, and only then does t
 - Every bridge test runs on generated fixture trees and checks invariants I-2 and I-3
   afterwards: the tree and the canary are unchanged.
 
+## Caches screen and the Quick Clean stub
+
+Caches (`#/caches`) reads `caches()`. The Quick Clean preview and run aren't in the core
+bridge yet. They go through `src/components/caches/bridge.ts` (`CacheActions`), which is kept
+out of `ScullBridge` so the read-only surface stays as it is:
+
+- `plan(report)`: per tool, the resolved trusted binary, the prune and wipe arguments, and the
+  skipped tools with scull-cleaner's reasons. Skips include S2/S3 caches (D-28), Windows `.cmd`
+  shims that would need a shell (#218), caches in use, and orphaned caches left for manual
+  removal. It mirrors `QuickCleanPlan`. Planned command: `quick_clean_plan`.
+- `run(preview, choices, onProgress)`: runs the tools one after another, each with its own
+  command and no shell. Orphaned caches the user confirms are removed through the Executor
+  (D-36, provisional). Planned command: `quick_clean_run`.
+
+The mock only animates, using the design's timing of 650 ms per tool plus 300 ms. Inside
+Tauri the preview is built from the report and marked unavailable, so the button explains
+that `scull clean caches` works for now. The recorded fixture's only cache (npm) is classified
+S2 and therefore skipped. With the mock bridge, `#/caches?demo=design` loads the design's
+machine plus the skipped states.
+
 ## Licenses
 
 `src-tauri/deny.toml` uses the root policy, plus exceptions for five MPL-2.0 crates that Tauri 2
