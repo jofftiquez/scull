@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#15121A}a:hover{color:#B81E74}
+input::placeholder{color:#77717A}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-spin{to{transform:rotate(360deg)}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.5">
+
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none" style="transform-box: fill-box; transform-origin: center; animation: {{wink}}"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{cacheNav}}</span></a>
+    <a href="CleanupReview.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.dc.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">{{usedPct}}%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: {{usedPct}}%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">{{freeGb}} GB free · <span style="color: #B81E74">full in ~{{days}} days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+
+<main style="flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px 0">
+    <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{scanText}}</span>
+    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+      <button type="button" onClick="{{filterRegen}}" style="min-height: 40px; padding: 0 14px; border: 0; border-radius: 12px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">Show regenerable · 38.6 GB</button>
+      <button type="button" onClick="{{startScan}}" disabled="{{scanning}}" style="min-height: 40px; padding: 0 14px; border: 1px solid #D8D3CB; border-radius: 12px; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="animation: {{iconSpin}}"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>{{rescanLabel}}</button>
+    </div>
+  </header>
+
+  <section aria-label="Storage wheel" style="flex: 1; border-radius: 28px; background: #FFFFFF; padding: 24px 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 16px">
+    <svg viewBox="0 0 620 620" style="width: 100%; max-width: 660px; height: auto" role="img" aria-label="Storage wheel: inner ring shows categories, outer ring shows items colored by risk tier. Click a segment to inspect it.">
+      <defs>
+        <pattern id="sc-stripes" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)"><rect width="10" height="10" fill="#FFB547"></rect><rect width="5" height="10" fill="#FFD08A"></rect></pattern>
+        <mask id="sc-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="620" height="620"><circle cx="310" cy="310" r="140" fill="none" stroke="#FFFFFF" stroke-width="282" stroke-dasharray="{{sweepLen}} 880" transform="rotate(-90 310 310)"></circle></mask>
+        <pattern id="sc-hatch" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)"><rect width="8" height="8" fill="#3B2A4F"></rect><rect width="2" height="8" fill="#5A4772"></rect></pattern>
+      </defs>
+      <circle cx="310" cy="310" r="300" fill="none" stroke="#D6268A" stroke-opacity="{{ringOp}}" stroke-width="1.5" stroke-dasharray="1 7" stroke-linecap="round" style="transform-box: view-box; transform-origin: 310px 310px; transition: stroke-opacity 300ms ease; animation: {{ringSpin}}"></circle>
+      <circle cx="310" cy="310" r="286" fill="none" stroke="#7C4DFF" stroke-opacity="0.18" stroke-width="1"></circle>
+      <g mask="url(#sc-reveal)">
+      <path d="M312.2 130.0A180 180 0 0 1 467.5 222.8L416.7 250.9A122 122 0 0 0 311.5 188.0Z" fill="#EEEAF4"></path>
+      <text x="387.5" y="180.4" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(30.9 387.5 180.4)">Build outputs</text>
+      <path d="M313.3 42.0A268 268 0 0 1 438.8 75.0L399.4 146.9A186 186 0 0 0 312.3 124.0Z" fill="#7C4DFF" opacity="{{op.target}}" stroke="{{ring.target}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.target}}"><title>rust-svc · target · 15.2 GB</title></path>
+      <path d="M444.5 78.2A268 268 0 0 1 523.2 147.7L458.0 197.3A186 186 0 0 0 403.3 149.1Z" fill="#7C4DFF" opacity="{{op.nm}}" stroke="{{ring.nm}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.nm}}"><title>shop-api · node_modules · 12.4 GB</title></path>
+      <path d="M527.1 152.9A268 268 0 0 1 544.5 180.2L472.7 219.9A186 186 0 0 0 460.7 201.0Z" fill="#7C4DFF" opacity="{{op.next}}" stroke="{{ring.next}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.next}}"><title>web-app · .next · 4.3 GB</title></path>
+      <path d="M469.6 226.7A180 180 0 0 1 490.0 309.6L432.0 309.7A122 122 0 0 0 418.2 253.6Z" fill="#EEEAF4"></path>
+      <text x="456.6" y="273.9" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(76.2 456.6 273.9)">Caches</text>
+      <path d="M547.6 186.0A268 268 0 0 1 566.1 231.0L487.7 255.1A186 186 0 0 0 474.9 223.9Z" fill="#DCCBFF" opacity="{{op.npm}}" stroke="{{ring.npm}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.npm}}"><title>npm cache · 6.1 GB</title></path>
+      <path d="M567.9 237.2A268 268 0 0 1 575.5 273.3L494.3 284.6A186 186 0 0 0 489.0 259.5Z" fill="#DCCBFF" opacity="{{op.pnpm}}" stroke="{{ring.pnpm}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.pnpm}}"><title>pnpm store · 4.8 GB</title></path>
+      <path d="M576.3 279.8A268 268 0 0 1 577.7 296.8L495.8 300.8A186 186 0 0 0 494.8 289.1Z" fill="#DCCBFF" opacity="{{op.bun}}" stroke="{{ring.bun}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.bun}}"><title>Bun cache · 2.6 GB</title></path>
+      <path d="M577.9 303.3A268 268 0 0 1 578.0 309.4L496.0 309.6A186 186 0 0 0 495.9 305.4Z" fill="#DCCBFF" opacity="{{op.yarn}}" stroke="{{ring.yarn}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.yarn}}"><title>Yarn cache · 1.4 GB</title></path>
+      <path d="M490.0 314.0A180 180 0 0 1 420.0 452.5L384.6 406.6A122 122 0 0 0 432.0 312.7Z" fill="#EEEAF4"></path>
+      <text x="444.8" y="378.1" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(296.8 444.8 378.1)">Worktrees</text>
+      <path d="M577.9 316.0A268 268 0 0 1 547.6 434.0L474.9 396.1A186 186 0 0 0 496.0 314.2Z" fill="url(#sc-hatch)" opacity="{{op.wtun}}" stroke="{{ring.wtun}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.wtun}}"><title>Unpushed worktrees · 14.3 GB</title></path>
+      <path d="M544.5 439.8A268 268 0 0 1 513.7 484.1L451.4 430.9A186 186 0 0 0 472.7 400.1Z" fill="#7C4DFF" opacity="{{op.wtart}}" stroke="{{ring.wtart}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.wtart}}"><title>Worktree artifacts · 6.7 GB</title></path>
+      <path d="M509.4 489.1A268 268 0 0 1 473.8 522.1L423.7 457.2A186 186 0 0 0 448.4 434.3Z" fill="url(#sc-stripes)" opacity="{{op.wtign}}" stroke="{{ring.wtign}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.wtign}}"><title>Worktree ignored files · 6.1 GB</title></path>
+      <path d="M416.5 455.1A180 180 0 0 1 173.7 427.5L217.6 389.7A122 122 0 0 0 382.2 408.4Z" fill="#EEEAF4"></path>
+      <text x="292.9" y="460.0" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(6.5 292.9 460.0)">ML & models</text>
+      <path d="M468.5 526.1A268 268 0 0 1 206.5 557.2L238.2 481.6A186 186 0 0 0 420.0 460.0Z" fill="#DCCBFF" opacity="{{op.hf}}" stroke="{{ring.hf}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.hf}}"><title>Hugging Face models · 31.2 GB</title></path>
+      <path d="M200.5 554.6A268 268 0 0 1 131.8 510.1L186.3 448.9A186 186 0 0 0 234.0 479.8Z" fill="url(#sc-stripes)" opacity="{{op.venv}}" stroke="{{ring.venv}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.venv}}"><title>ml-lab · .venv · 9.8 GB</title></path>
+      <path d="M126.9 505.7A268 268 0 0 1 107.0 485.0L169.1 431.4A186 186 0 0 0 182.9 445.8Z" fill="url(#sc-stripes)" opacity="{{op.data}}" stroke="{{ring.data}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.data}}"><title>ml-lab · data · 3.9 GB</title></path>
+      <path d="M170.8 424.2A180 180 0 0 1 131.0 328.6L188.7 322.6A122 122 0 0 0 215.7 387.4Z" fill="#EEEAF4"></path>
+      <text x="170.6" y="368.1" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(67.4 170.6 368.1)">Containers</text>
+      <path d="M102.8 480.0A268 268 0 0 1 43.4 337.7L125.0 329.2A186 186 0 0 0 166.2 428.0Z" fill="#DCCBFF" opacity="{{op.docker}}" stroke="{{ring.docker}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.docker}}"><title>Docker build cache · 18.0 GB</title></path>
+      <path d="M130.6 324.2A180 180 0 0 1 132.7 278.9L189.8 288.9A122 122 0 0 0 188.4 319.6Z" fill="#EEEAF4"></path>
+      <path d="M42.8 331.1A268 268 0 0 1 46.0 263.7L126.8 277.9A186 186 0 0 0 124.6 324.7Z" fill="#DCCBFF" opacity="{{op.kart}}" stroke="{{ring.kart}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.kart}}"><title>kart-game · Library · 8.2 GB</title></path>
+      <path d="M133.5 274.6A180 180 0 0 1 307.8 130.0L308.5 188.0A122 122 0 0 0 190.4 286.0Z" fill="#EEEAF4"></path>
+      <text x="213.6" y="193.8" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="500" fill="#4A4450" transform="rotate(320.3 213.6 193.8)">Source & Git</text>
+      <path d="M47.2 257.3A268 268 0 0 1 306.7 42.0L307.7 124.0A186 186 0 0 0 127.6 273.4Z" fill="url(#sc-hatch)" opacity="{{op.src}}" stroke="{{ring.src}}" stroke-width="3" style="cursor: pointer; transition: opacity 250ms ease" onClick="{{pick.src}}"><title>Source & Git history · 41.0 GB</title></path>
+      </g>
+      <g aria-hidden="true" style="transform-box: view-box; transform-origin: 310px 310px; transform: rotate({{sweepDeg}}deg); opacity: {{armOp}}; transition: opacity 300ms ease">
+        <line x1="310" y1="310" x2="310" y2="36" stroke="#D6268A" stroke-width="2.5" stroke-linecap="round"></line>
+        <circle cx="310" cy="36" r="6" fill="#D6268A"></circle>
+      </g>
+      <circle cx="310" cy="310" r="114" fill="#F7F5F2"></circle>
+      <g style="transform-box: fill-box; transform-origin: center; animation: {{centerAnim}}">
+      <text x="310" y="276" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="13" font-weight="600" fill="{{center.kColor}}">{{center.k}}</text>
+      <text x="310" y="322" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="40" font-weight="700" fill="#15121A" style="font-variant-numeric: tabular-nums">{{center.v}}</text>
+      <text x="310" y="352" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="13" fill="#615B66">{{center.n}}</text>
+      </g>
+    </svg>
+
+    <div role="toolbar" aria-label="Wheel tools" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 6px; border-radius: 999px; background: #F2EFEA; border: 1px solid #E6E2DC">
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="5">
+        <button type="button" aria-pressed="{{f.pressed}}" onClick="{{f.pick}}" style="min-height: 36px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease, color 200ms ease; background: {{f.bg}}; color: {{f.fg}}"><span style="width: 10px; height: 10px; border-radius: 50%; background: {{f.swatch}}"></span>{{f.label}}</button>
+      </sc-for>
+      <span style="width: 1px; height: 20px; margin: 0 6px; background: #D8D3CB"></span>
+      <button type="button" onClick="{{clearSel}}" style="min-height: 36px; min-width: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">Clear</button>
+    </div>
+    <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #77717A; text-align: center">click a segment to inspect · shift-click adds it to cleanup · esc clears</span>
+  </section>
+</main>
+
+<aside aria-label="Details" style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <div role="status" style="border-radius: 20px; background: #FCEEF5; border: 1px solid #F3C9DE; padding: 14px 16px; display: flex; align-items: center; gap: 14px">
+    <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true" style="flex: none"><circle cx="22" cy="22" r="18" fill="none" stroke="#F7D9E8" stroke-width="5"></circle><circle cx="22" cy="22" r="18" fill="none" stroke="#D6268A" stroke-width="5" stroke-linecap="round" stroke-dasharray="{{daysDash}} 113" transform="rotate(-90 22 22)" style="transition: stroke-dasharray 300ms ease"></circle><text x="22" y="26" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="12" font-weight="700" fill="#15121A">{{days}}d</text></svg>
+    <span style="flex: 1; font-size: 13px; color: #3A3440"><strong style="color: #15121A">Disk full in about {{days}} days.</strong> 38.6 GB is safe to free now.</span>
+    <a href="CleanupReview.dc.html" style="flex: none; min-height: 36px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 10px; background: #15121A; color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 600">Reclaim</a>
+  </div>
+
+  <section aria-label="Safe to reclaim" style="border-radius: 24px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 10px">
+    <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 64px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; color: #7C4DFF; font-variant-numeric: tabular-nums">38.6</span><span style="font-size: 22px; font-weight: 600; color: #7C4DFF">GB</span></div>
+    <span style="font-size: 15px; color: #15121A">safe to reclaim now</span>
+    <span style="font-size: 13px; color: #615B66">3 idle projects hold 31.9 GB of build output; 31 merged worktrees hold 6.7 GB of artifacts. All of it rebuilds itself.</span>
+    <a href="CleanupReview.dc.html" style="margin-top: 6px; align-self: flex-start; min-height: 48px; padding: 0 22px; display: inline-flex; align-items: center; border-radius: 14px; background: #15121A; color: #FFFFFF; text-decoration: none; font-weight: 700">Reclaim 38.6 GB</a>
+  </section>
+
+  <section aria-label="Selected item" aria-live="polite" style="border-radius: 24px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px">
+      <span style="font-size: 13px; font-weight: 500; color: #6E6870">{{detail.label}}</span>
+      <span style="padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: {{detail.badgeBg}}; color: {{detail.badgeFg}}; border: 1px solid {{detail.badgeBorder}}">{{detail.tier}}</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-size: 17px; font-weight: 600">{{detail.name}}</span><span style="font-family: 'DM Mono', monospace; font-size: 15px">{{detail.size}}</span></div>
+    <span style="font-size: 13px; color: #615B66">{{detail.reason}}</span>
+    <div style="display: flex; gap: 8px; margin-top: 4px">
+      <button type="button" style="min-height: 38px; padding: 0 14px; border: 1px solid #D8D3CB; border-radius: 10px; background: transparent; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">{{detail.action}}</button>
+      <button type="button" style="min-height: 38px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">Show in Finder</button>
+    </div>
+  </section>
+
+  <section aria-label="Quick Clean package caches" style="position: relative; overflow: hidden; border-radius: 24px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 10px">
+      <span style="font-size: 13px; font-weight: 500; color: #6E6870">Quick Clean · package caches</span>
+      <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums">{{cacheShown}} GB</span>
+    </div>
+    <div role="group" aria-label="Caches to clean" style="display: flex; flex-wrap: wrap; gap: 6px">
+      <sc-for list="{{tools}}" as="item" hint-placeholder-count="4">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.toggle}}" style="min-height: 34px; padding: 0 12px; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease, color 200ms ease; border: 1px solid {{item.border}}; background: {{item.bg}}; color: {{item.fg}}; animation: {{item.anim}}">{{item.label}}</button>
+      </sc-for>
+    </div>
+    <button type="button" onClick="{{start}}" disabled="{{busy}}" style="position: relative; overflow: hidden; min-height: 46px; border: 0; border-radius: 14px; font: inherit; font-weight: 600; cursor: pointer; transition: background 200ms ease; background: {{btnBg}}; color: {{btnFg}}">
+      <span style="position: absolute; left: 0; top: 0; bottom: 0; border-radius: 14px; background: repeating-linear-gradient(135deg, #7C4DFF 0 12px, #9C78FF 12px 24px); background-size: 48px 100%; animation: scull-shimmer 600ms linear infinite; transition: width 120ms linear; width: {{btnFill}}%"></span>
+      <span style="position: relative">{{btnLabel}}</span>
+    </button>
+    <span style="font-size: 12px; color: #77717A">Re-downloads on next install · not undoable</span>
+    <sc-if value="{{done}}" hint-placeholder-val="{{ false }}">
+      <div style="position: absolute; inset: 0; border-radius: 24px; background: #7C4DFF; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 20px; text-align: center; animation: scull-rise 260ms ease-out">
+        <div style="position: absolute; left: 50%; top: 40%; width: 0; height: 0">
+          <sc-for list="{{particles}}" as="p" hint-placeholder-count="0">
+            <span style="position: absolute; left: -5px; top: -5px; width: {{p.size}}px; height: {{p.size}}px; border-radius: {{p.radius}}; background: {{p.color}}; opacity: 0; animation: {{p.anim}}"></span>
+          </sc-for>
+        </div>
+        <span style="font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; animation: scull-bounce 640ms cubic-bezier(.2,.9,.3,1.3) both">+{{doneGb}} GB</span>
+        <span style="font-size: 14px; font-weight: 600; animation: scull-rise 400ms 350ms ease-out both">freed · measured {{measuredGb}} GB</span>
+        <button type="button" onClick="{{reset}}" style="margin-top: 10px; min-height: 40px; padding: 0 20px; border: 0; border-radius: 999px; background: #FFFFFF; color: #15121A; font: inherit; font-weight: 600; cursor: pointer; animation: scull-rise 400ms 600ms ease-out both">Nice</button>
+      </div>
+    </sc-if>
+  </section>
+
+  <section aria-label="By safety tier" style="border-radius: 24px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; justify-content: space-between"><span style="font-size: 13px; font-weight: 500; color: #6E6870">By safety tier</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">186.0 GB</span></div>
+    <div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px"><span style="padding: 2px 10px; border-radius: 999px; background: #7C4DFF; color: #FFFFFF; font-size: 12px; font-weight: 600">regenerable</span><span style="flex: 1; font-size: 13px; color: #615B66">Rebuilds itself</span><span style="font-family: 'DM Mono', monospace">38.6 GB</span></div><div style="height: 4px; border-radius: 999px; background: #F2EFEA"><div style="width: 20.8%; height: 100%; border-radius: 999px; background: #7C4DFF"></div></div></div>
+    <div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px"><span style="padding: 2px 10px; border-radius: 999px; background: #DCCBFF; color: #15121A; font-size: 12px; font-weight: 600">costly</span><span style="flex: 1; font-size: 13px; color: #615B66">Re-download or long build</span><span style="font-family: 'DM Mono', monospace">72.3 GB</span></div><div style="height: 4px; border-radius: 999px; background: #F2EFEA"><div style="width: 38.9%; height: 100%; border-radius: 999px; background: #DCCBFF"></div></div></div>
+    <div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px"><span style="padding: 2px 10px; border-radius: 999px; background: repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px); color: #15121A; font-size: 12px; font-weight: 600">uncertain</span><span style="flex: 1; font-size: 13px; color: #615B66">Look before it goes</span><span style="font-family: 'DM Mono', monospace">19.8 GB</span></div><div style="height: 4px; border-radius: 999px; background: #F2EFEA"><div style="width: 10.6%; height: 100%; border-radius: 999px; background: #FFB547"></div></div></div>
+    <div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px"><span style="padding: 2px 10px; border-radius: 999px; background: #3B2A4F; border: 1px solid #3B2A4F; color: #FFFFFF; font-size: 12px; font-weight: 600">protected</span><span style="flex: 1; font-size: 13px; color: #615B66">Never touched</span><span style="font-family: 'DM Mono', monospace">55.3 GB</span></div><div style="height: 4px; border-radius: 999px; background: #F2EFEA"><div style="width: 29.7%; height: 100%; border-radius: 999px; background: #3B2A4F"></div></div></div>
+  </section>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1120}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 'hf', filter: 'all', off: {}, phase: 'idle', p: 0, scan: 'idle', sp: 0, scannedAt: '4 min ago', flash: 0 };
+  }
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.scanTimer) clearInterval(this.scanTimer);
+  }
+  renderVals() {
+    const s = this.state;
+    const ITEMS = {
+      target: ['rust-svc · target', 15.2, 'S0', 'Rust build output. Rebuilt by cargo build in about 4 minutes.'],
+      nm: ['shop-api · node_modules', 12.4, 'S0', 'npm dependencies with a lockfile. npm install brings them back. Regrew 4× this month.'],
+      next: ['web-app · .next', 4.3, 'S0', 'Next.js build output. Rebuilt by next build.'],
+      npm: ['npm cache', 6.1, 'S1', 'Global npm cache. Packages re-download on next install.'],
+      pnpm: ['pnpm store', 4.8, 'S1', 'Shared store. Only unused packages are pruned; linked projects keep theirs.'],
+      bun: ['Bun cache', 2.6, 'S1', 'Global Bun cache. Re-downloads on next install.'],
+      yarn: ['Yarn cache', 1.4, 'S1', 'Global Yarn cache. Re-downloads on next install.'],
+      wtun: ['Unpushed worktrees', 14.3, 'S3', '3 worktrees with commits that exist only on this Mac. Never touched.'],
+      wtart: ['Worktree artifacts', 6.7, 'S0', 'node_modules and target inside 31 merged worktrees. The worktrees stay.'],
+      wtign: ['Worktree ignored files', 6.1, 'S2', '.env files and local databases in 18 worktrees. They exist nowhere else.'],
+      hf: ['Hugging Face models', 31.2, 'S1', '14 models. 3 unused for 90+ days hold 11.8 GB. Re-downloading all is about 31 GB.'],
+      venv: ['ml-lab · .venv', 9.8, 'S2', 'No lockfile, so it may not be reproducible. Review before removing.'],
+      data: ['ml-lab · data', 3.9, 'S2', 'Datasets with no recorded source. Review needed.'],
+      docker: ['Docker build cache', 18.0, 'S1', 'Cleaned through Docker itself, never by deleting files directly.'],
+      kart: ['kart-game · Library', 8.2, 'S1', 'Unity Library folder. Re-import takes about 25 minutes.'],
+      src: ['Source & Git history', 41.0, 'S3', 'Your source code and Git history. scull never touches it.']
+    };
+    const TIER = {
+      S0: { label: 'Regenerable', bg: '#7C4DFF', fg: '#FFFFFF', border: '#7C4DFF', color: '#7C4DFF', action: 'Add to cleanup' },
+      S1: { label: 'Costly', bg: '#DCCBFF', fg: '#15121A', border: '#DCCBFF', color: '#6B4FB3', action: 'Add to cleanup' },
+      S2: { label: 'Uncertain', bg: 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)', fg: '#15121A', border: '#FFB547', color: '#A86500', action: 'Review' },
+      S3: { label: 'Protected', bg: '#3B2A4F', fg: '#FFFFFF', border: '#3B2A4F', color: '#3B2A4F', action: 'Why protected?' }
+    };
+
+    // Quick Clean
+    const tools = [['npm', 'npm', 6.1], ['pnpm', 'pnpm', 4.8], ['bun', 'Bun', 2.6], ['yarn', 'Yarn', 1.4]];
+    const ease = (x) => 1 - Math.pow(1 - x, 3);
+    const e = s.phase === 'idle' ? 0 : (s.phase === 'done' ? 1 : ease(s.p));
+    const chosen = tools.filter((t) => !s.off[t[0]]);
+    const n = chosen.length;
+    const T = chosen.reduce((a, t) => a + t[2], 0);
+    const freed = T * e;
+    const cleaned = {};
+    let activeName = '';
+    const toolChips = tools.map((t) => {
+      const on = !s.off[t[0]];
+      const k = chosen.indexOf(t);
+      let st = on ? 'on' : 'off';
+      if (on && s.phase !== 'idle') {
+        if (s.phase === 'done' || e >= (k + 1) / n - 0.001) { st = 'done'; cleaned[t[0]] = true; }
+        else if (e >= k / n) { st = 'active'; activeName = t[1]; }
+      }
+      const look = {
+        off: { bg: 'transparent', fg: '#6E6870', border: '#D8D3CB', anim: 'none' },
+        on: { bg: '#15121A', fg: '#FFFFFF', border: '#15121A', anim: 'none' },
+        active: { bg: '#15121A', fg: '#FFFFFF', border: '#D6268A', anim: 'scull-pulse 700ms ease-in-out infinite' },
+        done: { bg: '#7C4DFF', fg: '#FFFFFF', border: '#7C4DFF', anim: 'scull-pop 340ms ease-out' }
+      }[st];
+      return Object.assign({
+        label: st === 'done' ? (t[1] + ' ✓') : (t[1] + ' · ' + t[2].toFixed(1)),
+        pressed: on ? 'true' : 'false',
+        toggle: () => { if (this.state.phase === 'idle') this.setState({ off: Object.assign({}, s.off, { [t[0]]: on }) }); }
+      }, look);
+    });
+    const start = () => {
+      if (this.state.phase !== 'idle' || n === 0) return;
+      const t0 = Date.now();
+      this.setState({ phase: 'cleaning', p: 0 });
+      this.timer = setInterval(() => {
+        const p = Math.min(1, (Date.now() - t0) / 2600);
+        if (p >= 1) { clearInterval(this.timer); this.timer = null; this.setState({ phase: 'done', p: 1 }); }
+        else this.setState({ p: p });
+      }, 40);
+    };
+
+    // Wheel
+    const scanning = s.scan === 'scanning';
+    const sweepDeg = scanning ? s.sp * 360 : 360;
+    const startAngle = {};
+    let acc = 0;
+    Object.keys(ITEMS).forEach((id) => { startAngle[id] = acc / 186 * 360; acc += ITEMS[id][1]; });
+    const op = {}, ring = {}, pick = {};
+    Object.keys(ITEMS).forEach((id) => {
+      const tier = ITEMS[id][2];
+      const match = s.filter === 'all' || s.filter === tier;
+      let o = 1;
+      if (cleaned[id]) o = 0.1;
+      else if (!match) o = 0.14;
+      else if (s.sel && s.sel !== id) o = 0.5;
+      if (scanning && startAngle[id] > sweepDeg) o = 0;
+      op[id] = o;
+      ring[id] = (!scanning && s.sel === id) ? '#D6268A' : 'none';
+      pick[id] = () => this.setState({ sel: this.state.sel === id ? null : id });
+    });
+    let center = { k: 'Development', kColor: '#B81E74', v: '186.0 GB', n: '7 categories · 16 items' };
+    const folders = ['~/code/rust-svc', '~/code/shop-api', '~/.cache/npm', '~/code/.worktrees', '~/.cache/huggingface', '~/code/ml-lab', '~/Library/Containers/Docker', '~/code/kart-game', '~/work'];
+    if (scanning) center = { k: 'Scanning…', kColor: '#B81E74', v: Math.round(412880 * s.sp).toLocaleString('en-US'), n: folders[Math.min(folders.length - 1, Math.floor(s.sp * folders.length))] };
+    else if (s.phase === 'done') center = { k: 'Just freed', kColor: '#B81E74', v: '+' + T.toFixed(1) + ' GB', n: 'package caches' };
+    else if (s.sel) { const it = ITEMS[s.sel]; center = { k: TIER[it[2]].label, kColor: TIER[it[2]].color, v: it[1].toFixed(1) + ' GB', n: it[0] }; }
+
+    const di = s.sel ? ITEMS[s.sel] : null;
+    const dt = di ? TIER[di[2]] : null;
+    const detail = di ? {
+      label: 'Selected', name: di[0], size: di[1].toFixed(1) + ' GB', reason: di[3], tier: dt.label,
+      badgeBg: dt.bg, badgeFg: dt.fg, badgeBorder: dt.border, action: dt.action
+    } : {
+      label: 'Nothing selected', name: 'Click a segment', size: '', reason: 'Pick any part of the wheel to see what it is, why it has its tier, and what you can do with it.',
+      tier: '—', badgeBg: '#F2EFEA', badgeFg: '#6E6870', badgeBorder: '#D8D3CB', action: 'Learn about tiers'
+    };
+
+    const F = [['all', 'All', 'conic-gradient(#7C4DFF 0 25%, #DCCBFF 0 50%, #FFB547 0 75%, #5A4772 0)'], ['S0', 'Regenerable', '#7C4DFF'], ['S1', 'Costly', '#DCCBFF'], ['S2', 'Uncertain', '#FFB547'], ['S3', 'Protected', '#5A4772']];
+    const filters = F.map(([id, label, sw]) => ({
+      label: label, swatch: sw, pressed: s.filter === id ? 'true' : 'false',
+      bg: s.filter === id ? '#15121A' : 'transparent', fg: s.filter === id ? '#FFFFFF' : '#4A4450',
+      pick: () => this.setState({ filter: id })
+    }));
+
+    const colors = ['#D6268A', '#FFFFFF', '#9C78FF', '#FFB547', '#DCCBFF'];
+    const particles = [];
+    for (let i = 0; i < 20; i++) {
+      particles.push({
+        size: [8, 10, 12, 9][i % 4], radius: i % 3 === 0 ? '3px' : '50%', color: colors[i % colors.length],
+        anim: 'scull-b' + (i % 10) + ' ' + (700 + (i % 5) * 90) + 'ms ' + (i >= 10 ? 120 : 0) + 'ms cubic-bezier(.15,.7,.3,1) both'
+      });
+    }
+
+    const free = 41.2 + freed;
+    const used = 494 - free;
+    const days = Math.max(1, Math.round((free - 10) / 3.5));
+    let btnLabel = n === 0 ? 'Pick caches to clean' : ('Clean ' + n + (n === 1 ? ' cache' : ' caches'));
+    if (s.phase === 'cleaning') btnLabel = 'Cleaning ' + (activeName || '') + '…';
+    if (s.phase === 'done') btnLabel = 'Done';
+
+    const startScan = () => {
+      if (this.state.scan === 'scanning') return;
+      const t0 = Date.now();
+      this.setState({ scan: 'scanning', sp: 0, sel: null });
+      this.scanTimer = setInterval(() => {
+        const sp = Math.min(1, (Date.now() - t0) / 3400);
+        if (sp >= 1) { clearInterval(this.scanTimer); this.scanTimer = null; this.setState({ scan: 'idle', sp: 1, scannedAt: 'just now', flash: this.state.flash + 1, sel: 'hf' }); }
+        else this.setState({ sp: sp });
+      }, 33);
+    };
+    return {
+      startScan: startScan,
+      scanning: scanning,
+      sweepLen: scanning ? (s.sp * 880).toFixed(1) : '880',
+      sweepDeg: sweepDeg.toFixed(1),
+      armOp: scanning ? 1 : 0,
+      ringOp: scanning ? 0.9 : 0.45,
+      ringSpin: scanning ? 'scull-spin 6s linear infinite' : 'none',
+      iconSpin: scanning ? 'scull-spin 800ms linear infinite' : 'none',
+      rescanLabel: scanning ? ('Scanning ' + Math.round(s.sp * 100) + '%') : 'Rescan',
+      scanText: scanning ? ('scanning · ' + Math.round(412880 * s.sp).toLocaleString('en-US') + ' entries · ' + (186 * s.sp).toFixed(1) + ' GB found') : ('scanned ' + s.scannedAt + ' · 3 folders · 186.0 GB of development data'),
+      centerAnim: (!scanning && s.flash > 0) ? ('scull-bounce 620ms cubic-bezier(.2,.9,.3,1.3) ' + (s.flash % 2 ? '' : '1')) : 'none',
+      op: op, ring: ring, pick: pick, center: center, detail: detail, filters: filters,
+      clearSel: () => this.setState({ sel: null, filter: 'all' }),
+      filterRegen: () => this.setState({ filter: 'S0', sel: null }),
+      tools: toolChips, start: start, reset: () => this.setState({ phase: 'idle', p: 0 }),
+      busy: s.phase !== 'idle', done: s.phase === 'done',
+      btnBg: s.phase === 'idle' ? '#15121A' : '#F2EFEA', btnFg: s.phase === 'idle' ? '#FFFFFF' : '#15121A',
+      btnFill: s.phase === 'idle' ? 0 : Math.round(e * 100), btnLabel: btnLabel,
+      cacheShown: (T - freed).toFixed(1), cacheNav: (14.9 - freed).toFixed(1) + ' GB',
+      doneGb: T.toFixed(1), measuredGb: (T * 0.98).toFixed(1), particles: particles,
+      wink: s.phase === 'done' ? 'scull-wink 420ms 500ms ease-in-out 2' : 'none',
+      freeGb: free.toFixed(1), usedGb: used.toFixed(1), usedPct: Math.round(used / 494 * 100),
+      days: days, daysDash: Math.min(113, (days / 30) * 113).toFixed(1)
+    };
+  }
+}
+</script>
+</body>
+</html>

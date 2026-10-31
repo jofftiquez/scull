@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Projects</title>
+<script>
+/* scull design preview runtime (standalone) */
+// Minimal local renderer for .dc.html design files (screenshots only).
+(function () {
+  const HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+  let tpl, root, comp, pending = false, mounted = false;
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(p) { this.state = Object.assign({}, this.state, typeof p === 'function' ? p(this.state) : p); schedule(); }
+    forceUpdate() { schedule(); }
+  }
+  window.DCLogic = DCLogic;
+  function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  function lookup(scope, path) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    const parts = path.split('.');
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] && parts[0] in scope[i]) {
+        let v = scope[i][parts[0]];
+        for (const p of parts.slice(1)) v = v == null ? undefined : v[p];
+        return v;
+      }
+    }
+    return undefined;
+  }
+  function interp(str, scope) {
+    const m = str.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) return lookup(scope, m[1]);
+    return str.replace(HOLE, (_, p) => { const v = lookup(scope, p); return v == null ? '' : String(v); });
+  }
+  function proc(node, scope, out) {
+    if (node.nodeType === 3) { const v = interp(node.nodeValue, scope); out.appendChild(document.createTextNode(v == null ? '' : String(v))); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'sc-for') {
+      const list = interp(node.getAttribute('list') || '', scope) || [];
+      const as = node.getAttribute('as') || 'item';
+      list.forEach((it, idx) => { const sc = scope.concat([{ [as]: it, $index: idx }]); node.childNodes.forEach((c) => proc(c, sc, out)); });
+      return;
+    }
+    if (tag === 'sc-if') { if (interp(node.getAttribute('value') || '', scope)) node.childNodes.forEach((c) => proc(c, scope, out)); return; }
+    if (tag === 'helmet') return;
+    const svg = node.namespaceURI === 'http://www.w3.org/2000/svg';
+    const el = svg ? document.createElementNS(node.namespaceURI, node.tagName) : document.createElement(node.tagName);
+    for (const a of Array.from(node.attributes)) {
+      const name = a.name;
+      if (/^on[a-z]+$/i.test(name)) {
+        const fn = interp(a.value, scope);
+        if (typeof fn === 'function') el.addEventListener(name.slice(2).toLowerCase(), fn);
+        continue;
+      }
+      const v = interp(a.value, scope);
+      if (name === 'checked' || name === 'disabled' || name === 'selected') {
+        if (v === true || v === 'true' || v === '' ) { el.setAttribute(name, ''); if (name === 'checked') el.checked = true; }
+        continue;
+      }
+      if (name.indexOf('hint-') === 0) continue;
+      el.setAttribute(name, v == null ? '' : String(v));
+      if (name === 'value' && el.tagName === 'INPUT') el.value = v;
+    }
+    node.childNodes.forEach((c) => proc(c, scope, el));
+    out.appendChild(el);
+  }
+  function render() {
+    const vals = comp.renderVals();
+    const frag = document.createDocumentFragment();
+    tpl.childNodes.forEach((c) => proc(c, [vals], frag));
+    root.replaceChildren(frag);
+    if (!mounted) { mounted = true; if (comp.componentDidMount) comp.componentDidMount(); }
+    window.__dcRenders = (window.__dcRenders || 0) + 1;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    tpl = document.querySelector('x-dc');
+    const helmet = tpl.querySelector('helmet');
+    if (helmet) helmet.querySelectorAll('style, link').forEach((n) => document.head.appendChild(n));
+    root = document.createElement('div');
+    tpl.parentNode.insertBefore(root, tpl);
+    tpl.remove();
+    const s = document.querySelector('script[data-dc-script]');
+    const props = {};
+    try { const dp = JSON.parse(s.getAttribute('data-props') || '{}'); Object.keys(dp).forEach((k) => { if (k[0] !== '$' && dp[k] && 'default' in dp[k]) props[k] = dp[k].default; }); } catch (e) { console.error(e); }
+    const C = new Function('DCLogic', s.textContent + '\n;return Component;')(DCLogic);
+    comp = new C(props);
+    render();
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#15121A}a:hover{color:#B81E74}
+input::placeholder{color:#77717A}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+@keyframes scull-spin{to{transform:rotate(360deg)}}
+@keyframes scull-zoomA{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-zoomB{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.5">
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">14.9 GB</span></a>
+    <a href="CleanupReview.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">full in ~9 days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+<main style="flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Projects</h1>
+      <span style="font-size: 13px; color: #615B66">{{countLabel}} · found by project markers, never by folder name</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"><div role="group" aria-label="Filter by ecosystem" style="display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: #F2EFEA">
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="6">
+        <button type="button" aria-pressed="{{f.pressed}}" onClick="{{f.pick}}" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{f.bg}}; color: {{f.fg}}">{{f.label}}</button>
+      </sc-for>
+    </div></div>
+  </header>
+  <section aria-label="Project list" style="border-radius: 22px; background: #FFFFFF; padding: 8px">
+    <div style="display: grid; grid-template-columns: 44px minmax(0, 1fr) 110px 160px 90px 100px; gap: 14px; align-items: center; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #6E6870">
+      <span></span><span>Project</span><span>Last activity</span><span>By tier</span><span style="text-align: right">Size</span><span style="text-align: right">Reclaimable</span>
+    </div>
+    <div style="overflow-x: auto">
+    <div role="list" style="min-width: 720px; display: flex; flex-direction: column; gap: 2px">
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="8">
+        <button type="button" role="listitem" onClick="{{r.pick}}" aria-current="{{r.current}}" style="display: grid; grid-template-columns: 44px minmax(0, 1fr) 110px 160px 90px 100px; gap: 14px; align-items: center; min-height: 68px; padding: 10px 14px; border: 0; border-radius: 16px; text-align: left; font: inherit; color: #15121A; cursor: pointer; transition: background 200ms ease; background: {{r.bg}}; animation: {{r.anim}}">
+          <span style="width: 40px; height: 40px; border-radius: 12px; background: {{r.avatarBg}}; color: {{r.avatarFg}}; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500">{{r.initials}}</span>
+          <span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+            <span style="font-weight: 600">{{r.name}}</span>
+            <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.path}} · {{r.eco}}</span>
+          </span>
+          <span style="font-size: 13px; color: #615B66">{{r.active}}</span>
+          <span style="display: flex; height: 8px; gap: 2px; border-radius: 999px; overflow: hidden; background: #F2EFEA">
+            <span style="height: 100%; background: #7C4DFF; transition: width 500ms ease; width: {{r.w0}}%"></span>
+            <span style="height: 100%; background: #DCCBFF; width: {{r.w1}}%"></span>
+            <span style="height: 100%; background: repeating-linear-gradient(135deg, #FFB547 0 3px, #FFD08A 3px 6px); width: {{r.w2}}%"></span>
+            <span style="height: 100%; background: #3B2A4F; width: {{r.w3}}%"></span>
+          </span>
+          <span style="font-family: 'DM Mono', monospace; text-align: right">{{r.size}}</span>
+          <span style="font-family: 'DM Mono', monospace; text-align: right; color: #6B3FD9; font-weight: 500">{{r.reclaim}}</span>
+        </button>
+      </sc-for>
+    </div>
+    </div>
+    <div style="padding: 12px 14px 6px; font-size: 13px; color: #6E6870">Showing 8 of 41 · sorted by size</div>
+  </section>
+</main>
+
+<aside aria-label="Project details" style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <section aria-live="polite" style="border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; align-items: center; gap: 12px">
+      <span style="width: 48px; height: 48px; border-radius: 14px; background: {{d.avatarBg}}; color: {{d.avatarFg}}; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-weight: 500">{{d.initials}}</span>
+      <div style="display: flex; flex-direction: column; min-width: 0"><span style="font-size: 20px; font-weight: 600">{{d.name}}</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">{{d.path}}</span></div>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+      <sc-for list="{{d.ecoList}}" as="e" hint-placeholder-count="2"><span style="padding: 4px 10px; border-radius: 999px; background: #F2EFEA; font-size: 12px; font-weight: 500">{{e.label}}</span></sc-for>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+      <div style="border-radius: 16px; background: #F7F5F2; padding: 14px; display: flex; flex-direction: column"><span style="font-size: 12px; color: #6E6870">Total</span><span style="font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums">{{d.size}}</span></div>
+      <div style="border-radius: 16px; background: #F3ECFF; padding: 14px; display: flex; flex-direction: column"><span style="font-size: 12px; color: #6B3FD9">Reclaimable</span><span style="font-size: 26px; font-weight: 700; color: #6B3FD9; font-variant-numeric: tabular-nums">{{d.reclaim}}</span></div>
+    </div>
+    <div style="display: flex; flex-direction: column">
+      <span style="font-size: 13px; font-weight: 500; color: #6E6870; padding-bottom: 6px">What's inside</span>
+      <sc-for list="{{d.parts}}" as="p" hint-placeholder-count="3">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid #E6E2DC; opacity: {{p.op}}; transition: opacity 400ms ease">
+          <span style="flex: 1; font-family: 'DM Mono', monospace; font-size: 13px">{{p.path}}</span>
+          <span style="padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: {{p.bg}}; color: {{p.fg}}">{{p.tier}}</span>
+          <span style="width: 64px; text-align: right; font-family: 'DM Mono', monospace; font-size: 13px">{{p.size}}</span>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #6E6870">Size over 30 days</span>
+      <svg viewBox="0 0 300 60" preserveAspectRatio="none" style="width: 100%; height: 60px" aria-hidden="true"><polyline points="{{d.spark}}" fill="none" stroke="#15121A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline></svg>
+      <span style="font-size: 12px; color: #615B66">{{d.note}}</span>
+    </div>
+    <button type="button" onClick="{{d.clean}}" disabled="{{d.cleanDisabled}}" style="position: relative; overflow: hidden; min-height: 48px; border: 0; border-radius: 14px; font: inherit; font-weight: 600; cursor: pointer; background: {{d.btnBg}}; color: {{d.btnFg}}">
+      <span style="position: absolute; left: 0; top: 0; bottom: 0; border-radius: 14px; background: repeating-linear-gradient(135deg, #7C4DFF 0 12px, #9C78FF 12px 24px); background-size: 48px 100%; animation: scull-shimmer 600ms linear infinite; transition: width 120ms linear; width: {{d.fill}}%"></span>
+      <span style="position: relative">{{d.btnLabel}}</span>
+    </button>
+    <div style="display: flex; gap: 8px">
+      <button type="button" style="flex: 1; min-height: 40px; border: 1px solid #D8D3CB; border-radius: 12px; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Never suggest</button>
+      <button type="button" style="flex: 1; min-height: 40px; border: 1px solid #D8D3CB; border-radius: 12px; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Show in Finder</button>
+    </div>
+    <sc-if value="{{toast.show}}" hint-placeholder-val="{{ false }}">
+      <div role="status" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 999px; background: #15121A; color: #FFFFFF; animation: scull-rise 360ms cubic-bezier(.2,.9,.3,1.2)">
+        <svg width="26" height="26" viewBox="0 0 88 88" aria-hidden="true" style="flex: none"><circle cx="44" cy="44" r="40" fill="#7C4DFF"></circle><path d="M28 45 l11 11 l21 -23" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="48" stroke-dashoffset="48" style="animation: scull-check 360ms 200ms ease-out forwards"></path></svg>
+        <span style="flex: 1; font-size: 13px">{{toast.text}}</span>
+        <span style="font-family: 'DM Mono', monospace; font-size: 13px; color: #C9B2FF">{{toast.gb}}</span>
+      </div>
+    </sc-if>
+  </section>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 'shop', filter: 'all', cleaned: {}, cleaning: null, p: 0, toast: null };
+  }
+  componentWillUnmount() { if (this.timer) clearInterval(this.timer); if (this.tt) clearTimeout(this.tt); }
+  renderVals() {
+    const TIER = {
+      S0: { label: 'Regenerable', bg: '#7C4DFF', fg: '#FFFFFF', bar: '#7C4DFF' },
+      S1: { label: 'Costly', bg: '#DCCBFF', fg: '#15121A', bar: '#DCCBFF' },
+      S2: { label: 'Uncertain', bg: 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)', fg: '#15121A', bar: 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)' },
+      S3: { label: 'Protected', bg: '#3B2A4F', fg: '#FFFFFF', bar: 'repeating-linear-gradient(135deg, #3B2A4F 0 3px, #5A4772 3px 6px)' }
+    };
+    const P = [
+      { id: 'shop', name: 'shop-api', path: '~/code/shop-api', eco: ['JS/TS', 'Docker'], tag: 'js', ini: 'JS', active: '3 days ago', parts: [['node_modules', 'S0', 12.4], ['dist', 'S0', 0.4], ['src', 'S3', 5.1], ['.git', 'S3', 3.4]], spark: '0,40 50,38 100,20 150,44 200,22 250,46 300,24', note: 'node_modules regrew 4× this month; cleaning it costs install time.' },
+      { id: 'rust', name: 'rust-svc', path: '~/code/rust-svc', eco: ['Rust'], tag: 'rust', ini: 'RS', active: '6 days ago', parts: [['target', 'S0', 15.2], ['src', 'S3', 4.0], ['.git', 'S3', 5.4]], spark: '0,52 50,46 100,40 150,34 200,26 250,18 300,12', note: 'target/ grows about 2 GB a week with incremental builds.' },
+      { id: 'ml', name: 'ml-lab', path: '~/code/ml-lab', eco: ['Python', 'ML'], tag: 'ml', ini: 'ML', active: '2 days ago', parts: [['.venv', 'S2', 9.8], ['data', 'S2', 3.9], ['notebooks', 'S3', 2.1], ['.git', 'S3', 3.4]], spark: '0,56 50,50 100,42 150,40 200,28 250,20 300,8', note: 'No lockfile for .venv, so it needs your review before removal.' },
+      { id: 'kart', name: 'kart-game', path: '~/code/kart-game', eco: ['Unity'], tag: 'game', ini: 'UN', active: '41 days ago', parts: [['Library', 'S1', 8.2], ['Assets', 'S3', 3.6], ['.git', 'S3', 0.7]], spark: '0,20 50,20 100,21 150,20 200,20 250,21 300,20', note: 'Re-importing Library takes about 25 minutes.' },
+      { id: 'pay', name: 'payments', path: '~/work/payments', eco: ['Rust'], tag: 'rust', ini: 'RS', active: '2 hours ago', parts: [['target (in use)', 'S3', 6.1], ['src', 'S3', 2.9], ['.git', 'S3', 2.2]], spark: '0,30 50,28 100,26 150,30 200,24 250,22 300,20', note: 'A cargo build is running here, so everything is protected for now.' },
+      { id: 'web', name: 'web-app', path: '~/code/web-app', eco: ['JS/TS', 'Next.js'], tag: 'js', ini: 'JS', active: '9 days ago', parts: [['.next', 'S0', 4.3], ['node_modules (pnpm)', 'S1', 1.2], ['src', 'S3', 2.6], ['.git', 'S3', 1.7]], spark: '0,40 50,36 100,38 150,30 200,32 250,28 300,26', note: 'node_modules links to the pnpm store, so deleting it frees almost nothing.' },
+      { id: 'old', name: 'old-site', path: '~/code/old-site', eco: ['JS/TS'], tag: 'js', ini: 'JS', active: '214 days ago', parts: [['node_modules', 'S0', 2.9], ['src', 'S3', 0.5]], spark: '0,30 50,30 100,30 150,30 200,30 250,30 300,30', note: 'Untouched for 7 months. Safe to clear its dependencies.' },
+      { id: 'cli', name: 'cli-tools', path: '~/code/cli-tools', eco: ['Go'], tag: 'go', ini: 'GO', active: '63 days ago', parts: [['bin', 'S0', 0.6], ['src', 'S3', 1.0], ['.git', 'S3', 0.3]], spark: '0,36 50,36 100,35 150,36 200,36 250,35 300,36', note: 'Small project; build output is cheap to recreate.' }
+    ];
+    const s = this.state;
+    const AV = { js: ['#FCEEF5', '#B81E74'], rust: ['#F3ECFF', '#6B3FD9'], ml: ['#FFF1DC', '#8A5200'], game: ['#EEEAF4', '#3B2A4F'], go: ['#F2EFEA', '#15121A'] };
+    const ease = (x) => 1 - Math.pow(1 - x, 3);
+    const sizes = (pr) => {
+      const t = { S0: 0, S1: 0, S2: 0, S3: 0 };
+      pr.parts.forEach(([, tier, gb]) => { t[tier] += gb; });
+      if (s.cleaned[pr.id]) t.S0 = 0;
+      if (s.cleaning === pr.id) t.S0 = t.S0 * (1 - ease(s.p));
+      return t;
+    };
+    const F = [['all', 'All'], ['js', 'JS/TS'], ['rust', 'Rust'], ['ml', 'ML'], ['game', 'Game'], ['go', 'Go']];
+    const filters = F.map(([id, label]) => ({ label: label, pressed: s.filter === id ? 'true' : 'false', bg: s.filter === id ? '#15121A' : 'transparent', fg: s.filter === id ? '#FFFFFF' : '#4A4450', pick: () => this.setState({ filter: id }) }));
+    const list = P.filter((p) => s.filter === 'all' || p.tag === s.filter);
+    const rows = list.map((p) => {
+      const t = sizes(p);
+      const total = t.S0 + t.S1 + t.S2 + t.S3;
+      const pct = (x) => (total ? (x / total * 100) : 0).toFixed(1);
+      return {
+        name: p.name, path: p.path, eco: p.eco.join(' · '), active: p.active, initials: p.ini,
+        avatarBg: AV[p.tag][0], avatarFg: AV[p.tag][1],
+        w0: pct(t.S0), w1: pct(t.S1), w2: pct(t.S2), w3: pct(t.S3),
+        size: total.toFixed(1) + ' GB', reclaim: t.S0 > 0.05 ? t.S0.toFixed(1) + ' GB' : '—',
+        bg: s.sel === p.id ? '#F3ECFF' : 'transparent', current: s.sel === p.id ? 'true' : 'false',
+        anim: s.cleaning === p.id ? 'scull-pulse 800ms ease-in-out infinite' : 'none',
+        pick: () => this.setState({ sel: p.id })
+      };
+    });
+    const pr = P.find((p) => p.id === s.sel) || P[0];
+    const t = sizes(pr);
+    const total = t.S0 + t.S1 + t.S2 + t.S3;
+    const canClean = t.S0 > 0.05 && !s.cleaning;
+    const clean = () => {
+      if (!canClean) return;
+      const id = pr.id, gb = t.S0, t0 = Date.now();
+      this.setState({ cleaning: id, p: 0, toast: null });
+      this.timer = setInterval(() => {
+        const p = Math.min(1, (Date.now() - t0) / 1800);
+        if (p >= 1) {
+          clearInterval(this.timer); this.timer = null;
+          this.setState({ cleaning: null, p: 0, cleaned: Object.assign({}, this.state.cleaned, { [id]: true }), toast: { text: 'Cleaned regenerable files in ' + pr.name, gb: '+' + gb.toFixed(1) + ' GB' } });
+          if (this.tt) clearTimeout(this.tt);
+          this.tt = setTimeout(() => this.setState({ toast: null }), 4000);
+        } else this.setState({ p: p });
+      }, 40);
+    };
+    const cleaningThis = s.cleaning === pr.id;
+    const d = {
+      name: pr.name, path: pr.path, initials: pr.ini, avatarBg: AV[pr.tag][0], avatarFg: AV[pr.tag][1],
+      ecoList: pr.eco.map((e) => ({ label: e })),
+      size: total.toFixed(1) + ' GB', reclaim: t.S0.toFixed(1) + ' GB',
+      parts: pr.parts.map(([path, tier, gb]) => {
+        const gone = tier === 'S0' && (s.cleaned[pr.id] || (cleaningThis && s.p > 0.5));
+        return { path: path, tier: TIER[tier].label, bg: TIER[tier].bg, fg: TIER[tier].fg, size: gone ? 'cleaned' : gb.toFixed(1) + ' GB', op: gone ? 0.4 : 1 };
+      }),
+      spark: pr.spark, note: pr.note,
+      clean: clean, cleanDisabled: !canClean,
+      btnBg: cleaningThis ? '#F2EFEA' : (canClean ? '#15121A' : '#F2EFEA'),
+      btnFg: cleaningThis ? '#15121A' : (canClean ? '#FFFFFF' : '#6E6870'),
+      fill: cleaningThis ? Math.round(ease(s.p) * 100) : 0,
+      btnLabel: cleaningThis ? 'Cleaning…' : (t.S0 > 0.05 ? ('Clean regenerable · ' + t.S0.toFixed(1) + ' GB') : 'Nothing regenerable to clean')
+    };
+    const toast = s.toast ? { show: true, text: s.toast.text, gb: s.toast.gb } : { show: false, text: '', gb: '' };
+    return { filters: filters, rows: rows, d: d, toast: toast, countLabel: '41 projects across ~/code and ~/work · ' + list.length + ' shown' };
+  }
+}
+</script>
+</body>
+</html>

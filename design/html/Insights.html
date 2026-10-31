@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Insights</title>
+<script>
+/* scull design preview runtime (standalone) */
+// Minimal local renderer for .dc.html design files (screenshots only).
+(function () {
+  const HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+  let tpl, root, comp, pending = false, mounted = false;
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(p) { this.state = Object.assign({}, this.state, typeof p === 'function' ? p(this.state) : p); schedule(); }
+    forceUpdate() { schedule(); }
+  }
+  window.DCLogic = DCLogic;
+  function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  function lookup(scope, path) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    const parts = path.split('.');
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] && parts[0] in scope[i]) {
+        let v = scope[i][parts[0]];
+        for (const p of parts.slice(1)) v = v == null ? undefined : v[p];
+        return v;
+      }
+    }
+    return undefined;
+  }
+  function interp(str, scope) {
+    const m = str.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) return lookup(scope, m[1]);
+    return str.replace(HOLE, (_, p) => { const v = lookup(scope, p); return v == null ? '' : String(v); });
+  }
+  function proc(node, scope, out) {
+    if (node.nodeType === 3) { const v = interp(node.nodeValue, scope); out.appendChild(document.createTextNode(v == null ? '' : String(v))); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'sc-for') {
+      const list = interp(node.getAttribute('list') || '', scope) || [];
+      const as = node.getAttribute('as') || 'item';
+      list.forEach((it, idx) => { const sc = scope.concat([{ [as]: it, $index: idx }]); node.childNodes.forEach((c) => proc(c, sc, out)); });
+      return;
+    }
+    if (tag === 'sc-if') { if (interp(node.getAttribute('value') || '', scope)) node.childNodes.forEach((c) => proc(c, scope, out)); return; }
+    if (tag === 'helmet') return;
+    const svg = node.namespaceURI === 'http://www.w3.org/2000/svg';
+    const el = svg ? document.createElementNS(node.namespaceURI, node.tagName) : document.createElement(node.tagName);
+    for (const a of Array.from(node.attributes)) {
+      const name = a.name;
+      if (/^on[a-z]+$/i.test(name)) {
+        const fn = interp(a.value, scope);
+        if (typeof fn === 'function') el.addEventListener(name.slice(2).toLowerCase(), fn);
+        continue;
+      }
+      const v = interp(a.value, scope);
+      if (name === 'checked' || name === 'disabled' || name === 'selected') {
+        if (v === true || v === 'true' || v === '' ) { el.setAttribute(name, ''); if (name === 'checked') el.checked = true; }
+        continue;
+      }
+      if (name.indexOf('hint-') === 0) continue;
+      el.setAttribute(name, v == null ? '' : String(v));
+      if (name === 'value' && el.tagName === 'INPUT') el.value = v;
+    }
+    node.childNodes.forEach((c) => proc(c, scope, el));
+    out.appendChild(el);
+  }
+  function render() {
+    const vals = comp.renderVals();
+    const frag = document.createDocumentFragment();
+    tpl.childNodes.forEach((c) => proc(c, [vals], frag));
+    root.replaceChildren(frag);
+    if (!mounted) { mounted = true; if (comp.componentDidMount) comp.componentDidMount(); }
+    window.__dcRenders = (window.__dcRenders || 0) + 1;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    tpl = document.querySelector('x-dc');
+    const helmet = tpl.querySelector('helmet');
+    if (helmet) helmet.querySelectorAll('style, link').forEach((n) => document.head.appendChild(n));
+    root = document.createElement('div');
+    tpl.parentNode.insertBefore(root, tpl);
+    tpl.remove();
+    const s = document.querySelector('script[data-dc-script]');
+    const props = {};
+    try { const dp = JSON.parse(s.getAttribute('data-props') || '{}'); Object.keys(dp).forEach((k) => { if (k[0] !== '$' && dp[k] && 'default' in dp[k]) props[k] = dp[k].default; }); } catch (e) { console.error(e); }
+    const C = new Function('DCLogic', s.textContent + '\n;return Component;')(DCLogic);
+    comp = new C(props);
+    render();
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#111}a:hover{color:#9C78FF}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">14.9 GB</span></a>
+    <a href="CleanupReview.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">full in ~9 days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Insights</h1>
+      <span style="font-size: 13px; color: #615B66">Trends from your own history · last 30 days</span>
+    </div>
+    <div role="group" aria-label="Range" style="display: flex; gap: 2px">
+      <sc-for list="{{ranges}}" as="item" hint-placeholder-count="3">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.pick}}" style="min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; font: inherit; font-weight: 500; cursor: pointer; background: {{item.bg}}; color: {{item.fg}}">{{item.label}}</button>
+      </sc-for>
+    </div>
+  </header>
+
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+
+    <section class="tile" aria-label="Free space forecast" style="grid-column: span 8; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px">
+        <span style="font-size: 13px; font-weight: 500; color: #615B66">Free space · history and forecast</span>
+        <div style="display: flex; gap: 16px; font-size: 12px">
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 16px; height: 2px; background: #15121A"></span>Measured</span>
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 16px; height: 0; border-top: 2px dashed {{accent}}"></span>Forecast</span>
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{accent}}"></span>Cleanup</span>
+        </div>
+      </div>
+      <svg viewBox="0 0 800 300" preserveAspectRatio="none" style="width: 100%; height: 300px" role="img" aria-label="Free space fell from 96 GB to 41 GB over 30 days, with two cleanups adding 22 GB and 9 GB. Forecast reaches 10 GB in about 9 days.">
+        <line x1="0" y1="20" x2="800" y2="20" stroke="#EEEAE4"></line>
+        <line x1="0" y1="90" x2="800" y2="90" stroke="#EEEAE4"></line>
+        <line x1="0" y1="160" x2="800" y2="160" stroke="#EEEAE4"></line>
+        <line x1="0" y1="230" x2="800" y2="230" stroke="#EEEAE4"></line>
+        <line x1="0" y1="272" x2="800" y2="272" stroke="#77717A" stroke-dasharray="4 4"></line>
+        <polyline points="0,40 40,50 80,58 120,70 160,82 200,94 220,62 260,72 300,86 340,98 380,110 420,122 440,104 480,116 520,128 560,142 600,155 600,155" fill="none" stroke="#15121A" stroke-width="2.5"></polyline>
+        <polyline points="600,155 800,272" fill="none" stroke="{{accent}}" stroke-width="2.5" stroke-dasharray="8 6"></polyline>
+        <rect x="214" y="56" width="12" height="12" fill="{{accent}}"></rect>
+        <rect x="434" y="98" width="12" height="12" fill="{{accent}}"></rect>
+        <rect x="594" y="149" width="12" height="12" fill="#15121A"></rect>
+      </svg>
+      <div style="display: flex; justify-content: space-between; font-family: 'DM Mono', monospace; font-size: 11px; color: #615B66"><span>Oct 1 · 96 GB</span><span>Oct 9 cleanup +22 GB</span><span>Oct 20 cleanup +9 GB</span><span>Today · 41.2 GB</span><span>Nov 9 · 10 GB line</span></div>
+    </section>
+
+    <section class="tile" aria-label="Forecast summary" style="grid-column: span 4; border-radius: 22px; background: #FCEEF5; border: 1px solid #F3C9DE; color: #15121A; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+      <span style="font-size: 13px; font-weight: 500; color: #4A4450">Forecast</span>
+      <span style="font-size: 56px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.04em; line-height: 1">≈ 9 days</span>
+      <span style="font-size: 14px; color: #D8D3CB">until less than 10 GB free</span>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px">
+        <div style="border-radius: 14px; background: #FFFFFF; padding: 14px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'DM Mono', monospace; font-size: 11px; color: #4A4450">Rate</span><span style="font-family: 'DM Mono', monospace">−3.5 GB/day</span></div>
+        <div style="border-radius: 14px; background: #FFFFFF; padding: 14px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'DM Mono', monospace; font-size: 11px; color: #4A4450">Confidence</span><span style="font-family: 'DM Mono', monospace">Medium</span></div>
+        <div style="border-radius: 14px; background: #FFFFFF; padding: 14px; display: flex; flex-direction: column; gap: 2px; grid-column: span 2"><span style="font-family: 'DM Mono', monospace; font-size: 11px; color: #4A4450">Driven by</span><span>ml-lab/.venv and the Hugging Face cache · 71% of growth</span></div>
+      </div>
+      <a href="CleanupReview.html" style="margin-top: auto; border-radius: 12px; min-height: 48px; display: flex; align-items: center; justify-content: center; background: {{accent}}; color: #FFFFFF; text-decoration: none; font-weight: 600">Review 38.6 GB now</a>
+    </section>
+
+    <section class="tile" aria-label="Regrowth" style="grid-column: span 4; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Regrowth</span>
+      <span style="font-size: 18px; font-weight: 600; line-height: 1.3">shop-api/node_modules came back 4 times this month</span>
+      <div style="display: flex; gap: 2px; height: 40px; align-items: flex-end">
+        <div style="flex: 1; border-radius: 6px; height: 100%; background: #15121A"></div><div style="flex: 1; border-radius: 6px; height: 8%; background: #5A4772"></div><div style="flex: 1; border-radius: 6px; height: 100%; background: #15121A"></div><div style="flex: 1; border-radius: 6px; height: 8%; background: #5A4772"></div><div style="flex: 1; border-radius: 6px; height: 100%; background: #15121A"></div><div style="flex: 1; border-radius: 6px; height: 8%; background: #5A4772"></div><div style="flex: 1; border-radius: 6px; height: 100%; background: #15121A"></div><div style="flex: 1; border-radius: 6px; height: 8%; background: #5A4772"></div><div style="flex: 1; border-radius: 6px; height: 100%; background: #15121A"></div>
+      </div>
+      <span style="font-size: 13px; color: #615B66">Each time it was reinstalled within 2 days, so cleaning it only costs you install time. You use this project actively.</span>
+      <button type="button" style="margin-top: auto; min-height: 44px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Stop suggesting it</button>
+    </section>
+
+    <section class="tile" aria-label="Duplication" style="grid-column: span 4; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Duplication</span>
+      <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 40px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1">7.4</span><span style="font-size: 15px">GB of identical packages</span></div>
+      <div style="display: flex; flex-direction: column">
+        <div style="display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid #E6E2DC; font-size: 13px"><span style="font-family: 'DM Mono', monospace">typescript@5.9</span><span>in 17 projects</span></div>
+        <div style="display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid #E6E2DC; font-size: 13px"><span style="font-family: 'DM Mono', monospace">next@16.1</span><span>in 6 projects</span></div>
+        <div style="display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid #E6E2DC; border-bottom: 1px solid #E6E2DC; font-size: 13px"><span style="font-family: 'DM Mono', monospace">torch@2.9</span><span>in 3 venvs</span></div>
+      </div>
+      <span style="font-size: 13px; color: #615B66">Switching the 11 npm projects to pnpm would store each package once.</span>
+    </section>
+
+    <section class="tile" aria-label="Agent footprint" style="grid-column: span 4; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Agent footprint</span>
+      <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 40px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1">41</span><span style="font-size: 15px">agent worktrees · 11.2 GB idle</span></div>
+      <div role="img" aria-label="Agent worktrees created per week over 8 weeks: 2, 3, 3, 5, 6, 8, 7, 9" style="display: flex; gap: 4px; height: 72px; align-items: flex-end">
+        <div style="flex: 1; border-radius: 6px; height: 22%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 33%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 33%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 55%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 66%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 88%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 77%; background: #DCCBFF"></div><div style="flex: 1; border-radius: 6px; height: 100%; background: {{accent}}"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-family: 'DM Mono', monospace; font-size: 11px; color: #615B66"><span>8 weeks ago</span><span>this week · 9 new</span></div>
+      <span style="font-size: 13px; color: #615B66">Average life 9 days. 22 are past their TTL. Claude Code 26 · Codex 15.</span>
+    </section>
+
+    <section class="tile" aria-label="Cleanup accuracy" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px">
+        <span style="font-size: 13px; font-weight: 500; color: #615B66">Predicted vs measured · last 4 cleanups</span>
+        <span style="font-family: 'DM Mono', monospace; font-size: 12px">median error 6%</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: grid; grid-template-columns: 64px minmax(0, 1fr) 120px; gap: 12px; align-items: center"><span style="font-family: 'DM Mono', monospace; font-size: 12px">Oct 20</span><div style="display: flex; flex-direction: column; gap: 3px"><div style="border-radius: 999px; height: 8px; width: 42%; background: #5A4772"></div><div style="border-radius: 999px; height: 8px; width: 40%; background: #15121A"></div></div><span style="font-family: 'DM Mono', monospace; font-size: 12px; text-align: right">9.4 → 9.0 GB</span></div>
+        <div style="display: grid; grid-template-columns: 64px minmax(0, 1fr) 120px; gap: 12px; align-items: center"><span style="font-family: 'DM Mono', monospace; font-size: 12px">Oct 9</span><div style="display: flex; flex-direction: column; gap: 3px"><div style="border-radius: 999px; height: 8px; width: 100%; background: #5A4772"></div><div style="border-radius: 999px; height: 8px; width: 96%; background: #15121A"></div></div><span style="font-family: 'DM Mono', monospace; font-size: 12px; text-align: right">22.8 → 21.9 GB</span></div>
+        <div style="display: grid; grid-template-columns: 64px minmax(0, 1fr) 120px; gap: 12px; align-items: center"><span style="font-family: 'DM Mono', monospace; font-size: 12px">Sep 28</span><div style="display: flex; flex-direction: column; gap: 3px"><div style="border-radius: 999px; height: 8px; width: 31%; background: #5A4772"></div><div style="border-radius: 999px; height: 8px; width: 12%; background: #15121A"></div></div><span style="font-family: 'DM Mono', monospace; font-size: 12px; text-align: right">7.1 → 2.8 GB</span></div>
+        <div style="display: grid; grid-template-columns: 64px minmax(0, 1fr) 120px; gap: 12px; align-items: center"><span style="font-family: 'DM Mono', monospace; font-size: 12px">Sep 14</span><div style="display: flex; flex-direction: column; gap: 3px"><div style="border-radius: 999px; height: 8px; width: 55%; background: #5A4772"></div><div style="border-radius: 999px; height: 8px; width: 52%; background: #15121A"></div></div><span style="font-family: 'DM Mono', monospace; font-size: 12px; text-align: right">12.6 → 11.9 GB</span></div>
+      </div>
+      <div style="display: flex; gap: 16px; font-size: 12px"><span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 8px; border-radius: 4px; background: #5A4772"></span>Predicted</span><span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 8px; border-radius: 4px; background: #15121A"></span>Measured</span></div>
+      <span style="font-size: 13px; color: #615B66">Sep 28 freed less: a Time Machine snapshot was holding 4.3 GB until it expired the next day.</span>
+    </section>
+
+    <section class="tile" aria-label="Ecosystem mix" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Ecosystem mix · 6 months</span>
+      <div role="img" aria-label="Development storage by ecosystem per month, May to October. ML grew from 12% to 34%; JavaScript shrank from 41% to 24%." style="display: flex; gap: 8px; height: 180px; align-items: flex-end">
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 62%"><div style="flex: 12; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 41; background: #15121A"></div><div style="flex: 27; background: {{accent}}"></div><div style="flex: 20; background: #5A4772"></div></div>
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 66%"><div style="flex: 15; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 39; background: #15121A"></div><div style="flex: 27; background: {{accent}}"></div><div style="flex: 19; background: #5A4772"></div></div>
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 72%"><div style="flex: 19; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 35; background: #15121A"></div><div style="flex: 27; background: {{accent}}"></div><div style="flex: 19; background: #5A4772"></div></div>
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 80%"><div style="flex: 24; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 31; background: #15121A"></div><div style="flex: 26; background: {{accent}}"></div><div style="flex: 19; background: #5A4772"></div></div>
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 90%"><div style="flex: 29; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 27; background: #15121A"></div><div style="flex: 25; background: {{accent}}"></div><div style="flex: 19; background: #5A4772"></div></div>
+        <div style="flex: 1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; height: 100%"><div style="flex: 34; background: repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)"></div><div style="flex: 24; background: #15121A"></div><div style="flex: 24; background: {{accent}}"></div><div style="flex: 18; background: #5A4772"></div></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-family: 'DM Mono', monospace; font-size: 11px; color: #615B66"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span></div>
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px">
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 4px; background: repeating-linear-gradient(135deg, #FFB340 0 3px, #FFD08A 3px 6px)"></span>ML / AI 34%</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 4px; background: #15121A"></span>JavaScript 24%</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 4px; background: {{accent}}"></span>Rust 24%</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 4px; background: #5A4772"></span>Other 18%</span>
+      </div>
+    </section>
+
+    <section class="tile" aria-label="What scull knows" style="grid-column: span 12; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 24px 40px">
+      <div style="flex: 1 1 280px; display: flex; flex-direction: column; gap: 6px">
+        <span style="font-size: 13px; font-weight: 500; color: #615B66">What scull knows</span>
+        <span style="font-size: 18px; font-weight: 600">212 MB of history, all on this Mac</span>
+        <span style="font-size: 13px; color: #615B66">No file contents, secrets or environment values, ever.</span>
+      </div>
+      <div style="flex: 2 1 420px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: #F2EFEA"><div style="width: 21%; background: #15121A"></div></div>
+        <div style="display: flex; justify-content: space-between; font-family: 'DM Mono', monospace; font-size: 11px; color: #615B66"><span>212 MB used</span><span>1 GB budget</span></div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button type="button" style="min-height: 44px; padding: 0 16px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Export</button>
+        <button type="button" style="min-height: 44px; padding: 0 16px; background: #15121A; color: #FFFFFF; border: 0; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Open data page</button>
+      </div>
+    </section>
+
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7C4DFF","options":["#7C4DFF","#D6268A","#15121A","#DCCBFF"]},"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { range: '30d' };
+  }
+  renderVals() {
+    const r = this.state.range;
+    const ranges = [['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']].map(([id, label]) => ({
+      label: label,
+      pressed: r === id ? 'true' : 'false',
+      bg: r === id ? '#15121A' : '#F2EFEA',
+      fg: r === id ? '#FFFFFF' : '#15121A',
+      pick: () => this.setState({ range: id })
+    }));
+    return { accent: this.props.accent ?? '#7C4DFF', ranges: ranges };
+  }
+}
+</script>
+</body>
+</html>

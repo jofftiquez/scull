@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Cleanup Review</title>
+<script>
+/* scull design preview runtime (standalone) */
+// Minimal local renderer for .dc.html design files (screenshots only).
+(function () {
+  const HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+  let tpl, root, comp, pending = false, mounted = false;
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(p) { this.state = Object.assign({}, this.state, typeof p === 'function' ? p(this.state) : p); schedule(); }
+    forceUpdate() { schedule(); }
+  }
+  window.DCLogic = DCLogic;
+  function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  function lookup(scope, path) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    const parts = path.split('.');
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] && parts[0] in scope[i]) {
+        let v = scope[i][parts[0]];
+        for (const p of parts.slice(1)) v = v == null ? undefined : v[p];
+        return v;
+      }
+    }
+    return undefined;
+  }
+  function interp(str, scope) {
+    const m = str.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) return lookup(scope, m[1]);
+    return str.replace(HOLE, (_, p) => { const v = lookup(scope, p); return v == null ? '' : String(v); });
+  }
+  function proc(node, scope, out) {
+    if (node.nodeType === 3) { const v = interp(node.nodeValue, scope); out.appendChild(document.createTextNode(v == null ? '' : String(v))); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'sc-for') {
+      const list = interp(node.getAttribute('list') || '', scope) || [];
+      const as = node.getAttribute('as') || 'item';
+      list.forEach((it, idx) => { const sc = scope.concat([{ [as]: it, $index: idx }]); node.childNodes.forEach((c) => proc(c, sc, out)); });
+      return;
+    }
+    if (tag === 'sc-if') { if (interp(node.getAttribute('value') || '', scope)) node.childNodes.forEach((c) => proc(c, scope, out)); return; }
+    if (tag === 'helmet') return;
+    const svg = node.namespaceURI === 'http://www.w3.org/2000/svg';
+    const el = svg ? document.createElementNS(node.namespaceURI, node.tagName) : document.createElement(node.tagName);
+    for (const a of Array.from(node.attributes)) {
+      const name = a.name;
+      if (/^on[a-z]+$/i.test(name)) {
+        const fn = interp(a.value, scope);
+        if (typeof fn === 'function') el.addEventListener(name.slice(2).toLowerCase(), fn);
+        continue;
+      }
+      const v = interp(a.value, scope);
+      if (name === 'checked' || name === 'disabled' || name === 'selected') {
+        if (v === true || v === 'true' || v === '' ) { el.setAttribute(name, ''); if (name === 'checked') el.checked = true; }
+        continue;
+      }
+      if (name.indexOf('hint-') === 0) continue;
+      el.setAttribute(name, v == null ? '' : String(v));
+      if (name === 'value' && el.tagName === 'INPUT') el.value = v;
+    }
+    node.childNodes.forEach((c) => proc(c, scope, el));
+    out.appendChild(el);
+  }
+  function render() {
+    const vals = comp.renderVals();
+    const frag = document.createDocumentFragment();
+    tpl.childNodes.forEach((c) => proc(c, [vals], frag));
+    root.replaceChildren(frag);
+    if (!mounted) { mounted = true; if (comp.componentDidMount) comp.componentDidMount(); }
+    window.__dcRenders = (window.__dcRenders || 0) + 1;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    tpl = document.querySelector('x-dc');
+    const helmet = tpl.querySelector('helmet');
+    if (helmet) helmet.querySelectorAll('style, link').forEach((n) => document.head.appendChild(n));
+    root = document.createElement('div');
+    tpl.parentNode.insertBefore(root, tpl);
+    tpl.remove();
+    const s = document.querySelector('script[data-dc-script]');
+    const props = {};
+    try { const dp = JSON.parse(s.getAttribute('data-props') || '{}'); Object.keys(dp).forEach((k) => { if (k[0] !== '$' && dp[k] && 'default' in dp[k]) props[k] = dp[k].default; }); } catch (e) { console.error(e); }
+    const C = new Function('DCLogic', s.textContent + '\n;return Component;')(DCLogic);
+    comp = new C(props);
+    render();
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#111}a:hover{color:#9C78FF}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">14.9 GB</span></a>
+    <a href="CleanupReview.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">full in ~9 days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Cleanup Review</h1>
+      <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">plan 7f3a·c21e · created 2 min ago · expires in 24 h · nothing changes until you confirm</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px">
+      <button type="button" style="height: 44px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Export plan</button>
+      <button type="button" style="height: 44px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Rescan</button>
+    </div>
+  </header>
+
+  <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+    <sc-if value="{{done}}" hint-placeholder-val="{{ false }}">
+    <section class="tile" aria-label="Cleanup complete" aria-live="polite" style="grid-column: span 12; position: relative; overflow: hidden; border-radius: 22px; background: #FFFFFF; padding: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 28px; animation: scull-rise 320ms ease-out">
+      <div style="position: absolute; left: 76px; top: 50%; width: 0; height: 0">
+        <sc-for list="{{particles}}" as="p" hint-placeholder-count="0">
+          <span style="position: absolute; left: -5px; top: -5px; width: {{p.size}}px; height: {{p.size}}px; border-radius: {{p.radius}}; background: {{p.color}}; opacity: 0; animation: {{p.anim}}"></span>
+        </sc-for>
+      </div>
+      <svg width="88" height="88" viewBox="0 0 88 88" role="img" aria-label="Done" style="flex: none">
+        <circle cx="44" cy="44" r="34" fill="none" stroke="#F2EFEA" stroke-width="8"></circle>
+        <circle cx="44" cy="44" r="34" fill="none" stroke="{{accent}}" stroke-width="8" stroke-linecap="round" stroke-dasharray="214" stroke-dashoffset="214" transform="rotate(-90 44 44)" style="animation: scull-ring 700ms ease-out forwards"></circle>
+        <path d="M30 45 l9 9 l19 -20" fill="none" stroke="#15121A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="48" stroke-dashoffset="48" style="animation: scull-check 380ms 620ms ease-out forwards"></path>
+      </svg>
+      <div style="flex: 1 1 320px; display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 48px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; animation: scull-bounce 640ms 200ms cubic-bezier(.2,.9,.3,1.3) both">{{doneGb}} GB freed</span>
+        <span style="font-size: 16px; animation: scull-rise 420ms 700ms ease-out both">Measured <strong>{{measuredGb}} GB</strong> · {{accuracy}} of predicted · {{doneCount}} items</span>
+        <span style="font-size: 13px; color: #615B66; animation: scull-rise 420ms 900ms ease-out both">{{doneSub}}</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; animation: scull-rise 420ms 1000ms ease-out both">
+        <button type="button" onClick="{{reset}}" style="min-height: 48px; padding: 0 20px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Run demo again</button>
+        <a href="Main.html" style="border-radius: 12px; min-height: 48px; padding: 0 22px; display: inline-flex; align-items: center; background: #15121A; color: #FFFFFF; text-decoration: none; font-weight: 600">Back to overview</a>
+      </div>
+    </section>
+    </sc-if>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">{{selLabel}}</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1">{{selValue}} GB</span>
+      <span style="font-size: 13px; color: #615B66">{{selSub}}</span>
+    </section>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Delete · S0</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1; color: #9C78FF">{{deleteGb}} GB</span>
+      <span style="font-size: 13px; color: #615B66">Freed now · rebuilt by your tools</span>
+    </section>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Quarantine · S1/S2</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1">{{quarGb}} GB</span>
+      <span style="font-size: 13px; color: #615B66">7-day undo · freed when purged</span>
+    </section>
+    <section class="tile" style="grid-column: span 3; border-radius: 22px; background: #FFFFFF; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Skipped</span>
+      <span style="font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1">3</span>
+      <span style="font-size: 13px; color: #615B66">In use or changed since scan</span>
+    </section>
+
+    <section class="tile" aria-label="Plan items" style="grid-column: span 12; border-radius: 22px; overflow: hidden; background: #FFFFFF; padding: 8px 0 0">
+      <div style="overflow-x: auto">
+        <div role="list" style="min-width: 980px">
+          <div style="display: grid; grid-template-columns: 56px minmax(280px, 2.4fr) 120px minmax(200px, 1.6fr) 120px 110px 110px; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 500; color: #615B66">
+            <span></span><span>Item</span><span>Tier</span><span>Evidence</span><span>Action</span><span style="text-align: right; padding-right: 16px">Predicted</span><span>Undo</span>
+          </div>
+          <sc-for list="{{items}}" as="item" hint-placeholder-count="6">
+            <div role="listitem" style="display: grid; grid-template-columns: 56px minmax(280px, 2.4fr) 120px minmax(200px, 1.6fr) 120px 110px 110px; align-items: center; min-height: 64px; border-top: 1px solid #E6E2DC; overflow: hidden; transition: background 250ms ease; background: {{item.rowBg}}; animation: {{item.anim}}">
+              <label style="display: flex; justify-content: center; align-items: center; height: 64px; cursor: pointer"><input type="checkbox" checked="{{item.on}}" onChange="{{item.toggle}}" aria-label="{{item.aria}}" style="width: 18px; height: 18px; margin: 0; accent-color: #15121A"></label>
+              <span style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px 10px 0; min-width: 0"><span style="font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; overflow-wrap: anywhere">{{item.path}}</span><span style="font-size: 12px; color: #615B66">{{item.sub}}</span></span>
+              <span><span style="border-radius: 999px; display: inline-block; padding: 4px 8px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; background: {{item.tierBg}}; color: {{item.tierFg}}">{{item.tier}}</span></span>
+              <span style="font-size: 13px; padding-right: 12px">{{item.evidence}}</span>
+              <span style="font-size: 13px; font-weight: 500">{{item.action}}</span>
+              <span style="font-family: 'DM Mono', monospace; text-align: right; padding-right: 16px">{{item.size}}</span>
+              <span style="font-size: 13px; color: #615B66">{{item.undo}}</span>
+            </div>
+          </sc-for>
+          <div style="padding: 16px 16px 8px; font-size: 13px; font-weight: 500; color: #615B66; border-top: 1px solid #E6E2DC">Skipped at re-check · not in this plan</div>
+          <div style="display: grid; grid-template-columns: 56px minmax(280px, 2.4fr) minmax(320px, 3fr); align-items: center; min-height: 52px; border-top: 1px solid #E6E2DC; color: #615B66"><span></span><span style="font-family: 'DM Mono', monospace; font-size: 13px">~/work/payments/target</span><span style="font-size: 13px">In use: cargo build is running (pid 48213)</span></div>
+          <div style="display: grid; grid-template-columns: 56px minmax(280px, 2.4fr) minmax(320px, 3fr); align-items: center; min-height: 52px; border-top: 1px solid #E6E2DC; color: #615B66"><span></span><span style="font-family: 'DM Mono', monospace; font-size: 13px">worktree agent/fix-auth-93</span><span style="font-size: 13px">New untracked file since scan: notes.md · now protected</span></div>
+          <div style="display: grid; grid-template-columns: 56px minmax(280px, 2.4fr) minmax(320px, 3fr); align-items: center; min-height: 52px; border-top: 1px solid #E6E2DC; color: #615B66"><span></span><span style="font-family: 'DM Mono', monospace; font-size: 13px">~/code/old-site/node_modules</span><span style="font-size: 13px">Changed since scan: folder was replaced · identity mismatch</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tile" aria-label="How much you will really get back" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">What you'll really get back</span>
+      <p style="margin: 0">scull measures free space before and after, and shows the difference next to this prediction.</p>
+      <p style="margin: 0; font-size: 13px; color: #615B66">Two pnpm projects are linked to the shared store, so deleting their node_modules frees almost nothing. They're left out of this estimate. Prune the store from Quick Clean instead.</p>
+    </section>
+    <section class="tile" aria-label="Safety checks" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 8px">
+      <span style="font-size: 13px; font-weight: 500; color: #615B66">Right before each item is touched</span>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; font-size: 13px">
+        <span>Same folder as scanned (identity check)</span>
+        <span>Not tracked by Git</span>
+        <span>Not in use by any process</span>
+        <span>Never follows links outside the item</span>
+        <span>Tier hasn't gone up</span>
+        <span>Stays on the same disk</span>
+      </div>
+    </section>
+
+    <section class="tile" aria-label="Confirm" style="grid-column: span 12; border-radius: 22px; background: #FCEEF5; border: 1px solid #F3C9DE; color: #15121A; padding: 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 18px; font-weight: 600">{{confirmTitle}}</span>
+        <span style="font-size: 13px; color: #4A4450">Deleted S0 items can't be undone; rebuild them with your tools. Quarantined items can be restored for 7 days.</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <a href="Main.html" style="border-radius: 12px; min-height: 48px; padding: 0 20px; display: inline-flex; align-items: center; color: #15121A; border: 1px solid #4A4450; text-decoration: none; font-weight: 500">Cancel</a>
+        <button type="button" onClick="{{start}}" disabled="{{busy}}" style="position: relative; overflow: hidden; min-width: 220px; min-height: 48px; padding: 0 24px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; cursor: pointer; transition: background 200ms ease; background: {{btnBg}}; color: {{btnFg}}"><span style="position: absolute; left: 0; top: 0; bottom: 0; border-radius: 12px; background: repeating-linear-gradient(135deg, {{accent}} 0 12px, #9C78FF 12px 24px); background-size: 48px 100%; animation: scull-shimmer 600ms linear infinite; transition: width 120ms linear; width: {{btnFill}}%"></span><span style="position: relative">{{confirmLabel}}</span></button>
+      </div>
+    </section>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7C4DFF","options":["#7C4DFF","#D6268A","#15121A","#DCCBFF"]},"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: { target: true, nm: true, next: true, wt: true, lib: false, venv: false }, phase: 'idle', p: 0 };
+  }
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.doneT) clearTimeout(this.doneT);
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#7C4DFF';
+    const tiers = {
+      S0: { label: 'S0 Regenerable', bg: accent, fg: '#FFFFFF' },
+      S1: { label: 'S1 Costly', bg: '#DCCBFF', fg: '#15121A' },
+      S2: { label: 'S2 Uncertain', bg: 'repeating-linear-gradient(135deg, #FFB340 0 4px, #FFD08A 4px 8px)', fg: '#15121A' }
+    };
+    const base = [
+      { id: 'target', path: '~/code/rust-svc/target', sub: 'rust-svc · idle 6 days · rebuild: cargo build, about 4 min', tier: 'S0', evidence: 'Cargo.toml + Cargo.lock', action: 'Delete', gb: 15.2, undo: 'Rebuild' },
+      { id: 'nm', path: '~/code/shop-api/node_modules', sub: 'shop-api · idle 3 days · regrew 4× this month', tier: 'S0', evidence: 'package.json + package-lock.json', action: 'Delete', gb: 12.4, undo: 'Reinstall' },
+      { id: 'next', path: '~/code/web-app/.next', sub: 'web-app · idle 9 days · rebuild: next build', tier: 'S0', evidence: 'next.config.js + lockfile', action: 'Delete', gb: 4.3, undo: 'Rebuild' },
+      { id: 'wt', path: '31 worktree artifact folders', sub: 'node_modules and target inside merged worktrees · worktrees kept', tier: 'S0', evidence: 'Markers + lockfiles in each', action: 'Delete', gb: 6.7, undo: 'Rebuild' },
+      { id: 'lib', path: '~/code/kart-game/Library', sub: 'kart-game · Unity re-import takes about 25 min', tier: 'S1', evidence: 'ProjectSettings/ present', action: 'Quarantine', gb: 8.2, undo: '7 days' },
+      { id: 'venv', path: '~/code/ml-lab/.venv', sub: 'ml-lab · no lockfile, may not be reproducible', tier: 'S2', evidence: 'pyproject.toml, no lock', action: 'Quarantine', gb: 9.8, undo: '7 days' }
+    ];
+    const s = this.state;
+    const sel = s.sel;
+    const chosen = base.filter((b) => sel[b.id]);
+    const n = chosen.length;
+    const running = s.phase !== 'idle';
+    const prog = s.phase === 'idle' ? 0 : (s.phase === 'running' ? s.p : 1);
+    let freed = 0;
+    let activePath = '';
+    const statusOf = (b) => {
+      const k = chosen.indexOf(b);
+      if (k < 0 || !running) return k < 0 ? 'off' : 'on';
+      if (prog >= (k + 1) / n) return 'done';
+      if (prog >= k / n) return 'active';
+      return 'on';
+    };
+    const items = base.map((b) => {
+      const t = tiers[b.tier];
+      const on = !!sel[b.id];
+      const st = statusOf(b);
+      if (st === 'done') freed += b.gb;
+      if (st === 'active') { activePath = b.path; freed += b.gb * ((prog * n) - chosen.indexOf(b)); }
+      return {
+        path: b.path, sub: b.sub, evidence: b.evidence, action: b.action, undo: b.undo,
+        size: b.gb.toFixed(1) + ' GB', tier: t.label, tierBg: t.bg, tierFg: t.fg,
+        on: on, aria: 'Include ' + b.path,
+        rowBg: st === 'active' ? '#F3ECFF' : (on ? '#FFFFFF' : '#FAF9F7'),
+        anim: st === 'done' ? 'scull-collapse 520ms ease-in forwards' : (st === 'active' ? 'scull-pulse 800ms ease-in-out infinite' : 'none'),
+        toggle: () => { if (this.state.phase === 'idle') this.setState({ sel: Object.assign({}, sel, { [b.id]: !on }) }); }
+      };
+    });
+    const sum = (xs) => xs.reduce((a, b) => a + b.gb, 0);
+    const del = chosen.filter((b) => b.action === 'Delete');
+    const quar = chosen.filter((b) => b.action === 'Quarantine');
+    const total = sum(chosen);
+
+    const start = () => {
+      if (this.state.phase !== 'idle' || n === 0) return;
+      const dur = 700 * n + 400;
+      const t0 = Date.now();
+      this.setState({ phase: 'running', p: 0 });
+      this.timer = setInterval(() => {
+        const p = Math.min(1, (Date.now() - t0) / dur);
+        this.setState({ p: p });
+        if (p >= 1) {
+          clearInterval(this.timer); this.timer = null;
+          this.doneT = setTimeout(() => this.setState({ phase: 'done' }), 420);
+        }
+      }, 40);
+    };
+    const reset = () => this.setState({ phase: 'idle', p: 0 });
+
+    let confirmLabel = 'Nothing selected';
+    if (del.length && quar.length) confirmLabel = 'Delete ' + del.length + ' · quarantine ' + quar.length;
+    else if (del.length) confirmLabel = 'Delete ' + del.length + (del.length === 1 ? ' item' : ' items');
+    else if (quar.length) confirmLabel = 'Quarantine ' + quar.length + (quar.length === 1 ? ' item' : ' items');
+    if (s.phase === 'running') confirmLabel = Math.round(prog * 100) + '% · cleaning';
+    if (s.phase === 'done') confirmLabel = 'Done';
+
+    const colors = ['#D6268A', '#15121A', '#7C4DFF', '#FFB547', '#DCCBFF'];
+    const particles = [];
+    for (let i = 0; i < 20; i++) {
+      particles.push({
+        size: [8, 10, 12, 9][i % 4], radius: i % 3 === 0 ? '3px' : '50%', color: colors[i % colors.length],
+        anim: 'scull-b' + (i % 10) + ' ' + (800 + (i % 5) * 90) + 'ms ' + (500 + (i >= 10 ? 140 : 0)) + 'ms cubic-bezier(.15,.7,.3,1) both'
+      });
+    }
+    const measured = total * 0.982;
+    return {
+      accent: accent,
+      items: items,
+      start: start,
+      reset: reset,
+      busy: running,
+      done: s.phase === 'done',
+      btnBg: running ? '#F2EFEA' : '#15121A',
+      btnFg: running ? '#15121A' : '#FFFFFF',
+      btnFill: Math.round(prog * 100),
+      selLabel: running ? 'Freed so far' : 'Selected',
+      selValue: running ? freed.toFixed(1) : total.toFixed(1),
+      selSub: running ? (s.phase === 'done' ? 'All done' : 'of ' + total.toFixed(1) + ' GB') : (n + ' items · predicted'),
+      deleteGb: sum(del).toFixed(1),
+      quarGb: sum(quar).toFixed(1),
+      confirmLabel: confirmLabel,
+      confirmTitle: s.phase === 'running' ? ('Cleaning ' + activePath + '…') : (s.phase === 'done' ? 'Cleanup complete' : (n ? ('Clean ' + n + ' items · ' + total.toFixed(1) + ' GB predicted') : 'Select items to clean')),
+      particles: particles,
+      doneGb: total.toFixed(1),
+      measuredGb: measured.toFixed(1),
+      accuracy: Math.round(measured / total * 100) + '%',
+      doneCount: n,
+      doneSub: quar.length ? (quar.length + ' quarantined item' + (quar.length > 1 ? 's' : '') + ' can be restored for 7 days from History.') : 'Deleted items are rebuilt by your tools the next time you build.'
+    };
+  }
+}
+</script>
+</body>
+</html>

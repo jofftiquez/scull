@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Menu bar widget</title>
+<script>
+/* scull design preview runtime (standalone) */
+// Minimal local renderer for .dc.html design files (screenshots only).
+(function () {
+  const HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+  let tpl, root, comp, pending = false, mounted = false;
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(p) { this.state = Object.assign({}, this.state, typeof p === 'function' ? p(this.state) : p); schedule(); }
+    forceUpdate() { schedule(); }
+  }
+  window.DCLogic = DCLogic;
+  function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  function lookup(scope, path) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    const parts = path.split('.');
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] && parts[0] in scope[i]) {
+        let v = scope[i][parts[0]];
+        for (const p of parts.slice(1)) v = v == null ? undefined : v[p];
+        return v;
+      }
+    }
+    return undefined;
+  }
+  function interp(str, scope) {
+    const m = str.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) return lookup(scope, m[1]);
+    return str.replace(HOLE, (_, p) => { const v = lookup(scope, p); return v == null ? '' : String(v); });
+  }
+  function proc(node, scope, out) {
+    if (node.nodeType === 3) { const v = interp(node.nodeValue, scope); out.appendChild(document.createTextNode(v == null ? '' : String(v))); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'sc-for') {
+      const list = interp(node.getAttribute('list') || '', scope) || [];
+      const as = node.getAttribute('as') || 'item';
+      list.forEach((it, idx) => { const sc = scope.concat([{ [as]: it, $index: idx }]); node.childNodes.forEach((c) => proc(c, sc, out)); });
+      return;
+    }
+    if (tag === 'sc-if') { if (interp(node.getAttribute('value') || '', scope)) node.childNodes.forEach((c) => proc(c, scope, out)); return; }
+    if (tag === 'helmet') return;
+    const svg = node.namespaceURI === 'http://www.w3.org/2000/svg';
+    const el = svg ? document.createElementNS(node.namespaceURI, node.tagName) : document.createElement(node.tagName);
+    for (const a of Array.from(node.attributes)) {
+      const name = a.name;
+      if (/^on[a-z]+$/i.test(name)) {
+        const fn = interp(a.value, scope);
+        if (typeof fn === 'function') el.addEventListener(name.slice(2).toLowerCase(), fn);
+        continue;
+      }
+      const v = interp(a.value, scope);
+      if (name === 'checked' || name === 'disabled' || name === 'selected') {
+        if (v === true || v === 'true' || v === '' ) { el.setAttribute(name, ''); if (name === 'checked') el.checked = true; }
+        continue;
+      }
+      if (name.indexOf('hint-') === 0) continue;
+      el.setAttribute(name, v == null ? '' : String(v));
+      if (name === 'value' && el.tagName === 'INPUT') el.value = v;
+    }
+    node.childNodes.forEach((c) => proc(c, scope, el));
+    out.appendChild(el);
+  }
+  function render() {
+    const vals = comp.renderVals();
+    const frag = document.createDocumentFragment();
+    tpl.childNodes.forEach((c) => proc(c, [vals], frag));
+    root.replaceChildren(frag);
+    if (!mounted) { mounted = true; if (comp.componentDidMount) comp.componentDidMount(); }
+    window.__dcRenders = (window.__dcRenders || 0) + 1;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    tpl = document.querySelector('x-dc');
+    const helmet = tpl.querySelector('helmet');
+    if (helmet) helmet.querySelectorAll('style, link').forEach((n) => document.head.appendChild(n));
+    root = document.createElement('div');
+    tpl.parentNode.insertBefore(root, tpl);
+    tpl.remove();
+    const s = document.querySelector('script[data-dc-script]');
+    const props = {};
+    try { const dp = JSON.parse(s.getAttribute('data-props') || '{}'); Object.keys(dp).forEach((k) => { if (k[0] !== '$' && dp[k] && 'default' in dp[k]) props[k] = dp[k].default; }); } catch (e) { console.error(e); }
+    const C = new Function('DCLogic', s.textContent + '\n;return Component;')(DCLogic);
+    comp = new C(props);
+    render();
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+*{box-sizing:border-box}
+a{color:#15121A}a:hover{color:#B81E74}
+@keyframes scull-spin{to{transform:rotate(360deg)}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+<div style="width: 380px; height: 660px; padding: 10px; background: #EDEAE4; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+<div style="height: 100%; border-radius: 22px; background: #FFFFFF; border: 1px solid #E6E2DC; padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
+
+  <div style="display: flex; align-items: center; gap: 10px">
+    <svg width="26" height="26" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 16px; font-weight: 600">scull</span>
+    <span style="padding: 2px 10px; border-radius: 999px; background: #F7D9E8; color: #B81E74; font-size: 12px; font-weight: 600">{{days}} days left</span>
+    <button type="button" aria-label="Settings" style="margin-left: auto; width: 36px; height: 36px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; cursor: pointer; display: inline-flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg></button>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 16px; padding: 14px; border-radius: 18px; background: #F2EFEA">
+    <svg width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="{{ringLabel}}" style="flex: none">
+      <circle cx="48" cy="48" r="38" fill="none" stroke="#F7F5F2" stroke-width="12"></circle>
+      <circle cx="48" cy="48" r="38" fill="none" stroke="#3B2A4F" stroke-width="12" stroke-dasharray="{{usedDash}} 239" transform="rotate(-90 48 48)" style="transition: stroke-dasharray 200ms linear"></circle>
+      <circle cx="48" cy="48" r="38" fill="none" stroke="#7C4DFF" stroke-width="12" stroke-dasharray="{{recDash}} 239" stroke-dashoffset="{{recOff}}" transform="rotate(-90 48 48)" style="transition: stroke-dashoffset 200ms linear"></circle>
+      <text x="48" y="53" text-anchor="middle" font-family="DM Sans, sans-serif" font-size="17" font-weight="700" fill="#15121A">{{usedPct}}%</text>
+    </svg>
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <span style="font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums">{{freeGb}} GB</span>
+      <span style="font-size: 13px; color: #615B66">free of 494 GB</span>
+      <span style="font-size: 12px; color: #B81E74">full in about {{days}} days</span>
+    </div>
+  </div>
+
+  <div style="padding: 14px; border-radius: 18px; background: #FCEEF5; border: 1px solid #F3C9DE; display: flex; align-items: center; gap: 12px">
+    <div style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 20px; font-weight: 700; color: #6B3FD9">38.6 GB</span><span style="font-size: 12px; color: #3A3440">safe to reclaim now</span></div>
+    <a href="CleanupReview.html" style="min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 12px; background: #15121A; color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 700">Review</a>
+  </div>
+
+  <div style="position: relative; overflow: hidden; padding: 14px; border-radius: 18px; background: #F2EFEA; display: flex; flex-direction: column; gap: 10px">
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 13px; font-weight: 600">Package caches</span><span style="font-size: 12px; color: #615B66">npm · pnpm · Bun · Yarn · re-downloadable</span></div>
+      <span style="font-family: 'DM Mono', monospace; font-size: 14px; font-variant-numeric: tabular-nums">{{cacheShown}} GB</span>
+    </div>
+    <button type="button" onClick="{{start}}" disabled="{{busy}}" style="position: relative; overflow: hidden; min-height: 40px; border: 0; border-radius: 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; background: {{btnBg}}; color: {{btnFg}}; animation: {{btnAnim}}">
+      <span style="position: absolute; left: 0; top: 0; bottom: 0; border-radius: 12px; background: repeating-linear-gradient(135deg, #7C4DFF 0 10px, #9C78FF 10px 20px); background-size: 40px 100%; animation: scull-shimmer 600ms linear infinite; transition: width 120ms linear; width: {{btnFill}}%"></span>
+      <span style="position: relative">{{btnLabel}}</span>
+    </button>
+    <div style="position: absolute; left: 50%; top: 70%; width: 0; height: 0; pointer-events: none">
+      <sc-for list="{{particles}}" as="p" hint-placeholder-count="0">
+        <span style="position: absolute; left: -4px; top: -4px; width: {{p.size}}px; height: {{p.size}}px; border-radius: {{p.radius}}; background: {{p.color}}; opacity: 0; animation: {{p.anim}}"></span>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <span style="font-size: 12px; font-weight: 500; color: #6E6870; padding: 0 4px 4px">Alerts</span>
+    <a href="Worktrees.html" style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; border-radius: 12px; text-decoration: none; color: #15121A"><span style="width: 8px; height: 8px; border-radius: 50%; background: #D6268A; flex: none"></span><span style="flex: 1; font-size: 13px">22 agent worktrees past their TTL</span><span style="color: #6E6870">›</span></a>
+    <a href="Insights.html" style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; border-radius: 12px; text-decoration: none; color: #15121A"><span style="width: 8px; height: 8px; border-radius: 50%; background: #FFB547; flex: none"></span><span style="flex: 1; font-size: 13px">Hugging Face cache over budget</span><span style="color: #6E6870">›</span></a>
+  </div>
+
+  <div style="margin-top: auto; display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid #E6E2DC">
+    <button type="button" onClick="{{check}}" style="min-height: 38px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="animation: {{spin}}"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>{{checkLabel}}
+    </button>
+    <a href="Main.html" style="margin-left: auto; min-height: 38px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 10px; background: #EEEAF4; color: #15121A; text-decoration: none; font-size: 13px; font-weight: 600">Open scull</a>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":380,"height":660}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { phase: 'idle', p: 0, checking: false, checked: '4 min ago' };
+  }
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.ct) clearTimeout(this.ct);
+  }
+  renderVals() {
+    const s = this.state;
+    const T = 14.9;
+    const ease = (x) => 1 - Math.pow(1 - x, 3);
+    const e = s.phase === 'idle' ? 0 : (s.phase === 'done' ? 1 : ease(s.p));
+    const freed = T * e;
+    const free = 41.2 + freed;
+    const used = 494 - free;
+    const C = 238.8;
+    const usedLen = used / 494 * C;
+    const recLen = 38.6 / 494 * C;
+    const start = () => {
+      if (this.state.phase !== 'idle') { if (this.state.phase === 'done') this.setState({ phase: 'idle', p: 0 }); return; }
+      const t0 = Date.now();
+      this.setState({ phase: 'cleaning', p: 0 });
+      this.timer = setInterval(() => {
+        const p = Math.min(1, (Date.now() - t0) / 2200);
+        if (p >= 1) { clearInterval(this.timer); this.timer = null; this.setState({ phase: 'done', p: 1 }); }
+        else this.setState({ p: p });
+      }, 40);
+    };
+    const check = () => {
+      if (this.state.checking) return;
+      this.setState({ checking: true });
+      this.ct = setTimeout(() => this.setState({ checking: false, checked: 'just now' }), 1400);
+    };
+    const colors = ['#D6268A', '#7C4DFF', '#15121A', '#FFB547'];
+    const particles = s.phase === 'done' ? Array.from({ length: 14 }, (_, i) => ({
+      size: [6, 8, 7][i % 3], radius: i % 3 === 0 ? '2px' : '50%', color: colors[i % 4],
+      anim: 'scull-b' + (i % 10) + ' ' + (650 + (i % 4) * 80) + 'ms ' + (i >= 10 ? 100 : 0) + 'ms cubic-bezier(.15,.7,.3,1) both'
+    })) : [];
+    const days = Math.max(1, Math.round((free - 10) / 3.5));
+    return {
+      days: days,
+      freeGb: free.toFixed(1),
+      usedPct: Math.round(used / 494 * 100),
+      usedDash: usedLen.toFixed(1),
+      recDash: Math.max(0, recLen - 1).toFixed(1),
+      recOff: (-(usedLen - recLen)).toFixed(1),
+      ringLabel: 'Disk ' + Math.round(used / 494 * 100) + '% used, ' + free.toFixed(1) + ' GB free',
+      cacheShown: (T - freed).toFixed(1),
+      start: start,
+      busy: s.phase === 'cleaning',
+      btnBg: s.phase === 'idle' ? '#15121A' : (s.phase === 'done' ? '#7C4DFF' : '#F2EFEA'),
+      btnFg: s.phase === 'cleaning' ? '#15121A' : '#FFFFFF',
+      btnFill: s.phase === 'cleaning' ? Math.round(e * 100) : 0,
+      btnAnim: s.phase === 'done' ? 'scull-pop 360ms ease-out' : 'none',
+      btnLabel: s.phase === 'idle' ? 'Quick Clean · 14.9 GB' : (s.phase === 'done' ? ('+' + T.toFixed(1) + ' GB freed ✓') : ('Cleaning… ' + Math.round(e * 100) + '%')),
+      particles: particles,
+      check: check,
+      spin: s.checking ? 'scull-spin 700ms linear infinite' : 'none',
+      checkLabel: s.checking ? 'Checking…' : ('Checked ' + s.checked)
+    };
+  }
+}
+</script>
+</body>
+</html>

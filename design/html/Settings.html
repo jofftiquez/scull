@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Settings</title>
+<script>
+/* scull design preview runtime (standalone) */
+// Minimal local renderer for .dc.html design files (screenshots only).
+(function () {
+  const HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+  let tpl, root, comp, pending = false, mounted = false;
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(p) { this.state = Object.assign({}, this.state, typeof p === 'function' ? p(this.state) : p); schedule(); }
+    forceUpdate() { schedule(); }
+  }
+  window.DCLogic = DCLogic;
+  function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  function lookup(scope, path) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    const parts = path.split('.');
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] && parts[0] in scope[i]) {
+        let v = scope[i][parts[0]];
+        for (const p of parts.slice(1)) v = v == null ? undefined : v[p];
+        return v;
+      }
+    }
+    return undefined;
+  }
+  function interp(str, scope) {
+    const m = str.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) return lookup(scope, m[1]);
+    return str.replace(HOLE, (_, p) => { const v = lookup(scope, p); return v == null ? '' : String(v); });
+  }
+  function proc(node, scope, out) {
+    if (node.nodeType === 3) { const v = interp(node.nodeValue, scope); out.appendChild(document.createTextNode(v == null ? '' : String(v))); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'sc-for') {
+      const list = interp(node.getAttribute('list') || '', scope) || [];
+      const as = node.getAttribute('as') || 'item';
+      list.forEach((it, idx) => { const sc = scope.concat([{ [as]: it, $index: idx }]); node.childNodes.forEach((c) => proc(c, sc, out)); });
+      return;
+    }
+    if (tag === 'sc-if') { if (interp(node.getAttribute('value') || '', scope)) node.childNodes.forEach((c) => proc(c, scope, out)); return; }
+    if (tag === 'helmet') return;
+    const svg = node.namespaceURI === 'http://www.w3.org/2000/svg';
+    const el = svg ? document.createElementNS(node.namespaceURI, node.tagName) : document.createElement(node.tagName);
+    for (const a of Array.from(node.attributes)) {
+      const name = a.name;
+      if (/^on[a-z]+$/i.test(name)) {
+        const fn = interp(a.value, scope);
+        if (typeof fn === 'function') el.addEventListener(name.slice(2).toLowerCase(), fn);
+        continue;
+      }
+      const v = interp(a.value, scope);
+      if (name === 'checked' || name === 'disabled' || name === 'selected') {
+        if (v === true || v === 'true' || v === '' ) { el.setAttribute(name, ''); if (name === 'checked') el.checked = true; }
+        continue;
+      }
+      if (name.indexOf('hint-') === 0) continue;
+      el.setAttribute(name, v == null ? '' : String(v));
+      if (name === 'value' && el.tagName === 'INPUT') el.value = v;
+    }
+    node.childNodes.forEach((c) => proc(c, scope, el));
+    out.appendChild(el);
+  }
+  function render() {
+    const vals = comp.renderVals();
+    const frag = document.createDocumentFragment();
+    tpl.childNodes.forEach((c) => proc(c, [vals], frag));
+    root.replaceChildren(frag);
+    if (!mounted) { mounted = true; if (comp.componentDidMount) comp.componentDidMount(); }
+    window.__dcRenders = (window.__dcRenders || 0) + 1;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    tpl = document.querySelector('x-dc');
+    const helmet = tpl.querySelector('helmet');
+    if (helmet) helmet.querySelectorAll('style, link').forEach((n) => document.head.appendChild(n));
+    root = document.createElement('div');
+    tpl.parentNode.insertBefore(root, tpl);
+    tpl.remove();
+    const s = document.querySelector('script[data-dc-script]');
+    const props = {};
+    try { const dp = JSON.parse(s.getAttribute('data-props') || '{}'); Object.keys(dp).forEach((k) => { if (k[0] !== '$' && dp[k] && 'default' in dp[k]) props[k] = dp[k].default; }); } catch (e) { console.error(e); }
+    const C = new Function('DCLogic', s.textContent + '\n;return Component;')(DCLogic);
+    comp = new C(props);
+    render();
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#15121A}a:hover{color:#B81E74}
+input::placeholder{color:#77717A}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+@keyframes scull-spin{to{transform:rotate(360deg)}}
+@keyframes scull-zoomA{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-zoomB{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 12px; background: #F7F5F2; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.5">
+<nav aria-label="Primary" style="flex: 1 1 248px; border-radius: 24px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px">
+  <div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px 16px">
+    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+    <span style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: #15121A">scull</span>
+    <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px; color: #6E6870">v0.1</span>
+  </div>
+    <a href="Main.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a href="Projects.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"></path><path d="M3 7v10l9 4 9-4V7"></path><path d="M12 11v10"></path></svg><span>Projects</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">41</span></a>
+    <a href="Explorer.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg><span>Storage Explorer</span></a>
+    <a href="Worktrees.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10c0 4-6 3-11 7"></path></svg><span>Git Worktrees</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">63</span></a>
+    <a href="Caches.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg><span>Caches</span><span style="margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; color: #6E6870">14.9 GB</span></a>
+    <a href="CleanupReview.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg><span>Cleanup Review</span></a>
+    <a href="Insights.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11"></path><path d="M11 20V5"></path><path d="M17 20v-6"></path><path d="M3 20h18"></path></svg><span>Insights</span></a>
+  <div style="height: 1px; margin: 10px 8px; background: #E6E2DC"></div>
+    <a href="History.html" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; color: #4A4450"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span>History</span></a>
+    <a href="Settings.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 12px; text-decoration: none; background: #15121A; color: #FFFFFF; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D6268A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg><span>Settings</span></a>
+  <div style="margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 10px">
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: 14px; background: #F2EFEA; border: 1px solid #E6E2DC; color: #6E6870; cursor: text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+      <input type="search" placeholder="Search paths, projects…" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #15121A; font: inherit; font-size: 13px">
+      <span style="padding: 2px 6px; border-radius: 6px; border: 1px solid #D8D3CB; font-family: 'DM Mono', monospace; font-size: 11px">⌘K</span>
+    </label>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 13px; color: #15121A"><strong>Supporter</strong> · pay what you want</span>
+      <span style="font-size: 12px; color: #615B66">Signed builds, early access and extra skull themes.</span>
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: #15121A; color: #FFFFFF; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Support</button>
+        <button type="button" style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4A4450; font: inherit; font-size: 13px; cursor: pointer">I have a key</button>
+      </div>
+    </div>
+    <div style="border-radius: 18px; background: #F2EFEA; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center"><span style="font-size: 12px; font-weight: 600; color: #615B66">Drives</span><a href="Settings.html" style="font-size: 12px; color: #615B66">Manage</a></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Macintosh HD</span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">92%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 92%; height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, #7C4DFF 0 6px, #9C78FF 6px 12px); transition: width 200ms linear"></div></div>
+        <span style="font-size: 12px; color: #4A4450">41.2 GB free · <span style="color: #B81E74">full in ~9 days</span></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 13px; font-weight: 600; color: #15121A">Dev SSD <span style="font-weight: 400; color: #615B66">· external</span></span><span style="font-size: 18px; font-weight: 700; color: #15121A; font-variant-numeric: tabular-nums">61%</span></div>
+        <div style="height: 6px; border-radius: 999px; overflow: hidden; background: #F7F5F2; display: flex"><div style="width: 61%; height: 100%; border-radius: 999px; background: #8E7FB0"></div></div>
+        <span style="font-size: 12px; color: #4A4450">390 GB free · 48.2 GB reclaimable</span>
+      </div>
+      <span style="font-size: 12px; color: #615B66">Backup (Time Machine) · not scanned</span>
+    </div>
+  </div>
+</nav>
+<main style="flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+  <header style="border-radius: 22px; background: #FFFFFF; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">Settings</h1>
+      <span style="font-size: 13px; color: #615B66">Changes save automatically</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"><span role="status" aria-live="polite" style="min-height: 32px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: #F3ECFF; color: #6B3FD9; font-size: 13px; font-weight: 600; opacity: {{savedOp}}; transform: translateY({{savedY}}px); transition: opacity 250ms ease, transform 250ms ease">Saved ✓</span></div>
+  </header>
+  <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">
+    <div role="tablist" aria-label="Settings sections" style="flex: 1 1 200px; max-width: 240px; border-radius: 22px; background: #FFFFFF; padding: 8px; display: flex; flex-direction: column; gap: 2px">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="7">
+        <button type="button" role="tab" aria-selected="{{t.selected}}" onClick="{{t.pick}}" style="min-height: 42px; padding: 0 14px; border: 0; border-radius: 12px; text-align: left; font: inherit; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{t.bg}}; color: {{t.fg}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+    <div role="tabpanel" style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<sc-if value="{{tab.general}}" hint-placeholder-val="{{ true }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Scanning</h2><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Scan folders</span><span style="font-size: 13px; color: #615B66">scull only looks inside these. Never your whole disk by default.</span></span></div><div style="display: flex; flex-direction: column; padding-bottom: 14px"><sc-for list="{{roots}}" as="r" hint-placeholder-count="3"><div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; font-family: 'DM Mono', monospace; font-size: 13px">{{r.path}}</span><span style="font-size: 12px; color: #6E6870">{{r.note}}</span><button type="button" style="min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #4A4450; font: inherit; font-size: 12px; cursor: pointer">Remove</button></div></sc-for><button type="button" style="align-self: flex-start; margin-top: 8px; min-height: 36px; padding: 0 14px; border: 1px solid #D8D3CB; border-radius: 10px; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Add folder</button></div></section><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Schedule</h2><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Check every</span><span style="font-size: 13px; color: #615B66">Light check of free space and known caches, run by macOS, not a background app.</span></span><span role="group" style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #F2EFEA"><sc-for list="{{intervals}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{o.bg}}; color: {{o.fg}}">{{o.label}}</button></sc-for></span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Menu bar widget</span><span style="font-size: 13px; color: #615B66">Free space, forecast and Quick Clean from the menu bar.</span></span><button type="button" role="switch" aria-checked="{{sw.menubar.on}}" aria-label="{{sw.menubar.label}}" onClick="{{sw.menubar.toggle}}" disabled="{{sw.menubar.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.menubar.track}}; opacity: {{sw.menubar.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.menubar.knob}}px"></span></button></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Open at login</span><span style="font-size: 13px; color: #615B66">Only the menu bar widget starts; scanning stays on schedule.</span></span><button type="button" role="switch" aria-checked="{{sw.login.on}}" aria-label="{{sw.login.label}}" onClick="{{sw.login.toggle}}" disabled="{{sw.login.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.login.track}}; opacity: {{sw.login.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.login.knob}}px"></span></button></div></section></sc-if><sc-if value="{{tab.drives}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Drives</h2><div style="display: flex; flex-direction: column; padding-bottom: 14px"><sc-for list="{{drives}}" as="d" hint-placeholder-count="4"><div style="display: flex; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid #E6E2DC">
+  <span style="width: 40px; height: 40px; border-radius: 12px; background: {{d.iconBg}}; color: {{d.iconFg}}; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="3"></rect><circle cx="17" cy="12" r="1.2"></circle></svg></span>
+  <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">{{d.name}} <span style="font-weight: 400; color: #6E6870">· {{d.kind}}</span></span><span style="font-size: 13px; color: #615B66">{{d.sub}}</span></span>
+  <span style="font-size: 12px; color: #6E6870">{{d.mode}}</span>
+  <button type="button" role="switch" aria-checked="{{d.on}}" aria-label="{{d.aria}}" onClick="{{d.toggle}}" disabled="{{d.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{d.track}}; opacity: {{d.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{d.knob}}px"></span></button>
+</div></sc-for></div></section><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">How scull treats each drive</h2><div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 6px 0 18px; font-size: 13px; color: #3A3440">
+  <span><strong>Own forecast.</strong> Each drive gets its own free-space trend and alerts.</span>
+  <span><strong>Own quarantine.</strong> Items never move between drives; undo stays on the same disk.</span>
+  <span><strong>External drives</strong> are scanned when connected. Unplugging mid-scan just pauses it.</span>
+  <span><strong>Network and backup drives</strong> are skipped: slow to scan and not yours to clean.</span>
+</div></section></sc-if><sc-if value="{{tab.safety}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Safety</h2><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Recently used means</span><span style="font-size: 13px; color: #615B66">Anything modified this recently is treated one tier more carefully.</span></span><span role="group" style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #F2EFEA"><sc-for list="{{windows}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{o.bg}}; color: {{o.fg}}">{{o.label}}</button></sc-for></span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">How cautious</span><span style="font-size: 13px; color: #615B66">Changes what is preselected. Safety checks are identical at every level.</span></span><span role="group" style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #F2EFEA"><sc-for list="{{cautions}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{o.bg}}; color: {{o.fg}}">{{o.label}}</button></sc-for></span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Quarantine keeps items for</span><span style="font-size: 13px; color: #615B66">Costly and uncertain items wait here before being freed.</span></span><span role="group" style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #F2EFEA"><sc-for list="{{retention}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{o.bg}}; color: {{o.fg}}">{{o.label}}</button></sc-for></span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Type to confirm permanent deletes</span><span style="font-size: 13px; color: #615B66">Required for costly or uncertain items that skip quarantine.</span></span><button type="button" role="switch" aria-checked="{{sw.typeconfirm.on}}" aria-label="{{sw.typeconfirm.label}}" onClick="{{sw.typeconfirm.toggle}}" disabled="{{sw.typeconfirm.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.typeconfirm.track}}; opacity: {{sw.typeconfirm.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.typeconfirm.knob}}px"></span></button></div></section><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Protected folders</h2><span style="font-size: 13px; color: #615B66; padding-bottom: 4px">Never touched, even if something inside looks regenerable.</span><div style="display: flex; flex-direction: column; padding-bottom: 14px"><sc-for list="{{protected}}" as="r" hint-placeholder-count="3"><div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; font-family: 'DM Mono', monospace; font-size: 13px">{{r.path}}</span><span style="font-size: 12px; color: #6E6870">{{r.note}}</span><button type="button" style="min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #4A4450; font: inherit; font-size: 12px; cursor: pointer">Unprotect</button></div></sc-for><button type="button" style="align-self: flex-start; margin-top: 8px; min-height: 36px; padding: 0 14px; border: 1px solid #D8D3CB; border-radius: 10px; background: #FFFFFF; color: #15121A; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Add folder</button></div></section></sc-if><sc-if value="{{tab.alerts}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Alerts</h2><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Warn me when the disk is</span><span style="font-size: 13px; color: #615B66">Forecast-based, so you hear about it days ahead.</span></span><span style="display: flex; align-items: center; gap: 10px"><input type="range" min="3" max="30" value="{{alertDays}}" onChange="{{setAlertDays}}" onInput="{{setAlertDays}}" aria-label="Days before full" style="width: 140px; accent-color: #D6268A"><span style="width: 92px; font-family: 'DM Mono', monospace; font-size: 13px">{{alertDays}} days out</span></span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Sudden growth</span><span style="font-size: 13px; color: #615B66">Alert when something grows more than 20 GB in a day.</span></span><button type="button" role="switch" aria-checked="{{sw.spike.on}}" aria-label="{{sw.spike.label}}" onClick="{{sw.spike.toggle}}" disabled="{{sw.spike.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.spike.track}}; opacity: {{sw.spike.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.spike.knob}}px"></span></button></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Weekly digest</span><span style="font-size: 13px; color: #615B66">A short local notification every Monday.</span></span><button type="button" role="switch" aria-checked="{{sw.digest.on}}" aria-label="{{sw.digest.label}}" onClick="{{sw.digest.toggle}}" disabled="{{sw.digest.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.digest.track}}; opacity: {{sw.digest.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.digest.knob}}px"></span></button></div></section><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Budgets</h2><div style="display: flex; flex-direction: column; padding-bottom: 14px"><sc-for list="{{budgets}}" as="b" hint-placeholder-count="3"><div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid #E6E2DC"><div style="display: flex; justify-content: space-between"><span style="font-weight: 600">{{b.name}}</span><span style="font-family: 'DM Mono', monospace; font-size: 13px; color: {{b.color}}">{{b.used}} / {{b.cap}}</span></div><div style="height: 8px; border-radius: 999px; background: #F2EFEA; overflow: hidden"><div style="height: 100%; border-radius: 999px; background: {{b.bar}}; width: {{b.pct}}%"></div></div></div></sc-for></div></section></sc-if><sc-if value="{{tab.agents}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">AI agents</h2><div style="display: flex; flex-direction: column"><sc-for list="{{clients}}" as="c" hint-placeholder-count="3"><div style="display: flex; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="width: 36px; height: 36px; border-radius: 10px; background: #F2EFEA; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500">{{c.ini}}</span><span style="flex: 1; display: flex; flex-direction: column"><span style="font-weight: 600">{{c.name}}</span><span style="font-size: 13px; color: #615B66">{{c.sub}}</span></span><button type="button" onClick="{{c.act}}" style="min-height: 36px; padding: 0 14px; border-radius: 10px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid {{c.border}}; background: {{c.bg}}; color: {{c.fg}}">{{c.label}}</button></div></sc-for></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Let agents prepare cleanup plans</span><span style="font-size: 13px; color: #615B66">They can propose; nothing runs without you.</span></span><button type="button" role="switch" aria-checked="{{sw.prepare.on}}" aria-label="{{sw.prepare.label}}" onClick="{{sw.prepare.toggle}}" disabled="{{sw.prepare.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.prepare.track}}; opacity: {{sw.prepare.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.prepare.knob}}px"></span></button></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Let approved plans run</span><span style="font-size: 13px; color: #615B66">You approve each plan in scull or your terminal. Agents can never approve their own.</span></span><button type="button" role="switch" aria-checked="{{sw.execute.on}}" aria-label="{{sw.execute.label}}" onClick="{{sw.execute.toggle}}" disabled="{{sw.execute.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.execute.track}}; opacity: {{sw.execute.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.execute.knob}}px"></span></button></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Hide my home folder in paths</span><span style="font-size: 13px; color: #615B66">Agents see ~/code instead of /Users/you/code.</span></span><button type="button" role="switch" aria-checked="{{sw.redact.on}}" aria-label="{{sw.redact.label}}" onClick="{{sw.redact.toggle}}" disabled="{{sw.redact.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.redact.track}}; opacity: {{sw.redact.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.redact.knob}}px"></span></button></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Hash project names</span><span style="font-size: 13px; color: #615B66">Agents see p-3fa2 instead of real project names.</span></span><button type="button" role="switch" aria-checked="{{sw.hashnames.on}}" aria-label="{{sw.hashnames.label}}" onClick="{{sw.hashnames.toggle}}" disabled="{{sw.hashnames.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.hashnames.track}}; opacity: {{sw.hashnames.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.hashnames.knob}}px"></span></button></div></section></sc-if><sc-if value="{{tab.data}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">Your data</h2><div style="display: flex; flex-direction: column; gap: 8px; padding: 6px 0 14px"><div style="display: flex; justify-content: space-between"><span style="font-weight: 600">212 MB of history</span><span style="font-size: 13px; color: #615B66">budget 1 GB</span></div><div style="height: 10px; border-radius: 999px; background: #F2EFEA; overflow: hidden"><div style="width: 21%; height: 100%; border-radius: 999px; background: #15121A"></div></div><span style="font-size: 13px; color: #615B66">Stored only on this Mac. No telemetry, ever. File contents and secrets are never recorded.</span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Keep detailed history for</span><span style="font-size: 13px; color: #615B66">Older data is summarized, then kept as monthly totals.</span></span><span role="group" style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #F2EFEA"><sc-for list="{{history}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms ease; background: {{o.bg}}; color: {{o.fg}}">{{o.label}}</button></sc-for></span></div><div style="display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0 16px; border-top: 1px solid #E6E2DC"><button type="button" style="min-height: 40px; padding: 0 16px; border: 1px solid #D8D3CB; border-radius: 12px; background: #FFFFFF; color: #15121A; font: inherit; font-weight: 500; cursor: pointer">Export everything</button><button type="button" style="min-height: 40px; padding: 0 16px; border: 1px solid #D8D3CB; border-radius: 12px; background: #FFFFFF; color: #15121A; font: inherit; font-weight: 500; cursor: pointer">What scull knows</button><button type="button" style="min-height: 40px; padding: 0 16px; border: 1px solid #F3C9DE; border-radius: 12px; background: #FCEEF5; color: #B81E74; font: inherit; font-weight: 600; cursor: pointer">Delete all history</button></div></section></sc-if><sc-if value="{{tab.about}}" hint-placeholder-val="{{ false }}"><section style="border-radius: 22px; background: #FFFFFF; padding: 22px 24px 8px; display: flex; flex-direction: column; animation: scull-rise 260ms ease-out"><h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600">About scull</h2><div style="display: flex; align-items: center; gap: 16px; padding: 10px 0 16px"><span style="font-size: 32px; font-weight: 700; letter-spacing: -0.02em">scull</span><span style="font-size: 13px; color: #615B66">v0.1 · MIT OR Apache-2.0 · free and open source</span></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Supporter key</span><span style="font-size: 13px; color: #615B66">Unlocks signed auto-updates, early builds and extra skull themes. Every feature stays free.</span></span><input type="text" placeholder="SCULL-XXXX-XXXX" aria-label="Supporter key" style="width: 200px; min-height: 40px; padding: 0 12px; border: 1px solid #D8D3CB; border-radius: 10px; font-family: 'DM Mono', monospace; font-size: 13px; color: #15121A; background: #FFFFFF"></div><div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #E6E2DC"><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Check for updates</span><span style="font-size: 13px; color: #615B66">Opt-in. The only network request scull makes on its own.</span></span><button type="button" role="switch" aria-checked="{{sw.updates.on}}" aria-label="{{sw.updates.label}}" onClick="{{sw.updates.toggle}}" disabled="{{sw.updates.locked}}" style="flex: none; width: 48px; height: 28px; padding: 3px; border: 0; border-radius: 999px; cursor: pointer; display: flex; transition: background 220ms ease; background: {{sw.updates.track}}; opacity: {{sw.updates.op}}"><span style="width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF; transition: margin-left 220ms cubic-bezier(.3,1.4,.5,1); margin-left: {{sw.updates.knob}}px"></span></button></div><div style="display: flex; gap: 16px; padding: 14px 0 16px; border-top: 1px solid #E6E2DC; font-size: 13px"><a href="#">Source code</a><a href="#">Security policy</a><a href="#">Third-party licenses</a></div></section></sc-if>
+    </div>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      tab: 'general', saved: false,
+      sw: { menubar: true, login: true, typeconfirm: true, spike: true, digest: false, prepare: true, execute: false, redact: true, hashnames: false, updates: false },
+      seg: { intervals: '6h', windows: '24h', cautions: 'balanced', retention: '7d', history: '12m' },
+      drive: { mac: true, ssd: true, nas: false },
+      alertDays: 14, clients: { cursor: false }
+    };
+  }
+  componentWillUnmount() { if (this.st) clearTimeout(this.st); }
+  renderVals() {
+    const s = this.state;
+    const save = (patch) => {
+      this.setState(Object.assign({ saved: true }, patch));
+      if (this.st) clearTimeout(this.st);
+      this.st = setTimeout(() => this.setState({ saved: false }), 1500);
+    };
+    const switchOf = (on, label, toggle, locked) => ({ on: on ? 'true' : 'false', label: label, toggle: toggle, locked: !!locked, track: on ? '#D6268A' : '#D8D3CB', knob: on ? 20 : 0, op: locked ? 0.45 : 1 });
+    const sw = {};
+    Object.keys(s.sw).forEach((k) => { sw[k] = switchOf(s.sw[k], k, () => save({ sw: Object.assign({}, this.state.sw, { [k]: !this.state.sw[k] }) })); });
+    const segOf = (key, opts) => opts.map(([id, label]) => ({ label: label, pressed: s.seg[key] === id ? 'true' : 'false', bg: s.seg[key] === id ? '#15121A' : 'transparent', fg: s.seg[key] === id ? '#FFFFFF' : '#4A4450', pick: () => save({ seg: Object.assign({}, this.state.seg, { [key]: id }) }) }));
+    const T = [['general', 'General'], ['drives', 'Drives'], ['safety', 'Safety'], ['alerts', 'Alerts'], ['agents', 'AI agents'], ['data', 'Data & privacy'], ['about', 'About']];
+    const tab = {}; T.forEach(([id]) => { tab[id] = s.tab === id; });
+    const DR = [
+      { id: 'mac', name: 'Macintosh HD', kind: 'internal', sub: '494 GB · 41.2 GB free · full in ~9 days', mode: 'always' },
+      { id: 'ssd', name: 'Dev SSD', kind: 'external', sub: '1 TB · 390 GB free · 48.2 GB reclaimable', mode: 'when connected' },
+      { id: 'tm', name: 'Backup', kind: 'Time Machine', sub: 'Backup drives are never scanned or cleaned', mode: 'never', locked: true },
+      { id: 'nas', name: 'studio-nas', kind: 'network', sub: 'Network drives are slow to scan; off unless you need it', mode: 'off by default' }
+    ];
+    const drives = DR.map((d) => {
+      const on = d.locked ? false : !!s.drive[d.id];
+      return Object.assign({ name: d.name, kind: d.kind, sub: d.sub, mode: d.mode, aria: 'Scan ' + d.name, iconBg: on ? '#15121A' : '#F2EFEA', iconFg: on ? '#FFFFFF' : '#6E6870' },
+        switchOf(on, d.name, () => { if (!d.locked) save({ drive: Object.assign({}, this.state.drive, { [d.id]: !this.state.drive[d.id] }) }); }, d.locked));
+    });
+    const clients = [
+      { ini: 'CC', name: 'Claude Code', sub: 'Connected · read-only tools + plan preparation', label: 'Disconnect', bg: '#FFFFFF', fg: '#15121A', border: '#D8D3CB', act: () => {} },
+      { ini: 'CX', name: 'Codex', sub: 'Connected · read-only tools', label: 'Disconnect', bg: '#FFFFFF', fg: '#15121A', border: '#D8D3CB', act: () => {} },
+      s.clients.cursor
+        ? { ini: 'CU', name: 'Cursor', sub: 'Connected just now · read-only tools', label: 'Disconnect', bg: '#FFFFFF', fg: '#15121A', border: '#D8D3CB', act: () => save({ clients: { cursor: false } }) }
+        : { ini: 'CU', name: 'Cursor', sub: 'Found on this Mac · not connected', label: 'Connect', bg: '#15121A', fg: '#FFFFFF', border: '#15121A', act: () => save({ clients: { cursor: true } }) }
+    ];
+    const budgets = [['Hugging Face cache', 31.2, 25], ['Docker', 18.0, 80], ['All Rust target folders', 21.9, 50]].map(([name, used, cap]) => ({
+      name: name, used: used.toFixed(1) + ' GB', cap: cap + ' GB', pct: Math.min(100, used / cap * 100).toFixed(1),
+      bar: used > cap ? '#D6268A' : '#15121A', color: used > cap ? '#B81E74' : '#615B66'
+    }));
+    return {
+      tabs: T.map(([id, label]) => ({ label: label, selected: s.tab === id ? 'true' : 'false', bg: s.tab === id ? '#15121A' : 'transparent', fg: s.tab === id ? '#FFFFFF' : '#15121A', pick: () => this.setState({ tab: id }) })),
+      tab: tab, sw: sw, drives: drives, clients: clients, budgets: budgets,
+      roots: [{ path: '~/code', note: '32 repos' }, { path: '~/work', note: '9 repos' }, { path: '~/.cache', note: 'caches' }],
+      protected: [{ path: '~/.ssh', note: 'built in' }, { path: '~/Documents', note: 'built in' }, { path: '~/code/payments', note: 'added by you' }],
+      intervals: segOf('intervals', [['1h', '1 h'], ['6h', '6 h'], ['24h', '24 h']]),
+      windows: segOf('windows', [['1h', '1 hour'], ['24h', '24 hours'], ['7d', '7 days']]),
+      cautions: segOf('cautions', [['very', 'Very'], ['balanced', 'Balanced'], ['expert', 'Expert']]),
+      retention: segOf('retention', [['3d', '3 days'], ['7d', '7 days'], ['30d', '30 days']]),
+      history: segOf('history', [['3m', '3 months'], ['12m', '12 months'], ['forever', 'Forever']]),
+      alertDays: s.alertDays,
+      setAlertDays: (e) => save({ alertDays: Number(e.target.value) }),
+      savedOp: s.saved ? 1 : 0, savedY: s.saved ? 0 : -6
+    };
+  }
+}
+</script>
+</body>
+</html>

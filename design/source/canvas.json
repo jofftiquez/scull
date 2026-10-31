@@ -1,0 +1,135 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-31T08:05:00Z"
+  },
+  "title": "scull — desktop UI",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 1120,
+      "title": "Overview",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Onboarding.dc.html": {
+      "x": 1520,
+      "y": 0,
+      "w": 1440,
+      "h": 1120,
+      "title": "First-run onboarding",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "CleanupReview.dc.html": {
+      "x": 0,
+      "y": 1440,
+      "w": 1440,
+      "h": 1180,
+      "title": "Cleanup Review",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Worktrees.dc.html": {
+      "x": 1520,
+      "y": 1440,
+      "w": 1440,
+      "h": 1180,
+      "title": "Git Worktrees",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Insights.dc.html": {
+      "x": 0,
+      "y": 2740,
+      "w": 1440,
+      "h": 1180,
+      "title": "Insights",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "MenuBar.dc.html": {
+      "x": 3040,
+      "y": 0,
+      "w": 380,
+      "h": 660,
+      "title": "Menu bar widget",
+      "is_interactive": true
+    },
+    "Projects.dc.html": {
+      "x": 1520,
+      "y": 2740,
+      "w": 1440,
+      "h": 1180,
+      "title": "Projects",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Explorer.dc.html": {
+      "x": 0,
+      "y": 4040,
+      "w": 1440,
+      "h": 1180,
+      "title": "Storage Explorer",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Caches.dc.html": {
+      "x": 1520,
+      "y": 4040,
+      "w": 1440,
+      "h": 1260,
+      "title": "Caches",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "History.dc.html": {
+      "x": 0,
+      "y": 5420,
+      "w": 1440,
+      "h": 1180,
+      "title": "History",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Settings.dc.html": {
+      "x": 1520,
+      "y": 5420,
+      "w": 1440,
+      "h": 1180,
+      "title": "Settings",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Onboarding.dc.html",
+    "CleanupReview.dc.html",
+    "Worktrees.dc.html",
+    "Insights.dc.html",
+    "MenuBar.dc.html",
+    "Projects.dc.html",
+    "Explorer.dc.html",
+    "Caches.dc.html",
+    "History.dc.html",
+    "Settings.dc.html"
+  ],
+  "notes": {
+    "title": {
+      "x": 0,
+      "y": -320,
+      "text": "scull — desktop UI v0.6 · every sidebar page · ink + magenta duotone",
+      "kind": "title1",
+      "maxW": 3420
+    }
+  },
+  "designSystems": []
+}

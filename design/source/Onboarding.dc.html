@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scull — Get to know you</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=DM+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#F7F5F2}
+*{box-sizing:border-box}
+a{color:#111}a:hover{color:#9C78FF}
+@media (max-width: 860px){.tile{grid-column:1 / -1 !important;grid-row:auto !important}}
+@keyframes scull-pop{0%{transform:scale(1)}45%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes scull-bounce{0%{transform:scale(.4);opacity:0}55%{transform:scale(1.12);opacity:1}75%{transform:scale(.96)}100%{transform:scale(1)}}
+@keyframes scull-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes scull-collapse{0%{max-height:120px;min-height:64px;opacity:1;transform:none}35%{opacity:1;transform:translateX(0)}100%{max-height:0;min-height:0;opacity:0;transform:translateX(56px);border-top-width:0}}
+@keyframes scull-ring{from{stroke-dashoffset:214}to{stroke-dashoffset:0}}
+@keyframes scull-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}
+@keyframes scull-wink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.12)}}
+@keyframes scull-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes scull-shimmer{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes scull-b0{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(160px,-90px) scale(.3) rotate(160deg);opacity:0}}
+@keyframes scull-b1{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-160px,-90px) scale(.3) rotate(-160deg);opacity:0}}
+@keyframes scull-b2{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(90px,-140px) scale(.3) rotate(120deg);opacity:0}}
+@keyframes scull-b3{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-90px,-140px) scale(.3) rotate(-120deg);opacity:0}}
+@keyframes scull-b4{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(200px,10px) scale(.3) rotate(200deg);opacity:0}}
+@keyframes scull-b5{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-200px,10px) scale(.3) rotate(-200deg);opacity:0}}
+@keyframes scull-b6{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(30px,-160px) scale(.3) rotate(90deg);opacity:0}}
+@keyframes scull-b7{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-30px,-160px) scale(.3) rotate(-90deg);opacity:0}}
+@keyframes scull-b8{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(140px,80px) scale(.3) rotate(140deg);opacity:0}}
+@keyframes scull-b9{from{transform:translate(0,0) scale(1);opacity:1}to{transform:translate(-140px,80px) scale(.3) rotate(-140deg);opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation-duration:1ms !important;animation-delay:0ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F7F5F2; padding: 12px; font-family: 'DM Sans', system-ui, sans-serif; color: #15121A; font-size: 14px; line-height: 1.45">
+<div style="max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px">
+
+  <header class="tile" style="grid-column: span 12; border-radius: 22px; background: #FFFFFF; padding: 32px; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 24px">
+    <div style="display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="scull logo"><line x1="5" y1="27" x2="27" y2="5"></line><line x1="5" y1="5" x2="27" y2="27"></line><line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"></line><path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"></path><circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle><circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"></circle></svg>
+        <span style="font-size: 20px; font-weight: 600">scull</span>
+      </div>
+      <h1 style="margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1">Let's set scull up for how you work.</h1>
+      <p style="margin: 0; font-size: 16px; color: #615B66">Five quick questions, under a minute. We already looked around, so most answers are pre-filled. Everything stays on this Mac.</p>
+    </div>
+    <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">{{answered}} of 5 answered</span>
+  </header>
+
+  <section class="tile" aria-label="Found on this Mac" style="grid-column: span 4; grid-row: span 2; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    <span style="font-size: 13px; font-weight: 500; color: #615B66">Found on this Mac</span>
+    <div style="display: flex; flex-direction: column">
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">Rust</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">cargo 1.97</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">Node</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">npm · pnpm · bun</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">Python</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">uv · conda</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">ML models</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">ollama · huggingface</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">Containers</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">docker</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">Game engine</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">unity hub</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC"><span style="font-weight: 500">AI clients</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">claude code · codex</span></div>
+      <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #E6E2DC; border-bottom: 1px solid #E6E2DC"><span style="font-weight: 500">Disk</span><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">494 GB · 41.2 GB free</span></div>
+    </div>
+    <span style="font-size: 12px; color: #615B66">Metadata only. scull didn't open any of your files.</span>
+  </section>
+
+  <section class="tile" aria-labelledby="q1" style="grid-column: span 8; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+    <div style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">01</span><h2 id="q1" style="margin: 0; font-size: 20px; font-weight: 600">What do you build?</h2><span style="font-size: 13px; color: #615B66">Pick all that apply</span></div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px">
+      <sc-for list="{{builds}}" as="item" hint-placeholder-count="9">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.toggle}}" style="min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; font: inherit; font-weight: 500; cursor: pointer; background: {{item.bg}}; color: {{item.fg}}">{{item.label}}</button>
+      </sc-for>
+    </div>
+    <span style="font-size: 12px; color: #615B66">Pre-selected from what we found. Decides which categories show first.</span>
+  </section>
+
+  <section class="tile" aria-labelledby="q2" style="grid-column: span 4; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">02</span><h2 id="q2" style="margin: 0; font-size: 20px; font-weight: 600">Where do your projects live?</h2></div>
+    <div style="display: flex; flex-direction: column">
+      <sc-for list="{{folders}}" as="item" hint-placeholder-count="3">
+        <label style="display: flex; align-items: center; gap: 12px; min-height: 44px; border-top: 1px solid #E6E2DC; cursor: pointer">
+          <input type="checkbox" checked="{{item.on}}" onChange="{{item.toggle}}" style="width: 18px; height: 18px; margin: 0; accent-color: #15121A">
+          <span style="flex: 1; font-family: 'DM Mono', monospace; font-size: 13px">{{item.path}}</span>
+          <span style="font-size: 12px; color: #615B66">{{item.repos}}</span>
+        </label>
+      </sc-for>
+    </div>
+    <button type="button" style="align-self: flex-start; min-height: 44px; padding: 0 16px; background: #FFFFFF; color: #15121A; border: 1px solid #D8D3CB; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Add folder</button>
+  </section>
+
+  <section class="tile" aria-labelledby="q3" style="grid-column: span 4; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">03</span><h2 id="q3" style="margin: 0; font-size: 20px; font-weight: 600">Do you use AI coding agents?</h2></div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px">
+      <sc-for list="{{agentOpts}}" as="item" hint-placeholder-count="3">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.pick}}" style="min-height: 44px; border: 0; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer; background: {{item.bg}}; color: {{item.fg}}">{{item.label}}</button>
+      </sc-for>
+    </div>
+    <span style="font-size: 13px; color: #615B66">Found Claude Code and Codex.</span>
+    <label style="display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer">
+      <input type="checkbox" checked="{{connect}}" onChange="{{toggleConnect}}" style="width: 18px; height: 18px; margin: 0; accent-color: #15121A">
+      <span>Connect scull to them, read-only</span>
+    </label>
+  </section>
+
+  <section class="tile" aria-labelledby="q4" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">04</span><h2 id="q4" style="margin: 0; font-size: 20px; font-weight: 600">What matters most right now?</h2></div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <sc-for list="{{goals}}" as="item" hint-placeholder-count="3">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.pick}}" style="min-height: 64px; padding: 12px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; border: 0; border-radius: 12px; font: inherit; cursor: pointer; background: {{item.bg}}; color: {{item.fg}}"><span style="font-weight: 600">{{item.label}}</span><span style="font-size: 13px; opacity: 0.8">{{item.hint}}</span></button>
+      </sc-for>
+    </div>
+  </section>
+
+  <section class="tile" aria-labelledby="q5" style="grid-column: span 6; border-radius: 22px; background: #FFFFFF; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; align-items: baseline; gap: 12px"><span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #615B66">05</span><h2 id="q5" style="margin: 0; font-size: 20px; font-weight: 600">How cautious should scull be?</h2></div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <sc-for list="{{cautions}}" as="item" hint-placeholder-count="3">
+        <button type="button" aria-pressed="{{item.pressed}}" onClick="{{item.pick}}" style="min-height: 64px; padding: 12px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; border: 0; border-radius: 12px; font: inherit; cursor: pointer; background: {{item.bg}}; color: {{item.fg}}"><span style="font-weight: 600">{{item.label}}</span><span style="font-size: 13px; opacity: 0.8">{{item.hint}}</span></button>
+      </sc-for>
+    </div>
+    <span style="font-size: 12px; color: #615B66">Safety rules are identical for every choice. This only changes suggestions and how often scull alerts you.</span>
+  </section>
+
+  <section class="tile" aria-label="Your setup" style="grid-column: span 12; border-radius: 22px; background: #FCEEF5; border: 1px solid #F3C9DE; color: #15121A; padding: 32px; display: flex; flex-wrap: wrap; gap: 24px 48px; align-items: flex-end">
+    <div style="flex: 1 1 520px; display: flex; flex-direction: column; gap: 16px">
+      <span style="font-size: 13px; font-weight: 500; color: #4A4450">Here's what scull will focus on</span>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px">
+        <sc-for list="{{summary}}" as="item" hint-placeholder-count="4">
+          <div style="border-radius: 14px; background: #FFFFFF; padding: 16px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'DM Mono', monospace; font-size: 11px; color: #4A4450">{{item.k}}</span><span style="font-weight: 500">{{item.v}}</span></div>
+        </sc-for>
+      </div>
+    </div>
+    <sc-if value="{{scanShow}}" hint-placeholder-val="{{ false }}">
+      <div aria-live="polite" style="flex: 1 1 100%; display: flex; flex-direction: column; gap: 12px; animation: scull-rise 320ms ease-out">
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px">
+          <span style="font-size: 28px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums">{{entries}} entries</span>
+          <span style="font-family: 'DM Mono', monospace; font-size: 13px; color: #4A4450">{{scanFolder}}</span>
+        </div>
+        <div style="height: 14px; border-radius: 999px; overflow: hidden; background: #FFFFFF">
+          <div style="height: 100%; border-radius: 999px; background: repeating-linear-gradient(135deg, {{accent}} 0 12px, #9C78FF 12px 24px); background-size: 48px 100%; animation: scull-shimmer 600ms linear infinite; transition: width 120ms linear; width: {{scanPct}}%"></div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+          <span style="padding: 6px 12px; border-radius: 999px; background: #FFFFFF; font-size: 13px">{{projectsFound}} projects</span>
+          <span style="padding: 6px 12px; border-radius: 999px; background: #FFFFFF; font-size: 13px">{{worktreesFound}} worktrees</span>
+          <span style="padding: 6px 12px; border-radius: 999px; background: {{accent}}; color: #FFFFFF; font-size: 13px; font-weight: 600">{{reclaimFound}} GB safely reclaimable</span>
+        </div>
+      </div>
+    </sc-if>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px">
+      <sc-if value="{{scanIdle}}" hint-placeholder-val="{{ true }}">
+        <button type="button" style="min-height: 48px; padding: 0 20px; background: transparent; color: #15121A; border: 1px solid #4A4450; border-radius: 12px; font: inherit; font-weight: 500; cursor: pointer">Skip, use defaults</button>
+        <button type="button" onClick="{{startScan}}" style="min-height: 48px; padding: 0 24px; border: 0; border-radius: 12px; background: {{accent}}; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Start first scan</button>
+      </sc-if>
+      <sc-if value="{{scanDone}}" hint-placeholder-val="{{ false }}">
+        <a href="Main.dc.html" style="border-radius: 12px; min-height: 52px; padding: 0 28px; display: inline-flex; align-items: center; background: {{accent}}; color: #FFFFFF; text-decoration: none; font-weight: 700; font-size: 16px; animation: scull-bounce 620ms cubic-bezier(.2,.9,.3,1.3) both">Open your overview →</a>
+      </sc-if>
+    </div>
+  </section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7C4DFF","options":["#7C4DFF","#D6268A","#15121A","#DCCBFF"]},"$preview":{"width":1440,"height":1120}}'>
+class Component extends DCLogic {
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+  }
+  constructor(props) {
+    super(props);
+    this.state = {
+      builds: { web: true, rust: true, ml: true },
+      folders: { code: true, work: true },
+      agents: 'daily',
+      connect: true,
+      goal: 'space',
+      caution: 'balanced',
+      scan: 'idle',
+      sp: 0
+    };
+  }
+  renderVals() {
+    const s = this.state;
+    const on = { bg: '#15121A', fg: '#FFFFFF' };
+    const off = { bg: '#F2EFEA', fg: '#15121A' };
+    const set = (patch) => this.setState(patch);
+
+    const buildList = [
+      ['web', 'Web / JS'], ['rust', 'Rust'], ['python', 'Python'], ['ml', 'ML / AI'],
+      ['mobile', 'Mobile'], ['game', 'Game dev'], ['cpp', 'C / C++ / embedded'], ['infra', 'Infra / DevOps'], ['other', 'Something else']
+    ];
+    const builds = buildList.map(([id, label]) => {
+      const p = !!s.builds[id];
+      return Object.assign({ label: label, pressed: p ? 'true' : 'false', toggle: () => set({ builds: Object.assign({}, s.builds, { [id]: !p }) }) }, p ? on : off);
+    });
+
+    const folderList = [['code', '~/code', '32 repos'], ['work', '~/work', '9 repos'], ['exp', '~/Downloads/experiments', '3 repos']];
+    const folders = folderList.map(([id, path, repos]) => ({
+      path: path, repos: repos, on: !!s.folders[id],
+      toggle: () => set({ folders: Object.assign({}, s.folders, { [id]: !s.folders[id] }) })
+    }));
+
+    const pick = (key, list) => list.map(([id, label, hint]) => Object.assign(
+      { label: label, hint: hint || '', pressed: s[key] === id ? 'true' : 'false', pick: () => set({ [key]: id }) },
+      s[key] === id ? on : off));
+
+    const agentOpts = pick('agents', [['none', 'None'], ['some', 'Sometimes'], ['daily', 'Daily']]);
+    const goals = pick('goal', [
+      ['space', 'Free space now', 'Opens on Quick Clean and the safest wins'],
+      ['tidy', 'Keep it tidy automatically', 'Sets up forecasts, staleness alerts and budgets'],
+      ['understand', 'Just understand my disk', 'Opens on the storage map; no suggestions pushed']
+    ]);
+    const cautions = pick('caution', [
+      ['very', 'Very cautious', 'Nothing preselected · longer idle windows'],
+      ['balanced', 'Balanced', 'Regenerable items preselected for review'],
+      ['expert', 'I know what I’m doing', 'Shorter idle windows · fewer reminders']
+    ]);
+
+    const labels = buildList.filter(([id]) => s.builds[id]).map(([, l]) => l);
+    const roots = folderList.filter(([id]) => s.folders[id]).map(([, p]) => p);
+    const goalText = { space: 'Quick Clean + safest wins', tidy: 'Alerts, forecast and budgets', understand: 'Storage map' }[s.goal];
+    const idle = { very: '30 days', balanced: '14 days', expert: '7 days' }[s.caution];
+    const agentText = s.agents === 'none' ? 'Off' : ('Agent worktrees watched' + (s.connect ? ' · Claude Code + Codex connected' : ''));
+
+    const summary = [
+      { k: 'Scan', v: roots.length ? roots.join(', ') : 'Choose at least one folder' },
+      { k: 'Show first', v: labels.length ? labels.slice(0, 4).join(' · ') : 'Everything, by size' },
+      { k: 'Agents', v: agentText },
+      { k: 'Open on', v: goalText },
+      { k: 'Stale after', v: 'Idle ' + idle },
+      { k: 'Checks', v: s.goal === 'understand' ? 'Manual' : 'Every 6 h · alert at ~14 days to full' }
+    ];
+
+    const se = s.scan === 'idle' ? 0 : (s.scan === 'done' ? 1 : 1 - Math.pow(1 - s.sp, 2));
+    const answered = [labels.length > 0, roots.length > 0, true, true, true].filter(Boolean).length;
+
+    return {
+      accent: this.props.accent ?? '#7C4DFF',
+      builds: builds,
+      folders: folders,
+      agentOpts: agentOpts,
+      connect: s.connect,
+      toggleConnect: () => set({ connect: !s.connect }),
+      goals: goals,
+      cautions: cautions,
+      summary: summary,
+      answered: answered,
+      scanShow: s.scan !== 'idle',
+      scanIdle: s.scan === 'idle',
+      scanDone: s.scan === 'done',
+      scanPct: Math.round(se * 100),
+      entries: Math.round(412880 * se).toLocaleString('en-US'),
+      scanFolder: s.scan === 'done' ? 'Scan complete' : ((roots.length ? roots : ['~'])[Math.min((roots.length || 1) - 1, Math.floor(s.sp * (roots.length || 1)))] + '/…'),
+      projectsFound: Math.round(41 * se),
+      worktreesFound: Math.round(63 * se),
+      reclaimFound: (38.6 * se).toFixed(1),
+      startScan: () => {
+        if (this.state.scan !== 'idle') return;
+        const t0 = Date.now();
+        this.setState({ scan: 'running', sp: 0 });
+        this.timer = setInterval(() => {
+          const sp = Math.min(1, (Date.now() - t0) / 3200);
+          if (sp >= 1) { clearInterval(this.timer); this.timer = null; this.setState({ scan: 'done', sp: 1 }); }
+          else this.setState({ sp: sp });
+        }, 40);
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>
