@@ -371,16 +371,18 @@ mod tests {
         let path = std::env::join_paths([&cwd, &tools, &nodejs]).expect("join");
         let trusted = |shims| TrustedDirs::new(&path, Some(&cwd), &[]).with_cmd_shims(shims);
 
+        // Trusted directories are canonical (`/var` is `/private/var` on macOS).
+        let canon = |p: PathBuf| canonical(&p).expect("canonical");
+
         // Off: the shim is invisible. On, without any trusted node: shell-only.
         assert_eq!(trusted(false).find("yarn"), Lookup::NotFound);
         fs::write(cwd.join(exe("node")), "").expect("node in cwd");
         assert_eq!(
             trusted(true).find("yarn"),
-            Lookup::ShellShimOnly(tools.join("yarn.cmd"))
+            Lookup::ShellShimOnly(canon(tools.clone()).join("yarn.cmd"))
         );
         // A trusted node on the search path: node + the canonical script.
         fs::write(nodejs.join(exe("node")), "").expect("node");
-        let canon = |p: PathBuf| canonical(&p).expect("canonical");
         let expected = NodeScript {
             shim: canon(tools.clone()).join("yarn.cmd"),
             node: canon(nodejs.join(exe("node"))),

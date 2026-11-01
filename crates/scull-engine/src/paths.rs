@@ -34,6 +34,13 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
 
 /// Whether file names compare case-insensitively on this OS (macOS and Windows by default).
 /// Containment checks for *protection* fold case there, which errs toward protecting.
+///
+/// This is per OS, not per volume. On a case-sensitive APFS volume folding only makes the
+/// checks refuse more (two names that differ in case are treated as the same), which is safe.
+/// On Linux, a case-insensitive volume (ext4 `casefold` directories, vfat, exFAT, NTFS via
+/// ntfs3) is compared case-sensitively, so a differently cased spelling of a protected path
+/// could be missed there. TODO: ask the platform per volume (statfs / FS_IOC_GETFLAGS) and
+/// fold case on such volumes too.
 const FOLD_CASE: bool = cfg!(windows) || cfg!(target_os = "macos");
 
 fn comps(p: &Path) -> Vec<String> {
