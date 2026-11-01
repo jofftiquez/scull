@@ -5,7 +5,8 @@
 //! pointing inside the fixture's temporary directory, `GIT_TERMINAL_PROMPT=0`, and fixed author
 //! and committer identity and dates (so commit IDs are deterministic). Every invocation also gets
 //! `-c init.defaultBranch=main -c user.name=… -c user.email=… -c commit.gpgsign=false
-//! -c tag.gpgsign=false -c core.autocrlf=false -c core.fsmonitor=false`, so neither the user's
+//! -c tag.gpgsign=false -c core.autocrlf=false -c core.fsmonitor=false -c gc.auto=0
+//! -c maintenance.auto=false`, so neither the user's
 //! configuration nor a fixture's (possibly malicious, FX-GIT-15) repo config can make the
 //! *builder* run hooks or helpers.
 
@@ -29,6 +30,11 @@ const CONFIG: &[&str] = &[
     "tag.gpgsign=false",
     "core.autocrlf=false",
     "core.fsmonitor=false",
+    // No automatic gc/maintenance: newer Git runs `maintenance run --auto --detach` after a
+    // commit, and the detached process writes `.git/objects/maintenance.lock` (and may repack)
+    // after the fixture's I-3 baseline, failing it at random.
+    "gc.auto=0",
+    "maintenance.auto=false",
 ];
 
 /// A Git repository inside a fixture.
