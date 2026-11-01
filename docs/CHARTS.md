@@ -1,7 +1,7 @@
 # Charts: Apache ECharts vs D3 + SVG (P3-CHART-01)
 
 Decision D-6 left the chart library open until a benchmark. This is that benchmark. The
-resulting decision is **D-37** in [DECISIONS.md](DECISIONS.md) (**provisional**; the maintainer
+resulting decision is **D-37** (**provisional**; the maintainer
 may overrule it).
 
 ## Recommendation

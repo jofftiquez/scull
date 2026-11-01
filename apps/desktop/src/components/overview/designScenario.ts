@@ -1,5 +1,5 @@
 // The design's illustrative machine (design/source/Main.dc.html: 16 items, 186.0 GB of
-// development data) as a bridge, for comparing the Overview with design/screens/01*.png.
+// development data) as a bridge, for comparing the Overview with the design mockups (screens 01).
 //
 // MOCK ONLY, OPT-IN: it wraps the mock bridge when the page URL carries `?scenario=design`
 // (see useOverviewBridge). It never wraps the Tauri bridge, and the real app never sees these

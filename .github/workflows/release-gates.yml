@@ -1,6 +1,6 @@
 name: Release gates
 
-# P1-REL-01: gates for the inspect-only alpha (PRD §22 Phase 1, HANDOVER §8.1).
+# P1-REL-01: gates for the inspect-only alpha (PRD §22 Phase 1).
 #
 # * Called by release.yml (dist `plan-jobs` in dist-workspace.toml) on a version tag. Every
 #   build job `needs:` this one, so a failing gate stops the release before anything is built
@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-      - name: scull-cli pulls in no Tauri/webview crates (HANDOVER §8.1)
+      - name: scull-cli pulls in no Tauri/webview crates
         run: python3 packaging/check_inspect_only.py deps
       - name: Build the release binary
         run: cargo build -p scull-cli --release --locked
