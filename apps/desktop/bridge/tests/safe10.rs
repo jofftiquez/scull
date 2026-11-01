@@ -286,6 +286,22 @@ const DIRECT_DELETION: &[&str] = &[
     "purge_own_files",
 ];
 
+/// The entries of [`DIRECT_DELETION`] that are plain std::fs calls: checked in production code
+/// only (unit tests build their temporary trees with them). The rest are checked in the whole
+/// file.
+const STD_FS_APIS: &[&str] = &[
+    "remove_file",
+    "remove_dir",
+    "fs::rename",
+    "fs::write",
+    "fs::copy",
+    "set_permissions",
+    "File::create",
+    "OpenOptions",
+    "hard_link",
+    "symlink",
+];
+
 /// The `scull-cleaner` API names the module may call (any receiver): the operations, their
 /// builders and the read-only accessors of their reports. Every other public method name of
 /// `scull-cleaner` is refused, whatever the binding is called.
@@ -767,7 +783,9 @@ fn no_desktop_source_reaches_platform_deletion() {
     let mods = platform_delete_modules();
     let items = platform_delete_items(&mods);
     for f in desktop_rust_files() {
-        let code = code_of(&f);
+        // The whole file, test items included: `cfg(test)` code must not hide a deletion
+        // either (a build script or rustflags could set `cfg(test)` in production).
+        let code = std::fs::read_to_string(&f).unwrap();
         let bad = platform_delete_uses(&code, &mods, &items);
         assert!(bad.is_empty(), "{}: {bad:?}", f.display());
         // Every desktop source is one of the files read here: no module or code pulled in
@@ -775,6 +793,54 @@ fn no_desktop_source_reaches_platform_deletion() {
         for pulled in ["#[path", "include!"] {
             assert!(!code.contains(pulled), "{} uses {pulled}", f.display());
         }
+    }
+}
+
+/// `cfg(test)` can't be switched on in a production build of the desktop: no bridge build
+/// script, no `rustc-cfg` in the app crate's, and no `--cfg` in any Cargo config or workflow.
+#[test]
+fn cfg_test_cannot_be_set_in_production() {
+    assert!(
+        !desktop().join("bridge/build.rs").exists(),
+        "the bridge has no build script"
+    );
+    let tauri_build = std::fs::read_to_string(desktop().join("src-tauri/build.rs")).unwrap();
+    assert!(
+        !tauri_build.contains("rustc-cfg"),
+        "src-tauri/build.rs sets a cfg"
+    );
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if p.is_dir() {
+                if !matches!(name.as_ref(), "target" | "node_modules" | ".git" | "local") {
+                    walk(&p, out);
+                }
+            } else if p
+                .parent()
+                .and_then(|d| d.file_name())
+                .is_some_and(|d| d == ".cargo" || d == "workflows")
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo_root(), &mut files);
+    assert!(
+        files
+            .iter()
+            .any(|f| f.ends_with(".github/workflows/ci.yml")),
+        "{files:?}"
+    );
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        assert!(!text.contains("--cfg"), "{} passes --cfg", f.display());
     }
 }
 
@@ -819,9 +885,18 @@ fn platform_deletion_guard_sees_every_spelling() {
 
 #[test]
 fn the_cleanup_module_deletes_only_through_the_executor() {
-    let code = code_of(&desktop().join(CLEANUP_MODULE));
+    // Production code (test items cut) for the plain std::fs checks, which test helpers need;
+    // the whole file for everything about deleting and the cleaner, where tests have no reason
+    // to differ (and `cfg(test)` must not be a hiding place).
+    let prod = code_of(&desktop().join(CLEANUP_MODULE));
+    let code = std::fs::read_to_string(desktop().join(CLEANUP_MODULE)).unwrap();
     for api in DIRECT_DELETION {
-        assert!(!code.contains(api), "{CLEANUP_MODULE} uses {api}");
+        let text = if STD_FS_APIS.contains(api) {
+            &prod
+        } else {
+            &code
+        };
+        assert!(!text.contains(api), "{CLEANUP_MODULE} uses {api}");
     }
     // Nothing of scull-cleaner is re-exported, and it is only named in `use` lines.
     for line in code.lines() {
@@ -887,13 +962,13 @@ fn the_cleanup_module_deletes_only_through_the_executor() {
     // The only directory it creates is Quick Clean's private sandbox, owner-only, in scull's
     // own data directory.
     assert_eq!(
-        code.matches("create_dir").count(),
+        prod.matches("create_dir").count(),
         1,
         "one create_dir_owner_only"
     );
-    assert!(code.contains("scull_platform::create_dir_owner_only(&dir)"));
+    assert!(prod.contains("scull_platform::create_dir_owner_only(&dir)"));
     // Every operation it starts is recorded as the human's desktop confirmation.
-    assert!(code.contains("method: ApprovalMethod::Desktop"));
+    assert!(prod.contains("method: ApprovalMethod::Desktop"));
     assert!(!code.contains("ApprovalMethod::Cli"));
 }
 
