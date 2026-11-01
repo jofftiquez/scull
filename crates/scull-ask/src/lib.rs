@@ -57,18 +57,18 @@ pub fn disclosure(cfg: &AskConfig, redact_home: bool, hash_names: bool) -> Strin
         cfg.model.as_str()
     };
     let paths = if redact_home {
-        "paths under your scan roots (your home folder shown as `~`)"
+        "your home folder is shown as `~`"
     } else {
-        "paths under your scan roots (full paths: mcp.redact_home is off)"
+        "full paths (mcp.redact_home is off)"
     };
     let names = if hash_names {
-        "project and folder names (hashed: mcp.hash_names is on)"
+        "hashed (mcp.hash_names is on)"
     } else {
-        "project and folder names (set mcp.hash_names = true to hash them)"
+        "shown (set mcp.hash_names = true to hash them)"
     };
     let where_ = if cfg.endpoint.is_loopback() {
-        "This endpoint is on this machine: nothing leaves your computer unless that server sends \
-         it on."
+        "This endpoint is on this machine: nothing leaves your computer unless that server\n  \
+         sends it on."
     } else {
         "That provider's own terms and data policy apply to what it receives."
     };
@@ -78,10 +78,12 @@ pub fn disclosure(cfg: &AskConfig, redact_home: bool, hash_names: bool) -> Strin
   Each question sends that endpoint:
   * your question and scull's instructions to the model;
   * the list of scull's read-only tools;
-  * the results of the tools the model calls: {paths}, {names}, Git branch names, sizes,
-    safety tiers and scull's storage history.
-  File contents, commit messages and environment values are never sent. Your API key ({key})
-  is sent only to this endpoint, as its authentication header; scull never stores or logs it.
+  * the results of the tools the model calls: paths under your scan roots, project and
+    folder names, Git branch names, sizes, safety tiers and scull's storage history.
+    Paths: {paths}. Names: {names}.
+  File contents, commit messages and environment values are never sent.
+  Your API key ({key}) goes only to this endpoint, as its authentication header;
+  scull never stores or logs it.
   The model can only call read-only tools: it cannot delete, move or change your files, write
   anything, or prepare or approve a cleanup.
   {where_}
