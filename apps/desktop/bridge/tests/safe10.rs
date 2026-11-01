@@ -649,6 +649,24 @@ impl Paths {
     }
 }
 
+impl Paths {
+    /// The `a::b::c` ident sequences in a macro's tokens (its arguments, or a `macro_rules!`
+    /// body), which `syn::visit` doesn't parse.
+    fn tokens(&mut self, ts: proc_macro2::TokenStream) {
+        let text = ts.to_string().replace(" :: ", "::").replace(":: ", "::");
+        for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':')) {
+            let segs: Vec<String> = word
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if !segs.is_empty() {
+                self.0.push(segs);
+            }
+        }
+    }
+}
+
 impl<'ast> syn::visit::Visit<'ast> for Paths {
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         self.use_tree(&[], &u.tree);
@@ -657,6 +675,20 @@ impl<'ast> syn::visit::Visit<'ast> for Paths {
         self.0
             .push(p.segments.iter().map(|s| s.ident.to_string()).collect());
         syn::visit::visit_path(self, p);
+    }
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        self.tokens(m.tokens.clone());
+        syn::visit::visit_macro(self, m);
+    }
+    fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
+        // A type alias of anything under fs/process is an alias too (`type Fl = std::fs::File`).
+        let mut inner = Paths::default();
+        syn::visit::visit_type(&mut inner, &t.ty);
+        for mut p in inner.0 {
+            p.push("as".into());
+            self.0.push(p);
+        }
+        syn::visit::visit_item_type(self, t);
     }
 }
 
@@ -672,14 +704,28 @@ fn std_writes(code: &str) -> Result<Vec<String>, String> {
             p.windows(2)
                 .any(|w| w[0] == a && (b.contains(&w[1].as_str())))
         };
-        let aliased = p.last().is_some_and(|l| l == "as")
-            && p.len() >= 2
-            && matches!(p[p.len() - 2].as_str(), "std" | "fs" | "process" | "os");
+        // A rename (or type alias) of anything under std's fs/process/os, or of std itself
+        // (`use std as s`, `use std::{self as s}`, `use std::fs::{self as f}`,
+        // `use std::fs::File as Fl`): later calls through the new name show no `fs`/`process`.
+        let aliased = p.last().is_some_and(|l| l == "as") && {
+            let named: Vec<&str> = p[..p.len() - 1]
+                .iter()
+                .map(String::as_str)
+                .filter(|s| *s != "self")
+                .collect();
+            named == ["std"]
+                || named
+                    .iter()
+                    .any(|s| matches!(*s, "fs" | "process" | "os" | "File" | "OpenOptions"))
+        };
         if has("fs", FS_WRITES)
             || has("fs", &["*"])
-            || has("File", &["create", "create_new", "options"])
+            || has(
+                "File",
+                &["create", "create_new", "create_buffered", "options"],
+            )
             || has("process", &["Command", "*"])
-            || p.iter().any(|s| s == "OpenOptions")
+            || p.iter().any(|s| s == "OpenOptions" || s == "DirBuilder")
             || aliased
         {
             bad.push(joined);
@@ -701,6 +747,99 @@ fn desktop_sources_use_no_std_writes() {
     }
 }
 
+/// The direct dependencies each desktop crate may have. Anything else (a crate such as `libc`,
+/// `nix`, `rustix`, `fs_err`, `tokio`, `duct`, `open` or `trash` could write, delete or spawn
+/// outside these checks) needs a deliberate change here, reviewed for SAFE-10.
+const ALLOWED_DEPS: &[(&str, &[&str])] = &[
+    (
+        "bridge",
+        &[
+            "scull-core",
+            "scull-platform",
+            "scull-engine",
+            "scull-detectors",
+            "scull-git",
+            "scull-safety",
+            "scull-storage",
+            "scull-proactive",
+            "scull-insights",
+            "scull-mcp",
+            "scull-cleaner",
+            "serde",
+            "serde_json",
+            "schemars",
+        ],
+    ),
+    (
+        "src-tauri",
+        &[
+            "scull-desktop-bridge",
+            "scull-core",
+            "scull-platform",
+            "serde",
+            "serde_json",
+            "tauri",
+            "tauri-plugin-notification",
+            "tauri-plugin-deep-link",
+            "tauri-plugin-single-instance",
+            "tauri-build",
+        ],
+    ),
+];
+
+/// The dependency keys of a manifest's normal, build and target sections (not dev).
+fn non_dev_dependencies(manifest: &str) -> Vec<String> {
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            let h = line.trim_matches(|c| c == '[' || c == ']');
+            let dev = h.contains("dev-dependencies");
+            // `[dependencies.<name>]` / `[target.'x'.build-dependencies.<name>]` name one directly.
+            if !dev {
+                for kind in ["dependencies.", "build-dependencies."] {
+                    if let Some(i) = h.find(kind) {
+                        deps.push(h[i + kind.len()..].trim_matches('"').to_owned());
+                    }
+                }
+            }
+            in_deps = !dev && (h.ends_with("dependencies"));
+            continue;
+        }
+        if in_deps && !line.is_empty() && !line.starts_with('#') {
+            let key = line
+                .split(['=', '.'])
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"');
+            if !key.is_empty() {
+                deps.push(key.to_owned());
+            }
+        }
+    }
+    deps
+}
+
+#[test]
+fn desktop_crates_depend_only_on_allowed_crates() {
+    for (dir, allowed) in ALLOWED_DEPS {
+        let text = std::fs::read_to_string(desktop().join(dir).join("Cargo.toml")).unwrap();
+        let deps = non_dev_dependencies(&text);
+        assert!(deps.iter().any(|d| d == "scull-core"), "{dir}: {deps:?}");
+        for d in deps {
+            assert!(
+                allowed.contains(&d.as_str()),
+                "{dir}/Cargo.toml depends on {d}, which is not in ALLOWED_DEPS (tests/safe10.rs): \
+                 review it for SAFE-10 first"
+            );
+        }
+    }
+    let probe = "[dependencies]\nlibc = \"0.2\"\n[target.'cfg(unix)'.dependencies]\nnix = \"1\"\n\
+                 [dependencies.fs-err]\nversion = \"3\"\n[dev-dependencies]\ntempfile = \"3\"\n";
+    assert_eq!(non_dev_dependencies(probe), ["libc", "nix", "fs-err"]);
+}
+
 #[test]
 fn std_write_guard_sees_every_spelling() {
     for code in [
@@ -718,6 +857,16 @@ fn std_write_guard_sees_every_spelling() {
         "use std as s;",
         "use std::os::unix::fs::symlink;",
         "use tokio::process::Command;",
+        // From the review of #127.
+        "use std::process::{self as pr};\nfn f() { pr::Command::new(\"rm\"); }",
+        "use std::fs::File as Fl;\nfn f() { Fl::create(p); }",
+        "use std::fs::{self as f};\nfn g() { f::rename(p, q); }",
+        "fn f() { let _ = vec![std::process::Command::new(\"rm\").arg(p).status()]; }",
+        "fn f() { let _ = std::fs::DirBuilder::new().recursive(true).create(p); }",
+        "type Fl = std::fs::File;",
+        "use std::{self as s};",
+        "macro_rules! m { () => { std::fs::File::options() } }",
+        "fn f() { let _ = std::fs::File::create_buffered(p); }",
     ] {
         assert!(!std_writes(code).unwrap().is_empty(), "not caught: {code}");
     }
@@ -726,6 +875,9 @@ fn std_write_guard_sees_every_spelling() {
         "fn f() { std::process::exit(1); let _ = std::process::id(); }",
         "use std::fs::{read, metadata};",
         "fn f() { let _ = Action::ToolCommand { tool, args }; }",
+        "use std::collections::HashMap as Map;",
+        "fn f() { println!(\"{}\", std::process::id()); }",
+        "type R = std::io::Result<()>;",
     ] {
         assert_eq!(
             std_writes(code).unwrap(),
