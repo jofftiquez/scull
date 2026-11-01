@@ -130,7 +130,11 @@ pub trait Platform: Send + Sync {
     /// sizes and times), but possibly faster. On Unix the entry is stat'ed relative to its
     /// listed directory (`fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)`), so the kernel doesn't
     /// resolve the whole path again for every entry, and a parent swapped for a link after the
-    /// listing can't redirect the call. The default is [`Platform::metadata`] of the path.
+    /// listing can't redirect the call. On Windows a plain file or directory is queried by name
+    /// without opening it (`NtQueryInformationByName(FileStatInformation)`), with the identity
+    /// from the listing (`FileIdExtdDirectoryInfo`) and only if the answer has the listed file
+    /// ID; reparse points, compressed and sparse files, and anything else are opened as by
+    /// [`Platform::metadata`]. The default is [`Platform::metadata`] of the path.
     fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
         self.metadata(&entry.path)
     }
