@@ -63,7 +63,8 @@ or 90 days), plus six months of rollups for the mix, the last scan's worktrees a
 `src/components/insights/model.ts` derives every figure from those samples:
 
 - Cleanups are rises in free space of at least 1 GiB.
-- The forecast is a least-squares fit of the samples since the last cleanup, with a 95% band.
+- The forecast (tile, dashed line and band) is the core's, from the `forecasts` command: the
+  same days and confidence as `scull check`, the digest and the menu bar (`docs/FORECAST.md`).
 - "Driven by" is the category that grew most.
 - Regrowth counts rebuilds per path, not restores.
 
@@ -87,7 +88,8 @@ The tray icon (macOS menu bar, Windows notification area, Linux app indicator) t
 
 - Free space is read live from `drives()` (the drive holding home). Without one it falls back to
   the latest `/` sample in `status()`.
-- The forecast is the Insights trend (`freeSpaceModel`) of 30 days of `freeSpaceHistory`.
+- The forecast is the core's (`forecasts`), for the drive holding home. It is shown only when
+  the core calls it actionable (at least medium confidence), like a status line.
 - "Safe to reclaim" is `status().review_plan`, the plan `scull check` prepared (PRO-05). Without
   a plan it falls back to the last scan's S0 bytes.
 - Alerts are `status().alerts`: one day of `scull check` alerts, the newest per key, at most 5.
@@ -187,6 +189,7 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 | `rollupHistory(since)` | `rollup_history` | `RollupHistory`: bytes per category per usable scan (growth, mix) |
 | `regrowth(since)` | `regrowth` | `RegrowthHistory`: artifacts that came back after they had gone |
 | `footprintHistory(since)` | `footprint_history` | `FootprintHistory`: scull's own disk use ("What scull knows") |
+| `forecasts()` | `forecasts` | `ForecastsView`: every sampled volume's disk-full forecast, the one source of days left (`src/lib/forecast.ts`, `docs/FORECAST.md`) |
 | `weeklyDigest()` | `weekly_digest` | `DigestView`: the last 7 days in a few lines (Insights "This week", the digest notification) |
 | `monitorStatus()` | `monitor_status` | `MonitorStatus`: tray monitoring's settings, pause, last and next check and digest |
 | (abort) | `cancel_operation` | `bool` |

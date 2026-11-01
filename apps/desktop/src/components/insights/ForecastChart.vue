@@ -7,7 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { scaleLinear } from 'd3-scale';
 import { area, line } from 'd3-shape';
 import { formatBytes } from '../../lib/format';
-import { FULL_RESERVE, shortDate, type FreeSpaceModel } from './model';
+import { shortDate, type FreeSpaceModel } from './model';
 
 const props = defineProps<{ model: FreeSpaceModel }>();
 
@@ -32,11 +32,11 @@ const x = computed(() => {
   return scaleLinear().domain([first, Math.max(last, first + 1)]).range([6, width.value - 6]);
 });
 const y = computed(() => {
-  const max = Math.max(FULL_RESERVE * 2, ...pts.value.map((p) => p.free), ...fc.value.map((p) => p.hi));
+  const max = Math.max(props.model.reserve * 2, ...pts.value.map((p) => p.free), ...fc.value.map((p) => p.hi));
   return scaleLinear().domain([0, max * 1.08]).range([H - 12, 14]);
 });
 const grid = computed(() => y.value.ticks(4).filter((t) => t > 0).map((t) => y.value(t)));
-const floorY = computed(() => y.value(FULL_RESERVE));
+const floorY = computed(() => y.value(props.model.reserve));
 const measuredPath = computed(
   () =>
     line<{ at: number; free: number }>()
@@ -106,7 +106,7 @@ const label = computed(() => {
     parts.push(`with ${props.model.cleanups.length} cleanup${props.model.cleanups.length === 1 ? '' : 's'} adding ${props.model.cleanups.map((c) => formatBytes(c.gained)).join(' and ')}`);
   }
   const t = props.model.trend;
-  return `${parts.join(', ')}.${t ? ` Forecast reaches ${formatBytes(FULL_RESERVE)} in about ${t.days} day${t.days === 1 ? '' : 's'}.` : ''}`;
+  return `${parts.join(', ')}.${t ? ` Forecast reaches ${formatBytes(props.model.reserve)} in about ${t.days} day${t.days === 1 ? '' : 's'}.` : ''}`;
 });
 
 /** The captions under the chart: start, each cleanup, today, the full line. */
@@ -117,7 +117,7 @@ const captions = computed(() => {
   for (const c of props.model.cleanups.slice(-2)) out.push(`${shortDate(c.at)} cleanup +${formatBytes(c.gained)}`);
   if (today.value) out.push(`Today · ${formatBytes(today.value.free)}`);
   const end = fc.value.at(-1);
-  if (end && props.model.trend) out.push(`${shortDate(end.at)} · ${formatBytes(FULL_RESERVE)} line`);
+  if (end && props.model.trend) out.push(`${shortDate(end.at)} · ${formatBytes(props.model.reserve)} line`);
   return out;
 });
 </script>

@@ -125,6 +125,37 @@ describe('Settings screen', () => {
     expect(w.get('[data-testid="saved"]').text()).toBe('');
   });
 
+  it('Alerts: a status refresh that comes back after a pause does not undo it', async () => {
+    localStorage.clear();
+    mockMonitor.reset();
+    // Hold the refresh that follows a monitor setting change, like a slow bridge: it reads the
+    // status when asked (not paused yet) and answers only when released.
+    const mock = createMockBridge();
+    const held: (() => void)[] = [];
+    let hold = false;
+    const bridge: ScullBridge = {
+      ...mock,
+      monitorStatus: async () => {
+        const st = mockMonitor.status();
+        if (hold) await new Promise<void>((r) => held.push(r));
+        return st;
+      },
+    };
+    const w = await mountScreen({ bridge, tab: 'alerts' });
+    hold = true;
+    await w.get('[aria-label="Look every"] button:first-child').trigger('click');
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    hold = false;
+    await w.findAll('[data-testid="monitoring"] button').find((b) => b.text() === '1 hour')!.trigger('click');
+    await vi.waitFor(() => expect(w.get('[data-testid="pause-state"]').text()).toMatch(/^Paused until /));
+    held.forEach((r) => r());
+    await flushPromises();
+    expect(w.get('[data-testid="pause-state"]').text()).toMatch(/^Paused until /);
+    expect(w.findAll('[data-testid="monitoring"] button').some((b) => b.text() === 'Resume')).toBe(true);
+    mockMonitor.reset();
+    localStorage.clear();
+  });
+
   it('Alerts: monitor settings save even with the refusing writer, and pause/send now work', async () => {
     localStorage.clear();
     mockMonitor.reset();

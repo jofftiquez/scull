@@ -21,6 +21,7 @@
 //! | `rollup_history` | [`Session::rollup_history`] | [`RollupHistory`] |
 //! | `regrowth` | [`Session::regrowth`] | [`RegrowthHistory`] |
 //! | `footprint_history` | [`Session::footprint_history`] | [`FootprintHistory`] |
+//! | `forecasts` | [`Session::forecasts`] | [`ForecastsView`] (one forecast source, PRO-01) |
 //! | `weekly_digest` | [`Session::weekly_digest`] | [`DigestView`] |
 //! | `monitor_status` | [`Monitor::status`] | [`MonitorStatus`] |
 //! | `configure_monitor` | [`Monitor::configure`] | [`MonitorStatus`] |
@@ -48,6 +49,7 @@
 
 pub mod db;
 pub mod drives;
+pub mod forecasts;
 pub mod history;
 pub mod insights;
 pub mod menubar;
@@ -58,6 +60,7 @@ pub mod settings;
 pub mod views;
 
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
+pub use forecasts::ForecastsView;
 pub use history::HistoryView;
 pub use insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
 pub use monitor::{DigestView, Monitor, MonitorConfig, MonitorSnapshot, MonitorStatus};

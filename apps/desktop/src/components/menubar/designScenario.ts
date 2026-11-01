@@ -4,7 +4,8 @@
 //
 // MOCK ONLY, OPT-IN: `menubar.html?demo=design` with the mock bridge (screenshots, E2E). It never
 // wraps the Tauri bridge, and the real app never sees these numbers.
-import type { Alert, CachesReport, DesktopStatus, FreeSpaceHistory, ScullBridge } from '../../bridge';
+import type { Alert, CachesReport, DesktopStatus, ForecastsView, ScullBridge } from '../../bridge';
+import { forecastsView, steadyForecast } from '../../bridge/forecastMock';
 import { DESIGN_CANDIDATES } from '../overview/designScenario';
 
 const GiB = 1024 ** 3;
@@ -56,15 +57,10 @@ export function designMenuBarBridge(base: ScullBridge, nowSecs: () => number = (
       const r = await base.caches(opts);
       return { ...r, candidates: structuredClone(DESIGN_CANDIDATES.filter((c) => c.category === 'package_cache')) };
     },
-    async freeSpaceHistory(since, volumeId): Promise<FreeSpaceHistory> {
-      const r = await base.freeSpaceHistory(since, volumeId);
+    async forecasts(): Promise<ForecastsView> {
+      // The design's disk: 41.2 GB free four minutes ago, losing 3.5 GB a day (about 9 days).
       const now = nowSecs();
-      // Two weeks of checks every 6 hours, 3.5 GB a day, ending at 41.2 GB four minutes ago.
-      const samples = Array.from({ length: 57 }, (_, i) => {
-        const at = now - 240 - (56 - i) * (DAY / 4);
-        return { volume_id: '/', total_bytes: g(494), free_bytes: g(41.2 + ((56 - i) / 4) * 3.5), sampled_at: at };
-      }).filter((s) => s.sampled_at >= since);
-      return { ...r, volume_id: '/', samples };
+      return forecastsView(now, [steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 41.2, perDayGiB: 3.5, asOf: now - 240 })]);
     },
   };
 }

@@ -1,0 +1,240 @@
+{
+  "$defs": {
+    "Forecast": {
+      "additionalProperties": false,
+      "description": "The forecast of one volume.",
+      "properties": {
+        "as_of": {
+          "description": "When the latest sample in the window was taken (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/ForecastConfidence",
+          "description": "How much to trust it."
+        },
+        "days_until_threshold": {
+          "description": "Days from `now` until free space drops below the reserve (`Filling`; 0 for\n`BelowReserve`).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "fill_bytes_per_day": {
+          "description": "Free space lost per day by the trend (negative when free space grows). Present once\nthere is enough history.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "free_bytes": {
+          "description": "Latest free space, plus releases recorded after that sample (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jumps_ignored": {
+          "description": "Steps levelled out of the trend: known releases plus detected cleanups and one-off\ndrops.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "noise_ratio": {
+          "description": "Residual spread relative to the change the trend explains over the span (lower is\nsteadier).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "outliers_ignored": {
+          "description": "Transient outliers dropped.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserve_bytes": {
+          "description": "The reserve the forecast counts down to (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "samples_used": {
+          "description": "Samples fitted (after dropping outliers).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "span_secs": {
+          "description": "Seconds between the first and the latest sample in the window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ForecastState",
+          "description": "What the forecast concluded."
+        },
+        "threshold_at": {
+          "description": "When free space is forecast to drop below the reserve (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_bytes": {
+          "description": "Volume size at the latest sample (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "volume_id": {
+          "description": "Volume identifier, as recorded in history (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "state",
+        "confidence",
+        "reserve_bytes",
+        "samples_used",
+        "span_secs",
+        "outliers_ignored",
+        "jumps_ignored"
+      ],
+      "type": "object"
+    },
+    "ForecastConfidence": {
+      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "Not enough history to say anything.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Shown in status lines and may alert.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Long, regular history and a short extrapolation.",
+          "type": "string"
+        }
+      ]
+    },
+    "ForecastState": {
+      "description": "What the forecast concluded.",
+      "oneOf": [
+        {
+          "const": "not_enough_history",
+          "description": "Too few samples or too short a span in the window; no extrapolation.",
+          "type": "string"
+        },
+        {
+          "const": "not_filling",
+          "description": "Free space is stable or growing, or would take longer than the horizon to run out.",
+          "type": "string"
+        },
+        {
+          "const": "filling",
+          "description": "Free space is shrinking: see `days_until_threshold`.",
+          "type": "string"
+        },
+        {
+          "const": "below_reserve",
+          "description": "Free space is already at or below the reserve (measured, not forecast).",
+          "type": "string"
+        }
+      ]
+    },
+    "HistoryRead": {
+      "description": "Whether the history database answered.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "The database answered (the series may still be empty).",
+          "type": "string"
+        },
+        {
+          "const": "no_database",
+          "description": "No database yet (nothing was ever recorded, or history is off).",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "The database can't be read right now (`detail` says why).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/forecasts.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`forecasts`: every sampled volume's forecast.",
+  "properties": {
+    "alert_days": {
+      "description": "Forecasts are shown as alerts within this many days (`[proactive] alert_days`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "detail": {
+      "description": "Why it didn't, when it didn't.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "forecasts": {
+      "description": "One per sampled volume, sorted by volume ID.",
+      "items": {
+        "$ref": "#/$defs/Forecast"
+      },
+      "type": "array"
+    },
+    "now": {
+      "description": "When they were computed (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "reserve_bytes": {
+      "description": "The reserve every forecast counts down to (bytes; `[proactive] reserve_gib`).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/HistoryRead",
+      "description": "Whether the database answered."
+    }
+  },
+  "required": [
+    "state",
+    "now",
+    "reserve_bytes",
+    "alert_days",
+    "forecasts"
+  ],
+  "title": "ForecastsView",
+  "type": "object"
+}

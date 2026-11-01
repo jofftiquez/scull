@@ -160,6 +160,7 @@ impl Setup {
                     let local = home.join("AppData").join("Local");
                     CacheEnv::with_vars(home, os, [("LOCALAPPDATA", p(&local))])
                 }),
+                forecast_policy: scull_proactive::ForecastPolicy::default(),
             },
         )
         .unwrap()

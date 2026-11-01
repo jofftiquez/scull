@@ -331,12 +331,24 @@ fn history_commands_read_the_recorded_series() {
         d.lines
     );
 
+    // The one forecast source (#36): the `forecasts` command and the digest agree on days left.
+    let forecasts = s.forecasts(NOW);
+    assert_eq!(forecasts.state, HistoryRead::Ok);
+    let root = forecasts
+        .forecasts
+        .iter()
+        .find(|f| f.volume_id == VOLUME)
+        .unwrap();
+    assert_eq!(root.days_rounded(), d.volumes[0].days_left);
+    assert!(root.is_actionable());
+
     let docs = [
         ("free-space-history", json(&free)),
         ("rollup-history", json(&roll)),
         ("regrowth", json(&regrowth)),
         ("footprint-history", json(&fp)),
         ("weekly-digest", json(&digest)),
+        ("forecasts", json(&forecasts)),
     ];
     for (stem, v) in &docs {
         validate(stem, v);

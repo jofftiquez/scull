@@ -14,6 +14,7 @@ import type {
   DigestView,
   Drive,
   FootprintHistory,
+  ForecastsView,
   FreeSpaceHistory,
   OperationOptions,
   ProgressEvent,
@@ -38,6 +39,7 @@ import rollupHistory from './fixtures/rollup-history.json';
 import regrowth from './fixtures/regrowth.json';
 import footprintHistory from './fixtures/footprint-history.json';
 import weeklyDigest from './fixtures/weekly-digest.json';
+import forecasts from './fixtures/forecasts.json';
 import { withDesignWorktrees } from './worktreesMock';
 import { designHistory } from './historyMock';
 import { designSettings } from './settingsMock';
@@ -132,7 +134,25 @@ export const MOCK_HISTORY = {
   footprint: footprintHistory as unknown as FootprintHistory,
   // The weekly digest of the same history (recorded by apps/desktop/bridge/tests/insights.rs).
   digest: weeklyDigest as unknown as DigestView,
+  // The core's forecasts of the same history (recorded by the same test).
+  forecasts: forecasts as unknown as ForecastsView,
 };
+
+/** The recorded forecasts moved so the history's latest sample is `now` (their `as_of` and
+ *  `threshold_at` move with it; `threshold_at` lies in the future, so it can't anchor). */
+export function forecastsAt(now: number): ForecastsView {
+  const delta = Math.floor(now) - historyLatest();
+  const doc = structuredClone(MOCK_HISTORY.forecasts);
+  return {
+    ...doc,
+    now: doc.now + delta,
+    forecasts: doc.forecasts.map((f) => ({
+      ...f,
+      as_of: f.as_of == null ? f.as_of : f.as_of + delta,
+      threshold_at: f.threshold_at == null ? f.threshold_at : f.threshold_at + delta,
+    })),
+  };
+}
 
 /** The latest timestamp of the recorded history, shared so all four series stay aligned. */
 function historyLatest(): number {
@@ -250,6 +270,7 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
         })),
       ),
     weeklyDigest: digest,
+    forecasts: () => later(forecastsAt(Date.now() / 1000)),
     monitorStatus: () => later(mockMonitor.status()),
   };
 }

@@ -1,7 +1,7 @@
 // What the shell knows from the core: the last status, a running scan (progress, cancel) and
 // the figures next to nav items. Screens read `core` and call `rescan` / `cancelScan`.
 import { markRaw, reactive } from 'vue';
-import type { DesktopStatus, ProgressEvent, ScanReport, ScullBridge, TierBreakdown } from '../bridge';
+import type { DesktopStatus, Forecast, ProgressEvent, ScanReport, ScullBridge, TierBreakdown } from '../bridge';
 import { toBridgeError } from '../bridge';
 import { formatBytes } from '../lib/format';
 import { NOT_SCANNED, shell } from './shell';
@@ -15,9 +15,12 @@ export interface CoreState {
   /** The last scan report of this session (a cancelled one only until a complete one exists),
    * kept raw (not deeply reactive): the Overview draws its wheel from it. */
   report: ScanReport | null;
+  /** The core's disk-full forecast of every sampled volume (`forecasts`; the one source of days
+   * left, src/lib/forecast.ts). */
+  forecasts: Forecast[];
 }
 
-export const core = reactive<CoreState>({ status: null, scanning: false, progress: null, error: null, report: null });
+export const core = reactive<CoreState>({ status: null, scanning: false, progress: null, error: null, report: null, forecasts: [] });
 
 let controller: AbortController | null = null;
 /** Bumped by `resetCore`; a scan or refresh started before a reset never writes after it. */
@@ -29,7 +32,7 @@ export function resetCore(): void {
   generation += 1;
   controller?.abort();
   controller = null;
-  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null });
+  Object.assign(core, { status: null, scanning: false, progress: null, error: null, report: null, forecasts: [] });
 }
 
 const total = (t: TierBreakdown) => t.s0 + t.s1 + t.s2 + t.s3;
@@ -67,7 +70,7 @@ function publish() {
   shell.status = statusLine(core);
 }
 
-/** Read status, projects, worktrees and caches; fill the header and nav figures. */
+/** Read status, projects, worktrees, caches and forecasts; fill the header and nav figures. */
 export async function refresh(bridge: ScullBridge): Promise<void> {
   const gen = generation;
   try {
@@ -79,12 +82,14 @@ export async function refresh(bridge: ScullBridge): Promise<void> {
     core.error = toBridgeError(e).message;
   }
   publish();
-  const [projects, worktrees, caches] = await Promise.allSettled([
+  const [projects, worktrees, caches, forecasts] = await Promise.allSettled([
     bridge.projects(),
     bridge.worktrees(),
     bridge.caches(),
+    bridge.forecasts(),
   ]);
   if (gen !== generation) return;
+  if (forecasts.status === 'fulfilled') core.forecasts = forecasts.value.forecasts;
   const counts = { ...shell.counts };
   if (projects.status === 'fulfilled' && projects.value.projects.length > 0) {
     counts.projects = String(projects.value.projects.length);

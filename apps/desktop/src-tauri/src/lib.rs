@@ -23,8 +23,9 @@ pub mod tray;
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
     AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, DigestView, Drive, FootprintHistory,
-    FreeSpaceHistory, HistoryView, OpId, ProgressEvent, ProjectsView, RegrowthHistory,
-    RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
+    ForecastsView, FreeSpaceHistory, HistoryView, OpId, ProgressEvent, ProjectsView,
+    RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup,
+    WorktreesView, now_unix,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -157,6 +158,14 @@ async fn footprint_history(
     blocking(move || Ok(session.footprint_history(since))).await
 }
 
+/// `forecasts`: every sampled volume's disk-full forecast (PRO-01; the one source of days left
+/// for Insights, the Overview alert and the menu bar widget; read-only).
+#[tauri::command]
+async fn forecasts(session: Shared<'_>) -> Result<ForecastsView, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.forecasts(now_unix()))).await
+}
+
 /// `weekly_digest`: the last 7 days in a few lines (Insights "This week"; read-only).
 #[tauri::command]
 async fn weekly_digest(session: Shared<'_>) -> Result<DigestView, ScullError> {
@@ -202,6 +211,7 @@ pub fn run() {
             rollup_history,
             regrowth,
             footprint_history,
+            forecasts,
             weekly_digest,
             monitor::monitor_status,
             monitor::configure_monitor,

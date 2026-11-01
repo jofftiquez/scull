@@ -48,6 +48,7 @@ describe('recorded real payloads (fixtures)', () => {
     regrowth: 'regrowth',
     'footprint-history': 'footprint-history',
     'weekly-digest': 'weekly-digest',
+    forecasts: 'forecasts',
   };
   for (const file of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
     const stem = file.replace(/\.json$/, '');
@@ -92,6 +93,7 @@ describe('mock bridge answers in the real shapes', () => {
     expectValid('regrowth', await b.regrowth(since));
     expectValid('footprint-history', await b.footprintHistory(since));
     expectValid('weekly-digest', await b.weeklyDigest());
+    expectValid('forecasts', await b.forecasts());
     expectValid('monitor-status', await b.monitorStatus());
   });
 

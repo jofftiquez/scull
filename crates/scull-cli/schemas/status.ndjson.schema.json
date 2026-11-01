@@ -1,6 +1,6 @@
 {
   "$defs": {
-    "Confidence": {
+    "ForecastConfidence": {
       "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
       "oneOf": [
         {
@@ -38,7 +38,7 @@
           ]
         },
         "confidence": {
-          "$ref": "#/$defs/Confidence",
+          "$ref": "#/$defs/ForecastConfidence",
           "description": "`unknown`, `low`, `medium` or `high`. Status lines and alerts use `medium` and up."
         },
         "days_until_threshold": {
