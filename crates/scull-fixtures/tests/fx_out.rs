@@ -394,7 +394,13 @@ fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
     schemas.ndjson(cli, &["clean", "--purge-quarantine"], "quarantine-purge");
     schemas.json(cli, &["clean", "caches", "--dry-run"], "clean-caches");
     schemas.ndjson(cli, &["clean", "caches", "--dry-run"], "clean-caches");
-    // An execution's NDJSON: plan the restored item again and run it.
+    // An execution's NDJSON: plan the restored item again and run it. Plans and operations
+    // are compared in whole seconds, and a plan created in the same second as the restore
+    // that touched its target is conservatively invalidated (SAFE-09): start a new second.
+    let restored_at = scull_engine::now_unix();
+    while scull_engine::now_unix() <= restored_at {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let plan2 = s(&fx.base().join("plan2.json"));
     schemas.json(
         cli,
