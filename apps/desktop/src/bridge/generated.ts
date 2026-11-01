@@ -817,6 +817,13 @@ export type DbState = "ok" | "missing" | "empty" | "newer_schema" | "needs_migra
  */
 export type OwnFileKind = "database" | "wal" | "shm" | "backup" | "damaged";
 /**
+ * What the reserve looks like now.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomState".
+ */
+export type HeadroomState = "none" | "ready" | "missing" | "changed" | "unreadable" | "unrecorded";
+/**
  * Where an effective config value came from.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -2567,9 +2574,20 @@ export interface McpConfig {
    */
   hash_names?: boolean;
   /**
+   * Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+   * `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+   * `0` counts as `1`.
+   */
+  max_pending_plans?: number;
+  /**
    * Maximum number of results per tool call.
    */
   max_results?: number;
+  /**
+   * Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+   * (`rate_limited`). File-only setting; `0` counts as `1`.
+   */
+  prepare_per_minute?: number;
   /**
    * Replace the home directory prefix with `~` in results (on by default, PRD §13.5).
    */
@@ -2780,6 +2798,11 @@ export interface DataInfo {
    * Their total size in bytes.
    */
   footprint_bytes: number;
+  /**
+   * The emergency headroom file (PRO-06, off by default; `None` without a data
+   * directory). Read-only here: `scull headroom create|release` changes it.
+   */
+  headroom?: HeadroomStatus | null;
 }
 /**
  * The database, from its header.
@@ -2822,6 +2845,64 @@ export interface OwnFile {
    * Where it is.
    */
   path: string;
+}
+/**
+ * The reserve's status (`scull headroom status`, `scull status`, the desktop).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomStatus".
+ */
+export interface HeadroomStatus {
+  /**
+   * Why it isn't ready, in one sentence.
+   */
+  detail?: string | null;
+  /**
+   * The manifest, when it could be read.
+   */
+  manifest?: HeadroomManifest | null;
+  /**
+   * The reserve's path.
+   */
+  path: string;
+  /**
+   * Bytes releasing it would free now (its allocated size), when [`HeadroomState::Ready`].
+   */
+  releasable_bytes?: number | null;
+  state: HeadroomState;
+}
+/**
+ * What scull recorded when it created the reserve.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomManifest".
+ */
+export interface HeadroomManifest {
+  /**
+   * Its allocated size when created (bytes): the space it really holds.
+   */
+  allocated_bytes: number;
+  /**
+   * When it was created (Unix seconds).
+   */
+  created_at: number;
+  identity: FileIdentity;
+  /**
+   * The reserve, relative to the data directory (always [`reserve_relative`]).
+   */
+  relative: string;
+  /**
+   * Its logical size (bytes).
+   */
+  size_bytes: number;
+  /**
+   * Format version ([`MANIFEST_VERSION`]).
+   */
+  version: number;
+  /**
+   * The volume it is on (mount point).
+   */
+  volume_id: string;
 }
 /**
  * `status`: the header's freshness line and the nav figures come from here.

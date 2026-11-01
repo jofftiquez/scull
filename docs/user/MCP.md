@@ -141,7 +141,11 @@ How a cleanup goes:
 1. The agent calls `prepare_cleanup` and tells you the plan ID.
 2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan and a
    short code; type the code to approve, or `deny`. It refuses to run without an interactive
-   terminal (a pipe, a script, an agent's shell tool) and as root.
+   terminal (a pipe, a script, an agent's shell tool) and as root. It also refuses a terminal
+   that looks driven by an agent: an AI agent's environment variables are set, an agent client
+   or a terminal-automation tool (`script`, `expect`) started it, or its parent processes
+   can't be read. That check is a heuristic, not a proof of a human; see
+   [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
 3. The agent calls `execute_cleanup`. It runs only with your approval: bound to the plan's
    exact content, unexpired, used once. If any item changed on disk since the plan was made,
    the whole plan is void and the agent has to prepare a new one. Every item is checked again
@@ -155,6 +159,35 @@ exactly one of the two happens: either the revocation is refused because the cle
 started, or `execute_cleanup` is refused with `approval_revoked` and nothing runs. The plan
 then reports `revoked`.
 
+### Limits on what the agent can ask for
+
+So an agent can't bury you in approval requests or grow scull's database without bound,
+`prepare_cleanup` is limited:
+
+| Setting | Default | Effect when exceeded |
+|---|---|---|
+| `mcp.max_pending_plans` | `5` | At most this many agent plans may await your approval (unexpired and unapproved) per machine and account, across all sessions. One more is refused with `too_many_pending_plans` and nothing is recorded. Approve, deny or wait out a plan (15 minutes) to free a slot; `scull approve` lists them. |
+| `mcp.prepare_per_minute` | `6` | At most this many `prepare_cleanup` calls per minute in one session (one `scull mcp serve` process). More are refused with `rate_limited` before anything is scanned; the error says when to retry. |
+
+```toml
+[mcp]
+max_pending_plans = 5
+prepare_per_minute = 6
+```
+
+The rate limit is per server process (each `scull mcp serve` your client starts has its own
+budget); the pending cap is per machine and account, shared by every session. A plan you
+denied in `scull approve` (`deny`, or three wrong codes) stops counting and leaves the list;
+an attempt refused for having no terminal does not.
+
+Both are read **only from scull's config file**, like `destructive`: there is no environment
+variable or flag, so an agent that can edit its MCP client's launch command still can't raise
+them. `0` counts as `1`. The pending cap is checked in the same database transaction that
+records the plan, so parallel sessions can't exceed it either.
+
+Refusals are recorded as `prepare_refused` (below). Rate-limit refusals are recorded once per
+minute per session, so a looping agent can't flood the record.
+
 ### What is recorded
 
 The plan, your approval (channel and account) and the operation with every item's outcome
@@ -165,8 +198,9 @@ Everything that was **refused** is recorded too, and `scull history` lists it un
 
 | Recorded as | When | Reason codes |
 |---|---|---|
-| `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
+| `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), `agent_environment`, `agent_process`, `pty_driver` or `ancestry_unknown` (a terminal that looks driven by an agent), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
 | `execute_refused` by `mcp` | The server refused `execute_cleanup` | `invalid_arguments` (including any attempt to pass a code), `unknown_plan`, `plan_foreign`, `plan_expired`, `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `plan_changed` (void), `outside_allowlist`, `lock_held` |
+| `prepare_refused` | A `prepare_cleanup` hit a limit (above) | `rate_limited`, `too_many_pending_plans` (no plan ID) |
 | `approval_revoked` | You revoked an approval before it was used (recorded in the same transaction; nothing else can write this entry) | `revoked` |
 | `revoke_refused` | A revocation was refused | `not_approved`, `approval_used` (the cleanup already started), `approval_revoked`, `approval_expired`, `plan_foreign`, `unknown_plan` |
 | `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
@@ -214,9 +248,10 @@ reveals anything about the path:
 | `mcp.redact_home` | `true` | Your home folder appears as `~` |
 | `mcp.hash_names` | `false` | Project and folder names are replaced by hashes, salted per machine. The salt is never returned. |
 | `mcp.max_results` | `1000` | Cap on list lengths. A capped list says `truncated`. |
+| `mcp.max_pending_plans`, `mcp.prepare_per_minute` | `5`, `6` | Destructive mode only: see [the limits](#limits-on-what-the-agent-can-ask-for). Config file only. |
 
-Each also has an environment variable: `SCULL_MCP_REDACT_HOME`, `SCULL_MCP_HASH_NAMES`,
-`SCULL_MCP_MAX_RESULTS`.
+The first three also have an environment variable: `SCULL_MCP_REDACT_HOME`,
+`SCULL_MCP_HASH_NAMES`, `SCULL_MCP_MAX_RESULTS`.
 
 Always, whatever the settings:
 

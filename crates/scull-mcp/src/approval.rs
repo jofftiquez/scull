@@ -436,6 +436,150 @@ fn recorded_plan(store: &Store, id: &PlanId) -> Result<Plan, Refused> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Who is approving (#35: agents that drive a pseudo-terminal)
+// ---------------------------------------------------------------------------------------------
+
+/// Executable names (case-insensitive, without `.exe`) of AI agent clients. A `scull approve`
+/// with one of them among its ancestors is being run by that agent (its shell tool, or a
+/// terminal it started), so it is refused. A heuristic: see [`check_approver`].
+pub const AGENT_PROCESSES: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "aider",
+    "goose",
+    "opencode",
+    "cursor-agent",
+    "copilot",
+];
+
+/// Executable names of tools that drive a pseudo-terminal programmatically. Nobody needs one
+/// to approve a plan in their own terminal; an agent uses one to pass the terminal checks and
+/// type the code. (Terminal multiplexers such as `tmux` and `screen` are not on this list:
+/// people use them every day. Their sessions are covered by [`AGENT_ENV_VARS`].)
+pub const PTY_DRIVERS: &[&str] = &["expect", "unbuffer", "script", "empty"];
+
+/// Environment variables AI agent clients set for the commands they run. They are inherited
+/// by everything those commands start, including a `tmux` server and its panes.
+pub const AGENT_ENV_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "GEMINI_CLI",
+];
+
+/// Which [`ApproverSignal`] it is (the stable reason code).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ApproverSignalKind {
+    /// An agent's environment variable is set.
+    AgentEnvironment,
+    /// An agent client is among the ancestor processes.
+    AgentProcess,
+    /// A pseudo-terminal driver is among the ancestor processes.
+    PtyDriver,
+    /// The ancestor processes can't be read (fail closed).
+    AncestryUnknown,
+}
+
+impl ApproverSignalKind {
+    /// Stable code: `agent_environment`, `agent_process`, `pty_driver`, `ancestry_unknown`.
+    pub fn code(self) -> &'static str {
+        match self {
+            ApproverSignalKind::AgentEnvironment => "agent_environment",
+            ApproverSignalKind::AgentProcess => "agent_process",
+            ApproverSignalKind::PtyDriver => "pty_driver",
+            ApproverSignalKind::AncestryUnknown => "ancestry_unknown",
+        }
+    }
+}
+
+/// Why [`check_approver`] refused: the kind and what was seen (a variable or process name, or
+/// why the ancestry couldn't be read).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApproverSignal {
+    /// The kind.
+    pub kind: ApproverSignalKind,
+    /// The variable, process name or error behind it.
+    pub detail: String,
+}
+
+impl ApproverSignal {
+    /// A sentence for the human (no code, no path).
+    pub fn explain(&self) -> String {
+        match self.kind {
+            ApproverSignalKind::AgentEnvironment => format!(
+                "this terminal carries the environment of an AI agent ({} is set)",
+                self.detail
+            ),
+            ApproverSignalKind::AgentProcess => format!(
+                "this terminal was started by an AI agent ({} is among its parent processes)",
+                self.detail
+            ),
+            ApproverSignalKind::PtyDriver => format!(
+                "this terminal is driven by an automation tool ({} is among its parent processes)",
+                self.detail
+            ),
+            ApproverSignalKind::AncestryUnknown => format!(
+                "scull can't tell which processes started this terminal ({})",
+                self.detail
+            ),
+        }
+    }
+}
+
+/// The name of a process as compared with [`AGENT_PROCESSES`] and [`PTY_DRIVERS`]: lowercase,
+/// without a trailing `.exe`.
+fn process_key(name: &str) -> String {
+    let n = name.trim().to_ascii_lowercase();
+    n.strip_suffix(".exe").map(str::to_owned).unwrap_or(n)
+}
+
+/// #35: whether the terminal `scull approve` (or another human approval surface) runs in
+/// looks driven by an AI agent or an automation tool. `ancestry` is the names of this
+/// process's ancestors, parent first, or why they couldn't be read (then this fails closed);
+/// `env_set` says whether an environment variable is set (to anything non-empty).
+///
+/// Checked in order: [`AGENT_ENV_VARS`], an unreadable ancestry, [`AGENT_PROCESSES`] among the
+/// ancestors, then [`PTY_DRIVERS`] among them.
+///
+/// **A heuristic, not a proof of a human.** It stops an agent that runs `scull approve`
+/// through its shell tool, under `script`/`expect`, or in a `tmux` session it started (those
+/// inherit its environment). It does not stop an agent that renames its tools, scrubs its
+/// environment and launches a daemonized multiplexer, nor anything that writes the database
+/// directly: the out-of-scope case of PRD §13.4 (`docs/APPROVAL_HARDENING.md`).
+pub fn check_approver(
+    ancestry: Result<&[String], &str>,
+    env_set: &dyn Fn(&str) -> bool,
+) -> Result<(), ApproverSignal> {
+    if let Some(var) = AGENT_ENV_VARS.iter().find(|v| env_set(v)) {
+        return Err(ApproverSignal {
+            kind: ApproverSignalKind::AgentEnvironment,
+            detail: (*var).to_owned(),
+        });
+    }
+    let names = ancestry.map_err(|why| ApproverSignal {
+        kind: ApproverSignalKind::AncestryUnknown,
+        detail: why.to_owned(),
+    })?;
+    let keys: Vec<String> = names.iter().map(|n| process_key(n)).collect();
+    if let Some(k) = keys.iter().find(|k| AGENT_PROCESSES.contains(&k.as_str())) {
+        return Err(ApproverSignal {
+            kind: ApproverSignalKind::AgentProcess,
+            detail: k.clone(),
+        });
+    }
+    if let Some(k) = keys.iter().find(|k| PTY_DRIVERS.contains(&k.as_str())) {
+        return Err(ApproverSignal {
+            kind: ApproverSignalKind::PtyDriver,
+            detail: k.clone(),
+        });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // Approving
 // ---------------------------------------------------------------------------------------------
 
@@ -1032,6 +1176,8 @@ pub enum Denial {
     /// The broker refused the attempt (expired, foreign, unknown or changed plan, already
     /// approved, ...).
     Refused(Reason),
+    /// The terminal looked driven by an agent or an automation tool ([`check_approver`]).
+    Approver(ApproverSignalKind),
 }
 
 impl Denial {
@@ -1042,6 +1188,7 @@ impl Denial {
             Denial::WrongCode => "wrong_code",
             Denial::NoTerminal => "no_terminal",
             Denial::Refused(r) => r.code(),
+            Denial::Approver(k) => k.code(),
         }
     }
 }
@@ -1098,6 +1245,31 @@ pub fn record_execute_refusal(
             source: "mcp".into(),
             plan_id: plan_id.cloned(),
             content_hash: content_hash.cloned(),
+            reason: reason.into(),
+            channel: "mcp".into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            count: 1,
+        })
+        .map_err(store_err)
+}
+
+/// Record that the MCP server refused a `prepare_cleanup` with the stable code `reason`
+/// (`rate_limited`, `too_many_pending_plans`; [`EventKind::PrepareRefused`], no plan).
+pub fn record_prepare_refusal(
+    store: &mut Store,
+    reason: &str,
+    who: &Principal,
+    now: i64,
+) -> Result<(), Refused> {
+    store
+        .record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::PrepareRefused,
+            source: "mcp".into(),
+            plan_id: None,
+            content_hash: None,
             reason: reason.into(),
             channel: "mcp".into(),
             machine_id: who.machine_id.clone(),
@@ -1231,6 +1403,67 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Reason::ApprovalUsed).unwrap(),
             serde_json::json!("approval_used")
+        );
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn none(_: &str) -> bool {
+        false
+    }
+
+    /// #35: a human's terminal passes; agents, their environment, PTY drivers and an
+    /// unreadable ancestry are refused, in that order, with stable codes.
+    #[test]
+    fn approver_check_refuses_agents_and_pty_drivers() {
+        let human = names(&["zsh", "gnome-terminal-server", "systemd"]);
+        assert_eq!(check_approver(Ok(&human), &none), Ok(()));
+        let tmux = names(&["bash", "tmux: server", "systemd"]);
+        assert_eq!(
+            check_approver(Ok(&tmux), &none),
+            Ok(()),
+            "tmux alone is fine"
+        );
+        let win = names(&["pwsh.exe", "WindowsTerminal.exe", "explorer.exe"]);
+        assert_eq!(check_approver(Ok(&win), &none), Ok(()));
+
+        let code = |a: &[String], env: &dyn Fn(&str) -> bool| {
+            check_approver(Ok(a), env).unwrap_err().kind.code()
+        };
+        assert_eq!(
+            code(&names(&["zsh", "claude", "zsh"]), &none),
+            "agent_process"
+        );
+        assert_eq!(code(&names(&["sh", "Codex.EXE"]), &none), "agent_process");
+        assert_eq!(code(&names(&["sh", "script", "bash"]), &none), "pty_driver");
+        assert_eq!(code(&names(&["expect", "zsh"]), &none), "pty_driver");
+        // An agent above a PTY driver is reported as the agent.
+        let both = names(&["sh", "script", "claude"]);
+        let e = check_approver(Ok(&both), &none).unwrap_err();
+        assert_eq!(
+            (e.kind.code(), e.detail.as_str()),
+            ("agent_process", "claude")
+        );
+        // The agent's environment wins even over a clean ancestry (a tmux session it made).
+        let env = |v: &str| v == "CLAUDECODE";
+        assert_eq!(code(&tmux, &env), "agent_environment");
+        assert!(
+            check_approver(Ok(&tmux), &env)
+                .unwrap_err()
+                .explain()
+                .contains("CLAUDECODE")
+        );
+        // Fail closed.
+        let e = check_approver(Err("no /proc"), &none).unwrap_err();
+        assert_eq!(e.kind, ApproverSignalKind::AncestryUnknown);
+        // Similar names are not matches.
+        let similar = names(&["claude-desktop-helper", "scripts", "expected", "zsh"]);
+        assert_eq!(check_approver(Ok(&similar), &none), Ok(()));
+        assert_eq!(
+            Denial::Approver(ApproverSignalKind::PtyDriver).code(),
+            "pty_driver"
         );
     }
 

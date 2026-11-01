@@ -27,6 +27,12 @@
 //!   was given and scull's database already exists; nothing is created for it), and a
 //!   refused attempt (expired, foreign or unknown plan, already approved). `scull history`
 //!   lists them. Not when elevated: an elevated process never writes the user's database.
+//! * **Agent-driven terminals (#35)**: a process that drives a pseudo-terminal passes the
+//!   terminal checks. Before showing a plan, `scull approve` refuses (`safety_blocked`, exit 5,
+//!   audited) when an AI agent's environment variable is set, an AI agent client or a PTY
+//!   driver (`script`, `expect`, ...) is among its parent processes, or the parent processes
+//!   can't be read ([`approval::check_approver`], [`scull_platform::ancestry()`]). A heuristic
+//!   that raises the bar, not a proof of a human: see `docs/APPROVAL_HARDENING.md`.
 //! * **`--revoke <plan-id>`**: the same checks (interactive terminal, never elevated, an agent
 //!   plan of this machine and user, approved by this user), then
 //!   [`approval::revoke`]: the approval is spent in the same atomic update the Executor uses,
@@ -71,7 +77,7 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
             && !exec::elevation().blocks_destructive()
             && let Some(id) = plan_id.and_then(|p| PlanId::try_from(p.to_owned()).ok())
         {
-            audit_without_terminal(&id);
+            audit_refused_attempt(&id, Denial::NoTerminal);
         }
         return Err(e);
     }
@@ -81,6 +87,11 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
             "scull approve refuses to run as root/administrator (or when that can't be told): \
              approve agent plans as your normal user. Nothing was approved.",
         ));
+    }
+    // #35: an agent driving a pseudo-terminal passes the checks above; refuse what looks like
+    // one before anything is shown (a heuristic, see `approval::check_approver`).
+    if let Some(id) = plan_id {
+        check_terminal_owner(id)?;
     }
     let who = exec::who()?;
     let principal = Principal {
@@ -203,10 +214,42 @@ fn audit(
     }
 }
 
-/// FX-MCP-08 refusals are audited too (an agent's shell tool trying `scull approve`), but
-/// only into a database and machine ID that already exist: nothing is created for a refused
-/// attempt (not even the machine ID file). Repeats fold into one entry (bounded).
-fn audit_without_terminal(id: &PlanId) {
+/// #35: refuse (and audit) when the terminal looks driven by an AI agent or an automation
+/// tool ([`approval::check_approver`] over this process's ancestry and environment). Fails
+/// closed when the ancestry can't be read.
+fn check_terminal_owner(plan_id: &str) -> Result<(), ScullError> {
+    let ancestry =
+        scull_platform::ancestry().map(|a| a.iter().flat_map(|p| p.names()).collect::<Vec<_>>());
+    let why = ancestry.as_ref().err().map(ToString::to_string);
+    let names = match &ancestry {
+        Ok(n) => Ok(n.as_slice()),
+        Err(_) => Err(why.as_deref().unwrap_or("unknown")),
+    };
+    let env_set = |v: &str| std::env::var_os(v).is_some_and(|x| !x.is_empty());
+    let Err(signal) = approval::check_approver(names, &env_set) else {
+        return Ok(());
+    };
+    if let Ok(id) = PlanId::try_from(plan_id.to_owned()) {
+        audit_refused_attempt(&id, Denial::Approver(signal.kind));
+    }
+    Err(ScullError::new(
+        ErrorKind::SafetyBlocked,
+        format!(
+            "scull approve refuses to approve here: {} ({}). Approving must be done by you, in a \
+             terminal you opened yourself, not by an AI agent or through `script`, `expect` or a \
+             session an agent started. This check is a heuristic; see \
+             docs/APPROVAL_HARDENING.md. Nothing was approved.",
+            escape_for_terminal(&signal.explain()),
+            signal.kind.code()
+        ),
+    ))
+}
+
+/// Refused attempts (no terminal, FX-MCP-08; a terminal that looks agent-driven, #35) are
+/// audited too, but only into a database and machine ID that already exist: nothing is
+/// created for a refused attempt (not even the machine ID file). Repeats fold into one entry
+/// (bounded).
+fn audit_refused_attempt(id: &PlanId, denial: Denial) {
     let Ok(dirs) = exec::dirs() else { return };
     let Ok(Some(machine_id)) = scull_platform::existing_machine_id(&dirs.data) else {
         return;
@@ -219,13 +262,7 @@ fn audit_without_terminal(id: &PlanId) {
     };
     let principal = Principal { machine_id, user };
     let hash = approval::recorded_hash(&store, id);
-    audit(
-        &mut store,
-        id,
-        hash.as_ref(),
-        Denial::NoTerminal,
-        &principal,
-    );
+    audit(&mut store, id, hash.as_ref(), denial, &principal);
 }
 
 /// FX-MCP-08: approving needs a human at an interactive terminal. `machine` is a JSON/NDJSON

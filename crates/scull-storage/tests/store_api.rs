@@ -809,3 +809,116 @@ fn revocation_and_consumption_race_with_exactly_one_winner() {
     }
     assert_eq!(s.agent_events(0, 10_000).unwrap().len(), revoked_wins);
 }
+
+/// #299: the pending cap is enforced in the insert's own transaction: concurrent sessions
+/// recording agent plans for one user get exactly `max_pending` in; approved, expired and
+/// other users' plans don't count; non-agent plans are refused by this call.
+#[test]
+fn agent_plan_cap_holds_under_concurrency() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let handles: Vec<_> = (1..=8u32)
+        .map(|n| {
+            let (path, barrier) = (path.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let mut c = open(&path);
+                barrier.wait();
+                c.insert_agent_plan(&plan(n), T0 + 1, 3).unwrap()
+            })
+        })
+        .collect();
+    let inserted = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .filter(|i| *i)
+        .count();
+    assert_eq!(inserted, 3);
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 1).unwrap(),
+        3
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "other", T0 + 1).unwrap(),
+        0
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-b", "dev", T0 + 1).unwrap(),
+        0
+    );
+    // An approved plan no longer counts; an expired one neither.
+    let ids = s
+        .plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 1, 10)
+        .unwrap();
+    let first = s.get_plan(&ids[0]).unwrap().unwrap();
+    s.insert_approval(&approval_for(&first, T0 + 2, T0 + 600))
+        .unwrap();
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 3).unwrap(),
+        2
+    );
+    assert!(s.insert_agent_plan(&plan(20), T0 + 3, 3).unwrap());
+    assert!(!s.insert_agent_plan(&plan(21), T0 + 3, 3).unwrap());
+    assert!(
+        s.get_plan(&plan_id(21)).unwrap().is_none(),
+        "nothing recorded"
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 15 * 60)
+            .unwrap(),
+        0
+    );
+}
+
+fn denial(
+    at: i64,
+    plan: &scull_core::Plan,
+    reason: &str,
+    source: &str,
+) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ApprovalDenied,
+        source: source.into(),
+        plan_id: Some(plan.id().clone()),
+        content_hash: Some(plan.content_hash().clone()),
+        reason: reason.into(),
+        channel: "terminal".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// #299 review: a plan the human denied (`denied`, or too many wrong codes) no longer counts
+/// toward the pending cap and leaves the approval list; a refused attempt (`no_terminal`,
+/// what an agent's shell tool gets) does not free a slot.
+#[test]
+fn denied_plans_stop_counting_as_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for n in 1..=4 {
+        s.insert_plan(&plan(n)).unwrap();
+    }
+    let pending = |s: &Store| s.pending_agent_plans("machine-a", "dev", T0 + 5).unwrap();
+    let listed = |s: &Store| {
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 5, 10)
+            .unwrap()
+    };
+    assert_eq!(pending(&s), 4);
+    s.record_agent_event(&denial(T0 + 1, &plan(1), "denied", "cli"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(2), "wrong_code", "desktop"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(3), "no_terminal", "cli"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(4), "plan_expired", "cli"))
+        .unwrap();
+    assert_eq!(pending(&s), 2);
+    assert_eq!(listed(&s), vec![plan_id(4), plan_id(3)]);
+    // The cap counts the same way.
+    assert!(s.insert_agent_plan(&plan(5), T0 + 5, 3).unwrap());
+    assert!(!s.insert_agent_plan(&plan(6), T0 + 5, 3).unwrap());
+}

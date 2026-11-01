@@ -226,6 +226,13 @@ in detail, including where each quarantined item is now.
 Freed space is measured, not guessed. Hard links, file-system snapshots and compression can
 make the real gain differ from the estimate, and scull explains differences over 10%.
 
+## The emergency reserve (headroom)
+
+`scull headroom create` sets aside a reserve file, so a completely full disk still leaves room
+to clean up. It is off until you create one. The reserve lives only in scull's own data folder.
+scull releases only the file it created and recorded, with the same identity and size. A link
+or any other file at that path is left alone. Creating and releasing are both recorded.
+
 ## scull refuses to run as root or Administrator
 
 Commands that change the disk refuse to run elevated (root, `sudo`, an Administrator prompt).

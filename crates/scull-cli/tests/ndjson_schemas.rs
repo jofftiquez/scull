@@ -109,6 +109,18 @@ const RUNS: &[(&str, &[&str], &str)] = &[
         &["data", "export", "--out", "{export}"],
         "data-export",
     ),
+    // Emergency headroom (PRO-06) in the temp SCULL_HOME: a 256 MiB reserve, then released.
+    ("headroom status", &["headroom", "status"], "headroom"),
+    (
+        "headroom create",
+        &["headroom", "create", "--size", "256M", "--yes"],
+        "headroom",
+    ),
+    (
+        "headroom release",
+        &["headroom", "release", "--yes"],
+        "headroom",
+    ),
     // Forgets the history `check` recorded above (scull's own temp database).
     (
         "insights purge",

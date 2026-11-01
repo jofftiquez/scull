@@ -234,6 +234,14 @@ pub enum Command {
         action: ScheduleAction,
     },
 
+    /// Emergency headroom: a reserve file scull releases on command when the disk is full
+    /// (off by default).
+    Headroom {
+        /// Subcommand.
+        #[command(subcommand)]
+        action: HeadroomAction,
+    },
+
     /// Inspect, export or delete everything scull has recorded locally.
     Data {
         /// Subcommand.
@@ -737,6 +745,29 @@ pub struct ConsentArgs {
     /// Only show the files and commands; change nothing.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// `scull headroom` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum HeadroomAction {
+    /// Show whether there is a reserve, its size and whether it can be released (read-only).
+    Status,
+    /// Reserve disk space for emergencies in scull's data folder (asks first, or `--yes`).
+    Create {
+        /// Size, e.g. `2G` or `512M` (256 MiB to 10 GiB, at most 5% of the volume).
+        #[arg(long, value_name = "SIZE", value_parser = crate::cmd::headroom::parse_size)]
+        size: Option<u64>,
+        /// Create without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Release the reserve to free its space, e.g. when the disk is full (asks first, or
+    /// `--yes`). Only the file scull created is ever removed.
+    Release {
+        /// Release without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// `scull data` subcommands.

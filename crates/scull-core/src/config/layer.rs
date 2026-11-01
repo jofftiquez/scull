@@ -37,6 +37,8 @@ use std::path::PathBuf;
 /// redact_home = true
 /// hash_names = false
 /// max_results = 1000
+/// max_pending_plans = 5    # agent plans awaiting approval (file only)
+/// prepare_per_minute = 6   # prepare_cleanup calls per session per minute (file only)
 ///
 /// [forge]
 /// enabled = false
@@ -136,6 +138,14 @@ pub struct McpLayer {
     /// Maximum results per tool call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
+    /// Most agent plans awaiting approval per machine and user. Only honored from the user
+    /// config file (see [`resolve`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pending_plans: Option<u32>,
+    /// Most `prepare_cleanup` calls per minute in one MCP session. Only honored from the user
+    /// config file (see [`resolve`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare_per_minute: Option<u32>,
 }
 
 /// `[forge]` in a [`ConfigLayer`].
@@ -555,7 +565,8 @@ impl ResolvedConfig {
 /// [`Config::default`]. See the [module docs](super) for which fields are additive.
 ///
 /// `mcp.destructive` is taken from `user` only; values in `cli` or `env` are ignored, so
-/// destructive MCP tools always need an explicit line in the config file.
+/// destructive MCP tools always need an explicit line in the config file. The agent limits
+/// `mcp.max_pending_plans` and `mcp.prepare_per_minute` are file-only too.
 pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> ResolvedConfig {
     let env_origin = |field: &str| Origin::Env {
         var: env
@@ -641,6 +652,15 @@ pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> Resolve
     if let Some(v) = user.mcp.destructive {
         config.mcp.destructive = v;
         origins.insert("mcp.destructive".into(), vec![Origin::UserConfig]);
+    }
+    // File-only: the agent limits (#299).
+    if let Some(v) = user.mcp.max_pending_plans {
+        config.mcp.max_pending_plans = v;
+        origins.insert("mcp.max_pending_plans".into(), vec![Origin::UserConfig]);
+    }
+    if let Some(v) = user.mcp.prepare_per_minute {
+        config.mcp.prepare_per_minute = v;
+        origins.insert("mcp.prepare_per_minute".into(), vec![Origin::UserConfig]);
     }
 
     // Additive protection fields.

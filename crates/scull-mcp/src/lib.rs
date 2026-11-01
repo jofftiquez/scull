@@ -68,8 +68,8 @@ pub use escape::{Suspicion, TRUNCATION_MARKER, escape, needs_escape, suspicion};
 pub use local::{LocalResult, ToolSpec, read_only_tool_names};
 pub use plan_tools::{
     CleanupRunner, CleanupStatusOutput, ExecuteOutput, ItemOutcomeView, MAX_PLAN_ITEMS,
-    OperationView, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanIdArgs, PlanItemView, PlanOutput,
-    PrepareArgs, RunItem, RunRequest, RunSummary,
+    OperationView, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanIdArgs, PlanItemView, PlanLimits,
+    PlanOutput, PrepareArgs, RunItem, RunRequest, RunSummary,
 };
 pub use redact::{
     HASH_PREFIX, MAX_NAME_CHARS, MAX_PATH_CHARS, MAX_STRING_CHARS, MAX_TEXT_CHARS, NameFlag,

@@ -577,8 +577,10 @@ fn approve_in_a_real_pseudo_terminal() {
     // The same environment as `Env::cmd`, spelled out for the shell tmux starts.
     let q = |p: &std::path::Path| format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"));
     let user_home = env.fx.base().join("userhome");
+    // Without the agent markers of whatever runs the tests (#35 would rightly refuse them).
     let mut vars = format!(
-        "env -u SCULL_TEST_ASSUME_ELEVATED SCULL_HOME={} HOME={} TERM=xterm NO_COLOR=1",
+        "env -u SCULL_TEST_ASSUME_ELEVATED {} SCULL_HOME={} HOME={} TERM=xterm NO_COLOR=1",
+        unset_agent_vars(),
         q(&env.home()),
         q(&user_home)
     );
@@ -839,4 +841,228 @@ fn revoke_through_the_cli_stops_the_agent() {
         ]
     );
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+// ---------------------------------------------------------------------------------------------
+// #35: agents driving a pseudo-terminal (FX-MCP-11, -12, -13)
+// ---------------------------------------------------------------------------------------------
+
+/// `env -u` arguments removing every agent marker (`approval::AGENT_ENV_VARS`).
+#[cfg(unix)]
+fn unset_agent_vars() -> String {
+    approval::AGENT_ENV_VARS
+        .iter()
+        .map(|v| format!("-u {v}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(unix)]
+fn shq(p: &std::path::Path) -> String {
+    format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
+}
+
+/// A prepared agent plan and the shell command that runs `scull approve <plan>` with the
+/// test's environment (scull home, sandbox) and `extra` variables, without agent markers.
+#[cfg(unix)]
+fn pty_case(extra: &str) -> (Env, PlanId, String) {
+    let env = Env::new(true);
+    let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
+    let (_, cands) = s.call("get_cleanup_candidates", json!({}));
+    let pick = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| matches!(c["action"].as_str(), Some("delete" | "quarantine")))
+        .unwrap()
+        .clone();
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": [pick["id"]] }));
+    assert!(!err, "{plan:#}");
+    s.finish();
+    let id = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    let user_home = env.fx.base().join("userhome");
+    let mut vars = format!(
+        "env -u SCULL_TEST_ASSUME_ELEVATED {} SCULL_HOME={} HOME={} TERM=xterm NO_COLOR=1 {extra}",
+        unset_agent_vars(),
+        shq(&env.home()),
+        shq(&user_home)
+    );
+    for (k, v) in env.fx.sandbox_env() {
+        vars.push_str(&format!(" {k}={}", shq(v)));
+    }
+    let cmd = format!(
+        "{vars} {} approve {}",
+        shq(std::path::Path::new(env!("CARGO_BIN_EXE_scull"))),
+        id.as_str()
+    );
+    (env, id, cmd)
+}
+
+/// `script` running `sh -c <cmd>` in a fresh pseudo-terminal (util-linux or BSD syntax), or
+/// `None` where there is no `script`.
+#[cfg(unix)]
+fn under_script(program: &std::path::Path, cmd: &str) -> Option<Command> {
+    if Command::new("script").arg("--version").output().is_err()
+        && !std::path::Path::new("/usr/bin/script").exists()
+    {
+        return None;
+    }
+    let mut c = Command::new(program);
+    if cfg!(target_os = "macos") {
+        c.args([
+            "-c",
+            &format!("script -q /dev/null sh -c {}", shell_quote(cmd)),
+        ]);
+    } else {
+        c.args([
+            "-c",
+            &format!("script -q -e -c {} /dev/null", shell_quote(cmd)),
+        ]);
+    }
+    Some(c)
+}
+
+#[cfg(unix)]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Run a PTY-driven approval with "yes" and a guess typed in, and check it was refused with
+/// `code` before any code was shown: nothing approved, the refusal audited.
+#[cfg(unix)]
+fn assert_refused(env: &Env, id: &PlanId, mut c: Command, code: &str) {
+    let mut child = c
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(b"yes\nABCDEF\n");
+    let o = child.wait_with_output().unwrap();
+    let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), stderr(&o));
+    assert!(all.contains(code), "expected {code}:\n{all}");
+    assert!(all.contains("Nothing was approved"), "{all}");
+    assert!(
+        !all.contains("to approve, or `deny`"),
+        "no code is ever shown:\n{all}"
+    );
+    assert!(
+        env.store().get_approval(id).unwrap().is_none(),
+        "nothing approved"
+    );
+    let audited: Vec<String> = env
+        .store()
+        .agent_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind.as_str() == "approval_denied")
+        .map(|e| e.reason)
+        .collect();
+    assert_eq!(audited, [code], "audited");
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// Whether the process running these tests was itself started by an AI agent (a developer's
+/// agent running `cargo test`): then every approval below is, rightly, refused as
+/// `agent_process` first.
+#[cfg(unix)]
+fn tests_run_under_an_agent() -> bool {
+    let names: Vec<String> = scull_platform::ancestry()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p.names())
+        .collect();
+    approval::check_approver(Ok(&names), &|_| false)
+        .is_err_and(|s| s.kind == approval::ApproverSignalKind::AgentProcess)
+}
+
+/// FX-MCP-11: `scull approve` under `script` (a real pseudo-terminal: stdin, stdout and
+/// stderr are terminals, so FX-MCP-08 passes) is refused as `pty_driver` before the plan or
+/// a code is shown (as `agent_process` when the tests themselves run under an agent).
+/// Skipped where `script` is missing.
+#[cfg(unix)]
+#[test]
+fn fx_mcp_11_approve_under_a_pty_driver_is_refused() {
+    let (env, id, cmd) = pty_case("");
+    let Some(c) = under_script(std::path::Path::new("/bin/sh"), &cmd) else {
+        eprintln!("skipped: no script(1)");
+        env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    };
+    let want = if tests_run_under_an_agent() {
+        "agent_process"
+    } else {
+        "pty_driver"
+    };
+    assert_refused(&env, &id, c, want);
+}
+
+/// FX-MCP-12: an agent's environment marker (here Claude Code's `CLAUDECODE=1`) refuses the
+/// approval even in a clean pseudo-terminal: a `tmux` session the agent started inherits it.
+/// Skipped where `tmux` is missing.
+#[cfg(unix)]
+#[test]
+fn fx_mcp_12_agent_environment_in_a_tmux_session_is_refused() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("skipped: tmux is not installed");
+        return;
+    }
+    let (env, id, cmd) = pty_case("CLAUDECODE=1");
+    let socket = env.fx.base().join("t.sock");
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .current_dir(env.fx.base())
+            .arg("-S")
+            .arg("t.sock")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let o = tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "agent",
+        "-x",
+        "220",
+        "-y",
+        "50",
+        &format!("{cmd}; echo SCULL-EXIT=$?; sleep 30"),
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let mut pane = String::new();
+    for _ in 0..200 {
+        pane = String::from_utf8_lossy(&tmux(&["capture-pane", "-p", "-J", "-t", "agent"]).stdout)
+            .into_owned();
+        if pane.contains("SCULL-EXIT=") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    tmux(&["kill-server"]);
+    let _ = std::fs::remove_file(&socket);
+    assert!(pane.contains("SCULL-EXIT=5"), "{pane}");
+    assert!(pane.contains("agent_environment"), "{pane}");
+    assert!(!pane.contains("to approve, or `deny`"), "{pane}");
+    assert!(env.store().get_approval(&id).unwrap().is_none());
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// FX-MCP-13: an AI agent client among the parent processes (a stand-in program named
+/// `claude`, a copy of `/bin/sh`, running the approval under `script`) is refused as
+/// `agent_process`, reported before the PTY driver.
+#[cfg(unix)]
+#[test]
+fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
+    let (env, id, cmd) = pty_case("");
+    let fake = env.fx.base().join("bin");
+    std::fs::create_dir_all(&fake).unwrap();
+    let claude = fake.join("claude");
+    std::fs::copy("/bin/sh", &claude).unwrap();
+    let Some(c) = under_script(&claude, &cmd) else {
+        eprintln!("skipped: no script(1)");
+        env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    };
+    assert_refused(&env, &id, c, "agent_process");
 }

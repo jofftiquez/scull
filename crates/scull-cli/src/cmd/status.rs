@@ -86,6 +86,9 @@ pub struct StatusReport {
     /// The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.
     /// The human line mentions it; the prompt line does not.
     pub review_plan: Option<ReviewPlanReport>,
+    /// The emergency headroom file (PRO-06), when there is one (or a leftover of one). The
+    /// human line mentions a ready one; the prompt line does not.
+    pub headroom: Option<scull_proactive::headroom::HeadroomStatus>,
 }
 
 /// The latest usable scan.
@@ -170,6 +173,7 @@ pub fn collect(now: i64) -> StatusReport {
                 if let Some(p) = super::review_plan::current(&store, now) {
                     add_review_plan(&mut r, p);
                 }
+                add_headroom(&mut r, scull_proactive::headroom::status(&data_dir));
                 r
             }
             Err(e) => unavailable(now, StatusState::Unavailable, Some(e.to_string())),
@@ -222,6 +226,7 @@ fn unavailable(now: i64, state: StatusState, detail: Option<String>) -> StatusRe
         line,
         short: String::new(),
         review_plan: None,
+        headroom: None,
     }
 }
 
@@ -334,6 +339,7 @@ pub fn from_parts(
         line,
         short,
         review_plan: None,
+        headroom: None,
     }
 }
 
@@ -347,6 +353,21 @@ pub fn add_review_plan(r: &mut StatusReport, p: ReviewPlanReport) {
         ));
     }
     r.review_plan = Some(p);
+}
+
+/// Mention the emergency headroom file in the human line when it is ready (only when a scan is
+/// shown); report any other state except "none".
+pub fn add_headroom(r: &mut StatusReport, h: scull_proactive::headroom::HeadroomStatus) {
+    use scull_proactive::headroom::HeadroomState;
+    match h.state {
+        HeadroomState::None => return,
+        HeadroomState::Ready if r.state == StatusState::Ok => r.line.push_str(&format!(
+            " \u{b7} {} headroom (`scull headroom release` frees it)",
+            format_bytes(h.releasable_bytes.unwrap_or(0))
+        )),
+        _ => {}
+    }
+    r.headroom = Some(h);
 }
 
 /// A duration as its largest unit: `<1m`, `5m`, `2h`, `9d`.

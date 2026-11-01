@@ -22,6 +22,10 @@ scull-safety.workspace = true
 scull-engine.workspace = true
 serde_json.workspace = true
 scull-storage.workspace = true
+# Headroom (PRO-06): the reserve's layout, limits and manifest (read-only side).
+scull-proactive.workspace = true
+schemars.workspace = true
+serde.workspace = true
 # Quick Clean (P2-QC-01): located caches and their commands, cache sizes, cancellation, and a
 # private sandbox folder for the sanitized tool environment.
 scull-detectors.workspace = true

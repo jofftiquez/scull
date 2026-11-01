@@ -17,7 +17,9 @@
 //!   layer's entries are kept, so a CLI flag or env var can never drop a path the user config
 //!   protects (FX-CFG-04). For `scan.min_tier` the most protective tier wins per path.
 //! * `mcp.destructive` is read **only** from the user config file. The `--allow-destructive`
-//!   launch flag is a separate, second switch checked by the MCP server (PRD §13.2).
+//!   launch flag is a separate, second switch checked by the MCP server (PRD §13.2). So are
+//!   the agent limits `mcp.max_pending_plans` and `mcp.prepare_per_minute` (#299): an agent
+//!   that can set its MCP server's environment or flags can't raise them.
 //!
 //! The user config file format is [`ConfigLayer`] in TOML (unknown keys are rejected with an
 //! [`ErrorKind::Config`](crate::ErrorKind::Config) error, exit code 2). Environment variables are
@@ -73,9 +75,16 @@ pub const DEFAULT_ACTIVITY_WINDOW: DurationSpec = DurationSpec::from_hours(24);
 /// Default cap on the number of results an MCP tool returns (PRD §13.5).
 pub const DEFAULT_MCP_MAX_RESULTS: u32 = 1000;
 
+/// Default cap on agent plans awaiting approval (unexpired, unapproved) per machine and user
+/// (#299).
+pub const DEFAULT_MCP_MAX_PENDING_PLANS: u32 = 5;
+
+/// Default number of `prepare_cleanup` calls an MCP session may make per minute (#299).
+pub const DEFAULT_MCP_PREPARE_PER_MINUTE: u32 = 6;
+
 /// Every effective config field, as the dotted key used in TOML, [`ResolvedConfig::origins`]
 /// and `scull config show`.
-pub const FIELDS: [&str; 28] = [
+pub const FIELDS: [&str; 30] = [
     "scan.roots",
     "scan.exclude",
     "scan.protect",
@@ -89,6 +98,8 @@ pub const FIELDS: [&str; 28] = [
     "mcp.redact_home",
     "mcp.hash_names",
     "mcp.max_results",
+    "mcp.max_pending_plans",
+    "mcp.prepare_per_minute",
     "forge.enabled",
     "output.color",
     "output.units",
@@ -258,6 +269,13 @@ pub struct McpConfig {
     pub hash_names: bool,
     /// Maximum number of results per tool call.
     pub max_results: u32,
+    /// Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+    /// `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+    /// `0` counts as `1`.
+    pub max_pending_plans: u32,
+    /// Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+    /// (`rate_limited`). File-only setting; `0` counts as `1`.
+    pub prepare_per_minute: u32,
 }
 
 impl Default for McpConfig {
@@ -268,6 +286,8 @@ impl Default for McpConfig {
             redact_home: true,
             hash_names: false,
             max_results: DEFAULT_MCP_MAX_RESULTS,
+            max_pending_plans: DEFAULT_MCP_MAX_PENDING_PLANS,
+            prepare_per_minute: DEFAULT_MCP_PREPARE_PER_MINUTE,
         }
     }
 }
