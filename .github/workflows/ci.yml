@@ -34,14 +34,17 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    # D-10 / PLT-07…11: macOS, Linux and Windows are first-class. To keep pull requests fast,
-    # PRs run Linux only; every push to main/phase2, the nightly schedule and manual runs test
-    # all three OSs, so a platform regression shows up on the branch within one merge.
+    # D-10 / PLT-07…11: macOS, Linux and Windows are supported. PRs run Linux only; every push to
+    # main/phase2, the nightly schedule and manual runs test all three OSs. During the MVP push
+    # (provisional maintainer decision, see docs/CI.md) Windows is ADVISORY: its job runs and
+    # reports, but a Windows failure does not fail the workflow or block merges; failures are
+    # filed as issues. Linux and macOS remain required.
     strategy:
       fail-fast: false
       matrix:
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - name: Enable long paths and keep LF on Windows
