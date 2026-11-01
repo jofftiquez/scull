@@ -1155,3 +1155,507 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
     };
     assert_refused(&env, &id, c, "agent_process");
 }
+
+// ---------------------------------------------------------------------------------------------
+// `scull approve <plan-id> --run`: the human approves and runs an agent plan in one step
+// ---------------------------------------------------------------------------------------------
+
+/// Whether the `--run` tests can drive a real terminal: they need tmux (its server is not a
+/// child of the test, so the approval isn't refused as agent- or PTY-driven). Required on CI,
+/// where a silent skip would hide the tests; skipped locally without it.
+#[cfg(unix)]
+fn have_tmux(test: &str) -> bool {
+    if Command::new("tmux").arg("-V").output().is_ok() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{test}: tmux is required on CI"
+    );
+    eprintln!("SKIP {test}: tmux is not installed");
+    false
+}
+
+/// An agent plan over `app/target` only, prepared through the MCP server; the session stays
+/// open for the agent's side. Returns the session, the picked candidate and the plan.
+#[cfg(unix)]
+fn prepare_app_target(env: &Env) -> (Session, Value, PlanId) {
+    let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
+    let (_, cands) = s.call("get_cleanup_candidates", json!({}));
+    let pick = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["path"]
+                .as_str()
+                .unwrap()
+                .replace('\\', "/")
+                .ends_with("app/target")
+                && matches!(c["action"].as_str(), Some("delete" | "quarantine"))
+        })
+        .unwrap_or_else(|| panic!("app/target is cleanable: {cands:#}"))
+        .clone();
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": [pick["id"]] }));
+    assert!(!err, "{plan:#}");
+    let id = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    (s, pick, id)
+}
+
+/// The shell line running `scull approve <id> --run` with the test's scull home and sandbox,
+/// without agent markers, plus `extra` variables.
+#[cfg(unix)]
+fn approve_run_line(env: &Env, id: &PlanId, extra: &str) -> String {
+    let user_home = env.fx.base().join("userhome");
+    let mut vars = format!(
+        "env -u SCULL_TEST_ASSUME_ELEVATED {} SCULL_HOME={} HOME={} TERM=xterm NO_COLOR=1 {extra}",
+        unset_agent_vars(),
+        shq(&env.home()),
+        shq(&user_home)
+    );
+    for (k, v) in env.fx.sandbox_env() {
+        vars.push_str(&format!(" {k}={}", shq(v)));
+    }
+    format!(
+        "{vars} {} approve {} --run",
+        shq(std::path::Path::new(env!("CARGO_BIN_EXE_scull"))),
+        id.as_str()
+    )
+}
+
+/// A detached tmux session (its own socket in the fixture's temp dir) running `line`.
+#[cfg(unix)]
+struct Tmux {
+    socket: PathBuf,
+}
+
+#[cfg(unix)]
+impl Tmux {
+    fn start(env: &Env, line: &str) -> Self {
+        let t = Self {
+            socket: env.fx.base().join("run.sock"),
+        };
+        let o = t.cmd(&[
+            "new-session",
+            "-d",
+            "-s",
+            "run",
+            "-x",
+            "220",
+            "-y",
+            "60",
+            &format!("{line}; echo SCULL-EXIT=$?; sleep 60"),
+        ]);
+        assert!(o.status.success(), "{}", stderr(&o));
+        t
+    }
+
+    fn cmd(&self, args: &[&str]) -> Output {
+        Command::new("tmux")
+            .arg("-S")
+            .arg(&self.socket)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn pane(&self) -> String {
+        String::from_utf8_lossy(
+            &self
+                .cmd(&["capture-pane", "-p", "-J", "-S", "-500", "-t", "run"])
+                .stdout,
+        )
+        .into_owned()
+    }
+
+    fn wait_for(&self, needle: &str) -> String {
+        for _ in 0..300 {
+            let p = self.pane();
+            if p.contains(needle) {
+                return p;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("{needle:?} never appeared:\n{}", self.pane());
+    }
+
+    /// The code shown in the prompt.
+    fn code(&self) -> String {
+        let shown = self.wait_for("or `deny`");
+        assert!(
+            shown.contains("to approve and run it now, or `deny`"),
+            "{shown}"
+        );
+        let code = shown
+            .split("Type ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap()
+            .to_owned();
+        assert_eq!(code.len(), 7, "{shown}");
+        code
+    }
+
+    fn send(&self, keys: &str) {
+        self.cmd(&["send-keys", "-t", "run", keys, "Enter"]);
+    }
+
+    /// The whole pane once `scull` exited, and its exit code.
+    fn finish(self) -> (String, i32) {
+        let done = self.wait_for("SCULL-EXIT=");
+        let code = done
+            .split("SCULL-EXIT=")
+            .nth(1)
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(-1);
+        (done, code)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Tmux {
+    fn drop(&mut self) {
+        let _ = self.cmd(&["kill-server"]);
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+/// `kind/source/reason` of the agent audit events of `kind`, oldest first.
+#[cfg(unix)]
+fn audited(env: &Env, kind: &str) -> Vec<String> {
+    env.store()
+        .agent_events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind.as_str() == kind)
+        .map(|e| format!("{}/{}/{}", e.kind.as_str(), e.source, e.reason))
+        .collect()
+}
+
+/// `scull approve <plan> --run` in a real terminal: the plan and the code are shown, the
+/// typed code approves it and scull runs exactly that plan through the Executor at once:
+/// only `app/target` goes (the other cleanable items and the canaries stay), the operation is
+/// recorded with channel `cli_tty` and this account, the run is audited (`approve_run`,
+/// `executed`), and the agent can't run the plan afterwards (`approval_used`).
+#[cfg(unix)]
+#[test]
+fn approve_run_executes_only_the_plan() {
+    if skip_if_elevated("approve_run_executes_only_the_plan")
+        || !have_tmux("approve_run_executes_only_the_plan")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (mut s, pick, id) = prepare_app_target(&env);
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let code = t.code();
+    let shown = t.pane();
+    assert!(shown.contains("An AI agent asks to clean up"), "{shown}");
+    assert!(shown.contains(id.as_str()), "{shown}");
+    t.send(&code);
+    let (done, exit) = t.finish();
+    println!("{}", done.trim_end());
+    assert_eq!(exit, 0, "{done}");
+    assert!(done.contains("Ran plan"), "{done}");
+    assert!(!env.fx.root().join("app/target").exists(), "{done}");
+    assert!(env.fx.root().join("web/node_modules").exists());
+    assert!(env.fx.root().join("notes/todo.txt").exists());
+
+    let store = env.store();
+    let ops = store.operations(0).unwrap();
+    assert_eq!(ops.len(), 1);
+    let op = ops[0].operation_id.clone();
+    let rec = store.operation(&op).unwrap().unwrap();
+    assert_eq!(rec.plan_id, id);
+    assert_eq!(rec.method, ApprovalMethod::CliTty);
+    assert_eq!(rec.approver, env.who().user);
+    let a = store.get_approval(&id).unwrap().unwrap();
+    assert_eq!(a.method, ApprovalMethod::CliTty);
+    assert!(a.used_at.is_some(), "spent by the run");
+    assert_eq!(audited(&env, "approve_run"), ["approve_run/cli/executed"]);
+
+    // The agent can't run it again.
+    let (err, r) = s.call("execute_cleanup", json!({ "plan_id": id.as_str() }));
+    assert!(err);
+    assert_eq!(r["error"]["code"], "approval_used", "{r:#}");
+    s.finish();
+    assert_eq!(store.operations(0).unwrap().len(), 1);
+
+    let o = env.run(&["history"]);
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(text.contains("approved, run here"), "{text}");
+
+    // A used plan can't be approved or run again: refused before a code is shown.
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let (again, exit) = t.finish();
+    assert_eq!(exit, 5, "{again}");
+    assert!(!again.contains("or `deny`"), "{again}");
+    assert_eq!(store.operations(0).unwrap().len(), 1);
+
+    let item_id: ItemId = serde_json::from_value(pick["id"].clone()).unwrap();
+    let tier: Tier = serde_json::from_value(pick["tier"].clone()).unwrap();
+    let audit = store.audit_items(&op).unwrap();
+    assert_eq!(audit.len(), 1, "only the plan's item");
+    let action = match audit[0].outcome.as_str() {
+        "deleted" => scull_core::Action::Delete,
+        _ => scull_core::Action::Quarantine,
+    };
+    let inputs = InvariantInputs::new()
+        .allow("app/target")
+        .audit(&store, &op)
+        .operation_bytes(&store, &op)
+        .plan(vec![(item_id.clone(), tier, action)])
+        .tiers(
+            BTreeMap::from([(item_id.clone(), tier)]),
+            BTreeMap::from([(item_id, tier)]),
+        );
+    let report = env.fx.check_invariants(&inputs);
+    println!("{report}");
+    report.assert_ok();
+}
+
+/// D-34 through `--run`: an item that changed on disk after the agent prepared the plan
+/// voids it after the code is typed: nothing runs, the approval is spent (the agent can't
+/// use it either), and the void is audited (`approve_run`, `plan_changed`).
+#[cfg(unix)]
+#[test]
+fn approve_run_of_a_changed_plan_voids_it() {
+    if skip_if_elevated("approve_run_of_a_changed_plan_voids_it")
+        || !have_tmux("approve_run_of_a_changed_plan_voids_it")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (mut s, _, id) = prepare_app_target(&env);
+    // The target grows after the plan was made.
+    let extra = env.fx.root().join("app/target/debug/grown.bin");
+    std::fs::create_dir_all(extra.parent().unwrap()).unwrap();
+    std::fs::write(&extra, vec![7u8; 256 * 1024]).unwrap();
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let code = t.code();
+    t.send(&code);
+    let (done, exit) = t.finish();
+    println!("{}", done.trim_end());
+    assert_eq!(exit, 4, "{done}");
+    assert!(done.contains("changed on disk"), "{done}");
+    assert!(done.contains("void"), "{done}");
+    assert!(!done.contains("Ran plan"), "{done}");
+    assert!(extra.exists() && env.fx.root().join("app/target").exists());
+    let store = env.store();
+    assert!(store.operations(0).unwrap().is_empty(), "nothing ran");
+    assert!(
+        store.get_approval(&id).unwrap().unwrap().used_at.is_some(),
+        "the approval is spent"
+    );
+    assert_eq!(
+        audited(&env, "approve_run"),
+        ["approve_run/cli/plan_changed"]
+    );
+    let (err, r) = s.call("execute_cleanup", json!({ "plan_id": id.as_str() }));
+    assert!(err);
+    assert_eq!(r["error"]["code"], "approval_used", "{r:#}");
+    s.finish();
+    assert!(store.operations(0).unwrap().is_empty());
+    env.fx
+        .check_invariants(&InvariantInputs::new().allow("app/target"))
+        .assert_ok();
+}
+
+/// `--run` has the same gates as approving, all before the plan or a code is shown: no
+/// terminal (exit 5, or 2 with `--json`), running elevated, an AI agent's environment in the
+/// terminal, a PTY driver among the parent processes. Nothing is approved or run. And
+/// `--run` needs a plan ID and can't be combined with `--revoke`.
+#[cfg(unix)]
+#[test]
+fn approve_run_is_refused_before_anything_is_shown() {
+    if skip_if_elevated("approve_run_is_refused_before_anything_is_shown") {
+        return;
+    }
+    let env = Env::new(true);
+    let (s, _, id) = prepare_app_target(&env);
+    s.finish();
+    let untouched = |env: &Env| {
+        assert!(env.fx.root().join("app/target").exists());
+        assert!(env.store().get_approval(&id).unwrap().is_none());
+        assert!(env.store().operations(0).unwrap().is_empty());
+    };
+
+    // No terminal.
+    let o = env.run(&["approve", id.as_str(), "--run"]);
+    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    assert!(o.stdout.is_empty(), "nothing shown");
+    assert!(
+        stderr(&o).contains("interactive terminal"),
+        "{}",
+        stderr(&o)
+    );
+    let o = env.run(&["approve", id.as_str(), "--run", "--json"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    // Usage: no plan, or with --revoke.
+    let o = env.run(&["approve", "--run"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    let o = env.run(&["approve", "--revoke", id.as_str(), "--run"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    untouched(&env);
+
+    // A PTY driver (`script`) among the parent processes.
+    let line = approve_run_line(&env, &id, "");
+    if let Some(mut c) = under_script(std::path::Path::new("/bin/sh"), &line) {
+        let o = c
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), stderr(&o));
+        assert!(
+            all.contains("pty_driver") || all.contains("agent_process"),
+            "{all}"
+        );
+        assert!(!all.contains("or `deny`"), "no code is ever shown:\n{all}");
+        assert!(!all.contains("An AI agent asks"), "no plan shown:\n{all}");
+        untouched(&env);
+    } else {
+        eprintln!("no script(1): PTY-driver case skipped");
+    }
+
+    if !have_tmux("approve_run_is_refused_before_anything_is_shown") {
+        return;
+    }
+    // Elevated, and an agent's environment marker, in a clean terminal.
+    for (extra, want) in [
+        ("SCULL_TEST_ASSUME_ELEVATED=1", "root/administrator"),
+        ("CLAUDECODE=1", "agent_environment"),
+    ] {
+        let t = Tmux::start(&env, &approve_run_line(&env, &id, extra));
+        let (done, exit) = t.finish();
+        assert_eq!(exit, 5, "{extra}: {done}");
+        assert!(done.contains(want), "{extra}: {done}");
+        assert!(
+            !done.contains("or `deny`"),
+            "{extra}: no code shown:\n{done}"
+        );
+        assert!(
+            !done.contains("An AI agent asks"),
+            "{extra}: no plan:\n{done}"
+        );
+        untouched(&env);
+    }
+    assert!(audited(&env, "approve_run").is_empty());
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// A denial is final (#78) for `--run` too: a plan the human denied is refused before a code
+/// is shown, and nothing runs. Three wrong codes typed at `--run`'s prompt deny the plan the
+/// same way, and nothing runs either.
+#[cfg(unix)]
+#[test]
+fn approve_run_of_a_denied_plan_is_refused() {
+    if skip_if_elevated("approve_run_of_a_denied_plan_is_refused")
+        || !have_tmux("approve_run_of_a_denied_plan_is_refused")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (mut s, pick, id) = prepare_app_target(&env);
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": [pick["id"]] }));
+    assert!(!err, "{plan:#}");
+    let wrong = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    s.finish();
+
+    let t = Tmux::start(&env, &approve_run_line(&env, &wrong, ""));
+    t.code();
+    for _ in 0..3 {
+        t.send("ZZZ-ZZZ");
+    }
+    let (done, exit) = t.finish();
+    assert_eq!(exit, 5, "{done}");
+    assert!(done.contains("now denied"), "{done}");
+    assert!(!done.contains("Ran plan"), "{done}");
+    let who = env.who();
+    let mut store = env.store();
+    let ch = approval::begin(&store, &id, &who, scull_engine::now_unix()).unwrap();
+    let r = scull_cli::cmd::approve::ask(
+        &mut store,
+        &ch,
+        &who,
+        &mut std::io::Cursor::new(b"deny\n".to_vec()),
+        &mut Vec::new(),
+        false,
+    );
+    assert_eq!(r.unwrap(), scull_cli::cmd::approve::Answer::Denied);
+
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let (done, exit) = t.finish();
+    assert_ne!(exit, 0, "{done}");
+    assert!(done.contains("denied"), "{done}");
+    assert!(!done.contains("or `deny`"), "no code shown:\n{done}");
+    assert!(env.fx.root().join("app/target").exists());
+    assert!(store.get_approval(&id).unwrap().is_none());
+    assert!(store.operations(0).unwrap().is_empty());
+    assert!(audited(&env, "approve_run").is_empty());
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// The agent's `execute_cleanup` racing `scull approve --run` on the same plan: the agent
+/// calls it in a loop from the moment the code is typed; exactly one of the two executes the
+/// plan (one operation), the other is told it was already used.
+#[cfg(unix)]
+#[test]
+fn approve_run_racing_the_agent_executes_once() {
+    if skip_if_elevated("approve_run_racing_the_agent_executes_once")
+        || !have_tmux("approve_run_racing_the_agent_executes_once")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (mut s, _, id) = prepare_app_target(&env);
+    let args = json!({ "plan_id": id.as_str() });
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let code = t.code();
+    t.send(&code);
+    let mut agent_ran = false;
+    let mut agent_codes = Vec::new();
+    for _ in 0..2000 {
+        let (err, r) = s.call("execute_cleanup", args.clone());
+        if !err {
+            agent_ran = true;
+            break;
+        }
+        let c = r["error"]["code"].as_str().unwrap_or("").to_owned();
+        let settled = c == "approval_used" || c == "approval_revoked";
+        agent_codes.push(c);
+        if settled || t.pane().contains("SCULL-EXIT=") {
+            break;
+        }
+    }
+    let (done, exit) = t.finish();
+    let human_ran = exit == 0 && done.contains("Ran plan");
+    println!("winner: {}", if agent_ran { "agent" } else { "--run" });
+    assert!(
+        agent_ran ^ human_ran,
+        "exactly one runs: agent {agent_ran} ({agent_codes:?}), --run exit {exit}:\n{done}"
+    );
+    if agent_ran {
+        assert!(done.contains("execute_cleanup"), "{done}");
+    }
+    // Whatever the agent tries now is refused.
+    let (err, r) = s.call("execute_cleanup", args);
+    assert!(err);
+    assert_eq!(r["error"]["code"], "approval_used", "{r:#}");
+    s.finish();
+    let store = env.store();
+    let ops = store.operations(0).unwrap();
+    assert_eq!(ops.len(), 1, "one operation");
+    assert!(!env.fx.root().join("app/target").exists());
+    let op = ops[0].operation_id.clone();
+    let report = env.fx.check_invariants(
+        &InvariantInputs::new()
+            .allow("app/target")
+            .audit(&store, &op)
+            .operation_bytes(&store, &op),
+    );
+    println!("{report}");
+    report.assert_ok();
+}
