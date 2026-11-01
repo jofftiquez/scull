@@ -296,6 +296,11 @@ async fn wait_for(stop: impl Fn() -> bool) {
 
 /// Serve `server` over stdin/stdout until the client disconnects or `stop()` returns true
 /// (`scull mcp serve`). Blocks. Nothing but JSON-RPC is written to stdout.
+///
+/// Returns as soon as the session ends, even while stdin stays open (#75): Tokio reads stdin
+/// on a blocking thread that no cancellation can interrupt, and dropping the runtime normally
+/// waits for it, i.e. for the client's next line or EOF. On a stop (Ctrl-C) that would leave
+/// the server hanging, so the runtime is shut down without waiting for that read.
 pub fn serve_stdio(
     server: ScullMcp,
     stop: impl Fn() -> bool + Send + 'static,
@@ -304,5 +309,7 @@ pub fn serve_stdio(
         .enable_all()
         .build()
         .map_err(|e| ScullError::from_io(&e))?;
-    rt.block_on(serve_until(server, rmcp::transport::stdio(), stop))
+    let result = rt.block_on(serve_until(server, rmcp::transport::stdio(), stop));
+    rt.shutdown_background();
+    result
 }
