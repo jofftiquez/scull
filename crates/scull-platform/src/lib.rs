@@ -134,7 +134,16 @@ pub trait Platform: Send + Sync {
     /// without opening it (`NtQueryInformationByName(FileStatInformation)`), with the identity
     /// from the listing (`FileIdExtdDirectoryInfo`) and only if the answer has the listed file
     /// ID; reparse points, compressed and sparse files, and anything else are opened as by
-    /// [`Platform::metadata`]. The default is [`Platform::metadata`] of the path.
+    /// [`Platform::metadata`]. On macOS the listing itself (`getattrlistbulk`) supplies the
+    /// metadata of a regular file with one link that is neither compressed nor dataless, as it
+    /// was when the listing read it (checked against `fstatat` once per listing); everything
+    /// else is stat'ed as above. The default is [`Platform::metadata`] of the path.
+    ///
+    /// **Scan only.** The result may describe the entry as it was listed, so an entry removed
+    /// or replaced since can still be reported. Never use it to decide whether something may
+    /// be changed: revalidation, the executor, quarantine/restore and purges re-check with
+    /// [`Platform::metadata`] or handle-based checks. `scripts/ci/platform_boundary.py` fails
+    /// on calls outside `scull-scanner`.
     fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
         self.metadata(&entry.path)
     }

@@ -8,6 +8,12 @@ Fails if OS-specific APIs are used outside `crates/scull-platform/`:
     `io_kit`, `fsevent`), `extern "C"` / `extern "system"` blocks.
   * Cargo manifests: `[dependencies]`/`[target.*.dependencies]` on those crates.
 
+Also fails (#91) if `Platform::entry_metadata` is called outside `crates/scull-scanner/` (and
+`crates/scull-platform/`): on macOS it may return what the directory listing saw, a snapshot
+that can describe an entry already removed or replaced. It feeds the scan only; revalidation,
+the executor, quarantine/restore and purges must use fresh no-follow checks
+(`Platform::metadata`, handle-based checks), never listing-derived metadata.
+
 Exempt:
   * `crates/scull-platform/` (the one place OS code lives);
   * `crates/scull-fixtures/` (test-only fixture builders create OS-specific trees: symlinks,
@@ -33,6 +39,9 @@ OS_CRATES = {
     "winapi", "ntapi",
 }
 EXEMPT_DIRS = ("crates/scull-platform/", "crates/scull-fixtures/")
+# Listing-derived metadata (`entry_metadata`) is for the scan only (#91).
+ENTRY_MD = re.compile(r"(\.|::)\s*entry_metadata\s*\(")
+SCAN_ONLY_ALLOWED = ("crates/scull-platform/", "crates/scull-scanner/")
 SKIP_DIRS = {"target", "node_modules", ".git", "docs", "design"}
 
 
@@ -52,7 +61,9 @@ def strip_comment(line):
 
 def check_rust(root, path, out):
     r = rel(root, path)
-    if r.startswith(EXEMPT_DIRS) or is_test_path(r):
+    check_api = not r.startswith(EXEMPT_DIRS)
+    check_entry_md = not r.startswith(SCAN_ONLY_ALLOWED)
+    if is_test_path(r) or not (check_api or check_entry_md):
         return
     # Skip exactly the item that follows a `#[cfg(test)]` attribute (a test module, fn or use),
     # by counting braces until it closes (or until `;` for brace-less items).
@@ -82,9 +93,14 @@ def check_rust(root, path, out):
             if depth > 0:
                 depth += code.count("{") - code.count("}")
                 continue
-            m = API.search(code)
+            m = API.search(code) if check_api else None
             if m:
                 out.append(f"{r}:{n}: OS-specific API `{m.group(0).strip()}` outside scull-platform (PLT-11)")
+            if check_entry_md and ENTRY_MD.search(code):
+                out.append(
+                    f"{r}:{n}: `entry_metadata` outside scull-scanner: it may be a listing snapshot; "
+                    "use a fresh no-follow check (`metadata`) here (#91)"
+                )
 
 
 def check_manifest(root, path, out):
