@@ -685,7 +685,10 @@ mod tests {
                 } else {
                     // What macOS reports (EINVAL, ErrorKind::InvalidInput); built by kind so
                     // the test means the same on every OS (22 is another error on Windows).
-                    Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid argument"))
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Invalid argument",
+                    ))
                 }
             },
         )
