@@ -47,9 +47,8 @@ use scull_desktop_bridge::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
     AppInfo, ApprovalDesk, CachesReport, CapabilitiesReport, DesktopStatus, DigestView, Drive,
     FootprintHistory, ForecastsView, FreeSpaceHistory, HistoryView, OpId, ProgressEvent,
-    ProjectsView,
-    RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup,
-    WorktreesView, now_unix,
+    ProjectsView, RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView,
+    Setup, WorktreesView, now_unix,
 };
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Invoke;
