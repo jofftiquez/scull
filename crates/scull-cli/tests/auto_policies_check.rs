@@ -90,6 +90,13 @@ impl Env {
             std::fs::set_permissions(self.config_file(), std::fs::Permissions::from_mode(0o600))
                 .unwrap();
         }
+        // Windows: a real user's config folder (under %APPDATA%) inherits a user-only ACL; the
+        // fixture's temp folder may grant other accounts write access (CI's standard-user run).
+        #[cfg(windows)]
+        {
+            scull_platform::owner_only::restrict(&dir).unwrap();
+            scull_platform::owner_only::restrict(&self.config_file()).unwrap();
+        }
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -293,11 +300,17 @@ fn elevated_or_scanless_checks_refuse() {
     assert!(a["reason"].as_str().unwrap().contains("SAFE-14"));
     let a = env.check(&["--no-scan"]);
     assert_eq!(a["state"], "refused", "{a:#}");
-    // The environment can't widen what policies act on.
-    for (var, value) in [
-        ("SCULL_ROOTS", env.root()),
-        ("SCULL_ACTIVITY_WINDOW", "1h".into()),
-    ] {
+    // The environment can't widen what policies act on. (Elevated, SAFE-14 answers first;
+    // CI's standard-user run on Windows covers this part there.)
+    let elevated = scull_platform::is_elevated().blocks_destructive();
+    for (var, value) in if elevated {
+        vec![]
+    } else {
+        vec![
+            ("SCULL_ROOTS", env.root()),
+            ("SCULL_ACTIVITY_WINDOW", "1h".into()),
+        ]
+    } {
         let o = env
             .cmd(&["check", "--json", "--no-progress"])
             .env(var, &value)
