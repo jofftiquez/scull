@@ -36,6 +36,13 @@
 //! * [`net`]: the I-6 network guard and [`isolate_network!`], which re-runs a test inside an OS
 //!   network sandbox (Linux network namespace, macOS `sandbox-exec`; none on Windows).
 //!
+//! * [`privileged`] and [`Mounts`]: the privileged nightly fixtures (FX-FS-04, FX-LNX-*,
+//!   FX-MAC-05) re-run themselves where they can mount (user + mount namespace, root, or a
+//!   macOS disk image) or are skipped with the reason; mounts stay inside the temporary
+//!   directory and are undone before it is removed.
+//! * [`Fixture::wide_tree`]: a deterministic, developer-shaped tree of a given entry count
+//!   (FX-FS-15, 1M entries).
+//!
 //! * [`registry`]: every fixture ID of `docs/FIXTURES.md` §3 this lane tracks, with where it is
 //!   implemented or which issue tracks it (checked against the document by `tests/registry.rs`).
 //!
@@ -46,8 +53,10 @@ mod error;
 mod fixture;
 mod git;
 pub mod invariants;
+pub mod mounts;
 pub mod net;
 mod os;
+pub mod privileged;
 mod projects;
 pub mod registry;
 mod snapshot;
@@ -58,7 +67,8 @@ pub use git::{GIT_DATE, GIT_USER_EMAIL, GIT_USER_NAME, GitRepo};
 pub use invariants::{
     InvariantId, InvariantInputs, InvariantReport, Outcome, PlanEntry, check_invariants,
 };
-pub use projects::{CACHEDIR_TAG, NodeLock};
+pub use mounts::Mounts;
+pub use projects::{CACHEDIR_TAG, NodeLock, WIDE_PROJECT_ENTRIES, WideTree};
 pub use snapshot::{ChangedField, Entry, EntryChange, EntryKind, TreeDiff, TreeSnapshot, diff};
 
 /// Crate name, used in diagnostics and `scull doctor` output.

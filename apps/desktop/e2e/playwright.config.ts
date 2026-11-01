@@ -30,7 +30,7 @@ export default defineConfig({
   use: {
     ...devices['Desktop Chrome'],
     baseURL: external ?? `http://localhost:${port}`,
-    // The design's frame (design/screens/*.png).
+    // The design's frame (the design mockups).
     viewport: { width: 1440, height: 900 },
     locale: 'en-US',
     timezoneId: 'UTC',

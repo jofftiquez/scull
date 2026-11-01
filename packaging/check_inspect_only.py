@@ -5,7 +5,7 @@ Two checks, both stdlib-only so they run unchanged on Linux, macOS and Windows:
 
 ``deps``
     ``cargo tree -p scull-cli`` (normal + build edges, every target) contains no Tauri, wry,
-    tao or webview crates (HANDOVER §8.1: building the CLI must not pull in the desktop).
+    tao or webview crates (building the CLI must not pull in the desktop).
 
 ``binary <path-to-scull>``
     The built ``scull`` binary has no destructive path wired in:

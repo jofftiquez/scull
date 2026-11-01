@@ -70,6 +70,16 @@ pub struct LargeFilesData {
     pub files: Vec<Candidate>,
 }
 
+/// One `scull large-files --ndjson` record (`schemas/large-files.ndjson.schema.json`).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum LargeFilesRecord {
+    /// A file, largest first.
+    Candidate(Box<Candidate>),
+    /// The last line.
+    Summary(LargeFilesSummary),
+}
+
 /// The JSON Schema (2020-12) of the `--json` envelope.
 pub fn large_files_schema() -> schemars::Schema {
     schemars::schema_for!(json::Envelope<LargeFilesData>)

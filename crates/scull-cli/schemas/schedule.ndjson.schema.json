@@ -1,0 +1,223 @@
+{
+  "$defs": {
+    "CommandReport": {
+      "additionalProperties": false,
+      "description": "One scheduler tool invocation.",
+      "properties": {
+        "command": {
+          "description": "The command line (absolute tool path, no shell).",
+          "type": "string"
+        },
+        "exit_code": {
+          "description": "Its exit code, when run.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output": {
+          "description": "What it printed (trimmed), when run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ran": {
+          "description": "Whether it was run (false for `--dry-run` and refusals).",
+          "type": "boolean"
+        },
+        "required": {
+          "description": "Whether a failure stops the operation (false for best-effort steps).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command",
+        "ran",
+        "required"
+      ],
+      "type": "object"
+    },
+    "FileChange": {
+      "description": "What happens (or happened) to one file.",
+      "oneOf": [
+        {
+          "const": "write",
+          "description": "Written (created or replaced) by `enable`.",
+          "type": "string"
+        },
+        {
+          "const": "remove",
+          "description": "Removed by `disable`.",
+          "type": "string"
+        },
+        {
+          "const": "present",
+          "description": "Present (`status`).",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "Missing (`status`).",
+          "type": "string"
+        }
+      ]
+    },
+    "FileReport": {
+      "additionalProperties": false,
+      "description": "One unit file.",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/FileChange",
+          "description": "What happens to it."
+        },
+        "contents": {
+          "description": "The full contents written (`enable` only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "existed": {
+          "description": "Whether a file was already there (`enable`: it is replaced).",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "change",
+        "existed"
+      ],
+      "type": "object"
+    },
+    "ScheduleOp": {
+      "description": "Which subcommand produced a report.",
+      "oneOf": [
+        {
+          "const": "enable",
+          "description": "`scull schedule enable`.",
+          "type": "string"
+        },
+        {
+          "const": "disable",
+          "description": "`scull schedule disable`.",
+          "type": "string"
+        },
+        {
+          "const": "status",
+          "description": "`scull schedule status`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ScheduleReport": {
+      "additionalProperties": false,
+      "description": "`scull schedule` output.",
+      "properties": {
+        "applied": {
+          "description": "Whether the change was applied.",
+          "type": "boolean"
+        },
+        "commands": {
+          "description": "The tool invocations, in order.",
+          "items": {
+            "$ref": "#/$defs/CommandReport"
+          },
+          "type": "array"
+        },
+        "dry_run": {
+          "description": "`--dry-run`: nothing was changed.",
+          "type": "boolean"
+        },
+        "files": {
+          "description": "The unit files.",
+          "items": {
+            "$ref": "#/$defs/FileReport"
+          },
+          "type": "array"
+        },
+        "interval_secs": {
+          "description": "Seconds between checks (`enable`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "job": {
+          "description": "The scheduled command line (`scull check --quiet --no-progress`).",
+          "type": "string"
+        },
+        "notes": {
+          "description": "Caveats.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "$ref": "#/$defs/ScheduleOp",
+          "description": "The subcommand."
+        },
+        "registered": {
+          "description": "Whether scull's schedule is registered (after the operation; for `status`, as found).",
+          "type": "boolean"
+        },
+        "scheduler": {
+          "description": "`launchd`, `systemd` or `task_scheduler`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "scheduler",
+        "job",
+        "dry_run",
+        "applied",
+        "registered",
+        "files",
+        "commands",
+        "notes"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/schedule@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/ScheduleReport",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/schedule@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "schedule",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/schedule@1 (NDJSON line)",
+  "type": "object"
+}

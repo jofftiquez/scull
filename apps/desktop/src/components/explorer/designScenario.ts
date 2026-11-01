@@ -2,7 +2,7 @@
 // Macintosh HD 186.0 GB + Dev SSD 262.8 GB of development data), as a real-shaped ScanReport.
 //
 // MOCK ONLY, OPT-IN: the Explorer uses it only with the mock bridge and `#/explorer?demo=design`
-// (like the Projects screen), to compare with design/screens/07*.png. The real app never sees
+// (like the Projects screen), to compare with the design mockups (screens 07). The real app never sees
 // these numbers; the default mock data stays the recorded payloads (src/bridge/fixtures).
 //
 // The design splits a project's protected part into ".git" and "src"; the core reports a

@@ -5,6 +5,7 @@ pub mod agent;
 pub mod caches;
 pub mod check;
 pub mod doctor;
+pub mod doctor_report;
 pub mod forecast;
 pub mod init;
 pub mod insights;

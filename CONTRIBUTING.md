@@ -19,7 +19,7 @@ Thanks for helping. scull deletes files, so safety comes before everything else.
 - PR title `[KEY] summary`; body starts with `Closes #<n>`.
 - Before pushing: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - CI must be green on macOS, Linux and Windows.
-- Issues close only with an `## Evidence` comment (see `HANDOVER.md` §6). Screenshots are attached to the
+- Issues close only with an `## Evidence` comment. Screenshots are attached to the
   comment with `gh issue comment --attach` (`scripts/evidence/post.py`); never commit them.
 
 ## Licensing

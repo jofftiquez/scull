@@ -116,9 +116,70 @@
         }
       ]
     },
-    "CachesReport": {
+    "CacheCommandLine": {
       "additionalProperties": false,
-      "description": "Result of locating package-manager caches (`scull caches`).",
+      "description": "The cleanup command of one cache candidate (the \"Cleanup commands\" line of the human\nreport).",
+      "properties": {
+        "command": {
+          "description": "The preferred native command (`npm cache verify`); `null` when inspect-only or unknown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "ID of the candidate."
+        },
+        "rule": {
+          "description": "Rule ID of the cache (e.g. `npm.cache`).",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CacheCommandStatus",
+          "description": "Whether the command is offered."
+        },
+        "text": {
+          "description": "The line as printed, e.g. `npm cache verify` or\n`none (inspect-only: no native cleanup command)`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rule",
+        "status",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CacheCommandStatus": {
+      "description": "Whether, and how, `scull clean caches` would clean one cache.",
+      "oneOf": [
+        {
+          "const": "offered",
+          "description": "The tool's native command is offered at the cache's tier.",
+          "type": "string"
+        },
+        {
+          "const": "not_offered",
+          "description": "The tool has a native command, but it is not offered at the cache's tier.",
+          "type": "string"
+        },
+        {
+          "const": "inspect_only",
+          "description": "The tool has no native cleanup command (Gradle, Maven): the cache is shown and\nmeasured, never cleaned.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Not a cache rule scull knows the commands of.",
+          "type": "string"
+        }
+      ]
+    },
+    "CachesDocument": {
+      "additionalProperties": false,
+      "description": "`scull caches --json` data: the engine's report plus the cleanup command of each candidate.",
       "properties": {
         "cancelled": {
           "description": "`true` when the user cancelled while sizing.",
@@ -128,6 +189,14 @@
           "description": "One candidate per cache found (category `package_cache`).",
           "items": {
             "$ref": "#/$defs/Candidate"
+          },
+          "type": "array"
+        },
+        "commands": {
+          "default": [],
+          "description": "The cleanup command of each candidate, in the order of `candidates` (added in 1.x;\nabsent in older output).",
+          "items": {
+            "$ref": "#/$defs/CacheCommandLine"
           },
           "type": "array"
         },
@@ -1312,7 +1381,7 @@
   "description": "A JSON document: schema identifier, scull version and the payload.",
   "properties": {
     "data": {
-      "$ref": "#/$defs/CachesReport",
+      "$ref": "#/$defs/CachesDocument",
       "description": "The payload."
     },
     "schema": {
