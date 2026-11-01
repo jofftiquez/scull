@@ -15,7 +15,7 @@ use crate::{Grower, GrowthWindow, InsightsReport, VolumeTrend};
 use schemars::JsonSchema;
 use scull_proactive::alert::{Alert, Severity, format_bytes, plural};
 use scull_proactive::review::{ReviewPlanSummary, latest_review_plan};
-use scull_proactive::{Confidence, ForecastState};
+use scull_proactive::{ForecastPolicy, ForecastState};
 use scull_storage::{Store, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -197,8 +197,9 @@ fn digest_volume(v: &VolumeTrend) -> Option<DigestVolume> {
     let free = f
         .free_bytes
         .or_else(|| v.points.last().map(|p| p.free_bytes))?;
+    // The same rule as status lines and alerts: filling with at least medium confidence.
     let days_left = match f.state {
-        ForecastState::Filling if f.confidence >= Confidence::Medium => f.days_rounded(),
+        ForecastState::Filling if f.is_actionable() => f.days_rounded(),
         _ => None,
     };
     Some(DigestVolume {
@@ -304,15 +305,17 @@ fn lines(d: &WeeklyDigest) -> Vec<String> {
     out
 }
 
-/// Read the week ending at `now` from `store` and build its digest. Read-only. Unreadable
+/// Read the week ending at `now` from `store` and build its digest, forecasting with
+/// `forecast_policy` (the configured one, like every other surface). Read-only. Unreadable
 /// alert or plan records are skipped (a digest never fails on one bad row).
 pub fn read_weekly_digest(
     store: &Store,
     now: i64,
     prefer_volume: Option<&str>,
+    forecast_policy: &ForecastPolicy,
 ) -> Result<WeeklyDigest, StoreError> {
     let since = now.saturating_sub(i64::from(DIGEST_DAYS) * DAY);
-    let report = crate::report(store, now, since, None)?;
+    let report = crate::report(store, now, since, None, forecast_policy)?;
     let alerts: Vec<Alert> = store
         .alerts(since)?
         .into_iter()
@@ -344,6 +347,7 @@ mod tests {
             footprint_history: Vec::new(),
             budget_used_bytes: 0,
             budget_bytes: None,
+            forecast_policy: ForecastPolicy::default(),
         })
     }
 

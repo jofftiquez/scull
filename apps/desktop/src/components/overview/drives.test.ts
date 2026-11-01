@@ -2,7 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
-import { BRIDGE_KEY, type Drive, type ScullBridge, type VolumeSampleView } from '../../bridge';
+import { BRIDGE_KEY, type Drive, type Forecast, type ScullBridge, type VolumeSampleView } from '../../bridge';
+import { steadyForecast } from '../../bridge/forecastMock';
 import { createMockBridge, MOCK_DRIVES } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { core } from '../../state/core';
@@ -84,33 +85,41 @@ describe('driveOptions', () => {
   });
 });
 
-describe('per-drive forecast', () => {
-  const samples = [...series('/', 41.2, 3.5), ...series('/Volumes/Dev SSD', 390, 14)];
+describe('per-drive forecast (the core forecasts, one source)', () => {
+  const at = 2_000_000_000;
+  const f = (volumeId: string, freeGiB: number, perDayGiB: number, confidence: Forecast['confidence'] = 'high') =>
+    steadyForecast({ volumeId, totalGiB: 1000, freeGiB, perDayGiB, asOf: at, confidence });
+  const forecasts = [f('/', 41.2, 3.5), f('/Volumes/Dev SSD', 390, 14)];
 
-  it("uses each drive's own samples", () => {
-    expect(samplesOf(SSD, samples, MOCK_DRIVES)).toHaveLength(8);
-    expect(driveForecast(HD, MOCK_DRIVES, samples)).toMatchObject({ days: 9, drive: HD });
-    expect(driveForecast(SSD, MOCK_DRIVES, samples)).toMatchObject({ days: 27, drive: SSD });
-    expect(driveForecast(BACKUP, MOCK_DRIVES, samples)).toBeNull();
+  it("uses each drive's own forecast", () => {
+    expect(driveForecast(HD, MOCK_DRIVES, forecasts)).toMatchObject({ days: 9, drive: HD, confidence: 'high' });
+    expect(driveForecast(SSD, MOCK_DRIVES, forecasts)).toMatchObject({ days: 27, drive: SSD });
+    expect(driveForecast(BACKUP, MOCK_DRIVES, forecasts)).toBeNull();
   });
 
   it('for All drives, shows the drive that fills first', () => {
-    expect(driveForecast(null, MOCK_DRIVES, samples)).toMatchObject({ days: 9, drive: HD });
-    const ssdFirst = [...series('/', 300, 1), ...series('/Volumes/Dev SSD', 50, 5)];
+    expect(driveForecast(null, MOCK_DRIVES, forecasts)).toMatchObject({ days: 9, drive: HD });
+    const ssdFirst = [f('/', 300, 1), f('/Volumes/Dev SSD', 50, 5)];
     expect(driveForecast(null, MOCK_DRIVES, ssdFirst)).toMatchObject({ days: 8, drive: SSD });
   });
 
   it('adds bytes freed by Quick Clean to the home drive only', () => {
-    expect(driveForecast(HD, MOCK_DRIVES, samples, 35 * GiB)!.days).toBe(19);
-    expect(driveForecast(null, MOCK_DRIVES, [...series('/', 300, 1), ...series('/Volumes/Dev SSD', 50, 5)], 100 * GiB)!.drive).toBe(SSD);
+    expect(driveForecast(HD, MOCK_DRIVES, forecasts, 35 * GiB)!.days).toBe(19);
+    expect(driveForecast(SSD, MOCK_DRIVES, forecasts, 35 * GiB)!.days).toBe(27);
+    expect(driveForecast(null, MOCK_DRIVES, [f('/', 300, 1), f('/Volumes/Dev SSD', 50, 5)], 100 * GiB)!.drive).toBe(SSD);
+  });
+
+  it('shows only actionable forecasts (core rule: at least medium confidence)', () => {
+    expect(driveForecast(HD, MOCK_DRIVES, [f('/', 41.2, 3.5, 'low')])).toBeNull();
+    expect(driveForecast(HD, MOCK_DRIVES, [f('/', 41.2, 3.5, 'medium')])).toMatchObject({ days: 9 });
   });
 
   it("gives an unmatched single volume (a Windows volume GUID path) to the home drive, never a listed drive's", () => {
     const c: Drive = { mount_point: 'C:\\', label: 'C:', kind: 'local', scan_policy: 'scan', holds_home: true };
-    const guid = series('\\\\?\\Volume{1234}\\', 41.2, 3.5);
-    expect(samplesOf(c, guid, [c])).toHaveLength(8);
+    expect(driveForecast(c, [c], [f('\\\\?\\Volume{1234}\\', 41.2, 3.5)])).toMatchObject({ days: 9, drive: c });
+    expect(driveForecast(HD, MOCK_DRIVES, [f('/Volumes/Dev SSD', 390, 14)])).toBeNull();
+    expect(driveForecast(null, [], [f('/', 41.2, 3.5)])).toMatchObject({ days: 9, drive: null });
     expect(samplesOf(HD, series('/Volumes/Dev SSD', 390, 14), MOCK_DRIVES)).toEqual([]);
-    expect(driveForecast(null, [], series('/', 41.2, 3.5))).toMatchObject({ days: 9, drive: null });
   });
 });
 

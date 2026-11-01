@@ -2,14 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
-import { BRIDGE_KEY, type ScullBridge, type VolumeSampleView } from '../../bridge';
+import { BRIDGE_KEY, type ScullBridge } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { core, resetCore } from '../../state/core';
 import { shell } from '../../state/shell';
 import QuickCleanCard from './QuickCleanCard.vue';
 import { DESIGN_CANDIDATES, designScenarioBridge } from './designScenario';
-import { daysDash, forecastFull, FULL_RESERVE } from './forecast';
+import { daysDash } from './forecast';
 import {
   QUICK_CLEAN_UNAVAILABLE,
   quickCleanFrame,
@@ -85,27 +85,8 @@ describe('quick clean model', () => {
   });
 });
 
-describe('forecast', () => {
-  const day = 86400;
-  const samples = (frees: number[]): VolumeSampleView[] =>
-    frees.map((f, i) => ({ volume_id: '/', total_bytes: 494 * GiB, free_bytes: f * GiB, sampled_at: 1_000_000 + i * day }));
-
-  it('fits the free-space trend (design: 41.2 GB free, -3.5 GB/day -> 9 days; +14.9 GB -> 13)', () => {
-    const s = samples([65.7, 62.2, 58.7, 55.2, 51.7, 48.2, 44.7, 41.2]);
-    expect(forecastFull(s)!.days).toBe(9);
-    expect(forecastFull(s, 14.9 * GiB)!.days).toBe(13);
-    expect(forecastFull(s)!.perDay / GiB).toBeCloseTo(3.5, 5);
-  });
-
-  it('stays silent without a trend', () => {
-    expect(forecastFull([])).toBeNull();
-    expect(forecastFull(samples([41]))).toBeNull();
-    expect(forecastFull(samples([40, 41, 42]))).toBeNull();
-    expect(forecastFull(MOCK_DATA.status.volumes)).toBeNull();
-    const close = samples([20, 19]).map((s, i) => ({ ...s, sampled_at: 1000 + i * 60 }));
-    expect(forecastFull(close)).toBeNull();
-    expect(forecastFull(samples([11, 10.5]))!.days).toBe(1);
-    expect(FULL_RESERVE).toBe(10 * GiB);
+describe('forecast alert ring', () => {
+  it('fills over 30 days (design)', () => {
     expect(daysDash(9)).toBe('33.9');
     expect(daysDash(90)).toBe('113.0');
   });
@@ -210,9 +191,10 @@ describe('overview sidebar', () => {
     w.unmount();
   });
 
-  it('with the recorded data: no forecast, nothing regenerable', async () => {
+  it("with the recorded data: the core's recorded forecast, nothing regenerable", async () => {
     const w = await mountOverview(createMockBridge());
-    expect(w.find('[data-testid="forecast"]').exists()).toBe(false);
+    // The same days as the Insights tile, the menu bar and the digest (src/lib/forecast.test.ts).
+    await vi.waitFor(() => expect(w.get('[data-testid="forecast"]').text()).toContain('Macintosh HD full in about 11 days.'));
     expect(w.get('[data-testid="hero"]').text()).toContain('Nothing is regenerable');
     w.unmount();
   });

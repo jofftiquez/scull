@@ -5,7 +5,7 @@
 use scull_insights::digest::{DIGEST_TITLE, read_weekly_digest};
 use scull_insights::fixtures::{DEMO_VOLUME, seed_demo};
 use scull_insights::time::DAY;
-use scull_proactive::{Alert, AlertKind, Severity};
+use scull_proactive::{Alert, AlertKind, ForecastPolicy, Severity};
 use scull_storage::{AlertEvent, DefaultPermissions, Store, VolumeSample};
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -35,7 +35,7 @@ fn record_alert(s: &mut Store, a: &Alert) {
 fn empty_database_digest_says_there_is_no_history() {
     let dir = tempfile::tempdir().unwrap();
     let s = store(&dir);
-    let d = read_weekly_digest(&s, NOW, None).unwrap();
+    let d = read_weekly_digest(&s, NOW, None, &ForecastPolicy::default()).unwrap();
     assert!(!d.has_history);
     assert_eq!(d.since, NOW - 7 * DAY);
     assert!(d.volumes.is_empty());
@@ -87,7 +87,7 @@ fn demo_week_digest_names_free_space_forecast_growth_cleanups_and_alerts() {
         ),
     );
 
-    let d = read_weekly_digest(&s, NOW, Some(DEMO_VOLUME)).unwrap();
+    let d = read_weekly_digest(&s, NOW, Some(DEMO_VOLUME), &ForecastPolicy::default()).unwrap();
     assert!(d.has_history);
     assert_eq!(d.title, DIGEST_TITLE);
     assert_eq!(d.volumes.len(), 1);
@@ -134,7 +134,10 @@ fn demo_week_digest_names_free_space_forecast_growth_cleanups_and_alerts() {
     assert_eq!(d.body().lines().count(), 3);
 
     // Same input, same digest (pure over the store).
-    assert_eq!(read_weekly_digest(&s, NOW, Some(DEMO_VOLUME)).unwrap(), d);
+    assert_eq!(
+        read_weekly_digest(&s, NOW, Some(DEMO_VOLUME), &ForecastPolicy::default()).unwrap(),
+        d
+    );
 }
 
 #[test]
@@ -166,7 +169,7 @@ fn preferred_volume_comes_first_then_the_one_closest_to_full() {
         });
     }
     s.record_free_space(&samples, None).unwrap();
-    let d = read_weekly_digest(&s, NOW, None).unwrap();
+    let d = read_weekly_digest(&s, NOW, None, &ForecastPolicy::default()).unwrap();
     let ids: Vec<&str> = d.volumes.iter().map(|v| v.volume_id.as_str()).collect();
     assert_eq!(ids, ["/full", "/data", "/"], "{:#?}", d.volumes);
     assert!(d.volumes[0].below_reserve);
@@ -175,7 +178,7 @@ fn preferred_volume_comes_first_then_the_one_closest_to_full() {
         "{:?}",
         d.lines
     );
-    let d = read_weekly_digest(&s, NOW, Some("/")).unwrap();
+    let d = read_weekly_digest(&s, NOW, Some("/"), &ForecastPolicy::default()).unwrap();
     let ids: Vec<&str> = d.volumes.iter().map(|v| v.volume_id.as_str()).collect();
     assert_eq!(ids, ["/", "/full", "/data"]);
     assert!(

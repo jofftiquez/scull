@@ -244,6 +244,11 @@ pub enum Command {
     /// Report platform capabilities, permissions and available signals.
     Doctor(DoctorArgs),
 
+    /// Ask a question about your developer storage (optional assistant, off by default; bring
+    /// your own model).
+    #[command(after_long_help = crate::cmd::ask::AFTER_HELP)]
+    Ask(AskArgs),
+
     /// Model Context Protocol server for AI agents.
     Mcp {
         /// Subcommand.
@@ -302,6 +307,24 @@ pub struct DoctorArgs {
 
     /// Write the `--out` file without asking (the preview is still printed first).
     #[arg(short, long, requires = "out")]
+    pub yes: bool,
+}
+
+/// Arguments for `scull ask`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct AskArgs {
+    /// Your question, e.g. "why did my disk fill up this week?" (several words are joined).
+    #[arg(value_name = "QUESTION", required = true, num_args = 1..)]
+    pub question: Vec<String>,
+
+    /// Print the privacy notice and the exact first request (API key masked), and send
+    /// nothing. Works while the assistant is off.
+    #[arg(long)]
+    pub show_request: bool,
+
+    /// Agree to the privacy notice for this provider and endpoint without a prompt (read
+    /// `--show-request` first). Needed when there is no terminal to ask on.
+    #[arg(long)]
     pub yes: bool,
 }
 

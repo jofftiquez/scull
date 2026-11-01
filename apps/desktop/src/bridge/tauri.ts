@@ -85,6 +85,7 @@ export function createTauriBridge(t: TauriTransport = realTransport): ScullBridg
     regrowth: (since) => call(COMMANDS.regrowth, { since }),
     footprintHistory: (since) => call(COMMANDS.footprintHistory, { since }),
     weeklyDigest: () => call(COMMANDS.weeklyDigest),
+    forecasts: () => call(COMMANDS.forecasts),
     monitorStatus: () => call(COMMANDS.monitorStatus),
   };
 }

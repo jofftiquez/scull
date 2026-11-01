@@ -342,6 +342,20 @@ export type ErrorKind =
  */
 export type HistoryRead = "ok" | "no_database" | "unavailable";
 /**
+ * How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ForecastConfidence".
+ */
+export type ForecastConfidence = "unknown" | "low" | "medium" | "high";
+/**
+ * What the forecast concluded.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ForecastState".
+ */
+export type ForecastState = "not_enough_history" | "not_filling" | "filling" | "below_reserve";
+/**
  * The outcome of one plan item.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -843,6 +857,7 @@ export interface BridgePayloads {
   Drives: Drives;
   ScullError: ScullError;
   FootprintHistory: FootprintHistory;
+  ForecastsView: ForecastsView;
   FreeSpaceHistory: FreeSpaceHistory;
   HistoryView: HistoryView;
   MonitorConfig: MonitorConfig;
@@ -1381,6 +1396,101 @@ export interface FootprintSampleView {
    * The `-wal` and `-shm` files.
    */
   wal_bytes: number;
+}
+/**
+ * `forecasts`: every sampled volume's forecast.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ForecastsView".
+ */
+export interface ForecastsView {
+  /**
+   * Forecasts are shown as alerts within this many days (`[proactive] alert_days`).
+   */
+  alert_days: number;
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * One per sampled volume, sorted by volume ID.
+   */
+  forecasts: Forecast[];
+  /**
+   * When they were computed (Unix seconds).
+   */
+  now: number;
+  /**
+   * The reserve every forecast counts down to (bytes; `[proactive] reserve_gib`).
+   */
+  reserve_bytes: number;
+  state: HistoryRead;
+}
+/**
+ * The forecast of one volume.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Forecast".
+ */
+export interface Forecast {
+  /**
+   * When the latest sample in the window was taken (Unix seconds).
+   */
+  as_of?: number | null;
+  confidence: ForecastConfidence;
+  /**
+   * Days from `now` until free space drops below the reserve (`Filling`; 0 for
+   * `BelowReserve`).
+   */
+  days_until_threshold?: number | null;
+  /**
+   * Free space lost per day by the trend (negative when free space grows). Present once
+   * there is enough history.
+   */
+  fill_bytes_per_day?: number | null;
+  /**
+   * Latest free space, plus releases recorded after that sample (bytes).
+   */
+  free_bytes?: number | null;
+  /**
+   * Steps levelled out of the trend: known releases plus detected cleanups and one-off
+   * drops.
+   */
+  jumps_ignored: number;
+  /**
+   * Residual spread relative to the change the trend explains over the span (lower is
+   * steadier).
+   */
+  noise_ratio?: number | null;
+  /**
+   * Transient outliers dropped.
+   */
+  outliers_ignored: number;
+  /**
+   * The reserve the forecast counts down to (bytes).
+   */
+  reserve_bytes: number;
+  /**
+   * Samples fitted (after dropping outliers).
+   */
+  samples_used: number;
+  /**
+   * Seconds between the first and the latest sample in the window.
+   */
+  span_secs: number;
+  state: ForecastState;
+  /**
+   * When free space is forecast to drop below the reserve (Unix seconds).
+   */
+  threshold_at?: number | null;
+  /**
+   * Volume size at the latest sample (bytes).
+   */
+  total_bytes?: number | null;
+  /**
+   * Volume identifier, as recorded in history (mount point or volume GUID path).
+   */
+  volume_id: string;
 }
 /**
  * `free_space_history`: one volume's free-space samples (INS-01), oldest first.

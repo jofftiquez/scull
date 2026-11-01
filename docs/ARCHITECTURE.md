@@ -42,7 +42,8 @@ Companion docs: [Fixtures](./FIXTURES.md) ·
               │  engine (read-only re-derivation for revalidation) · safety · storage · platform
 
   Everything depends on scull-core (types, no I/O). Only scull-platform calls OS APIs.
-  scull-mcp and the desktop never depend on scull-cleaner (SAFE-10).
+  scull-mcp, scull-ask (`scull ask`, over scull-mcp's in-process read-only tools) and the
+  desktop never depend on scull-cleaner (SAFE-10).
   scull-fixtures: dev-dependency only (test trees, canaries, invariants).
 ```
 
@@ -58,7 +59,8 @@ Companion docs: [Fixtures](./FIXTURES.md) ·
 | `scull-cleaner` | **Executor**: the only deleter; quarantine; restore; journal; lock | Phase 2 (#67…) |
 | `scull-engine` | Read-only pipeline shared by CLI, MCP and desktop (D-29): scan → detect → Git → signals (in-use, activity, protected roots, mounts, cloud) → rubric → candidates; reclaim estimates; history recording. Never depends on `scull-cleaner` | #56 |
 | `scull-cli` | `scull` binary: clap commands, tables/JSON/NDJSON, exit codes | #55, #56…#59, #159 |
-| `scull-mcp` | Read-only MCP server (rmcp, stdio); output safety | #60, #61 |
+| `scull-mcp` | Read-only MCP server (rmcp, stdio); output safety; the same read-only tools in-process (`call_read_only`) | #60, #61 |
+| `scull-ask` | Optional `scull ask` assistant (off by default): bring-your-own model (Anthropic Messages API or an OpenAI-compatible endpoint, e.g. Ollama), per-provider consent, a small loop over scull-mcp's in-process read-only tools. The only crate with an HTTP client (rustls; https unless loopback; no redirects). Never depends on `scull-cleaner` | P5-AI-01 |
 | `scull-fixtures` | Generated fixture trees, canaries, snapshots, invariants I-1…I-8 | #62 (+ #151 for I-6) |
 
 ## 3. Pipeline
@@ -225,6 +227,12 @@ Schema details live in the migrations under `crates/scull-storage/` (#53).
   and length-capped fields, home prefix redacted (MCP-01…05). Destructive tools only in v1.0
   behind config + flag, executing through the approval broker; an AI tool call is never
   consent (§13.3).
+- **Assistant** (`scull-ask`, P5-AI-01, AI-05/D-13): `scull ask "<question>"`, off by default
+  (`ask.toml` next to `config.toml`). The user's own key comes from the environment and is
+  never stored or logged. Before the first request to a provider and endpoint the user sees
+  what is sent and must agree (`--show-request` prints the exact request and sends nothing).
+  The model can call only scull-mcp's read-only tools (not `register_worktree`), with the same
+  allowlist and `[mcp]` redaction; it can never prepare, approve or run a cleanup.
 - **Desktop** (`apps/desktop`, Phase 3): Tauri 2 + Vue 3. The Rust side is a thin bridge to
   these crates and never deletes directly.
 

@@ -342,7 +342,7 @@ pub struct VolumeTrend {
     pub points: Vec<FreePoint>,
     /// Change of free space over the window (latest minus first point).
     pub change_bytes: i64,
-    /// Disk-full forecast from the last 30 days of samples (PRO-01; the same as `scull
+    /// Disk-full forecast from the policy window of samples (PRO-01; the same as `scull
     /// check`), independent of the report window.
     pub forecast: Forecast,
 }
@@ -417,6 +417,10 @@ pub struct InsightsInput {
     pub budget_used_bytes: u64,
     /// The storage budget, if any.
     pub budget_bytes: Option<u64>,
+    /// The disk-full forecast's policy: `scull_proactive::forecast_policy(&config.proactive)`,
+    /// the same one `scull check`, `scull status`, the MCP server and the desktop use, so every
+    /// surface reports the same days left (one forecast source).
+    pub forecast_policy: ForecastPolicy,
 }
 
 /// How far back item history is read: the window, the agent weeks and the ecosystem months,
@@ -427,18 +431,20 @@ pub fn lookback(now: i64, since: i64) -> i64 {
     since.min(weeks).min(months)
 }
 
-/// Read the history a report over `[since, now]` needs. Read-only.
+/// Read the history a report over `[since, now]` needs, forecasting free space with
+/// `forecast_policy` (pass `scull_proactive::forecast_policy(&config.proactive)`). Read-only.
 pub fn read(
     store: &Store,
     now: i64,
     since: i64,
     budget_bytes: Option<u64>,
+    forecast_policy: &ForecastPolicy,
 ) -> Result<InsightsInput, StoreError> {
     let mut regrowth = Vec::new();
     for c in CATEGORIES {
         regrowth.extend(store.regrowth(c, since)?.into_iter().map(|e| (c, e)));
     }
-    let forecast_since = now.saturating_sub(i64::from(ForecastPolicy::default().window_days) * DAY);
+    let forecast_since = now.saturating_sub(i64::from(forecast_policy.window_days) * DAY);
     let volumes = store
         .volume_ids()?
         .iter()
@@ -455,6 +461,7 @@ pub fn read(
         footprint_history: store.footprint_history(since)?,
         budget_used_bytes: store.budget_bytes_used()?,
         budget_bytes,
+        forecast_policy: forecast_policy.clone(),
     })
 }
 
@@ -464,8 +471,15 @@ pub fn report(
     now: i64,
     since: i64,
     budget_bytes: Option<u64>,
+    forecast_policy: &ForecastPolicy,
 ) -> Result<InsightsReport, StoreError> {
-    Ok(compute(&read(store, now, since, budget_bytes)?))
+    Ok(compute(&read(
+        store,
+        now,
+        since,
+        budget_bytes,
+        forecast_policy,
+    )?))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -512,7 +526,7 @@ pub fn compute(input: &InsightsInput) -> InsightsReport {
         agent_footprint: agent_footprint(&input.items, now),
         accuracy: accuracy(&input.operations),
         ecosystem_mix: ecosystem_mix(&input.items, now),
-        free_space: free_space(&input.volumes, since, now),
+        free_space: free_space(&input.volumes, since, now, &input.forecast_policy),
         own_footprint: own_footprint(input),
         notes,
     }
@@ -963,7 +977,12 @@ fn daily_last<T: Copy>(points: impl IntoIterator<Item = (i64, T)>) -> Vec<(i64, 
     by_day.into_values().collect()
 }
 
-fn free_space(volumes: &[Vec<VolumeSample>], since: i64, now: i64) -> Vec<VolumeTrend> {
+fn free_space(
+    volumes: &[Vec<VolumeSample>],
+    since: i64,
+    now: i64,
+    policy: &ForecastPolicy,
+) -> Vec<VolumeTrend> {
     volumes
         .iter()
         .filter_map(|samples| {
@@ -985,13 +1004,7 @@ fn free_space(volumes: &[Vec<VolumeSample>], since: i64, now: i64) -> Vec<Volume
                 change_bytes: i64::try_from(latest).unwrap_or(i64::MAX)
                     - i64::try_from(first).unwrap_or(i64::MAX),
                 points,
-                forecast: scull_proactive::forecast(
-                    &last.volume_id,
-                    samples,
-                    &[],
-                    now,
-                    &ForecastPolicy::default(),
-                ),
+                forecast: scull_proactive::forecast(&last.volume_id, samples, &[], now, policy),
             })
         })
         .collect()

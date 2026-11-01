@@ -2,6 +2,7 @@
 
 use crate::allowlist::{Allowlist, path_from_file_uri};
 use crate::approval::Principal;
+use crate::local::LocalResult;
 use crate::plan_tools::{self, CleanupRunner, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanTools};
 use crate::redact::{NameSalt, Redactor};
 use crate::tools::{self, Ctx, ToolError};
@@ -50,6 +51,9 @@ pub struct ServerOptions {
     pub threads: usize,
     /// Where package-manager caches are looked for (`None` disables `list_caches`).
     pub cache_env: Option<CacheEnv>,
+    /// The disk-full forecast's policy (`scull_proactive::forecast_policy(&config.proactive)`,
+    /// shared with `scull check`/`status` and the desktop).
+    pub forecast_policy: scull_proactive::ForecastPolicy,
 }
 
 /// The read-only scull MCP server.
@@ -97,7 +101,8 @@ impl ScullMcp {
             opts.threads,
             opts.data_dir,
             opts.cache_env,
-        );
+        )
+        .with_forecast_policy(opts.forecast_policy);
         Ok(Self {
             ctx: Arc::new(ctx),
             tools: Arc::new(tools::definitions()),
@@ -146,6 +151,11 @@ impl ScullMcp {
     /// The names of every tool offered, in listing order.
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|t| t.name.to_string()).collect()
+    }
+
+    /// The handlers' shared state (for in-process calls, [`crate::local`]).
+    pub(crate) fn ctx(&self) -> &Ctx {
+        &self.ctx
     }
 
     /// The configured allowlist (before narrowing to client roots).
@@ -209,13 +219,22 @@ fn with_plan_tools_listed(mut out: tools::Output) -> tools::Output {
     out
 }
 
-fn tool_error(e: &ToolError, r: &Redactor) -> CallToolResult {
-    let mut out = CallToolResult::error(vec![ContentBlock::text(
-        r.finish_text(&format!("error ({}): {}", e.code, e.message)),
-    )]);
+/// A tool failure as the client sees it: escaped, capped and redacted text plus
+/// `{"error": {...}}` (shared by MCP calls and in-process calls).
+pub(crate) fn error_result(e: &ToolError, r: &Redactor) -> LocalResult {
     let mut v = serde_json::json!({ "error": e });
     r.finish_value(&mut v);
-    out.structured_content = Some(v);
+    LocalResult {
+        is_error: true,
+        text: r.finish_text(&format!("error ({}): {}", e.code, e.message)),
+        structured: v,
+    }
+}
+
+fn tool_error(e: &ToolError, r: &Redactor) -> CallToolResult {
+    let res = error_result(e, r);
+    let mut out = CallToolResult::error(vec![ContentBlock::text(res.text)]);
+    out.structured_content = Some(res.structured);
     out
 }
 

@@ -33,7 +33,27 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with(args, &[])
+    }
+
+    fn run_with(&self, args: &[&str], extra: &[(&str, &Path)]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_scull"));
+        // Onboarding locates caches from the environment (XDG folders, %LocalAppData%,
+        // per-tool overrides, Nix's variables): start from an empty one so only the temp home
+        // is ever looked at, keeping only what the OS itself needs (#38).
+        cmd.env_clear();
+        for k in [
+            "SystemRoot",
+            "SYSTEMROOT",
+            "windir",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+        ] {
+            if let Some(v) = std::env::var_os(k) {
+                cmd.env(k, v);
+            }
+        }
         cmd.args(args)
             .env("SCULL_HOME", self.scull_home.path())
             .env("HOME", self.home.path())
@@ -41,11 +61,7 @@ impl Env {
             .env("PATH", self.home.path().join("bin"))
             .env("TERM", "dumb")
             .stdin(Stdio::null());
-        for (k, _) in std::env::vars() {
-            if k.starts_with("SCULL_") && k != "SCULL_HOME" {
-                cmd.env_remove(k);
-            }
-        }
+        cmd.envs(extra.iter().copied());
         cmd.output().expect("run scull")
     }
 }
@@ -244,4 +260,52 @@ fn needs_a_terminal_or_yes_and_validates_answers() {
         !env.config_dir().exists(),
         "nothing written on usage errors"
     );
+}
+
+/// #38: onboarding finds caches through the cache locator, so long-tail tools and their
+/// environment overrides count (here Homebrew, Conan and Deno, moved by their variables, which
+/// work on every OS layout), and each lands under its toolchain.
+#[test]
+fn located_tool_caches_are_detected_under_their_toolchain() {
+    let env = Env::new();
+    let home = env.home.path();
+    for d in ["brew-cache/downloads", "conan-home/p", "deno-dir/deps"] {
+        std::fs::create_dir_all(home.join(d)).expect("dir");
+    }
+    let (brew, conan, deno) = (
+        home.join("brew-cache"),
+        home.join("conan-home"),
+        home.join("deno-dir"),
+    );
+    let o = env.run_with(
+        &["init", "--yes", "--json"],
+        &[
+            ("HOMEBREW_CACHE", &brew),
+            ("CONAN_HOME", &conan),
+            ("DENO_DIR", &deno),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate(&v);
+    let toolchains = v["data"]["detected"]["toolchains"]
+        .as_array()
+        .expect("toolchains");
+    let caches_of = |id: &str| -> Vec<PathBuf> {
+        toolchains
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap_or_else(|| panic!("{id} detected: {toolchains:#?}"))["caches"]
+            .as_array()
+            .expect("caches")
+            .iter()
+            .map(|c| PathBuf::from(c.as_str().expect("path")))
+            .collect()
+    };
+    assert!(caches_of("system").contains(&brew), "{toolchains:#?}");
+    assert!(
+        caches_of("native").contains(&conan.join("p")),
+        "{toolchains:#?}"
+    );
+    assert!(caches_of("node").contains(&deno), "{toolchains:#?}");
 }

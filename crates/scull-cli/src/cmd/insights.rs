@@ -207,8 +207,13 @@ pub fn collect(now: i64, since: Option<When>) -> Result<InsightsReport, ScullErr
         ));
     }
     let budget = Some(DEFAULT_BUDGET_BYTES);
+    // The configured forecast policy, like `scull check` and `scull status` (one source).
+    let policy =
+        scull_proactive::forecast_policy(&super::pipeline::load_config(&[])?.config.proactive);
     match open_existing()? {
-        Some(store) => scull_insights::report(&store, now, since, budget).map_err(store_err),
+        Some(store) => {
+            scull_insights::report(&store, now, since, budget, &policy).map_err(store_err)
+        }
         None => Ok(scull_insights::compute(&InsightsInput {
             now,
             since,
@@ -220,6 +225,7 @@ pub fn collect(now: i64, since: Option<When>) -> Result<InsightsReport, ScullErr
             footprint_history: Vec::new(),
             budget_used_bytes: 0,
             budget_bytes: budget,
+            forecast_policy: policy,
         })),
     }
 }
@@ -514,6 +520,7 @@ mod tests {
             footprint_history: vec![],
             budget_used_bytes: 0,
             budget_bytes: None,
+            forecast_policy: scull_proactive::ForecastPolicy::default(),
         });
         let text = render(&r, false);
         assert!(text.contains("No history recorded yet"), "{text}");

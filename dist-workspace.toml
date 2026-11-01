@@ -1,15 +1,25 @@
-# cargo-dist (`dist`, MIT OR Apache-2.0) release configuration (P1-REL-01).
+# cargo-dist (`dist`, MIT OR Apache-2.0) release configuration (P1-REL-01, P2-REL-01).
 #
 # Only `scull-cli` (the `scull` binary) is distributed; it opts in with
 # `[package.metadata.dist] dist = true` because the workspace is `publish = false`.
 # After editing this file run `dist generate` and commit the regenerated
 # .github/workflows/release.yml (CI's `dist plan` fails if it is stale). See RELEASING.md.
 #
-# Deliberately NOT here yet (P2-REL-01, MVP): Homebrew, Scoop/winget, MSI, code signing and
-# notarization, crates.io. The alpha is unsigned and inspect-only.
-# SBOM: `cargo-cyclonedx = true` is left off for now: dist 0.33.1's generated step references
-# `steps.cargo-cyclonedx.output.paths` (should be `outputs`), which actionlint rejects and
-# GitHub silently evaluates to empty. Revisit with P2-REL-01.
+# Signing is wired behind repository secrets and skipped (with a notice in the run log) when
+# they are absent, so an unsigned release still builds:
+# * macOS: Developer ID codesign by dist (`macos-sign`, CODESIGN_* secrets, hardened runtime
+#   set by .github/build-setup.yml), then Apple notarization (`notarytool`, APPLE_API_*
+#   secrets) in .github/workflows/release-extras.yml, which blocks the release on rejection.
+# * Windows: Authenticode through SSL.com eSigner by dist (`ssldotcom-windows-sign`,
+#   SSLDOTCOM_* secrets).
+# * Every artifact gets a GitHub build-provenance attestation (Sigstore, keyless, no secret).
+# SBOM: CycloneDX from packaging/sbom.py (stdlib Python over `cargo metadata`) in
+# release-extras.yml. dist's own `cargo-cyclonedx = true` stays off: dist 0.33.1's generated
+# step references `steps.cargo-cyclonedx.output.paths` (should be `outputs`).
+# Homebrew: dist writes the formula (`scull.rb`, attached to the release); Scoop: release-extras
+# writes `scull.json`. release-packages.yml pushes both to the tap and bucket repositories when
+# HOMEBREW_TAP_TOKEN / SCOOP_BUCKET_TOKEN are set, and skips with a notice otherwise.
+# Not here: MSI, winget, crates.io (name reservation is a maintainer step, RELEASING.md).
 
 [workspace]
 members = ["cargo:."]
@@ -19,7 +29,7 @@ cargo-dist-version = "0.33.1"
 ci = "github"
 # Shell (macOS/Linux) and PowerShell (Windows) installers that download the archive for the
 # host. Every archive also gets a .sha256 file, plus one sha256.sum for the release.
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
 targets = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",
@@ -36,9 +46,30 @@ pr-run-mode = "skip"
 # Gates that every build job waits for: no Tauri in the CLI tree, no destructive command or
 # MCP tool wired (.github/workflows/release-gates.yml, packaging/check_inspect_only.py).
 plan-jobs = ["./release-gates"]
+# SBOM, Scoop manifest and macOS notarization (after the builds, before anything is hosted: a
+# failure here stops the release).
+global-artifacts-jobs = ["./release-extras"]
+# Homebrew tap and Scoop bucket updates (skipped without their tokens; never for prereleases).
+publish-jobs = ["./release-packages"]
+# Homebrew formula `scull` in the tap repository jofftiquez/homebrew-scull
+# (`brew install jofftiquez/scull/scull`). Pushed by release-packages.yml, not by dist.
+tap = "jofftiquez/homebrew-scull"
+formula = "scull"
+# Code signing (skipped when the secrets are absent; see RELEASING.md "Signing").
+macos-sign = true
+ssldotcom-windows-sign = "prod"
+github-build-setup = "../build-setup.yml"
+# Sigstore build-provenance attestations for every artifact (`gh attestation verify`).
+github-attestations = true
 install-path = "CARGO_HOME"
 # No self-updater: scull makes no network calls of its own (PRD §20).
 install-updater = false
 checksum = "sha256"
 unix-archive = ".tar.gz"
 windows-archive = ".zip"
+
+# The custom jobs only read this repository (the tap and bucket are written with their own
+# tokens, never with GITHUB_TOKEN).
+[dist.github-custom-job-permissions]
+release-extras = { contents = "read" }
+release-packages = { contents = "read" }

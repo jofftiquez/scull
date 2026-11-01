@@ -4,11 +4,16 @@ import { expect, open, test } from './fixtures';
 
 test('remove a removable worktree and keep its branch', async ({ page, shot }) => {
   await open(page, '/worktrees');
-  await expect(page.getByTestId('worktrees-summary')).toContainText('worktrees across');
+  // The summary only shows counts once the view has loaded (it reads "Reading worktrees…" before),
+  // so the rows are rendered by the time it matches; count them only after that.
+  const summary = page.getByTestId('worktrees-summary');
+  await expect(summary).toContainText(/\d+ worktrees? across/);
   const list = page.getByRole('region', { name: 'Worktree list' });
   const details = page.getByRole('region', { name: 'Worktree details' });
   const rows = list.locator('button[data-row]');
-  const before = await rows.count();
+  const before = Number((await summary.textContent())!.trim().match(/^(\d+) worktree/)![1]);
+  expect(before).toBeGreaterThan(1);
+  await expect(rows).toHaveCount(before);
 
   // A protected one first: whole-worktree removal is blocked.
   await rows.filter({ has: page.locator('[data-verdict="protected"]') }).first().click();
@@ -31,6 +36,6 @@ test('remove a removable worktree and keep its branch', async ({ page, shot }) =
   await expect(toast).toContainText(`Removed ${branch} · branch kept`);
   await expect(rows).toHaveCount(before - 1);
   await expect(list.getByText(branch, { exact: true })).toHaveCount(0);
-  await expect(page.getByTestId('worktrees-summary')).toContainText(`${before - 1} worktrees`);
+  await expect(summary).toContainText(`${before - 1} worktrees`);
   await shot('worktrees-2-removed');
 });

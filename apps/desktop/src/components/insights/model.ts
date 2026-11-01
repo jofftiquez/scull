@@ -3,6 +3,8 @@
 // the history can't support is `null` (the tile then says so) rather than invented.
 import type {
   Category,
+  Forecast,
+  ForecastConfidence,
   CategorySeries,
   FootprintSampleView,
   RegrowthEventView,
@@ -11,6 +13,7 @@ import type {
 } from '../../bridge';
 import { isAgent, branchOf } from '../worktrees/worktrees';
 import { categoryLabel } from '../overview/wheel';
+import { daysLeft } from '../../lib/forecast';
 
 export const DAY = 86_400;
 const GiB = 1024 ** 3;
@@ -25,7 +28,7 @@ export function rangeDays(id: RangeId): number {
   return RANGES.find((r) => r.id === id)?.days ?? 30;
 }
 
-/** "Full" means less than this left (same reserve as the Overview alert). */
+/** The default reserve (`[proactive] reserve_gib`); the chart uses the forecast's own. */
 export const FULL_RESERVE = 10 * GiB;
 /** A rise in free space of at least this much between two samples counts as a cleanup. */
 export const CLEANUP_MIN_RISE = 1 * GiB;
@@ -44,31 +47,36 @@ export interface BandPoint extends FreePoint {
   lo: number;
   hi: number;
 }
-export type Confidence = 'High' | 'Medium' | 'Low';
+export type Confidence = 'High' | 'Medium' | 'Low' | 'Unknown';
 
 export interface FreeSpaceModel {
   points: FreePoint[];
   cleanups: Cleanup[];
-  /** Least-squares trend of the samples since the last cleanup; `null` when not shrinking. */
+  /** The core's forecast while free space is shrinking; `null` otherwise (see `state`). */
   trend: {
     /** Bytes per day lost (positive). */
     perDay: number;
-    /** Days until FULL_RESERVE from the last sample (rounded, at least 1). */
+    /** Days until the reserve (core `days_rounded`: at least 1). */
     days: number;
     confidence: Confidence;
-    /** Coefficient of determination of the fit, 0..1. */
-    r2: number;
   } | null;
+  /** What the core concluded (`no_forecast` when it sent none for this volume). */
+  state: Forecast['state'] | 'no_forecast';
+  /** The reserve the forecast counts down to. */
+  reserve: number;
   forecast: BandPoint[];
 }
 
+const LABEL: Record<ForecastConfidence, Confidence> = { high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' };
+
 /**
- * Free-space history, cleanups and the forecast. Cleanups are inferred from the samples (free
- * space rose by at least CLEANUP_MIN_RISE), so they are what the disk measured, not what a
- * plan predicted. The trend uses the samples after the last cleanup (at least 3 spanning a
- * day), otherwise the whole window.
+ * Free-space history, cleanups and the forecast. The points and cleanups are what the disk
+ * measured (a rise of at least CLEANUP_MIN_RISE between two samples marks a cleanup). The
+ * trend, days and confidence are the core's (`forecast`, from the `forecasts` command; one
+ * forecast source, src/lib/forecast.ts): the dashed line runs from its latest sample at its
+ * fill rate to the reserve, and the band widens with its noise ratio.
  */
-export function freeSpaceModel(samples: readonly VolumeSampleView[]): FreeSpaceModel {
+export function freeSpaceModel(samples: readonly VolumeSampleView[], forecast: Forecast | null = null): FreeSpaceModel {
   const points = [...samples]
     .sort((a, b) => a.sampled_at - b.sampled_at)
     .map((s) => ({ at: s.sampled_at, free: s.free_bytes }));
@@ -77,49 +85,24 @@ export function freeSpaceModel(samples: readonly VolumeSampleView[]): FreeSpaceM
     const rise = points[i]!.free - points[i - 1]!.free;
     if (rise >= CLEANUP_MIN_RISE) cleanups.push({ ...points[i]!, gained: rise });
   }
-  const lastCleanup = cleanups.at(-1);
-  let fitPts = lastCleanup ? points.filter((p) => p.at >= lastCleanup.at) : points;
-  if (fitPts.length < 3 || fitPts.at(-1)!.at - fitPts[0]!.at < DAY) fitPts = points;
-  const fit = leastSquares(fitPts);
-  const last = points.at(-1);
-  if (!fit || !last || !(fit.slope < 0) || last.at - fitPts[0]!.at < 3600) {
-    return { points, cleanups, trend: null, forecast: [] };
+  const reserve = forecast?.reserve_bytes ?? FULL_RESERVE;
+  const state = forecast?.state ?? 'no_forecast';
+  const d = daysLeft(forecast);
+  if (!forecast || !d || d.belowReserve || forecast.as_of == null) {
+    return { points, cleanups, trend: null, state, reserve, forecast: [] };
   }
-  const perDay = -fit.slope * DAY;
-  const days = Math.max(1, Math.round((last.free - FULL_RESERVE) / perDay));
-  const confidence: Confidence =
-    fit.r2 >= 0.9 && fitPts.length >= 8 ? 'High' : fit.r2 >= 0.6 && fitPts.length >= 4 ? 'Medium' : 'Low';
-  // The band widens with the slope's standard error (95%), never below zero.
-  const horizon = Math.min(MAX_HORIZON_DAYS, Math.max(1, Math.ceil((last.free - FULL_RESERVE) / perDay)));
-  const forecast: BandPoint[] = [];
-  for (let d = 0; d <= horizon; d++) {
-    const at = last.at + d * DAY;
-    const free = Math.max(0, last.free + fit.slope * d * DAY);
-    const spread = 1.96 * fit.slopeSe * d * DAY;
-    forecast.push({ at, free, lo: Math.max(0, free - spread), hi: free + spread });
+  const perDay = d.perDay;
+  const start = { at: forecast.as_of, free: forecast.free_bytes ?? 0 };
+  // The band: ± the residual spread relative to the trend (noise ratio), growing with distance.
+  const noise = forecast.noise_ratio ?? 0;
+  const horizon = Math.min(MAX_HORIZON_DAYS, Math.max(1, Math.ceil((start.free - reserve) / perDay)));
+  const band: BandPoint[] = [];
+  for (let i = 0; i <= horizon; i++) {
+    const free = Math.max(0, start.free - perDay * i);
+    const spread = 2 * noise * perDay * i;
+    band.push({ at: start.at + i * DAY, free, lo: Math.max(0, free - spread), hi: free + spread });
   }
-  return { points, cleanups, trend: { perDay, days, confidence, r2: fit.r2 }, forecast };
-}
-
-function leastSquares(pts: readonly FreePoint[]): { slope: number; slopeSe: number; r2: number } | null {
-  const n = pts.length;
-  if (n < 2) return null;
-  const mx = pts.reduce((a, p) => a + p.at, 0) / n;
-  const my = pts.reduce((a, p) => a + p.free, 0) / n;
-  let sxy = 0;
-  let sxx = 0;
-  let syy = 0;
-  for (const p of pts) {
-    sxy += (p.at - mx) * (p.free - my);
-    sxx += (p.at - mx) ** 2;
-    syy += (p.free - my) ** 2;
-  }
-  if (sxx === 0) return null;
-  const slope = sxy / sxx;
-  const sse = Math.max(0, syy - slope * sxy);
-  const r2 = syy === 0 ? 1 : 1 - sse / syy;
-  const slopeSe = n > 2 ? Math.sqrt(sse / (n - 2) / sxx) : 0;
-  return { slope, slopeSe, r2 };
+  return { points, cleanups, trend: { perDay, days: d.days, confidence: LABEL[forecast.confidence] }, state, reserve, forecast: band };
 }
 
 /** The category that grew most over the window and its share of all growth. */

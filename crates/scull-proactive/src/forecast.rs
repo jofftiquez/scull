@@ -50,17 +50,14 @@
 //!
 //! Status lines and alerts only use forecasts of at least [`Confidence::Medium`].
 //!
-//! # Compatibility with the desktop (`apps/desktop/src/components/overview/forecast.ts`)
+//! # One forecast source
 //!
-//! Same meaning of the result (days until free space drops below a 10 GiB reserve, measured
-//! from the latest sample, "not filling" when free space is not shrinking) and the same
-//! reserve. Differences, all on the cautious side: the desktop fits ordinary least squares
-//! over two or more samples an hour apart and has no confidence level; this engine needs
-//! [`ForecastPolicy::min_samples`] samples over [`ForecastPolicy::min_span_hours`], is robust
-//! to outliers and cleanups, windows relative to `now` rather than the latest sample (stale
-//! history is "not enough history", not an old forecast), forecasts every volume rather than
-//! only `/`, and takes known releases where the desktop takes one `extraFree` number (a
-//! release after the latest sample is the same thing).
+//! This is the only disk-full forecast in scull (#36). `scull check`, `scull status`,
+//! `scull insights`, the MCP server, the weekly digest, the tray monitor and every desktop
+//! screen (through the bridge's `forecasts` command) call it with the configured policy
+//! ([`crate::forecast_policy`]), so they report the same days and confidence for the same
+//! history. The desktop draws the result; it does not fit a trend of its own. See
+//! `docs/FORECAST.md`.
 
 use crate::stats;
 use schemars::JsonSchema;
@@ -130,6 +127,9 @@ pub struct Release {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+// Named apart from the reclaim estimate's `Confidence` (scull-core) in shared JSON Schemas, so
+// payloads that carry both (the desktop's) have one definition per name.
+#[schemars(rename = "ForecastConfidence")]
 pub enum Confidence {
     /// Not enough history to say anything.
     Unknown,

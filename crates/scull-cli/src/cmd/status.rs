@@ -4,8 +4,10 @@
 //! Reads **only** the database: one indexed query ([`scull_storage::Store::status_summary`])
 //! plus, per sampled volume, one indexed range query over its last 30 days of free-space
 //! samples for the disk-full forecast ([`scull_proactive::forecast_all`], PRO-01). No scan, no
-//! `git`, no network, no config file (the forecast uses its default policy). It never creates
-//! or migrates the database (see [`crate::db`]).
+//! `git`, no network. The forecast uses the configured policy (`[proactive]` in config.toml,
+//! [`scull_proactive::forecast_policy`]), the one every surface shares; an unreadable config
+//! falls back to the defaults so a prompt line never fails. It never creates or migrates the
+//! database (see [`crate::db`]).
 //!
 //! * `scull status`:
 //!   `scull: 18.4 GiB reclaimable (12.1 GiB safe) · 41.0 GiB free on / · last scan 2h ago`
@@ -142,6 +144,14 @@ fn now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// The forecast policy from the user config (the one `scull check` uses), or the defaults when
+/// the config can't be read: the status line never fails on it.
+fn configured_forecast_policy() -> scull_proactive::ForecastPolicy {
+    super::pipeline::load_config(&[])
+        .map(|l| scull_proactive::forecast_policy(&l.config.proactive))
+        .unwrap_or_default()
+}
+
 /// Read the status from the database in scull's data directory.
 pub fn collect(now: i64) -> StatusReport {
     let data_dir = match scull_platform::app_dirs() {
@@ -153,12 +163,9 @@ pub fn collect(now: i64) -> StatusReport {
         Ok(store) => match store.status_summary() {
             Ok(summary) => {
                 // A forecast that can't be read never hides the rest of the status.
-                let forecasts = scull_proactive::forecast_all(
-                    &store,
-                    now,
-                    &scull_proactive::ForecastPolicy::default(),
-                )
-                .unwrap_or_default();
+                let forecasts =
+                    scull_proactive::forecast_all(&store, now, &configured_forecast_policy())
+                        .unwrap_or_default();
                 let mut r = from_parts(&summary, &forecasts, now);
                 if let Some(p) = super::review_plan::current(&store, now) {
                     add_review_plan(&mut r, p);

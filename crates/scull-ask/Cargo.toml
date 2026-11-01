@@ -1,0 +1,34 @@
+[package]
+name = "scull-ask"
+description = "Optional bring-your-own-model assistant for scull (`scull ask`) over the read-only tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Read-only by construction: the model only reaches scull through scull-mcp's in-process
+# read-only tools. Never depends on scull-cleaner (checked by a test).
+[dependencies]
+scull-core.workspace = true
+scull-mcp.workspace = true
+scull-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+# HTTP(S) to the user's own model endpoint. rustls with the ring provider and the OS trust
+# store (platform verifier): no OpenSSL, no bundled root list. No redirects are followed.
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[dev-dependencies]
+scull-fixtures.workspace = true
+scull-platform.workspace = true
+scull-safety.workspace = true
+scull-proactive.workspace = true
+tempfile = "3"

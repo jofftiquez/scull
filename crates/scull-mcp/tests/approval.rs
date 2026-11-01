@@ -147,6 +147,7 @@ impl Env {
                 mcp,
                 threads: 2,
                 cache_env: None,
+                forecast_policy: scull_proactive::ForecastPolicy::default(),
             },
         )
         .unwrap()

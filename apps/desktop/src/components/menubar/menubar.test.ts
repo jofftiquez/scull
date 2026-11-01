@@ -8,6 +8,7 @@ import { createMockBridge, MOCK_DATA, MOCK_DRIVES } from '../../bridge/mock';
 import { createTauriWindowCommands, NAVIGATE_EVENT, WINDOW_COMMANDS, type TauriTransport } from '../../bridge/tauri';
 import { QUICK_CLEAN_UNAVAILABLE } from '../overview/quickClean';
 import { designMenuBarBridge, wantsDesign } from './designScenario';
+import { steadyForecast } from '../../bridge/forecastMock';
 import {
   alertRows,
   checkedAgo,
@@ -77,12 +78,14 @@ describe('menu bar model', () => {
     for (const r of rows) expect(MAIN_ROUTES).toContain(r.route);
   });
 
-  it('days left from the trend: none without one, at least 1', () => {
-    expect(daysLeft(41.2 * GiB, 3.5 * GiB)).toBe(9);
-    expect(daysLeft(56.1 * GiB, 3.5 * GiB)).toBe(13);
-    expect(daysLeft(5 * GiB, 3.5 * GiB)).toBe(1);
-    expect(daysLeft(41.2 * GiB, null)).toBeNull();
-    expect(daysLeft(41.2 * GiB, 0)).toBeNull();
+  it("days left are the core's forecast, with Quick Clean's bytes as a release; only confident ones", () => {
+    const f = steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 41.2, perDayGiB: 3.5, asOf: NOW });
+    expect(daysLeft(f)).toBe(9);
+    expect(daysLeft(f, 14.9 * GiB)).toBe(13);
+    expect(daysLeft(steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 12, perDayGiB: 3.5, asOf: NOW }))).toBe(1);
+    expect(daysLeft(steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 41.2, perDayGiB: 3.5, asOf: NOW, confidence: 'low' }))).toBeNull();
+    expect(daysLeft({ ...f, state: 'not_filling', days_until_threshold: null })).toBeNull();
+    expect(daysLeft(null)).toBeNull();
   });
 
   it('draws the ring like the design (used, then the reclaimable share at its end)', () => {
@@ -109,9 +112,9 @@ describe('menu bar model', () => {
   });
 
   it('names the cache tools and how long ago the machine was checked', () => {
-    const m = menuBarModel({ drives: null, status: status(), caches: MOCK_DATA.cachesReport, history: null });
+    const m = menuBarModel({ drives: null, status: status(), caches: MOCK_DATA.cachesReport, forecasts: null });
     expect(toolNames(m.tools)).toBe('npm · re-downloadable');
-    expect(m.perDay).toBeNull();
+    expect(m.forecast).toBeNull();
     expect(checkedAgo(status({ volumes: [{ volume_id: '/', total_bytes: 1, free_bytes: 1, sampled_at: NOW - 30 }] }))).toBe(30);
     expect(checkedAgo(status({ volumes: [], last_scan: null }))).toBeNull();
   });
