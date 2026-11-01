@@ -133,7 +133,29 @@ pub struct DirEntry {
     /// Windows only: the raw reparse tag when the entry is a reparse point (see
     /// [`Metadata::reparse_tag`]). `None` for ordinary entries and on Unix.
     pub reparse_tag: Option<u32>,
+    /// Unix: the listed directory, for [`Platform::entry_metadata`](crate::Platform) to stat
+    /// the entry relative to it. Held weakly: once the listing is dropped, the entry falls back
+    /// to its path.
+    pub(crate) at: Option<EntryAt>,
 }
+
+/// The directory an entry was listed from (Unix): a weak handle to its descriptor, opened
+/// `O_DIRECTORY | O_NOFOLLOW` and verified to be the directory that was checked.
+#[derive(Debug, Clone)]
+pub(crate) struct EntryAt {
+    #[cfg(unix)]
+    pub(crate) dir: std::sync::Weak<std::fs::File>,
+    /// The directory's identity, for equality.
+    pub(crate) dir_id: FileIdentity,
+}
+
+impl PartialEq for EntryAt {
+    fn eq(&self, other: &Self) -> bool {
+        self.dir_id == other.dir_id
+    }
+}
+
+impl Eq for EntryAt {}
 
 /// Which signals this OS build provides, for `scull doctor` (PLT-09) and for downgrading
 /// confidence or blocking actions when a safety signal is missing (PLT-08).

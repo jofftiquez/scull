@@ -58,6 +58,11 @@ const RUNS: &[(&str, &[&str], &str)] = &[
     ),
     ("rules list", &["rules", "list"], "rules-list"),
     ("rules validate", &["rules", "validate"], "rules-validate"),
+    (
+        "rules test",
+        &["rules", "test", "{example_rule}"],
+        "rules-test",
+    ),
     ("status", &["status"], "status"),
     ("check", &["check"], "check"),
     ("insights", &["insights"], "insights"),
@@ -314,6 +319,12 @@ fn every_ndjson_command_has_a_line_schema_and_validates() {
             .replace("{export}", &export.to_string_lossy())
             .replace("{app}", &app.to_string_lossy())
             .replace("{wt}", &wt.to_string_lossy())
+            .replace(
+                "{example_rule}",
+                &Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs/examples/rules/godot.toml")
+                    .to_string_lossy(),
+            )
     };
 
     for (path, args, name) in RUNS.iter().chain(VARIANTS) {

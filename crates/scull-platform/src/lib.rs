@@ -147,4 +147,14 @@ pub trait Platform: Send + Sync {
     /// point the call fails with [`ErrorKind::NotADirectory`] instead of following it. Entries
     /// are reported in OS order, without `.` and `..`, each with its no-follow kind.
     fn read_dir<'a>(&'a self, path: &Path) -> Result<DirIter<'a>>;
+
+    /// Metadata of an entry from [`Platform::read_dir`]: exactly what [`Platform::metadata`]
+    /// returns for its path (the final component is never followed; same kind, identity,
+    /// sizes and times), but possibly faster. On Unix the entry is stat'ed relative to its
+    /// listed directory (`fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)`), so the kernel doesn't
+    /// resolve the whole path again for every entry, and a parent swapped for a link after the
+    /// listing can't redirect the call. The default is [`Platform::metadata`] of the path.
+    fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
+        self.metadata(&entry.path)
+    }
 }

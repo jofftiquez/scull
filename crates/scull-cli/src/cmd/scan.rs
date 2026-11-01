@@ -100,6 +100,9 @@ impl From<&ScanReport> for ScanSummary {
 
 /// Run `scull scan`.
 pub fn run(args: &ScanArgs, ui: &Ui) -> Result<(), ScullError> {
+    if let Some(target) = &args.ssh {
+        return super::remote::scan(target, args.remote_bin.as_deref(), ui);
+    }
     let mut loaded = pipeline::load_config(&args.paths)?;
     loaded.allow_network_roots = args.allow_network_roots;
     let roots = pipeline::roots(&loaded, args.allow_broad_roots)?;
