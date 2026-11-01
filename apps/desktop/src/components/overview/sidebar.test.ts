@@ -19,6 +19,7 @@ import {
 } from './quickClean';
 import { itemReason, reclaimSummary, splitBytes } from './summary';
 import { buildWheelModel } from './wheel';
+import { until } from '../../test/until';
 
 const GiB = 1024 ** 3;
 const tools = quickCleanTools(DESIGN_CANDIDATES);
@@ -184,8 +185,8 @@ describe('overview sidebar', () => {
     await flushPromises();
     // The Overview decides asynchronously whether to auto-scan (never on first run, CFG-04):
     // wait for the report itself, then for the sweep to finish.
-    await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout: 2000 });
-    await vi.waitFor(() => expect(w.get('[data-testid="rescan"]').text()).toBe('Rescan'), { timeout: 2000 });
+    await until(() => core.report !== null);
+    await until(() => w.get('[data-testid="rescan"]').text() === 'Rescan');
     await flushPromises();
     return w;
   }

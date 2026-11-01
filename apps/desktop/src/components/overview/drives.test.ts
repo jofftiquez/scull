@@ -6,6 +6,7 @@ import { BRIDGE_KEY, type Drive, type ScullBridge, type VolumeSampleView } from 
 import { createMockBridge, MOCK_DRIVES } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { core } from '../../state/core';
+import { until } from '../../test/until';
 import { DESIGN_CANDIDATES, DESIGN_SSD_CANDIDATES, designScenarioBridge, wantsSecondDrive } from './designScenario';
 import {
   ALL_DRIVES,
@@ -147,9 +148,9 @@ describe('overview drive switcher', () => {
     await router.isReady();
     const w = mount(App, { attachTo: document.body, global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: bridge } } });
     await flushPromises();
-    await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout: 3000 });
-    await vi.waitFor(() => expect(w.get('[data-testid="rescan"]').text()).toBe('Rescan'), { timeout: 3000 });
-    await vi.waitFor(() => expect(w.find('[data-testid="drive-switcher"]').exists()).toBe(true));
+    await until(() => core.report !== null);
+    await until(() => w.get('[data-testid="rescan"]').text() === 'Rescan');
+    await until(() => w.find('[data-testid="drive-switcher"]').exists());
     return w;
   }
 
@@ -199,7 +200,7 @@ describe('overview drive switcher', () => {
         provide: { [BRIDGE_KEY as symbol]: { ...base, drives: async () => [HD, BACKUP] } },
       },
     });
-    await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout: 3000 });
+    await until(() => core.report !== null);
     await flushPromises();
     expect(w.find('[data-testid="drive-switcher"]').exists()).toBe(false);
     w.unmount();
