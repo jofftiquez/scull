@@ -687,6 +687,9 @@ fn approve_in_a_real_pseudo_terminal() {
 /// recorded at all.
 #[test]
 fn approve_without_a_terminal_creates_no_machine_id() {
+    if skip_if_elevated("approve_without_a_terminal_creates_no_machine_id") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
