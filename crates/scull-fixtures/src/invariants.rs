@@ -253,9 +253,25 @@ impl From<(ItemId, Tier, Action)> for PlanEntry {
 /// managers whose own cleanup Quick Clean runs (`scull_detectors::caches::CacheTool::binary`).
 /// Matched against the binary's file name without an `.exe` extension. Tool-native ML removal
 /// (`ollama rm`) is not run by scull, so `ollama` is not listed; nor are `gradle` and `mvn`
-/// (their caches are inspect-only: no cleanup command).
+/// (their caches are inspect-only: no cleanup command). Of the long-tail tool caches, Quick Clean
+/// runs `ccache`, `conan`, `arduino-cli`, `deno` and `cypress` (#44); `pod`, `playwright` and
+/// `puppeteer` are never started.
 pub const ALLOWED_TOOLS: &[&str] = &[
-    "git", "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda", "go", "dotnet",
+    "git",
+    "npm",
+    "pnpm",
+    "bun",
+    "yarn",
+    "pip",
+    "uv",
+    "conda",
+    "go",
+    "dotnet",
+    "ccache",
+    "conan",
+    "arduino-cli",
+    "deno",
+    "cypress",
 ];
 
 /// One process scull started, for I-7: the binary as spawned and its arguments.

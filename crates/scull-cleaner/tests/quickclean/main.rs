@@ -213,6 +213,26 @@ const TESTS: &[Test] = &[
         "forged_long_tail_plan_entries_never_run",
         forged_long_tail_plan_entries_never_run,
     ),
+    (
+        "long_tail_enabled_tools_exact_argv_env_and_location",
+        long_tail_enabled_tools_exact_argv_env_and_location,
+    ),
+    (
+        "long_tail_forged_invocations_never_run",
+        long_tail_forged_invocations_never_run,
+    ),
+    (
+        "deno_location_data_is_never_cleaned",
+        deno_location_data_is_never_cleaned,
+    ),
+    (
+        "conan_conanrc_above_the_sandbox_is_refused",
+        conan_conanrc_above_the_sandbox_is_refused,
+    ),
+    (
+        "d36_long_tail_only_arduino_is_orphan_removable",
+        d36_long_tail_only_arduino_is_orphan_removable,
+    ),
 ];
 
 fn main() {
@@ -3307,8 +3327,32 @@ fn forged_gradle_and_maven_plan_entries_never_run() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// P5-DET-05 long-tail tool caches: located on main, not run on phase2
+// P5-DET-05 long-tail tool caches: five run (#44), three refused, the rest inspect-only
 // ---------------------------------------------------------------------------------------------
+
+/// The long-tail tools Quick Clean runs (#44), each pinned to the located folder.
+const LONG_TAIL_ENABLED: [CacheTool; 5] = [
+    CacheTool::Ccache,
+    CacheTool::Conan,
+    CacheTool::Arduino,
+    CacheTool::Deno,
+    CacheTool::Cypress,
+];
+
+/// The long-tail tools with a native command Quick Clean still refuses (#44).
+const LONG_TAIL_REFUSED: [CacheTool; 3] = [
+    CacheTool::CocoaPods,
+    CacheTool::Playwright,
+    CacheTool::Puppeteer,
+];
+
+fn long_tail(set: &[CacheTool]) -> Vec<(CacheTool, &'static str, &'static str)> {
+    LONG_TAIL_RUNNABLE
+        .iter()
+        .copied()
+        .filter(|(t, _, _)| set.contains(t))
+        .collect()
+}
 
 /// The long-tail tools with a native command (P5-DET-05), their binaries and their macOS
 /// default cache folders (macOS, so CocoaPods is located too; the layouts are the tools' own).
@@ -3339,6 +3383,8 @@ fn long_tail_cache(fx: &mut Fixture, tool: CacheTool, dir: &str) -> PathBuf {
         CacheTool::Conan => &[
             ("cache.sqlite3", 4096),
             ("zlib1a2b3c4d5e6f7/s/zlib.c", 2048),
+            ("zlib1a2b3c4d5e6f7/p/lib/libz.a", 4096),
+            ("zlib1a2b3c4d5e6f7/b/unused-build.o", 2048),
         ],
         CacheTool::Arduino => &[
             ("packages/esp32-3.0.4.zip", 4096),
@@ -3357,7 +3403,10 @@ fn long_tail_cache(fx: &mut Fixture, tool: CacheTool, dir: &str) -> PathBuf {
             ("chromium-1140/chrome-linux/chrome", 4096),
             ("ffmpeg-1010/ffmpeg-linux", 1024),
         ],
-        CacheTool::Cypress => &[("13.6.0/Cypress/Cypress", 4096)],
+        CacheTool::Cypress => &[
+            ("13.6.0/Cypress/Cypress", 4096),
+            ("12.17.4/unused-old-binary", 4096),
+        ],
         CacheTool::Puppeteer => &[("chrome/linux-127.0.6533.88/chrome-linux64/chrome", 4096)],
         other => panic!("{other:?} is not a runnable long-tail tool"),
     };
@@ -3373,16 +3422,15 @@ fn locate_macos(fx: &Fixture) -> CacheScan {
     locate_on(&env, &Native::new())
 }
 
-/// The long-tail tool caches are located, but Quick Clean on this branch never runs their
-/// commands: with their binaries trusted and every tool asked to wipe, or with no binary at
-/// all, it plans nothing for them, skips each as `NotSupportedYet`, never offers one as
-/// orphaned (D-36) and starts nothing.
+/// CocoaPods, Playwright and Puppeteer stay refused (#44): with their binaries trusted and
+/// every tool asked to wipe, or with no binary at all, Quick Clean plans nothing for them,
+/// skips each as `NotSupportedYet`, never offers one as orphaned (D-36) and starts nothing.
 fn long_tail_tools_are_not_supported_and_never_run() {
     if !identity_available() {
         return;
     }
     let mut fx = Fixture::new().unwrap();
-    let dirs: Vec<(CacheTool, &str, PathBuf)> = LONG_TAIL_RUNNABLE
+    let dirs: Vec<(CacheTool, &str, PathBuf)> = long_tail(&LONG_TAIL_REFUSED)
         .iter()
         .map(|(t, bin, dir)| (*t, *bin, long_tail_cache(&mut fx, *t, dir)))
         .collect();
@@ -3430,7 +3478,7 @@ fn long_tail_tools_are_not_supported_and_never_run() {
     }
 }
 
-/// A plan is data: each long-tail tool with a native command, forged into an approved plan
+/// A plan is data: each refused long-tail tool (#44), forged into an approved plan
 /// (from pip's and uv's planned tools, pointing at the real cache, its identity and a trusted
 /// fake binary, so every other run-time check would pass), is refused at run time as
 /// `NotSupportedYet`, audited as `refused`, and nothing starts or changes.
@@ -3438,7 +3486,7 @@ fn forged_long_tail_plan_entries_never_run() {
     if !identity_available() {
         return;
     }
-    for pair in LONG_TAIL_RUNNABLE.chunks(2) {
+    for pair in long_tail(&LONG_TAIL_REFUSED).chunks(2) {
         let mut fx = Fixture::new().unwrap();
         let pip = pip_cache(&mut fx);
         let uv = uv_cache(&mut fx);
@@ -3468,6 +3516,7 @@ fn forged_long_tail_plan_entries_never_run() {
         planned.sort();
         assert_eq!(planned, [CacheTool::Pip, CacheTool::Uv]);
         plan.tools.sort_by_key(|t| t.tool);
+        plan.tools.truncate(forged.len());
         for ((t, (tool, dir)), bin) in plan.tools.iter_mut().zip(&forged).zip(&bins) {
             let cand = cands.iter().find(|c| c.rule.id == tool.rule_id()).unwrap();
             t.tool = *tool;
@@ -3484,7 +3533,7 @@ fn forged_long_tail_plan_entries_never_run() {
         let report = run_ok(&fx, &q, &plan);
         assert!(report.results.is_empty(), "{report:#?}");
         assert!(report.spawned.is_empty(), "{report:#?}");
-        assert_eq!(report.skipped.len(), 2, "{report:#?}");
+        assert_eq!(report.skipped.len(), forged.len(), "{report:#?}");
         for (tool, _) in &forged {
             assert_eq!(
                 skip_reason(&report.skipped, *tool),
@@ -3493,7 +3542,7 @@ fn forged_long_tail_plan_entries_never_run() {
         }
         assert!(!fake::ran_in(&tools(&fx)), "nothing started");
         let rows = rows(&fx, &report.rec);
-        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(rows.len(), forged.len(), "{rows:#?}");
         assert!(
             rows.iter().all(|r| r.outcome == ItemOutcome::Refused
                 && r.reason.as_deref() == Some("not_supported_yet")),
@@ -3509,5 +3558,404 @@ fn forged_long_tail_plan_entries_never_run() {
             "  forged {:?}: refused as not_supported_yet, nothing started",
             forged.iter().map(|(t, _)| *t).collect::<Vec<_>>()
         );
+    }
+}
+
+/// The enabled long-tail caches (macOS layout) with their fake binaries trusted: planned with
+/// the exact arguments and location variables of the module docs, run from the sandbox with
+/// nothing but the sanitized environment plus those variables, each acting on its own folder
+/// only (#44).
+fn long_tail_enabled_setup(fx: &mut Fixture) -> Vec<(CacheTool, PathBuf, PathBuf)> {
+    let dirs: Vec<(CacheTool, &str, PathBuf)> = long_tail(&LONG_TAIL_ENABLED)
+        .iter()
+        .map(|(t, bin, dir)| (*t, *bin, long_tail_cache(fx, *t, dir)))
+        .collect();
+    fx.checkpoint().unwrap();
+    dirs.into_iter()
+        .map(|(t, bin, dir)| (t, fake::install(&tools(fx), bin), dir))
+        .collect()
+}
+
+fn long_tail_expected(tool: CacheTool, dir: &Path) -> (Vec<OsString>, Vec<(String, OsString)>) {
+    let e = |pairs: &[(&str, OsString)]| -> Vec<(String, OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect()
+    };
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    match tool {
+        CacheTool::Ccache => (
+            os(&["--clear"]),
+            e(&[
+                ("CCACHE_DIR", path_arg(dir)),
+                ("CCACHE_CONFIGPATH", null.into()),
+            ]),
+        ),
+        CacheTool::Conan => {
+            let mut storage = OsString::from("core.cache:storage_path=");
+            storage.push(dir);
+            let mut args = os(&["cache", "clean", "--source", "--build", "--temp", "-cc"]);
+            args.push(storage);
+            args.extend(os(&["-cc", "core:non_interactive=True"]));
+            (args, e(&[("CONAN_HOME", path_arg(dir.parent().unwrap()))]))
+        }
+        CacheTool::Arduino => (
+            os(&["cache", "clean"]),
+            e(&[
+                ("ARDUINO_DIRECTORIES_DOWNLOADS", path_arg(dir)),
+                ("ARDUINO_METRICS_ENABLED", "false".into()),
+                ("ARDUINO_UPDATER_ENABLE_NOTIFICATION", "false".into()),
+            ]),
+        ),
+        CacheTool::Deno => (
+            os(&["clean"]),
+            e(&[
+                ("DENO_DIR", path_arg(dir)),
+                ("DENO_NO_UPDATE_CHECK", "1".into()),
+                ("DENO_NO_PROMPT", "1".into()),
+            ]),
+        ),
+        CacheTool::Cypress => (
+            os(&["cache", "prune"]),
+            e(&[("CYPRESS_CACHE_FOLDER", path_arg(dir))]),
+        ),
+        other => panic!("{other:?} is not enabled"),
+    }
+}
+
+/// #44: ccache, Conan, Arduino CLI, Deno and Cypress are planned and run with the exact argv,
+/// environment and working directory, each pinned to the located folder; a wipe request for
+/// Cypress still runs the prune. Conan keeps its packages, ccache its configuration, Cypress
+/// the binary it runs with.
+fn long_tail_enabled_tools_exact_argv_env_and_location() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let setup = long_tail_enabled_setup(&mut fx);
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    for (tool, _, _) in &setup {
+        assert!(scull_cleaner::quickclean::is_supported(*tool), "{tool:?}");
+        let c = cands.iter().find(|c| c.rule.id == tool.rule_id()).unwrap();
+        assert_eq!(c.tier, Tier::S1, "{c:#?}");
+    }
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let request = QuickCleanRequest {
+        wipe: [CacheTool::Cypress].into_iter().collect(),
+        ..QuickCleanRequest::default()
+    };
+    let plan = q.plan(&scan, &cands, &request, &Probe::idle());
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    assert!(plan.spawned.is_empty(), "planning starts nothing");
+    let mut planned = planned_tools(&plan);
+    planned.sort();
+    let mut want = LONG_TAIL_ENABLED.to_vec();
+    want.sort();
+    assert_eq!(planned, want);
+    for (tool, bin, dir) in &setup {
+        let t = plan.tools.iter().find(|t| t.tool == *tool).unwrap();
+        let (args, env) = long_tail_expected(*tool, dir);
+        assert_eq!(t.binary, canonical(bin), "{tool:?}");
+        assert_eq!(t.location, *dir, "{tool:?}");
+        assert_eq!(t.args, args, "{tool:?}");
+        assert_eq!(t.env, env, "{tool:?}");
+        assert_eq!(t.not_undoable, NOT_UNDOABLE_NOTE);
+        let mode = match tool {
+            CacheTool::Conan | CacheTool::Cypress => CleanMode::Prune,
+            _ => CleanMode::Wipe,
+        };
+        assert_eq!(t.mode, mode, "{tool:?}");
+    }
+    let cy = plan
+        .tools
+        .iter()
+        .find(|t| t.tool == CacheTool::Cypress)
+        .unwrap();
+    assert!(cy.wipe_requested);
+    assert!(
+        cy.notes.iter().any(|n| n.contains("session records")),
+        "{:?}",
+        cy.notes
+    );
+
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(report.results.len(), 5);
+    assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
+    let sandbox = canonical(&sandbox_base(&fx));
+    let bins = [
+        (CacheTool::Ccache, "ccache"),
+        (CacheTool::Conan, "conan"),
+        (CacheTool::Arduino, "arduino-cli"),
+        (CacheTool::Deno, "deno"),
+        (CacheTool::Cypress, "cypress"),
+    ];
+    for (tool, _, dir) in &setup {
+        let name = bins.iter().find(|(t, _)| t == tool).unwrap().1;
+        let call = only_call(&fx, name);
+        let (args, env) = long_tail_expected(*tool, dir);
+        let argv: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(call.argv, argv, "{tool:?}");
+        for (k, v) in &env {
+            assert_eq!(call.env[k], v.to_string_lossy(), "{tool:?} {k}");
+        }
+        let extra: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(env_names(&call.env), expected_env_names(&extra), "{tool:?}");
+        assert!(
+            call.cwd.starts_with(&sandbox),
+            "{tool:?} cwd {:?}",
+            call.cwd
+        );
+    }
+    let dir = |t: CacheTool| setup.iter().find(|(x, _, _)| *x == t).unwrap().2.clone();
+    assert_eq!(
+        files_below(&dir(CacheTool::Ccache)),
+        [fake::GUARD, "ccache.conf"]
+    );
+    assert_eq!(files_below(&dir(CacheTool::Arduino)), [fake::GUARD]);
+    assert_eq!(files_below(&dir(CacheTool::Deno)), [fake::GUARD]);
+    let conan = files_below(&dir(CacheTool::Conan));
+    assert!(conan.iter().any(|f| f.ends_with("libz.a")), "{conan:?}");
+    assert!(!conan.iter().any(|f| f.contains("unused")), "{conan:?}");
+    let cypress = files_below(&dir(CacheTool::Cypress));
+    assert!(cypress.iter().any(|f| f.contains("13.6.0")), "{cypress:?}");
+    assert!(!cypress.iter().any(|f| f.contains("unused")), "{cypress:?}");
+    let rows = rows(&fx, &report.rec);
+    assert_eq!(rows.len(), 5, "{rows:#?}");
+    assert!(
+        rows.iter().all(|r| r.outcome == ItemOutcome::ToolRun),
+        "{rows:#?}"
+    );
+    let allowed: Vec<PathBuf> = setup.iter().map(|(_, _, d)| rel(&fx, d)).collect();
+    check(&fx, &plan, &cands, &allowed, &[&report.rec]);
+}
+
+/// #44: a plan is data. An approved entry whose arguments or location variables differ from
+/// what this build constructs (Deno pointed at another folder, Cypress asked to `clear`, ccache
+/// without its pinned config path) is refused right before starting it: nothing runs.
+fn long_tail_forged_invocations_never_run() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let setup = long_tail_enabled_setup(&mut fx);
+    let elsewhere = fx.base().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(elsewhere.join(fake::GUARD), "").unwrap();
+    fs::write(elsewhere.join("keep.bin"), "keep").unwrap();
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let mut plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    plan.tools.retain(|t| {
+        matches!(
+            t.tool,
+            CacheTool::Deno | CacheTool::Cypress | CacheTool::Ccache
+        )
+    });
+    for t in &mut plan.tools {
+        match t.tool {
+            CacheTool::Deno => t.env[0].1 = path_arg(&elsewhere),
+            CacheTool::Cypress => {
+                t.args = os(&["cache", "clear"]);
+                t.mode = CleanMode::Wipe;
+            }
+            _ => t.env.retain(|(k, _)| k != "CCACHE_CONFIGPATH"),
+        }
+    }
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.is_empty(), "{report:#?}");
+    assert!(report.spawned.is_empty(), "{report:#?}");
+    let reason = |t| skip_reason(&report.skipped, t);
+    assert!(
+        matches!(reason(CacheTool::Deno), SkipReason::Changed(_)),
+        "{report:#?}"
+    );
+    assert!(
+        matches!(reason(CacheTool::Ccache), SkipReason::Changed(_)),
+        "{report:#?}"
+    );
+    assert!(
+        matches!(reason(CacheTool::Cypress), SkipReason::NotScoped(ref w) if w.contains("session records")),
+        "{report:#?}"
+    );
+    assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+    assert!(elsewhere.join("keep.bin").is_file());
+    for (tool, _, dir) in &setup {
+        assert!(dir.join(fake::GUARD).is_file(), "{tool:?}");
+    }
+    let rows = rows(&fx, &report.rec);
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    let cy = rows
+        .iter()
+        .find(|r| r.outcome == ItemOutcome::Refused)
+        .expect("Cypress refused");
+    assert_eq!(cy.reason.as_deref(), Some("not_scoped"));
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+/// #44: `deno clean` would delete `location_data/` (web storage of Deno programs, unique
+/// data). With it present the cache is S2 and never planned; when it appears between planning
+/// and the run, the run refuses (`not_scoped`) and starts nothing.
+fn deno_location_data_is_never_cleaned() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let dir = long_tail_cache(&mut fx, CacheTool::Deno, "home/Library/Caches/deno");
+    fx.file(
+        "home/Library/Caches/deno/location_data/0a1b/local_storage",
+        "kv",
+    )
+    .unwrap();
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "deno");
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty(), "{plan:#?}");
+    assert_eq!(
+        skip_reason(&plan.skipped, CacheTool::Deno),
+        SkipReason::NotEligible { tier: Tier::S2 }
+    );
+    check(&fx, &plan, &cands, &[], &[]);
+
+    // Planned without it; it appears before the run.
+    let mut fx = Fixture::new().unwrap();
+    let dir2 = long_tail_cache(&mut fx, CacheTool::Deno, "home/Library/Caches/deno");
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "deno");
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert_eq!(planned_tools(&plan), [CacheTool::Deno]);
+    fs::create_dir_all(dir2.join("location_data/0a1b")).unwrap();
+    fs::write(dir2.join("location_data/0a1b/local_storage"), "kv").unwrap();
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.is_empty(), "{report:#?}");
+    assert!(
+        matches!(skip_reason(&report.skipped, CacheTool::Deno), SkipReason::NotScoped(ref w) if w.contains("location_data")),
+        "{report:#?}"
+    );
+    assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+    assert!(dir2.join("location_data/0a1b/local_storage").is_file());
+    only_row(&fx, &report.rec, ItemOutcome::Refused, Some("not_scoped"));
+    assert!(dir.join("location_data/0a1b/local_storage").is_file());
+    // The test made that change itself (not scull): undo it before the invariants compare the
+    // audit with the disk.
+    fs::remove_dir_all(dir2.join("location_data")).unwrap();
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+/// #44: a `.conanrc` in the working folder or any parent outranks `CONAN_HOME`, so one above
+/// the sandbox makes the run refuse Conan (`not_scoped`) without starting it.
+fn conan_conanrc_above_the_sandbox_is_refused() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let dir = long_tail_cache(&mut fx, CacheTool::Conan, "home/.conan2/p");
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "conan");
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert_eq!(planned_tools(&plan), [CacheTool::Conan]);
+    let rc = sandbox_base(&fx).join(".conanrc");
+    fs::write(
+        &rc,
+        format!("conan_home={}\n", fx.base().join("other").display()),
+    )
+    .unwrap();
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.is_empty(), "{report:#?}");
+    assert!(
+        matches!(skip_reason(&report.skipped, CacheTool::Conan), SkipReason::NotScoped(ref w) if w.contains(".conanrc")),
+        "{report:#?}"
+    );
+    assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+    assert!(dir.join("zlib1a2b3c4d5e6f7/b/unused-build.o").is_file());
+    only_row(&fx, &report.rec, ItemOutcome::Refused, Some("not_scoped"));
+    fs::remove_file(&rc).unwrap();
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+/// #44 D-36: with none of the five binaries installed, only the Arduino download cache is
+/// offered as orphaned. ccache (its folder holds ccache.conf), Conan (packages built locally),
+/// Deno (web storage) and Cypress (installed per project) are not; a forged, confirmed and
+/// approved orphaned entry for one of them is refused (`d36_excluded`) and nothing is removed.
+fn d36_long_tail_only_arduino_is_orphan_removable() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let dirs: Vec<(CacheTool, PathBuf)> = long_tail(&LONG_TAIL_ENABLED)
+        .iter()
+        .map(|(t, _, dir)| (*t, long_tail_cache(&mut fx, *t, dir)))
+        .collect();
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap(); // trusted folder without any of them
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty());
+    for (tool, dir) in &dirs {
+        assert_eq!(
+            skip_reason(&plan.skipped, *tool),
+            SkipReason::NotInstalled {
+                manual_removal: dir.clone()
+            }
+        );
+        let excluded = scull_cleaner::orphaned::not_orphan_removable(*tool);
+        assert_eq!(excluded.is_none(), *tool == CacheTool::Arduino, "{tool:?}");
+    }
+    let orphaned: Vec<CacheTool> = plan.orphaned.iter().map(|o| o.tool).collect();
+    assert_eq!(orphaned, [CacheTool::Arduino], "{plan:#?}");
+
+    for forged_tool in [CacheTool::Ccache, CacheTool::Deno] {
+        let (_, dir) = dirs.iter().find(|(t, _)| *t == forged_tool).unwrap();
+        let cand = cands
+            .iter()
+            .find(|c| c.rule.id == forged_tool.rule_id())
+            .unwrap();
+        let mut forged = plan.orphaned[0].clone();
+        forged.tool = forged_tool;
+        forged.cache = dir.clone();
+        forged.identity = cand.identity;
+        forged.item = scull_core::PlanItem::from_candidate(cand).unwrap();
+        forged.reclaimable_bytes = cand.sizes.reclaimable.bytes;
+        let mut p = plan.clone();
+        p.orphaned = vec![forged];
+        let exec = locked_executor(&fx);
+        let report = orphans_audited(
+            &fx,
+            &exec,
+            &q,
+            &p,
+            &confirmed(&[forged_tool]),
+            &Probe::idle(),
+            &CancelToken::new(),
+        );
+        assert!(report.removed.is_empty(), "{report:#?}");
+        assert!(
+            matches!(
+                skip_reason(&report.skipped, forged_tool),
+                SkipReason::NotOrphanRemovable(_)
+            ),
+            "{report:#?}"
+        );
+        only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("d36_excluded"));
+        assert!(dir.join(fake::GUARD).is_file(), "{forged_tool:?} untouched");
+        drop(exec);
+        check(&fx, &p, &cands, &[], &[&report.rec]);
     }
 }

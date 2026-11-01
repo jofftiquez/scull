@@ -116,6 +116,26 @@
 //! `conda clean --packages` only removes extracted packages no environment links to, and
 //! `--tarballs` only downloaded archives, in each of them.
 //!
+//! # Long-tail tools (#44)
+//!
+//! Five of the long-tail tool caches (P5-DET-05) are cleaned the same way, each pinned to the
+//! located folder by the option or variable that outranks every config file:
+//!
+//! | Tool | Command | Location passed as | Also |
+//! |---|---|---|---|
+//! | ccache | `ccache --clear` (keeps `ccache.conf`) | `CCACHE_DIR=<dir>` | `CCACHE_CONFIGPATH=<null device>`: "the only configuration file that will be read", so neither the system-wide nor the cache's own `ccache.conf` can add remote storage or move the cache |
+//! | Conan 2 | `conan cache clean --source --build --temp` (never packages, never the download cache) | `CONAN_HOME=<parent of p/>` and `-cc core.cache:storage_path=<p/>` (outranks `global.conf`) | `-cc core:non_interactive=True`; refused when a `.conanrc` exists in the working folder or any parent (it outranks `CONAN_HOME`) |
+//! | Arduino CLI | `arduino-cli cache clean` | `ARDUINO_DIRECTORIES_DOWNLOADS=<dir>` (environment outranks `arduino-cli.yaml`) | `ARDUINO_METRICS_ENABLED=false`, `ARDUINO_UPDATER_ENABLE_NOTIFICATION=false` |
+//! | Deno | `deno clean` (removes exactly the `DENO_DIR` root) | `DENO_DIR=<dir>` | `DENO_NO_UPDATE_CHECK=1`, `DENO_NO_PROMPT=1`; refused when the folder holds `location_data/` (web storage, unique data), checked again right before the run |
+//! | Cypress | `cypress cache prune` only (keeps the running version, `bundles` and session records) | `CYPRESS_CACHE_FOLDER=<dir>` | a wipe request still runs the prune: `cypress cache clear` also deletes the session records |
+//!
+//! Refused (`not_supported_yet`): CocoaPods (`pod cache clean --all` has no location option or
+//! variable, so with the sandboxed `HOME` it would act on an empty cache, and `pod` is a Ruby
+//! script behind shell shims), Playwright (`uninstall --all` removes every installation's
+//! browsers, and the CLI is a project-local script whose version decides the layout) and
+//! Puppeteer (`browsers clear` always asks for confirmation on stdin, which Quick Clean never
+//! answers).
+//!
 //! Bun, Yarn and pip have no prune: their only cleanup removes the whole cache (`pip cache
 //! purge` empties pip's HTTP and wheel caches), and it is what Quick Clean runs for them
 //! ([`CleanMode::Wipe`] with [`PlannedTool::wipe_requested`] false). Asking pnpm or conda for a
@@ -215,12 +235,13 @@ use std::time::Duration;
 
 /// Whether Quick Clean runs `tool`'s own command on this branch at all.
 ///
-/// The long-tail tool caches from P5-DET-05 (ccache, Conan, Arduino, CocoaPods, Deno,
-/// Playwright, Cypress, Puppeteer, and the inspect-only ones) are located, measured and shown,
-/// but never run here yet: each needs its own location scoping, sandbox and D-36 review first.
-/// They are refused with [`SkipReason::NotSupportedYet`] when planning and again right before
-/// a run, never offered as orphaned (D-36), and no process is ever started for them. The
-/// match is exhaustive, so a new tool needs an explicit decision.
+/// Of the long-tail tool caches from P5-DET-05, five are enabled (#44), each pinned to exactly
+/// the located folder (see [Long-tail tools](self#long-tail-tools-44)): ccache, Conan, Arduino
+/// CLI, Deno and Cypress. CocoaPods, Playwright and Puppeteer stay refused (their commands
+/// can't be scoped to the located folder or can't run unattended), and the inspect-only ones
+/// have no command at all. A refused tool gets [`SkipReason::NotSupportedYet`] when planning
+/// and again right before a run, is never offered as orphaned (D-36), and no process is ever
+/// started for it. The match is exhaustive, so a new tool needs an explicit decision.
 pub fn is_supported(tool: CacheTool) -> bool {
     match tool {
         CacheTool::Npm
@@ -236,24 +257,33 @@ pub fn is_supported(tool: CacheTool) -> bool {
         | CacheTool::Gradle
         | CacheTool::Maven
         | CacheTool::NuGet => true,
+        // #44: scoped to the located folder (module docs, "Long-tail tools").
         CacheTool::Ccache
         | CacheTool::Conan
-        | CacheTool::Vcpkg
-        | CacheTool::PlatformIo
         | CacheTool::Arduino
+        | CacheTool::Deno
+        | CacheTool::Cypress => true,
+        // #44: `pod cache clean --all` can't be pointed at the located cache without writing a
+        // CocoaPods config (and `pod` runs behind Ruby shell shims); `playwright uninstall
+        // --all` acts on every installation's browsers and the CLI is a project-local script;
+        // `puppeteer browsers clear` always asks for confirmation on stdin (never answered).
+        CacheTool::CocoaPods | CacheTool::Playwright | CacheTool::Puppeteer => false,
+        // Inspect-only: no command at all.
+        CacheTool::Vcpkg
+        | CacheTool::PlatformIo
         | CacheTool::EspIdf
         | CacheTool::SwiftPm
-        | CacheTool::CocoaPods
         | CacheTool::Coursier
-        | CacheTool::Deno
         | CacheTool::Zig
-        | CacheTool::Playwright
-        | CacheTool::Cypress
-        | CacheTool::Puppeteer
         | CacheTool::Electron
         | CacheTool::Homebrew
         | CacheTool::Nix => false,
     }
+}
+
+/// The platform's null device: an empty configuration file that always exists.
+fn null_device() -> &'static str {
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
 
 /// Default per-tool timeout (a large npm cache verify takes minutes).
@@ -478,6 +508,9 @@ pub enum SkipReason {
     /// Quick Clean does not run this tool's command on this branch yet ([`is_supported`]):
     /// whatever the request or plan says, nothing is started and nothing is removed.
     NotSupportedYet,
+    /// The command could not be pinned to the located folder alone right now (#44: Deno's
+    /// `location_data/`, a `.conanrc` above the working folder).
+    NotScoped(String),
 }
 
 impl fmt::Display for SkipReason {
@@ -539,6 +572,7 @@ impl fmt::Display for SkipReason {
                  (its location scoping and sandbox are still under review); the cache is shown \
                  for information and nothing is run or removed",
             ),
+            SkipReason::NotScoped(why) => write!(f, "not scoped to the located cache: {why}"),
         }
     }
 }
@@ -909,8 +943,24 @@ impl QuickClean {
         }
         in_use(&location, probe)?;
 
+        self.scoped(c.tool, &location, None)?;
+
         let wipe_requested = request.wipe.contains(&c.tool);
-        let (cmd, mode): (NativeCommand, CleanMode) = match (wipe_requested, commands.wipe) {
+        let wipe = match (c.tool, commands.wipe) {
+            // `cypress cache clear` also deletes Cypress' session records: never run it.
+            (CacheTool::Cypress, Some(_)) => {
+                if wipe_requested {
+                    notes.push(
+                        "`cypress cache clear` also deletes Cypress' session records; running \
+                         the prune instead"
+                            .into(),
+                    );
+                }
+                None
+            }
+            (_, w) => w,
+        };
+        let (cmd, mode): (NativeCommand, CleanMode) = match (wipe_requested, wipe) {
             (true, Some(w)) => (w, CleanMode::Wipe),
             (true, None) if commands.preferred_prunes => {
                 notes.push(format!(
@@ -919,6 +969,7 @@ impl QuickClean {
                 ));
                 (commands.preferred, CleanMode::Prune)
             }
+            (true, None) if c.tool == CacheTool::Cypress => (commands.preferred, CleanMode::Prune),
             (_, _) if commands.preferred_prunes => (commands.preferred, CleanMode::Prune),
             _ => (commands.preferred, CleanMode::Wipe),
         };
@@ -1298,7 +1349,10 @@ impl QuickClean {
                 not_started(&mut report, &mut tally, op, t, SkipReason::Cancelled)?;
                 continue;
             }
-            if let Err(reason) = self.revalidate(t, probe) {
+            if let Err(reason) = self
+                .revalidate(t, probe)
+                .and_then(|()| self.scoped(t.tool, &t.location, Some(&sb.cwd)))
+            {
                 not_started(&mut report, &mut tally, op, t, reason)?;
                 continue;
             }
@@ -1359,6 +1413,29 @@ impl QuickClean {
         if !is_supported(t.tool) {
             return Err(SkipReason::NotSupportedYet);
         }
+        // The arguments and location variables must be exactly what this build constructs for
+        // this tool, mode and location (#44): a plan pointing a tool elsewhere, or carrying a
+        // command scull never runs for it (e.g. `cypress cache clear`), never starts.
+        if let Some(commands) = commands_for_rule(t.tool.rule_id()) {
+            let cmd = match (t.mode, commands.wipe) {
+                (CleanMode::Wipe, Some(w)) => w,
+                _ => commands.preferred,
+            };
+            let (tool_args, env) = tool_invocation(t.tool, cmd, &t.location)?;
+            let expected: Vec<OsString> = t
+                .script
+                .iter()
+                .map(|s| s.as_os_str().to_owned())
+                .chain(tool_args)
+                .collect();
+            if expected != t.args || env != t.env {
+                return Err(SkipReason::Changed(format!(
+                    "the planned `{}` invocation is not the one scull builds for {}",
+                    t.tool.binary(),
+                    t.location.display()
+                )));
+            }
+        }
         self.check_location(&t.cache, &t.anchor, t.identity)?;
         if self.trusted.find(t.tool.binary()).program()
             != Some((t.binary.clone(), t.script.clone()))
@@ -1370,6 +1447,44 @@ impl QuickClean {
             )));
         }
         in_use(&t.location, probe)
+    }
+
+    /// Tool-specific conditions for the command to act on the located folder only (#44),
+    /// checked when planning and again right before starting it (`cwd`: the sandbox's working
+    /// directory, known only then). An entry that can't be checked counts as present.
+    fn scoped(
+        &self,
+        tool: CacheTool,
+        location: &Path,
+        cwd: Option<&Path>,
+    ) -> Result<(), SkipReason> {
+        let present = |p: &Path| match self.platform.metadata(p) {
+            Ok(_) => true,
+            Err(e) => !e.is_not_found(),
+        };
+        match tool {
+            // `deno clean` removes the whole DENO_DIR, web storage of `--location` apps included.
+            CacheTool::Deno if present(&location.join("location_data")) => {
+                Err(SkipReason::NotScoped(format!(
+                    "{} holds location_data/ (web storage of Deno programs), which `deno clean` \
+                     would delete too",
+                    location.display()
+                )))
+            }
+            // A `.conanrc` in the working folder or any parent outranks CONAN_HOME.
+            CacheTool::Conan => match cwd.and_then(|cwd| {
+                cwd.ancestors()
+                    .map(|a| a.join(".conanrc"))
+                    .find(|rc| present(rc))
+            }) {
+                Some(rc) => Err(SkipReason::NotScoped(format!(
+                    "{} would override CONAN_HOME for `conan cache clean`",
+                    rc.display()
+                ))),
+                None => Ok(()),
+            },
+            _ => Ok(()),
+        }
     }
 
     /// The cache is still a directory with `identity`, nothing between `anchor` and it is a
@@ -1547,21 +1662,25 @@ fn location_of(c: &LocatedCache) -> Result<PathBuf, SkipReason> {
         | CacheTool::Conda
         | CacheTool::GoBuild
         | CacheTool::GoMod
-        | CacheTool::NuGet => c.path.clone(),
-        CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
-        CacheTool::Ccache
-        | CacheTool::Conan
-        | CacheTool::Vcpkg
-        | CacheTool::PlatformIo
+        | CacheTool::NuGet
+        | CacheTool::Ccache
         | CacheTool::Arduino
+        | CacheTool::Deno
+        | CacheTool::Cypress => c.path.clone(),
+        // Conan's storage folder `p/`; CONAN_HOME is its parent.
+        CacheTool::Conan => {
+            parent_if_named("p")?;
+            c.path.clone()
+        }
+        CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
+        CacheTool::Vcpkg
+        | CacheTool::PlatformIo
         | CacheTool::EspIdf
         | CacheTool::SwiftPm
         | CacheTool::CocoaPods
         | CacheTool::Coursier
-        | CacheTool::Deno
         | CacheTool::Zig
         | CacheTool::Playwright
-        | CacheTool::Cypress
         | CacheTool::Puppeteer
         | CacheTool::Electron
         | CacheTool::Homebrew
@@ -1644,22 +1763,69 @@ fn tool_invocation(
             env.push(("DOTNET_CLI_TELEMETRY_OPTOUT".to_owned(), "1".into()));
             env.push(("DOTNET_NOLOGO".to_owned(), "1".into()));
         }
+        // `CCACHE_DIR` outranks `cache_dir` in every config file; with `CCACHE_CONFIGPATH`
+        // naming an empty file, that is the only config ccache reads, so no system-wide or
+        // cache-level `ccache.conf` can add remote storage or move the cache.
+        CacheTool::Ccache => {
+            env.push(("CCACHE_DIR".to_owned(), loc));
+            env.push(("CCACHE_CONFIGPATH".to_owned(), null_device().into()));
+        }
+        // Temporary source, build and temp folders only: never packages (some are built
+        // locally) and never the download cache (`core.download:download_cache` may point at a
+        // cache shared with other Conan homes). `-cc core.cache:storage_path` outranks
+        // `global.conf`, so Conan uses exactly the located `p/`.
+        CacheTool::Conan => {
+            let home = location
+                .parent()
+                .ok_or_else(|| SkipReason::UnexpectedLayout("p/ has no parent".into()))?;
+            for a in ["--source", "--build", "--temp", "-cc"] {
+                args.push(a.into());
+            }
+            let mut storage = OsString::from("core.cache:storage_path=");
+            storage.push(&loc);
+            args.push(storage);
+            args.push("-cc".into());
+            args.push("core:non_interactive=True".into());
+            env.push(("CONAN_HOME".to_owned(), home.as_os_str().to_owned()));
+        }
+        // Environment variables outrank `arduino-cli.yaml`; there is no config search in the
+        // working folder.
+        CacheTool::Arduino => {
+            env.push(("ARDUINO_DIRECTORIES_DOWNLOADS".to_owned(), loc));
+            env.push(("ARDUINO_METRICS_ENABLED".to_owned(), "false".into()));
+            env.push((
+                "ARDUINO_UPDATER_ENABLE_NOTIFICATION".to_owned(),
+                "false".into(),
+            ));
+        }
+        // `deno clean` removes exactly the DENO_DIR root (no project folder is touched).
+        CacheTool::Deno => {
+            env.push(("DENO_DIR".to_owned(), loc));
+            env.push(("DENO_NO_UPDATE_CHECK".to_owned(), "1".into()));
+            env.push(("DENO_NO_PROMPT".to_owned(), "1".into()));
+        }
+        // The prune only: a plan carrying `cypress cache clear` (forged or stale) is refused.
+        CacheTool::Cypress => {
+            if cmd.args != ["cache", "prune"] {
+                return Err(SkipReason::NotScoped(
+                    "only `cypress cache prune` is run: `cypress cache clear` also deletes \
+                     Cypress' session records"
+                        .into(),
+                ));
+            }
+            env.push(("CYPRESS_CACHE_FOLDER".to_owned(), loc));
+        }
         // Unreachable through `plan_one` (no command, refused first); refused, not a panic.
         CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
         // Unreachable too ([`is_supported`] is checked first); refused, not a panic.
-        CacheTool::Ccache
-        | CacheTool::Conan
-        | CacheTool::Vcpkg
+        CacheTool::Vcpkg
         | CacheTool::PlatformIo
-        | CacheTool::Arduino
         | CacheTool::EspIdf
         | CacheTool::SwiftPm
         | CacheTool::CocoaPods
         | CacheTool::Coursier
-        | CacheTool::Deno
         | CacheTool::Zig
         | CacheTool::Playwright
-        | CacheTool::Cypress
         | CacheTool::Puppeteer
         | CacheTool::Electron
         | CacheTool::Homebrew

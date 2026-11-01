@@ -102,7 +102,7 @@ pub fn parse_tool(s: &str) -> Result<Untick, String> {
         // Inspect-only (never run); accepted so every reported name round-trips.
         "gradle" => vec![CacheTool::Gradle],
         "maven" => vec![CacheTool::Maven],
-        // Long-tail tool caches (P5-DET-05): shown, never run in this build.
+        // Long-tail tool caches (P5-DET-05); ccache, conan, arduino, deno and cypress run (#44).
         "ccache" => vec![CacheTool::Ccache],
         "conan" => vec![CacheTool::Conan],
         "vcpkg" => vec![CacheTool::Vcpkg],
@@ -368,6 +368,7 @@ fn skip_code(r: &SkipReason) -> &'static str {
         SkipReason::NotOrphanRemovable(_) => "d36_excluded",
         SkipReason::InspectOnly => "inspect_only",
         SkipReason::NotSupportedYet => "not_supported_yet",
+        SkipReason::NotScoped(_) => "not_scoped",
     }
 }
 
