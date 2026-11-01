@@ -7,7 +7,7 @@
 //! Free space is volume-wide and noisy (other processes, APFS purgeable space, delayed
 //! frees), so these fixtures require the measured delta to be **recorded and explained**,
 //! not equal to the prediction. Agreement within tolerance on quiet volumes is
-//! `crates/scull-cleaner/tests/measure.rs`, which retries around noise.
+//! `crates/scull-cleaner/tests/measure.rs`, which measures on a private tmpfs where available.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
