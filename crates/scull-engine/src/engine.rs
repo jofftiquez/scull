@@ -33,13 +33,14 @@ use scull_git::{
     worktree_candidate,
 };
 use scull_platform::activity::Limits;
-use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo};
+use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo, VolumeKind};
 use scull_safety::{
     ActivityWindow, GitTracking, MtimeSample, NativeActivityProbe, ProtectedSet, Regen,
     Signals as RubricSignals, Tri, classify, recent_activity,
 };
 use scull_scanner::{
-    BoundaryReason, CancelToken, DirSummary, EstimateContext, Snapshots, VolumeFs, estimate,
+    BoundaryReason, CancelToken, DirSummary, EstimateContext, ScanOptions, Snapshots, VolumeFs,
+    estimate,
 };
 use scull_storage::{
     ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store, VolumeSample,
@@ -48,7 +49,7 @@ use scull_storage::{
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// What the engine needs from its caller. Everything machine-specific comes in here; the
 /// engine reads no environment variables.
@@ -77,6 +78,11 @@ pub struct EngineConfig {
     pub in_use: InUseSource,
     /// The mounted-volume list ([`NativeVolumes`] by default).
     pub volumes: Arc<dyn VolumeSource>,
+    /// How long one directory listing, or one entry's metadata call, may take before the
+    /// walk gives up on it (default 60 s; see [`ScanOptions::dir_timeout`]). A hung entry
+    /// (a frozen mount point) costs only itself: it is reported as timed out and its siblings
+    /// are still scanned. `None` waits forever.
+    pub dir_timeout: Option<Duration>,
 }
 
 impl EngineConfig {
@@ -92,6 +98,7 @@ impl EngineConfig {
             explicit_target_dirs: Vec::new(),
             in_use: InUseSource::Unavailable,
             volumes: Arc::new(NativeVolumes),
+            dir_timeout: ScanOptions::default().dir_timeout,
         }
     }
 }
@@ -148,6 +155,8 @@ pub struct Engine {
     explicit_target_dirs: Vec<(PathBuf, String)>,
     in_use: InUseSource,
     volume_source: Arc<dyn VolumeSource>,
+    /// See [`EngineConfig::dir_timeout`].
+    dir_timeout: Option<Duration>,
     /// Mounted volumes, re-read at the start of each run.
     volumes: Mutex<Vec<VolumeInfo>>,
     /// Why the last volume list could not be read, if it couldn't.
@@ -195,6 +204,7 @@ impl Engine {
             explicit_target_dirs: cfg.explicit_target_dirs,
             in_use: cfg.in_use,
             volume_source: cfg.volumes,
+            dir_timeout: cfg.dir_timeout,
             volumes: Mutex::new(Vec::new()),
             volumes_error: Mutex::new(None),
         })
@@ -332,6 +342,7 @@ impl Engine {
         let collector = Collector::new(
             Arc::clone(&self.platform),
             Some(Arc::clone(&self.detectors)),
+            self.walk_options(),
             Arc::clone(&progress),
         );
         {
@@ -505,7 +516,12 @@ impl Engine {
             if cancel.is_cancelled() {
                 return;
             }
-            let c = Collector::new(Arc::clone(&self.platform), None, Arc::new(|_| {}));
+            let c = Collector::new(
+                Arc::clone(&self.platform),
+                None,
+                self.walk_options(),
+                Arc::new(|_| {}),
+            );
             if let Ok(outcome) = c.walk(d, threads, cancel)
                 && !outcome.is_cancelled()
                 && let Some(s) = outcome.root
@@ -594,6 +610,33 @@ impl Engine {
             }
         }
         estimate(s, &ctx)
+    }
+
+    /// Base options of every walk this run: the configured timeout, and the network mount
+    /// points to leave untouched ([`Engine::skip_mounts`]).
+    fn walk_options(&self) -> ScanOptions {
+        let mut opts = ScanOptions::default();
+        opts.dir_timeout = self.dir_timeout;
+        opts.skip_mounts = self.skip_mounts();
+        opts
+    }
+
+    /// Network mount points (NFS, SMB, sshfs, every FUSE filesystem on Linux, ...) from the
+    /// mount table read for this run: the walk reports them as other-volume boundaries
+    /// without touching them, so a stale or frozen one costs nothing and its siblings are
+    /// still scanned (T-53, #301). A later mount at the same point hides an earlier one.
+    /// Empty when the table could not be read; the walk's per-entry deadline then still
+    /// confines a hung mount point to itself.
+    fn skip_mounts(&self) -> Vec<PathBuf> {
+        let mut by_point: BTreeMap<PathBuf, VolumeKind> = BTreeMap::new();
+        for v in lock(&self.volumes).iter() {
+            by_point.insert(v.mount_point.clone(), v.kind);
+        }
+        by_point
+            .into_iter()
+            .filter(|(_, kind)| *kind == VolumeKind::Network)
+            .map(|(point, _)| point)
+            .collect()
     }
 
     /// Whether a volume is mounted strictly inside `dir` (bind mounts and mounted folders keep
@@ -773,7 +816,12 @@ impl Engine {
         // placeholders and whether every folder could be read. A failed walk leaves it
         // unmeasured, which the protection step treats as unknown (at least S2).
         self.refresh_volumes();
-        let collector = Collector::new(Arc::clone(&self.platform), None, Arc::new(|_| {}));
+        let collector = Collector::new(
+            Arc::clone(&self.platform),
+            None,
+            self.walk_options(),
+            Arc::new(|_| {}),
+        );
         if let Err(e) = collector.walk(&want, 0, &CancelToken::new()) {
             lock(&collector.state).issue(&want, IssueKind::ReadError, e.to_string());
         }
@@ -808,7 +856,12 @@ impl Engine {
         let ctx = DetectContext::new().with_config_reader(&reader);
         let located = locate_caches(env, self.platform.as_ref(), &ctx);
         self.refresh_volumes();
-        let collector = Collector::new(Arc::clone(&self.platform), None, progress);
+        let collector = Collector::new(
+            Arc::clone(&self.platform),
+            None,
+            self.walk_options(),
+            progress,
+        );
         let mut cancelled = false;
         let mut found = Vec::new();
         for c in located.found {
