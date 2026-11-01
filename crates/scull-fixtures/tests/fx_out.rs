@@ -618,6 +618,40 @@ fn mcp_cli(roots: &[&Path]) -> Cli {
     cli
 }
 
+/// SAFE-14: an elevated `scull mcp serve` never offers the destructive plan tools, so a test
+/// that needs them can't run as root/administrator (GitHub's Windows runners are elevated).
+/// There it checks that refusal on `m` instead and returns `true` (skip the rest). CI reruns
+/// the test as a standard user (`scripts/ci/run-as-standard-user.ps1`), where
+/// `SCULL_TEST_REQUIRE_NOT_ELEVATED` turns an elevated process into a failure and the `RUN`
+/// marker proves the test ran.
+fn skip_if_elevated(test: &str, m: &mut Mcp) -> bool {
+    let required =
+        std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_some_and(|v| !v.is_empty());
+    if scull_platform::is_elevated().blocks_destructive() {
+        assert!(
+            !required,
+            "{test}: SCULL_TEST_REQUIRE_NOT_ELEVATED is set but this process runs elevated"
+        );
+        let list = m.request("tools/list", json!({}));
+        let tools: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{list}"))
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            !tools.contains(&"prepare_cleanup"),
+            "an elevated scull must not offer prepare_cleanup (SAFE-14): {tools:?}"
+        );
+        eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
+}
+
 /// A running `scull mcp serve` speaking JSON-RPC lines over its stdio.
 struct Mcp {
     child: Child,
@@ -685,6 +719,8 @@ impl Mcp {
     /// `tools/call` → the tool's structured result.
     fn tool(&mut self, name: &str, args: Value) -> Value {
         let r = self.request("tools/call", json!({ "name": name, "arguments": args }));
+        // A JSON-RPC error (e.g. a tool this server doesn't offer) has no `result`.
+        assert!(r.get("result").is_some(), "{name}: JSON-RPC error: {r}");
         let result = &r["result"];
         assert_ne!(result["isError"], true, "{name}: {r}");
         if let Some(sc) = result.get("structuredContent") {
@@ -1002,6 +1038,11 @@ fn fx_out_03_cli_and_mcp_plan_identical_contents() {
     let r = s(fx.root());
 
     let mut m = Mcp::start_with(&cli, &["mcp", "serve", "--allow-destructive"]);
+    if skip_if_elevated("fx_out_03_cli_and_mcp_plan_identical_contents", &mut m) {
+        assert_eq!(m.finish(), Some(0));
+        check(&fx);
+        return;
+    }
     let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));
     let ids: Vec<String> = cands["candidates"]
         .as_array()
