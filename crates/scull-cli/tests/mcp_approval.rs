@@ -238,6 +238,16 @@ impl Session {
     }
 }
 
+/// `kind/source/reason xcount` of every agent audit event, oldest first.
+fn reasons(env: &Env) -> Vec<String> {
+    env.store()
+        .agent_events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .map(|e| format!("{}/{}/{} x{}", e.kind.as_str(), e.source, e.reason, e.count))
+        .collect()
+}
+
 fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
@@ -332,6 +342,15 @@ fn agent_plan_runs_only_after_the_human_approves() {
     );
     let (_, st) = s.call("get_approval_status", args.clone());
     assert_eq!(st["state"], "awaiting_approval");
+    // Audited (PRD §13.3 step 5): the refused execution, and both attempts without a
+    // terminal that named the plan (the usage error and the bare listing are not attempts).
+    assert_eq!(
+        reasons(&env),
+        [
+            "execute_refused/mcp/not_approved x1",
+            "approval_denied/cli/no_terminal x2",
+        ]
+    );
 
     // The human approves in their terminal.
     env.human_approves(&id);
@@ -352,6 +371,63 @@ fn agent_plan_runs_only_after_the_human_approves() {
     let (_, st) = s.call("get_cleanup_status", args);
     assert_eq!(st["state"], "executed", "{st:#}");
     s.finish();
+
+    // `scull history` lists what was refused to the agent; `scull data show` counts it.
+    let o = env.run(&["history", "--json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let h: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let listed: Vec<(&str, &str, u64)> = h["data"]["agent_events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{h:#}"))
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                e["reason"].as_str().unwrap(),
+                e["count"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("execute_refused", "approval_used", 1),
+            ("approval_denied", "no_terminal", 2),
+            ("execute_refused", "not_approved", 1),
+        ],
+        "newest first"
+    );
+    assert!(
+        h["data"]["agent_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["plan_id"] == id.as_str()),
+        "{h:#}"
+    );
+    let o = env.run(&["history"]);
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(text.contains("Refused to AI agents (3"), "{text}");
+    assert!(
+        text.contains("no_terminal") && text.contains("not_approved"),
+        "{text}"
+    );
+    let o = env.run(&["data", "show", "--json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let d: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let rows = |k: &str| {
+        d["data"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == k)
+            .map_or(0, |e| e["rows"].as_u64().unwrap())
+    };
+    assert_eq!(
+        (rows("approval_denied"), rows("execute_refused")),
+        (1, 2),
+        "{d:#}"
+    );
 
     // The operation is recorded with the approval's channel and approver.
     let store = env.store();
@@ -432,6 +508,28 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
     assert_eq!(r.unwrap_err().kind, scull_core::ErrorKind::SafetyBlocked);
     assert_eq!(out.matches("Type WXY-Z23 to approve").count(), 3, "{out}");
     assert!(store.get_approval(&id).unwrap().is_none());
+    // Four denials (folded into one entry counting 4) and one give-up are audited, with the
+    // plan's hash and never the code.
+    let events = store.agent_events(0, 10_000).unwrap();
+    let got: Vec<(&str, u64)> = events
+        .iter()
+        .map(|e| (e.reason.as_str(), e.count))
+        .collect();
+    assert_eq!(got, [("denied", 4), ("wrong_code", 1)]);
+    for e in &events {
+        assert_eq!(e.kind.as_str(), "approval_denied");
+        assert_eq!((e.source.as_str(), e.channel.as_str()), ("cli", "terminal"));
+        assert_eq!(e.plan_id.as_ref(), Some(&id));
+        assert_eq!(
+            e.content_hash.as_ref().map(|h| h.as_str()),
+            plan["content_hash"].as_str()
+        );
+        assert_eq!(e.user, who.user);
+    }
+    assert!(
+        !format!("{events:?}").contains("WXY"),
+        "no code in the audit"
+    );
     let (r, out) = answer(&mut store, "nope\nwxy z23\n");
     assert!(
         matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),
@@ -550,5 +648,106 @@ fn approve_in_a_real_pseudo_terminal() {
     assert_eq!(a.method, ApprovalMethod::CliTty);
     assert_eq!(a.approver, env.who().user);
     let _ = std::fs::remove_file(&socket);
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// A refused `scull approve` without a terminal leaves no trace beyond the audit row: it
+/// never creates scull's machine ID file (nor a database). With no machine ID, nothing is
+/// recorded at all.
+#[test]
+fn approve_without_a_terminal_creates_no_machine_id() {
+    let env = Env::new(true);
+    let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
+    let (_, cands) = s.call("get_cleanup_candidates", json!({}));
+    let pick = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| matches!(c["action"].as_str(), Some("delete" | "quarantine")))
+        .unwrap()
+        .clone();
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": [pick["id"]] }));
+    assert!(!err, "{plan:#}");
+    s.finish();
+    let id = plan["plan_id"].as_str().unwrap().to_owned();
+    let machine = env
+        .home()
+        .join("data")
+        .join(scull_platform::MACHINE_ID_FILE);
+    std::fs::remove_file(&machine).unwrap();
+    let o = env.run(&["approve", &id]);
+    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    assert!(!machine.exists(), "the machine ID file was created");
+    assert!(env.store().agent_events(0, 100).unwrap().is_empty());
+    // Without a database either, nothing is created.
+    let fresh = Env::new(true);
+    let o = fresh.run(&["approve", &id]);
+    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    assert!(
+        !fresh
+            .home()
+            .join("data")
+            .join(scull_platform::MACHINE_ID_FILE)
+            .exists()
+    );
+    assert!(
+        !fresh
+            .home()
+            .join("data")
+            .join(scull_storage::DB_FILE_NAME)
+            .exists()
+    );
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+    fresh
+        .fx
+        .check_invariants(&InvariantInputs::new())
+        .assert_ok();
+}
+
+/// `scull history` stays bounded however many agent refusals were recorded: `--limit`
+/// (default 50) entries, newest first, plus how many more there are.
+#[test]
+fn history_lists_a_bounded_number_of_agent_events() {
+    let env = Env::new(true);
+    let o = env.run(&["scan", "--json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let mut store = env.store();
+    let now = scull_engine::now_unix();
+    for n in 0..120 {
+        store
+            .record_agent_event(&scull_storage::AgentAuditEvent {
+                event_id: 0,
+                at: now - 120 + n,
+                kind: scull_storage::EventKind::ExecuteRefused,
+                source: "mcp".into(),
+                plan_id: None,
+                content_hash: None,
+                reason: format!("reason_{n}"),
+                channel: "mcp".into(),
+                machine_id: "m".into(),
+                user: "u".into(),
+                count: 1,
+            })
+            .unwrap();
+    }
+    let json = |args: &[&str]| -> Value {
+        let o = env.run(args);
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        serde_json::from_slice(&o.stdout).unwrap()
+    };
+    let h = json(&["history", "--json"]);
+    assert_eq!(h["data"]["agent_events"].as_array().unwrap().len(), 50);
+    assert_eq!(h["data"]["agent_events_more"], 70);
+    assert_eq!(
+        h["data"]["agent_events"][0]["reason"], "reason_119",
+        "newest first"
+    );
+    let h = json(&["history", "--json", "--limit", "5"]);
+    assert_eq!(h["data"]["agent_events"].as_array().unwrap().len(), 5);
+    assert_eq!(h["data"]["agent_events_more"], 115);
+    let o = env.run(&["history", "--limit", "3"]);
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(text.contains("and 117 more"), "{text}");
+    assert_eq!(text.matches("reason_").count(), 3, "{text}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

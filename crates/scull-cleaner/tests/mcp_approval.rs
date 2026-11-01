@@ -15,13 +15,13 @@
 mod planning;
 
 use planning::*;
-use scull_cleaner::{ExecutionReport, Executor};
+use scull_cleaner::{ExecutionReport, Executor, GATE_REASONS};
 use scull_core::{
     ErrorKind, OperationId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, ScullError,
 };
 use scull_engine::{CancelToken, PlatformOwnerOnly, ScanReport, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs};
-use scull_storage::{ApprovalMethod, NewApproval, OperationEnd, OperationStart, Store};
+use scull_storage::{ApprovalMethod, EventKind, NewApproval, OperationEnd, OperationStart, Store};
 
 fn store(fx: &Fixture) -> Store {
     Store::open(&fx.base().join("data").join("scull.db"), &PlatformOwnerOnly).unwrap()
@@ -440,4 +440,265 @@ fn cli_plans_need_no_broker_approval() {
     op.finish(OperationEnd::Normal, now_unix()).unwrap();
     assert_executed(&fx, &r, "app/target");
     check(&fx, &plan, &r, &["app/target"]);
+}
+
+/// The reasons the gate recorded for `plan` (agent audit events with its ID and the hash of
+/// the plan presented, source `executor`), oldest first. Every one carries channel `mcp` and
+/// this account.
+fn gate_reasons(s: &Store, plan: &Plan) -> Vec<String> {
+    s.agent_events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| {
+            e.plan_id.as_ref() == Some(plan.id())
+                && e.content_hash.as_ref() == Some(plan.content_hash())
+        })
+        .map(|e| {
+            assert_eq!(e.kind, EventKind::ExecuteRefused);
+            assert_eq!(e.source, "executor");
+            assert_eq!(e.channel, "mcp");
+            assert_eq!(e.user, me());
+            assert_eq!(e.machine_id, MACHINE);
+            assert!(GATE_REASONS.contains(&e.reason.as_str()), "{}", e.reason);
+            e.reason
+        })
+        .collect()
+}
+
+/// PRD §13.3 step 5: every refusal of the Executor's gate is audited with its reason, and
+/// recording it never creates, spends or changes an approval. CLI plans are not audited
+/// here (they are not agent requests).
+#[test]
+fn every_gate_refusal_is_audited_without_touching_the_approval() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let exec = locked(&fx);
+
+    // not_approved, then lock_not_held and operation_mismatch (no approval exists).
+    let none = mcp_plan(&fx, &scan, &["app/target"], "01JAUDNONE", now);
+    s.insert_plan(&none).unwrap();
+    let st = start(&none, "01JAUDNONE", ApprovalMethod::CliTty);
+    exec.begin_operation(&mut s, &none, &st).unwrap_err();
+    Executor::new()
+        .begin_operation(&mut s, &none, &st)
+        .unwrap_err();
+    let mut wrong = st.clone();
+    wrong.plan_id = PlanId::from_suffix("01JAUDOTHER").unwrap();
+    exec.begin_operation(&mut s, &none, &wrong).unwrap_err();
+    assert_eq!(
+        gate_reasons(&s, &none),
+        ["not_approved", "lock_not_held", "operation_mismatch"]
+    );
+    assert!(s.get_approval(none.id()).unwrap().is_none(), "none created");
+
+    // not_human (a non-human method).
+    let flag = mcp_plan(&fx, &scan, &["app/target"], "01JAUDFLAG", now);
+    s.insert_plan(&flag).unwrap();
+    approve(
+        &mut s,
+        &flag,
+        ApprovalMethod::CliFlag,
+        now,
+        flag.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &flag,
+        &start(&flag, "01JAUDFLAG", ApprovalMethod::CliFlag),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &flag), ["not_human"]);
+    assert_eq!(s.get_approval(flag.id()).unwrap().unwrap().used_at, None);
+
+    // channel_mismatch, approver_not_recorded, approval_mismatch (a substitute under the
+    // approved ID), other_account.
+    let who = mcp_plan(&fx, &scan, &["app/target"], "01JAUDWHO", now);
+    s.insert_plan(&who).unwrap();
+    approve(
+        &mut s,
+        &who,
+        ApprovalMethod::CliTty,
+        now,
+        who.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &who,
+        &start(&who, "01JAUDWHO", ApprovalMethod::Desktop),
+    )
+    .unwrap_err();
+    let mut st = start(&who, "01JAUDWHO", ApprovalMethod::CliTty);
+    st.approver = "someone-else".into();
+    exec.begin_operation(&mut s, &who, &st).unwrap_err();
+    assert_eq!(
+        gate_reasons(&s, &who),
+        ["channel_mismatch", "approver_not_recorded"]
+    );
+    assert_eq!(s.get_approval(who.id()).unwrap().unwrap().used_at, None);
+    let substitute = mcp_plan(&fx, &scan, &["lib/target"], "01JAUDWHO", now);
+    exec.begin_operation(
+        &mut s,
+        &substitute,
+        &start(&substitute, "01JAUDSUB", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &substitute), ["approval_mismatch"]);
+    let theirs = mcp_plan(&fx, &scan, &["app/target"], "01JAUDTHEIRS", now);
+    s.insert_plan(&theirs).unwrap();
+    approve_as(
+        &mut s,
+        &theirs,
+        ApprovalMethod::CliTty,
+        now,
+        theirs.expires_unix(),
+        "other-account",
+    );
+    exec.begin_operation(
+        &mut s,
+        &theirs,
+        &start(&theirs, "01JAUDTHEIRS", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &theirs), ["other_account"]);
+    assert_eq!(s.get_approval(theirs.id()).unwrap().unwrap().used_at, None);
+
+    // approval_expired (unused), approval_used (spent by a void).
+    let old = mcp_plan(&fx, &scan, &["app/target"], "01JAUDOLD", now - 14 * 60);
+    s.insert_plan(&old).unwrap();
+    approve(
+        &mut s,
+        &old,
+        ApprovalMethod::CliTty,
+        now - 13 * 60,
+        now - 60,
+    );
+    exec.begin_operation(
+        &mut s,
+        &old,
+        &start(&old, "01JAUDOLD", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &old), ["approval_expired"]);
+    assert_eq!(s.get_approval(old.id()).unwrap().unwrap().used_at, None);
+    let spent = mcp_plan(&fx, &scan, &["app/target"], "01JAUDSPENT", now);
+    s.insert_plan(&spent).unwrap();
+    approve(
+        &mut s,
+        &spent,
+        ApprovalMethod::Desktop,
+        now,
+        spent.expires_unix(),
+    );
+    assert!(
+        s.consume_approval(spent.id(), spent.content_hash(), now_unix())
+            .unwrap()
+    );
+    let used_at = s.get_approval(spent.id()).unwrap().unwrap().used_at;
+    exec.begin_operation(
+        &mut s,
+        &spent,
+        &start(&spent, "01JAUDSPENT", ApprovalMethod::Desktop),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &spent), ["approval_used"]);
+    assert_eq!(
+        s.get_approval(spent.id()).unwrap().unwrap().used_at,
+        used_at
+    );
+    nothing_happened(&fx, &s);
+
+    // unfinished_operation: an earlier operation did not finish (a crash).
+    let cli = plan_named(&fx, &scan, &["lib/target"], "01JAUDCLI");
+    s.insert_plan(&cli).unwrap();
+    let op = exec
+        .begin_operation(
+            &mut s,
+            &cli,
+            &start(&cli, "01JAUDCLI", ApprovalMethod::CliInteractive),
+        )
+        .unwrap();
+    drop(op);
+    let after = mcp_plan(&fx, &scan, &["app/target"], "01JAUDAFTER", now_unix());
+    s.insert_plan(&after).unwrap();
+    approve(
+        &mut s,
+        &after,
+        ApprovalMethod::CliTty,
+        now_unix(),
+        after.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &after,
+        &start(&after, "01JAUDAFTER", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &after), ["unfinished_operation"]);
+    assert_eq!(s.get_approval(after.id()).unwrap().unwrap().used_at, None);
+    // The CLI plan's own refusals are not agent events.
+    assert!(gate_reasons(&s, &cli).is_empty());
+    let inv = fx.check_invariants(&InvariantInputs::new());
+    inv.assert_ok();
+}
+
+/// `targets_touched` and `outside_operation`: an agent plan whose targets another operation
+/// touched is refused (and audited) without spending its approval, and an operation started
+/// for one plan can't run an agent plan (audited through that operation's store).
+#[test]
+fn touched_targets_and_foreign_operations_are_audited() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let exec = locked(&fx);
+    let agent = mcp_plan(&fx, &scan, &["app/target"], "01JAUDTOUCH", now);
+    s.insert_plan(&agent).unwrap();
+    approve(
+        &mut s,
+        &agent,
+        ApprovalMethod::CliTty,
+        now,
+        agent.expires_unix(),
+    );
+    // An operation for a CLI plan of the same target runs first and finishes.
+    let cli = plan_named(&fx, &scan, &["app/target"], "01JAUDFIRST");
+    s.insert_plan(&cli).unwrap();
+    let mut op = exec
+        .begin_operation(
+            &mut s,
+            &cli,
+            &start(&cli, "01JAUDFIRST", ApprovalMethod::CliInteractive),
+        )
+        .unwrap();
+    // While it is open, it can't carry the agent plan.
+    let e = exec
+        .execute_plan(
+            &agent,
+            &ctx(),
+            &h.revalidation(&fx),
+            Some(&mut op),
+            &CancelToken::new(),
+        )
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{}", e.message);
+    op.finish(OperationEnd::Cancelled, now_unix()).unwrap();
+    let e = exec
+        .begin_operation(
+            &mut s,
+            &agent,
+            &start(&agent, "01JAUDTOUCH", ApprovalMethod::CliTty),
+        )
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated, "{}", e.message);
+    assert_eq!(
+        gate_reasons(&s, &agent),
+        ["outside_operation", "targets_touched"]
+    );
+    assert_eq!(s.get_approval(agent.id()).unwrap().unwrap().used_at, None);
+    assert!(fx.root().join("app/target").exists());
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

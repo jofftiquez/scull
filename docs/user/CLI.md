@@ -610,10 +610,27 @@ Lists past cleanups, newest first, from the audit log: items done, bytes freed a
 items still restorable, and whether the audit chain is intact. With an ID it shows one
 operation in full.
 
+Below the operations it lists what was refused to AI agents (MCP destructive mode), newest
+first: denied approvals and refused `execute_cleanup` calls, each with its reason code, plan,
+channel, what recorded it and how many times it repeated within a minute (repeats share one
+entry), at most `--limit` of them and a count of the rest (`agent_events` in JSON; see
+[MCP.md](MCP.md#what-is-recorded)).
+
+```console
+$ scull history
+No cleanup operations recorded yet.
+
+Refused to AI agents (2, newest first):
+When                  What               Reason        Plan                           Channel   Recorded by  Times
+2026-11-01 09:14 UTC  approval denied    no_terminal   plan_6b4b2f1c8e0d9a7b3c2d1e0f  terminal  cli              1
+2026-11-01 09:13 UTC  execution refused  not_approved  plan_6b4b2f1c8e0d9a7b3c2d1e0f  mcp       mcp             12
+```
+
 | Flag | Effect |
 |---|---|
 | `OPERATION_ID` | Show this operation in detail |
 | `--since AGE` | Only operations started within AGE (`90m`, `12h`, `30d`, `2w`) |
+| `--limit N` | Most entries under "Refused to AI agents" (default 50; from the last 30 days unless `--since` is given) |
 
 ```console
 $ scull history
@@ -849,8 +866,10 @@ scull data purge (--all | --older-than AGE) [--confirm]
 
 What scull has recorded about this machine, and how to take it with you or delete it.
 
-* **`show`** lists scull's folders, the database (path, schema version, rows per table),
-  scull's own files with sizes, and what is in quarantine. Read-only.
+* **`show`** lists scull's folders, the database (path, schema version, rows per table, and
+  the `events` rows by kind: alerts, review plans and the agent audit events
+  `approval_denied` and `execute_refused`), scull's own files with sizes, and what is in
+  quarantine. Read-only.
 * **`export`** writes every table to DIR (default `./scull-export-<unix time>`), created
   owner-only. Existing files are never overwritten. `--format json` (default) writes one
   `scull-data.json` (`scull/data-dump@1`); `--format csv` writes one CSV per table.

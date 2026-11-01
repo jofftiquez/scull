@@ -6,7 +6,9 @@
 //!   every file of scull's own footprint (database, `-wal`/`-shm`, migration backups, damaged
 //!   copies, audit mirrors, the MCP name-hashing salt) with its size, and the quarantine
 //!   folders recorded in the manifest (read-only: names come from the database, nothing in
-//!   quarantine is opened). It never creates or migrates the database ([`crate::db`]).
+//!   quarantine is opened), and the rows of the `events` table by kind (alerts, review plans,
+//!   and the agent audit events: denied approvals, refused executions). It never creates or
+//!   migrates the database ([`crate::db`]).
 //!   Machine output: `scull/data-show@1`.
 //! * **`export [--format json|csv] [--out DIR]`** writes every table to `DIR` (default
 //!   `./scull-export-<unix time>`), created owner-only, with owner-only files that are never
@@ -153,6 +155,16 @@ pub struct TableRows {
     pub rows: u64,
 }
 
+/// Rows of one event kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventRows {
+    /// Stored kind name.
+    pub kind: String,
+    /// Rows.
+    pub rows: u64,
+}
+
 /// How the database looks to this command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -270,6 +282,10 @@ pub struct DataShowReport {
     pub database: DatabaseReport,
     /// Rows per table (empty when the database can't be read).
     pub tables: Vec<TableRows>,
+    /// Rows of the `events` table by kind (`alert`, `review_plan`, `approval_denied`,
+    /// `execute_refused`, ...); empty when there are none or the database can't be read.
+    #[serde(default)]
+    pub events: Vec<EventRows>,
     /// scull's own files.
     pub files: Vec<OwnFile>,
     /// Their total size in bytes.
@@ -295,6 +311,7 @@ pub fn run_show(ui: &Ui) -> Result<(), ScullError> {
 pub fn show(dirs: &AppDirs) -> DataShowReport {
     let db_path = db::db_path(&dirs.data);
     let mut tables = Vec::new();
+    let mut events = Vec::new();
     let mut quarantine = QuarantineReport {
         known: false,
         outstanding_items: 0,
@@ -316,6 +333,18 @@ pub fn show(dirs: &AppDirs) -> DataShowReport {
                         .collect();
                 }
                 Err(e) => detail = Some(e.to_string()),
+            }
+            match store.event_counts() {
+                Ok(c) => {
+                    events = c
+                        .into_iter()
+                        .map(|e| EventRows {
+                            kind: e.kind,
+                            rows: e.rows,
+                        })
+                        .collect();
+                }
+                Err(e) => detail = detail.or(Some(e.to_string())),
             }
             match store.quarantine_outstanding() {
                 Ok(q) => quarantine = quarantine_report(&q),
@@ -342,6 +371,7 @@ pub fn show(dirs: &AppDirs) -> DataShowReport {
         dirs: DirsReport::new(dirs),
         database,
         tables,
+        events,
         files,
         footprint_bytes,
         quarantine,
@@ -460,6 +490,11 @@ fn render_show(r: &DataShowReport) -> String {
                 &mut out,
                 format!("  {:<width$}  {:>8} rows", t.table, t.rows),
             );
+            if t.table == "events" {
+                for e in &r.events {
+                    line(&mut out, format!("    {:<24}  {:>8}", esc(&e.kind), e.rows));
+                }
+            }
         }
     }
     line(&mut out, String::new());

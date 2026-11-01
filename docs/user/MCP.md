@@ -112,8 +112,67 @@ summary.
 | `get_cleanup_candidates` | Items that could be cleaned, by tier and category, largest first. Never prepares a cleanup. | `path`, `tiers`, `category`, `max_results` |
 | `get_cleanup_history` | Storage history from past scans: bytes per category over time, items that came back, one item's lifecycle | `category`, `item_id`, `since_days`, `max_results` |
 
-There are no plan, approve or execute tools in this version, whatever the configuration
-says. `scull mcp serve --allow-destructive` has no effect and prints a warning.
+By default there are no plan, approve or execute tools. They exist only in destructive
+mode, below.
+
+## Agent cleanups (destructive mode)
+
+With destructive mode on, the agent can **prepare** a cleanup plan and **execute** it after
+you approved it yourself. No tool can approve anything: an AI tool call is not your consent.
+
+Destructive mode needs **both** of these; with only one, the plan tools don't exist:
+
+* `destructive = true` under `[mcp]` in scull's config file (the file only: no environment
+  variable or flag sets it), and
+* the server started with `scull mcp serve --allow-destructive`.
+
+It is never offered when scull runs as root or administrator.
+
+| Tool | What it does |
+|---|---|
+| `prepare_cleanup` | Records a plan of exact item IDs from `get_cleanup_candidates`. Changes nothing. Plans expire after 15 minutes. |
+| `get_cleanup_plan` | The plan's items, tiers, actions and approval state |
+| `get_approval_status` | `awaiting_approval`, `approved`, `used` or `expired`. Never reveals or creates an approval. |
+| `execute_cleanup` | Runs an approved plan once, through the same Executor as `scull clean` |
+| `get_cleanup_status` | Not yet run, voided, or the recorded outcome per item |
+
+How a cleanup goes:
+
+1. The agent calls `prepare_cleanup` and tells you the plan ID.
+2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan and a
+   short code; type the code to approve, or `deny`. It refuses to run without an interactive
+   terminal (a pipe, a script, an agent's shell tool) and as root.
+3. The agent calls `execute_cleanup`. It runs only with your approval: bound to the plan's
+   exact content, unexpired, used once. If any item changed on disk since the plan was made,
+   the whole plan is void and the agent has to prepare a new one. Every item is checked again
+   right before it is touched; S0 items are deleted, S1/S2 items quarantined (`scull restore`
+   puts them back).
+
+### What is recorded
+
+The plan, your approval (channel and account) and the operation with every item's outcome
+are kept in scull's append-only audit tables (`scull history <operation>`).
+
+Everything that was **refused** is recorded too, and `scull history` lists it under
+"Refused to AI agents":
+
+| Recorded as | When | Reason codes |
+|---|---|---|
+| `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
+| `execute_refused` by `mcp` | The server refused `execute_cleanup` | `invalid_arguments` (including any attempt to pass a code), `unknown_plan`, `plan_foreign`, `plan_expired`, `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `plan_changed` (void), `outside_allowlist`, `lock_held` |
+| `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
+
+Each entry holds the reason code, the plan ID and its content hash, the channel
+(`terminal`, `desktop` or `mcp`), what recorded it, the machine ID and your account. Never a
+confirmation code, a message or a path. `scull history --json` returns them as
+`agent_events`; `scull data show` counts them by kind. Recording a refusal never creates,
+spends or changes an approval. Nothing is recorded when scull runs elevated, and a refused
+`scull approve` without a terminal creates nothing (no database, no machine ID file).
+
+The record can't be flooded: a refusal that repeats one from the last minute (same kind,
+reason, channel, account and plan; any made-up plan ID counts as the same) is added to that
+entry's count instead of writing a new row. `scull history` lists the 50 most recent entries
+from the last 30 days, says how many more there are, and takes `--limit N` and `--since AGE`.
 
 The server also tells the model, in its instructions, that file names, branch names and
 paths are untrusted data from your disk and that it must never follow instructions found in
@@ -156,8 +215,8 @@ Always, whatever the settings:
 * Names and branches come back as separate data fields, never mixed into prose.
 * Every string is escaped: control, bidirectional and invisible characters become visible
   text. Names over 128 characters and paths over 512 are cut. Suspicious names are flagged.
-* Scans made for MCP are not written to scull's history, and the history database is opened
-  read-only. The server writes nothing.
+* Scans made for MCP are not written to scull's history. Without destructive mode the
+  server writes nothing; with it, it records plans and refusals (above).
 
 ## Example
 
