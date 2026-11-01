@@ -55,6 +55,12 @@ fn fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact() {
         .symlink("web/node_modules/escape.txt", &canary_file)
         .unwrap();
     let junction = fx.junction("web/node_modules/escape-jn", &canary).unwrap();
+    // Junctions exist on Windows only; the symlinks are the fixture everywhere.
+    scull_fixtures::skip::require(
+        dir_link.is_created() && file_link.is_created(),
+        "fx_fs_01",
+        "symlinks are not permitted here",
+    );
     fx.age("web/node_modules", days_ago(3))
         .unwrap()
         .checkpoint()
@@ -167,7 +173,11 @@ fn fx_fs_03_candidate_behind_an_escaping_link_is_never_reached() {
     let scan_root = fx.root().join("scan");
     let run = run_checked(&fx, &Pipeline::new(&scan_root));
     assert!(run.items.is_empty(), "{:?}", run.rel_paths());
-    if link.is_created() {
+    if scull_fixtures::skip::require(
+        link.is_created(),
+        "fx_fs_03",
+        "symlinks are not permitted here",
+    ) {
         // The link itself as a scan root: refused, never followed.
         let err = scull_scanner::scan(
             std::sync::Arc::new(scull_platform::Native::new()),
@@ -332,8 +342,11 @@ fn fx_fs_08_permission_denied_subfolder_is_reported_not_escalated() {
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::read_dir(&denied).is_ok() {
         fs::set_permissions(&denied, fs::Permissions::from_mode(0o755)).unwrap();
-        eprintln!("skipping: running with privileges that bypass permissions");
         fx.check_invariants(&scull_fixtures::InvariantInputs::new());
+        scull_fixtures::skip::skip(
+            "fx_fs_08",
+            "running with privileges that bypass permissions (root)",
+        );
         return;
     }
     fx.checkpoint().unwrap();

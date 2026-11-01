@@ -62,12 +62,15 @@ pub mod activity;
 pub mod ancestry;
 pub mod app_dirs;
 pub mod cloud;
+#[cfg(all(windows, feature = "test-support"))]
+pub mod console;
 pub mod docker;
 pub mod elevation;
 mod error;
 #[cfg(feature = "delete")]
 pub mod exec_lock;
 pub mod identity;
+pub mod interrupt;
 mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]

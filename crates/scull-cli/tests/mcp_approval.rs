@@ -1167,15 +1167,12 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
 /// refusal still runs); skipped locally without tmux too.
 #[cfg(unix)]
 fn have_tmux(test: &str) -> bool {
-    if Command::new("tmux").arg("-V").output().is_ok() {
-        return true;
-    }
-    assert!(
-        !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
-        "{test}: tmux is required on Linux CI"
-    );
-    eprintln!("SKIP {test}: tmux is not installed");
-    false
+    // CI installs tmux on Linux and macOS: there a missing tmux is a failure, not a skip.
+    scull_fixtures::skip::require(
+        Command::new("tmux").arg("-V").output().is_ok(),
+        test,
+        "tmux is not installed",
+    )
 }
 
 /// An agent plan over `app/target` only, prepared through the MCP server; the session stays
@@ -1523,6 +1520,8 @@ fn approve_run_is_refused_before_anything_is_shown() {
     }
 
     if !have_tmux("approve_run_is_refused_before_anything_is_shown") {
+        // The fixture was used above: its invariants are checked before skipping the rest.
+        env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
         return;
     }
     // Elevated, and an agent's environment marker, in a clean terminal.
@@ -1660,6 +1659,69 @@ fn approve_run_racing_the_agent_executes_once() {
     );
     println!("{report}");
     report.assert_ok();
+}
+
+/// `--run` waiting behind an unrelated operation's execution lock while the agent's
+/// `execute_cleanup` voids the plan (its rescan found a change, D-34): the human is told the
+/// agent used the approval and nothing ran here, never that the agent is running it (#118).
+#[cfg(unix)]
+#[test]
+fn approve_run_behind_another_lock_when_the_agent_voids_the_plan() {
+    if skip_if_elevated("approve_run_behind_another_lock_when_the_agent_voids_the_plan")
+        || !have_tmux("approve_run_behind_another_lock_when_the_agent_voids_the_plan")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (s, _, id) = prepare_app_target(&env);
+    s.finish();
+    // Another operation holds the lock for the whole run.
+    let held = scull_cleaner::Executor::acquire(&scull_cleaner::LockOptions::at(
+        env.home().join("state").join("execution.lock"),
+    ))
+    .unwrap();
+    let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
+    let code = t.code();
+    t.send(&code);
+    // Once `--run` has approved and is waiting behind the held lock (it retries for 5 s; its
+    // re-check of the approval takes milliseconds), the agent voids the plan.
+    let mut store = env.store();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !t.pane().contains("Checking that nothing in it changed") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no approval:\n{}",
+            t.pane()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(store.get_approval(&id).unwrap().is_some());
+    let plan = store.get_plan(&id).unwrap().unwrap();
+    assert!(approval::void(&mut store, &plan, scull_engine::now_unix()).unwrap());
+    let (done, exit) = t.finish();
+    drop(held);
+    println!("{}", done.trim_end());
+    assert_eq!(exit, 5, "{done}");
+    assert!(
+        done.contains("either ran the plan or found it changed"),
+        "{done}"
+    );
+    assert!(done.contains("Nothing was run here"), "{done}");
+    assert!(!done.contains("is being run"), "{done}");
+    assert!(
+        !done.contains("execute_cleanup first, as operation"),
+        "{done}"
+    );
+    assert!(env.fx.root().join("app/target").exists(), "nothing ran");
+    assert!(store.operations(0).unwrap().is_empty());
+    let audit = audited(&env, "approve_run");
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert!(
+        !format!("{audit:?}").contains("approval_used"),
+        "not audited as a use: {audit:?}"
+    );
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 
 /// A `--run` that started the operation and then failed (here the test hook fails it after

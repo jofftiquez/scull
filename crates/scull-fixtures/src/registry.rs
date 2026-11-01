@@ -285,9 +285,6 @@ const PHASE2_PENDING: &str = "MW";
 /// clippy-clean for `x86_64-pc-windows-gnu`, never run on Windows yet.
 const WINDOWS_PENDING: &str = "W";
 
-/// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
-/// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
-const MACOS_PENDING: &str = "M";
 const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
@@ -895,8 +892,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_05_link_to_canary_is_shared_and_counted_once",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-06",
         Gate::Mvp,
@@ -1008,8 +1004,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_12_long_path_candidate_is_scanned_and_classified",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-13",
         Gate::Mvp,
@@ -1172,8 +1167,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_race_04_build_started_after_scan_item_skipped_in_use",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-05",
         Gate::Mvp,
@@ -1193,8 +1187,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_05_plan_invalidated_when_another_operation_touched_its_targets",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // FX-RACE-06/07: green on macOS and Windows in run 41326764895 (journal fixtures only, on a
     // verification branch while FX-WIN-03 hung the full Windows run) and on Linux in PR CI.
     fx(
@@ -1227,8 +1220,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-02",
         Gate::Mvp,
@@ -1300,16 +1292,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_07_plan_file_edited_to_add_a_path_rejected_exit_4",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-08",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[t(E2E_EXEC, "fx_exec_08_expired_plan_rejected_exit_4")]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-09",
         Gate::Mvp,
@@ -1319,8 +1309,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_09_plan_from_another_machine_or_user_rejected_exit_4",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-10",
         Gate::Mvp,
@@ -1330,8 +1319,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_exec_10_item_became_s3_since_planning_is_skipped_with_reason",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-11",
         Gate::Mvp,
@@ -1348,8 +1336,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-12",
         Gate::Mvp,
@@ -1359,8 +1346,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             CLI_CLEAN,
             "fx_exec_12_elevated_run_refused_without_allow_root",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-13",
         Gate::Mvp,
@@ -1377,8 +1363,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(AUDIT, "fx_exec_13_audit_is_append_only_at_the_sql_level"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-14",
         Gate::Mvp,
@@ -1447,8 +1432,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_phy_02_apfs_clone_low_confidence_explained",
             ),
         ]),
-    )
-    .pending_ci("M"),
+    ),
     fx("FX-PHY-03", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
     fx(
         "FX-PHY-04",
@@ -1473,8 +1457,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(MEASURE_UNIT, "fx_phy_05_compression_uses_allocated_bytes"),
         ]),
-    )
-    .pending_ci("MW"),
+    ),
     fx(
         "FX-PHY-06",
         Gate::Mvp,
@@ -1498,8 +1481,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_phy_07_trash_and_quarantine_are_moved_not_freed",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.7 Quick Clean: package caches (FX-QC)
     fx(
         "FX-QC-01",
@@ -1740,8 +1722,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             EXEC_WIN,
             "fx_win_03_file_held_open_by_another_process_is_skipped_and_named",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-04",
         Gate::Mvp,
@@ -1754,8 +1735,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_04_long_paths"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-05",
         Gate::Mvp,
@@ -1788,8 +1768,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_win_06_recycle_bin_record_v2_round_trips",
             ),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx("FX-WIN-07", Gate::V1_0, "W", Mode::Manual, Status::Deferred),
     fx(
         "FX-WIN-08",
@@ -1800,8 +1779,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_WIN,
             "fx_win_08_scan_completes_with_defender_on_and_timing_is_recorded",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-09",
         Gate::V1_0,
@@ -1821,8 +1799,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_10_reserved_names_are_files"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-11",
         Gate::Mvp,
@@ -1835,8 +1812,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(EXEC_WIN, "fx_win_11_read_only_single_file_item_is_kept"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-12",
         Gate::Mvp,
@@ -1846,8 +1822,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_WIN,
             "fx_win_12_database_in_local_app_data_with_owner_only_acl",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     // §3.11 macOS-specific (FX-MAC)
     fx(
         "FX-MAC-01",
@@ -1876,8 +1851,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_mac_03_system_volumes_data_alias_is_not_counted_twice",
             ),
         ]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
     fx(
         "FX-MAC-04",
         Gate::Mvp,
@@ -1887,8 +1861,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_MAC,
             "fx_mac_04_bundles_are_folders_and_not_candidates_unless_a_rule_matches",
         )]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
     fx(
         "FX-MAC-05",
         Gate::Mvp,
@@ -2043,8 +2016,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_data_03_database_wal_shm_are_0600_and_new_dir_is_0700",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-04",
         Gate::Mvp,
@@ -2118,8 +2090,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_data_07_doctor_report_preview_then_consent_to_write",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.14 Output contracts (FX-OUT)
     fx(
         "FX-OUT-01",
@@ -2140,31 +2111,23 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-OUT-02",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 251,
-            reason: "the binary returns every documented code (0, 1, 2, 3, 4, 5, 6, and 130 on \
-                     Unix, also for Ctrl-C before the MCP handshake); 130 is not exercised on \
-                     Windows (no console Ctrl-C injection in the test)",
-            partial: &[
-                t(
-                    E2E_OUT,
-                    "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
-                ),
-                t(
-                    E2E_OUT,
-                    "fx_out_02_binary_returns_the_documented_exit_codes",
-                ),
-            ],
-        },
-    )
-    .pending_ci(PHASE2_PENDING),
+        Status::Implemented(&[
+            t(
+                E2E_OUT,
+                "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
+            ),
+            t(
+                E2E_OUT,
+                "fx_out_02_binary_returns_the_documented_exit_codes",
+            ),
+        ]),
+    ),
     fx(
         "FX-OUT-03",
         Gate::Mvp,

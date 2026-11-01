@@ -437,9 +437,12 @@ fn fx_data_04_purge_all_removes_exactly_sculls_files() {
     );
     assert!(scull_storage::footprint_files(&db_path(h.home())).is_empty());
     if !h.links {
-        eprintln!(
-            "symlinks not permitted here; link cases skipped: {:?}",
-            h.fx.skipped()
+        scull_fixtures::skip::skip(
+            "fx_data_04",
+            &format!(
+                "symlinks are not permitted here; link cases skipped: {:?}",
+                h.fx.skipped()
+            ),
         );
     }
     h.check();

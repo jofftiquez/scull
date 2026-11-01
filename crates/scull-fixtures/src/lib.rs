@@ -66,6 +66,7 @@ mod outside;
 pub mod privileged;
 mod projects;
 pub mod registry;
+pub mod skip;
 mod snapshot;
 
 pub use error::{FixtureError, Result};

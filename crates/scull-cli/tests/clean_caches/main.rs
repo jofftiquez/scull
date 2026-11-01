@@ -1054,6 +1054,10 @@ fn fx_qc_05_remove_orphaned_flag_through_the_binary() {
                 serde_json::json!(["pnpm"]),
                 "{v:#}"
             );
+            // Not a skip: both outcomes are asserted. Where whether the store is in use can't
+            // be observed (Linux and macOS CI: "could not check whether it is in use"), it is
+            // S2 and must stay unremovable; the removal itself is covered with an injected
+            // idle probe (fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool).
             println!(
                 "NOTE: the pnpm store is not removable here (activity not observable): {}",
                 tool(&v, "skipped", "pnpm").unwrap()
