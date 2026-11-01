@@ -13,6 +13,7 @@ pub mod insights;
 pub mod mcp;
 pub mod pipeline;
 pub mod projects;
+pub mod remote;
 pub mod render;
 pub mod review_plan;
 pub mod rules;

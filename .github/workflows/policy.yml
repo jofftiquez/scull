@@ -44,6 +44,8 @@ jobs:
         run: python3 packaging/check_inspect_only.py deps
       - name: Self-test the inspect-only gate (consent and metadata-only rules)
         run: python3 packaging/test_check_inspect_only.py
+      - name: Self-test the release packaging (CycloneDX SBOM, Scoop manifest)
+        run: python3 packaging/test_release_packaging.py
 
   platform-boundary:
     # P1-CI-03 / PLT-11: no OS APIs outside crates/scull-platform.

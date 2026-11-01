@@ -12,8 +12,9 @@ Workflow: `.github/workflows/ci.yml`.
 | `release-versions` (`policy.yml`) | Linux | `scripts/release/bump_version.py --check`: the workspace, Tauri crate, `tauri.conf.json` and `package.json` versions agree (one tag releases everything); self-tests of the version-bump and changelog scripts. |
 | `release-desktop` (`release-desktop.yml`) | Linux on PRs that touch the bundling; macOS, Windows, Linux on `v1*` tags | Tauri bundles (DMG, MSI/NSIS, deb/rpm/AppImage), signed and notarized when the secrets exist, attached to the tag's release. PRs and manual runs are dry runs. See `docs/RELEASE_v1.md`. |
 
-| `cli-deps` (`policy.yml`) | Linux | `packaging/check_inspect_only.py deps`: the `scull` binary's dependency tree has no Tauri/webview crates. |
-| `release-gates` (`release-gates.yml`) | Linux | Runs before every release build (and as a manual dry run): inspect-only binary gate (every destructive command still a stub, MCP read-only, canary unchanged), `dist plan`. See `RELEASING.md`. |
+| `cli-deps` (`policy.yml`) | Linux | `packaging/check_inspect_only.py deps`: the `scull` binary's dependency tree has no Tauri/webview crates. Also self-tests the inspect-only gate and the release packaging scripts (`packaging/test_release_packaging.py`: CycloneDX SBOM, Scoop manifest). |
+| `release-gates` (`release-gates.yml`) | Linux | Runs before every release build (and as a manual dry run): inspect-only binary gate (every destructive command still a stub, MCP read-only, canary unchanged), `dist plan`; the dry run also builds the SBOMs, one archive with its installers, Homebrew formula and `sha256.sum`, and reports which signing secrets are set. See `RELEASING.md`. |
+| `release-extras`, `release-packages` | Linux, macOS, Windows | Tag releases only (called by `release.yml`): SBOMs, Scoop manifest, macOS notarization and signature checks; then the Homebrew tap and Scoop bucket. Each signing/publishing step is skipped with a notice when its secrets are absent. See `RELEASING.md`. |
 
 **Required checks:** `CI ok`, `cargo-deny`, `platform-boundary`.
 
