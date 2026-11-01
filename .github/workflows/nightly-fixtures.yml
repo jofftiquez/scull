@@ -87,6 +87,11 @@ jobs:
           df -h "$RUNNER_TEMP" || true
       - name: FX-FS-04, FX-FS-15 (release build)
         # FX-FS-04 is compiled for Linux and macOS only; Windows runs FX-FS-15.
+        # FX-FS-15's budget is 15 s (PRD §21.2, reference machine). The hosted macOS runner (3 vCPU
+        # Apple M1 VM, 7.5 GB) spends ~87% of the scan in the kernel's APFS enumeration and varies
+        # 13.5-21 s run to run, so it gets a runner-calibrated bound (#91, docs/BENCHMARKS.md).
+        env:
+          SCULL_FX_FS15_MAX_SECS: ${{ matrix.os == 'macos-latest' && '25' || '15' }}
         run: |
           cargo test -p scull-fixtures --release --locked --test fx_fs_nightly -- \
             --ignored --nocapture --test-threads=1 2>&1 | tee fx-fs-nightly.log

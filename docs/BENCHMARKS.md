@@ -84,6 +84,18 @@ reproduce a run and the workflow records the exact CPU/RAM it got:
 
 Physical laptop numbers stay a maintainer task (needs real hardware).
 
+**Runner change (Nov 1, 2026).** `macos-latest` now reports `Apple M1 (Virtual)`, **3 vCPUs,
+7.5 GB RAM**, APFS, smaller than the row above. On it FX-FS-15 (1M entries, judged warm run)
+measured 13.5–16.5 s for the same code and up to 21 s with cold caches. A `sample` profile of the
+scan shows ~87% of busy worker time inside the kernel's `getattrlistbulk` (APFS directory
+enumeration); scull's own code is under 2%. The same engine scans the same tree in 1–1.7 s on the
+2-CPU Linux runner and 7–13 s on Windows.
+
+So the nightly keeps **≤ 15 s** on Linux and Windows, and gives `macos-latest` a
+runner-calibrated bound of **≤ 25 s** (`SCULL_FX_FS15_MAX_SECS` in `nightly-fixtures.yml`,
+about 1.2× the worst judged time seen). The ≤ 15 s target for an 8-core Mac (PRD §21.2) still
+stands and needs a measurement on physical hardware (#91).
+
 ## What this means for the PRD §21.2 targets
 
 - **Full scan, 1M entries, warm: ≤ 15 s.** gdu does it in ~3–4.5 s and `du` in ~6 s on this VM.
@@ -94,5 +106,6 @@ Physical laptop numbers stay a maintainer task (needs real hardware).
   instead of holding every entry (it stores rollups, not per-file rows; DATA-02).
 - Windows (NTFS + Defender, 2 CPUs): gdu 6.6 s for 1M. A ≤ 15 s Windows target is realistic on
   runner-class hardware; per-OS release gates are allowed (PRD §19.1).
-- macOS: dua 3.6 s for 1M on 5 cores, so ≤ 15 s holds on Apple Silicon too.
+- macOS: dua 3.6 s for 1M on 5 cores, so ≤ 15 s holds on Apple Silicon too. On today's 3-vCPU
+  runner scull is kernel-bound at 13.5–21 s; see the runner change note above.
 - Revisit these targets once the scull scanner (P1-SCAN-01) has numbers on the same trees.
