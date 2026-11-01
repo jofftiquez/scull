@@ -177,7 +177,7 @@ pub fn all() -> Vec<(String, serde_json::Value)> {
     );
     add(
         caches::CACHES_SCHEMA,
-        document_schema::<scull_engine::CachesReport>(caches::CACHES_SCHEMA),
+        document_schema::<caches::CachesDocument>(caches::CACHES_SCHEMA),
         ndjson_schema::<caches::CachesRecord>(caches::CACHES_SCHEMA),
     );
     {
