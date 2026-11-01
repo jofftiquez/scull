@@ -666,15 +666,15 @@ fn agent_ran(id: &PlanId, op: &OperationId) -> ScullError {
     )
 }
 
-/// The agent's `execute_cleanup` spent the approval and holds the execution lock, but its
-/// operation isn't recorded yet.
-fn agent_claimed(id: &PlanId) -> ScullError {
+/// The agent's `execute_cleanup` spent the approval but no operation of it is recorded: it
+/// either is still starting the run or found the plan changed and voided it.
+fn used_by_agent(id: &PlanId) -> ScullError {
     ScullError::new(
         Reason::ApprovalUsed.kind(),
         format!(
-            "plan {id} is being run by the agent's execute_cleanup, which used its approval first \
-             (approvals are single use): see `scull history` when it finishes. Nothing was run \
-             here."
+            "the approval of plan {id} was used by the agent's execute_cleanup first: it either \
+             ran the plan or found it changed and voided it; see `scull history`. Nothing was \
+             run here."
         ),
     )
 }
@@ -690,29 +690,31 @@ fn not_run(
     outcome: &str,
     e: ScullError,
 ) -> ScullError {
-    // The execution lock is held and the approval is spent (not revoked): the lock holder is
-    // the agent's `execute_cleanup`, which claims the approval before it records its
-    // operation. Give it a moment to record it, so the human is told the agent ran the plan
-    // rather than "another operation is running" (#118).
+    // The execution lock is held and the approval is spent (not revoked): the agent's
+    // `execute_cleanup` used it. It claims the approval before it records its operation, so
+    // give it a moment to record one, then report it (#118). Without an operation the agent
+    // may also have voided the plan (its rescan found a change, D-34): then nothing is claimed
+    // to have run.
     if e.kind == ErrorKind::LockHeld
         && approval_spent(store, plan.id())
-        && !store.approval_revoked(plan.id()).unwrap_or(false)
+        && matches!(store.approval_revoked(plan.id()), Ok(false))
     {
         let deadline = std::time::Instant::now() + LOCK_WAIT;
         let op = loop {
             if let Some(op) = ran_elsewhere(store, plan) {
                 break Some(op);
             }
-            if std::time::Instant::now() >= deadline {
+            if std::time::Instant::now() >= deadline || crate::cancel::is_cancelled() {
                 break None;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         };
-        audit_run(store, plan, Reason::ApprovalUsed.code(), who);
-        return match op {
-            Some(op) => agent_ran(plan.id(), &op),
-            None => agent_claimed(plan.id()),
-        };
+        if let Some(op) = op {
+            audit_run(store, plan, Reason::ApprovalUsed.code(), who);
+            return agent_ran(plan.id(), &op);
+        }
+        audit_run(store, plan, outcome, who);
+        return used_by_agent(plan.id());
     }
     if let Some(op) = ran_elsewhere(store, plan) {
         audit_run(store, plan, Reason::ApprovalUsed.code(), who);
