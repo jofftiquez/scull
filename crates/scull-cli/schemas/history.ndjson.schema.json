@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "HistoryReport": {
+      "additionalProperties": false,
+      "description": "`scull history` (`scull/history@1`).",
+      "properties": {
+        "operations": {
+          "description": "Operations, newest first.",
+          "items": {
+            "$ref": "#/$defs/OperationLine"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operations"
+      ],
+      "type": "object"
+    },
+    "OperationId": {
+      "pattern": "^op_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "OperationLine": {
+      "additionalProperties": false,
+      "description": "One operation.",
+      "properties": {
+        "approver": {
+          "description": "Who approved it.",
+          "type": "string"
+        },
+        "chain_intact": {
+          "description": "Whether the audit hash chain verifies.",
+          "type": "boolean"
+        },
+        "finished_at": {
+          "description": "End, once finished.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "freed_bytes": {
+          "description": "Bytes freed by removal.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_done": {
+          "description": "Items removed, quarantined, moved to the Trash or cleaned by their tool.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_planned": {
+          "description": "Items in the plan (0 while unfinished).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_recorded": {
+          "description": "Items with a recorded outcome.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_skipped": {
+          "description": "Items skipped at revalidation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_with_errors": {
+          "description": "Items partly processed, failed or refused.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measured_delta_bytes": {
+          "description": "Measured free-space delta, if recorded.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method": {
+          "description": "How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`).",
+          "type": "string"
+        },
+        "moved_bytes": {
+          "description": "Bytes moved aside (quarantine, Trash).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "description": "Operation ID (for `scull history <id>` and `scull restore <id>`)."
+        },
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "The executed plan."
+        },
+        "predicted_bytes": {
+          "description": "Bytes the plan predicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quarantine_held": {
+          "description": "Quarantined items still held (restorable).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "description": "Start (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "description": "`completed`, `completed_with_errors`, `failed`, `cancelled`, `interrupted`, or\n`unfinished` (crash recovery closes it on the next destructive run).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_id",
+        "approver",
+        "method",
+        "started_at",
+        "status",
+        "items_planned",
+        "items_recorded",
+        "items_done",
+        "items_with_errors",
+        "items_skipped",
+        "predicted_bytes",
+        "freed_bytes",
+        "moved_bytes",
+        "quarantine_held",
+        "chain_intact"
+      ],
+      "type": "object"
+    },
+    "PlanId": {
+      "pattern": "^plan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/history@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/HistoryReport",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/history@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "history",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/history@1 (NDJSON line)",
+  "type": "object"
+}
