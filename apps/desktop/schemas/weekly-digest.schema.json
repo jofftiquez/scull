@@ -1,0 +1,300 @@
+{
+  "$defs": {
+    "AlertCounts": {
+      "additionalProperties": false,
+      "description": "Alerts by severity.",
+      "properties": {
+        "critical": {
+          "description": "Critical.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "info": {
+          "description": "Info.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warning": {
+          "description": "Warning.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "critical",
+        "warning",
+        "info"
+      ],
+      "type": "object"
+    },
+    "DigestVolume": {
+      "additionalProperties": false,
+      "description": "One volume in the digest.",
+      "properties": {
+        "below_reserve": {
+          "description": "Whether it is already below the reserve.",
+          "type": "boolean"
+        },
+        "change_bytes": {
+          "description": "Change of free space over the week (negative: it shrank).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "days_left": {
+          "description": "Whole days until the reserve, when a forecast with at least medium confidence says\nthe volume is filling.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "free_bytes": {
+          "description": "Bytes free at the latest sample.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserve_bytes": {
+          "description": "The forecast's reserve (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "Volume size.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "free_bytes",
+        "total_bytes",
+        "change_bytes",
+        "reserve_bytes",
+        "below_reserve"
+      ],
+      "type": "object"
+    },
+    "Grower": {
+      "additionalProperties": false,
+      "description": "One category or project that grew.",
+      "properties": {
+        "ecosystem": {
+          "description": "The project's ecosystem, when every one of its items agrees.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "end_bytes": {
+          "description": "Bytes now.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "growth_bytes": {
+          "description": "`end_bytes - start_bytes` (always positive here).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "description": "Category (snake_case, e.g. `project_artifact`) or project root path.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Display name: the category key, or the project folder name.",
+          "type": "string"
+        },
+        "share_of_growth": {
+          "description": "Share of [`GrowthWindow::grown_bytes`] (0..=1).",
+          "format": "double",
+          "type": "number"
+        },
+        "start_bytes": {
+          "description": "Bytes at the window start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "start_bytes",
+        "end_bytes",
+        "growth_bytes",
+        "share_of_growth"
+      ],
+      "type": "object"
+    },
+    "HistoryRead": {
+      "description": "Whether the history database answered.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "The database answered (the series may still be empty).",
+          "type": "string"
+        },
+        {
+          "const": "no_database",
+          "description": "No database yet (nothing was ever recorded, or history is off).",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "The database can't be read right now (`detail` says why).",
+          "type": "string"
+        }
+      ]
+    },
+    "WeeklyDigest": {
+      "additionalProperties": false,
+      "description": "The weekly digest.",
+      "properties": {
+        "alerts": {
+          "$ref": "#/$defs/AlertCounts",
+          "description": "Distinct alerts raised this week, by severity."
+        },
+        "cleanups": {
+          "description": "Cleanups with measured results this week.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generated_at": {
+          "description": "When it was computed (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "grown_bytes": {
+          "description": "Sum of the growth of everything that grew.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "has_history": {
+          "description": "Whether there is any recorded history in the week (free-space samples or tracked\nitems). Without it the digest only says so.",
+          "type": "boolean"
+        },
+        "lines": {
+          "description": "One plain sentence per fact, most important first (the notification body is the first\nthree).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "net_bytes": {
+          "description": "Net change of all tracked bytes over the week (negative after cleanups).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "reclaimable_bytes": {
+          "description": "Bytes the ready-to-review plan would reclaim, when one is current.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reclaimed_bytes": {
+          "description": "Bytes measured as freed by cleanups this week.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "review_items": {
+          "description": "Items in that plan.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Start of the week it covers (`generated_at` − 7 days).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "title": {
+          "description": "The notification title ([`DIGEST_TITLE`]).",
+          "type": "string"
+        },
+        "top_growers": {
+          "description": "The projects (or, without projects, categories) that grew most, at most\n[`DIGEST_GROWERS`].",
+          "items": {
+            "$ref": "#/$defs/Grower"
+          },
+          "type": "array"
+        },
+        "volumes": {
+          "description": "Free space per volume: the preferred volume (the home folder's) first, then those below\ntheir reserve, then by days left, then by how much free space shrank this week.",
+          "items": {
+            "$ref": "#/$defs/DigestVolume"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "generated_at",
+        "since",
+        "has_history",
+        "volumes",
+        "net_bytes",
+        "grown_bytes",
+        "top_growers",
+        "reclaimed_bytes",
+        "cleanups",
+        "alerts",
+        "title",
+        "lines"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/weekly-digest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`weekly_digest`: the digest of the last 7 days, read from the history database.",
+  "properties": {
+    "detail": {
+      "description": "Why it didn't, when it didn't.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WeeklyDigest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The digest (also without a database: it then says there is no history)."
+    },
+    "state": {
+      "$ref": "#/$defs/HistoryRead",
+      "description": "Whether the database answered."
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "title": "DigestView",
+  "type": "object"
+}

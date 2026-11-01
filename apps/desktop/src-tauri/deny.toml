@@ -26,6 +26,13 @@ ignore = [
   # proc-macro-error is unmaintained (no vulnerability). It is a build-time proc-macro reached
   # only through Tauri's Linux GTK3 stack (glib-macros 0.18 <- gtk <- muda/wry <- tauri).
   { id = "RUSTSEC-2024-0370", reason = "build-time proc-macro in Tauri's Linux GTK3 stack; unmaintained, not vulnerable" },
+  # zvariant, zvariant_derive and zbus_names were folded into zbus 6 and are marked unmaintained
+  # (no vulnerability). They are reached only on Linux, through D-Bus desktop notifications:
+  # zbus 5 <- notify-rust <- tauri-plugin-notification (tray monitoring, P5-PRO-01). Drop these
+  # when notify-rust moves to zbus 6.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; Linux D-Bus notifications only; unmaintained, not vulnerable" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; Linux D-Bus notifications only; unmaintained, not vulnerable" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; Linux D-Bus notifications only; unmaintained, not vulnerable" },
 ]
 
 [licenses]

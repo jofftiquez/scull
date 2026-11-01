@@ -11,6 +11,7 @@ import type {
   CachesReport,
   CapabilitiesReport,
   DesktopStatus,
+  DigestView,
   Drive,
   FootprintHistory,
   FreeSpaceHistory,
@@ -36,10 +37,12 @@ import freeSpaceHistory from './fixtures/free-space-history.json';
 import rollupHistory from './fixtures/rollup-history.json';
 import regrowth from './fixtures/regrowth.json';
 import footprintHistory from './fixtures/footprint-history.json';
+import weeklyDigest from './fixtures/weekly-digest.json';
 import { withDesignWorktrees } from './worktreesMock';
 import { designHistory } from './historyMock';
 import { designSettings } from './settingsMock';
 import { registerScanCandidates } from './planMock';
+import { mockMonitor } from '../monitor/mock';
 
 const GiB = 1024 ** 3;
 
@@ -127,6 +130,8 @@ export const MOCK_HISTORY = {
   rollups: rollupHistory as unknown as RollupHistory,
   regrowth: regrowth as unknown as RegrowthHistory,
   footprint: footprintHistory as unknown as FootprintHistory,
+  // The weekly digest of the same history (recorded by apps/desktop/bridge/tests/insights.rs).
+  digest: weeklyDigest as unknown as DigestView,
 };
 
 /** The latest timestamp of the recorded history, shared so all four series stay aligned. */
@@ -183,6 +188,9 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
     if (o.signal?.aborted) out.cancelled = true;
     return out;
   };
+
+  const digest = () => later(shiftHistory(MOCK_HISTORY.digest, Date.now() / 1000));
+  mockMonitor.digest = digest;
 
   return {
     kind: 'mock',
@@ -241,5 +249,7 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
           samples: d.samples.filter((x) => x.at >= t),
         })),
       ),
+    weeklyDigest: digest,
+    monitorStatus: () => later(mockMonitor.status()),
   };
 }

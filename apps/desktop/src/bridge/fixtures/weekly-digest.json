@@ -1,0 +1,65 @@
+{
+  "detail": null,
+  "digest": {
+    "alerts": {
+      "critical": 0,
+      "info": 0,
+      "warning": 0
+    },
+    "cleanups": 0,
+    "generated_at": 1793448000,
+    "grown_bytes": 4090956350,
+    "has_history": true,
+    "lines": [
+      "41.2 GiB free on / (−24.5 GiB this week), about 11 days until 10.0 GiB free",
+      "Grew most: ML model caches (+1.8 GiB)"
+    ],
+    "net_bytes": 4090956350,
+    "reclaimable_bytes": null,
+    "reclaimed_bytes": 0,
+    "review_items": null,
+    "since": 1792843200,
+    "title": "Your week in scull",
+    "top_growers": [
+      {
+        "ecosystem": null,
+        "end_bytes": 36507222016,
+        "growth_bytes": 1879048192,
+        "key": "ml_cache",
+        "label": "ml_cache",
+        "share_of_growth": 0.4593,
+        "start_bytes": 34628173824
+      },
+      {
+        "ecosystem": null,
+        "end_bytes": 26682484327,
+        "growth_bytes": 1288490189,
+        "key": "project_artifact",
+        "label": "project_artifact",
+        "share_of_growth": 0.315,
+        "start_bytes": 25393994138
+      },
+      {
+        "ecosystem": null,
+        "end_bytes": 19284403159,
+        "growth_bytes": 923417969,
+        "key": "other",
+        "label": "other",
+        "share_of_growth": 0.2257,
+        "start_bytes": 18360985190
+      }
+    ],
+    "volumes": [
+      {
+        "below_reserve": false,
+        "change_bytes": -26306674688,
+        "days_left": 11,
+        "free_bytes": 44227425731,
+        "reserve_bytes": 10737418240,
+        "total_bytes": 530428461056,
+        "volume_id": "/"
+      }
+    ]
+  },
+  "state": "ok"
+}

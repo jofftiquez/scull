@@ -22,12 +22,12 @@ scull-core.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
 # The crate's own demo histories in its tests.
 scull-insights = { path = ".", features = ["fixtures"] }
-serde_json.workspace = true
 tempfile = "3"
 
 [[example]]
