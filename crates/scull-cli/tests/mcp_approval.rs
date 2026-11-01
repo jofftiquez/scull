@@ -1684,10 +1684,11 @@ fn approve_run_behind_another_lock_when_the_agent_voids_the_plan() {
     let t = Tmux::start(&env, &approve_run_line(&env, &id, ""));
     let code = t.code();
     t.send(&code);
-    // Once the human's approval is recorded, the agent voids the plan.
+    // Once `--run` has approved and is waiting behind the held lock (it retries for 5 s; its
+    // re-check of the approval takes milliseconds), the agent voids the plan.
     let mut store = env.store();
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while store.get_approval(&id).unwrap().is_none() {
+    while !t.pane().contains("Checking that nothing in it changed") {
         assert!(
             std::time::Instant::now() < deadline,
             "no approval:\n{}",
@@ -1695,6 +1696,8 @@ fn approve_run_behind_another_lock_when_the_agent_voids_the_plan() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(store.get_approval(&id).unwrap().is_some());
     let plan = store.get_plan(&id).unwrap().unwrap();
     assert!(approval::void(&mut store, &plan, scull_engine::now_unix()).unwrap());
     let (done, exit) = t.finish();
