@@ -869,7 +869,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 E2E_FS_NIGHTLY,
                 "fx_fs_04_mount_inside_candidate_is_s3_and_mounted_content_untouched",
             ),
-            t(EXEC_UNIX, "fx_fs_04_mount_inside_candidate_is_never_crossed"),
+            t(
+                EXEC_UNIX,
+                "fx_fs_04_mount_inside_candidate_is_never_crossed",
+            ),
         ]),
     ),
     fx(
@@ -886,10 +889,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_WIN,
                 "fx_fs_05_hardlink_to_canary_link_removed_canary_intact",
             ),
-            t(
-                E2E_FS,
-                "fx_fs_05_hardlink_to_canary_bytes_attributed_once",
-            ),
+            t(E2E_FS, "fx_fs_05_hardlink_to_canary_bytes_attributed_once"),
             t(
                 HARDLINKS,
                 "fx_fs_05_link_to_canary_is_shared_and_counted_once",
@@ -1002,10 +1002,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_UNIX,
                 "fx_fs_12_very_deep_tree_beyond_path_max_is_removed",
             ),
-            t(
-                EXEC_WIN,
-                "fx_fs_12_very_deep_tree_is_removed",
-            ),
+            t(EXEC_WIN, "fx_fs_12_very_deep_tree_is_removed"),
             t(
                 E2E_FS,
                 "fx_fs_12_long_path_candidate_is_scanned_and_classified",
@@ -1082,8 +1079,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 REVAL,
                 "fx_race_01_candidate_replaced_by_symlink_skipped_canary_intact",
             ),
-            t(EXEC_UNIX, "fx_race_01_candidate_replaced_by_symlink_is_refused"),
-            t(EXEC_WIN, "fx_race_01_candidate_replaced_by_junction_is_refused"),
+            t(
+                EXEC_UNIX,
+                "fx_race_01_candidate_replaced_by_symlink_is_refused",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_01_candidate_replaced_by_junction_is_refused",
+            ),
         ]),
     )
     .pending_ci(PHASE2_PENDING),
@@ -1105,8 +1108,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_UNIX,
                 "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
             ),
-            t(EXEC_UNIX, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
-            t(EXEC_UNIX, "fx_race_02_directory_moved_out_during_walk_aborts"),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_nested_folder_swapped_mid_walk_aborts",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_directory_moved_out_during_walk_aborts",
+            ),
             t(
                 EXEC_UNIX,
                 "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
@@ -1128,7 +1137,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
             ),
             t(EXEC_WIN, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
-            t(EXEC_WIN, "fx_race_02_entry_kind_changed_since_listing_aborts"),
+            t(
+                EXEC_WIN,
+                "fx_race_02_entry_kind_changed_since_listing_aborts",
+            ),
             t(
                 EXEC_WIN,
                 "fx_race_02_held_directory_cannot_be_moved_out_during_walk",
@@ -1183,50 +1195,38 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         ]),
     )
     .pending_ci(PHASE2_PENDING),
+    // FX-RACE-06/07: green on macOS and Windows in run 41326764895 (journal fixtures only, on a
+    // verification branch while FX-WIN-03 hung the full Windows run) and on Linux in PR CI.
     fx(
         "FX-RACE-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "cancel mid-execution, partial audit and a completing rerun are covered through the journal on Unix; the journal fixtures need quarantine moves, which Windows does not have yet",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
+        )]),
+    ),
     fx(
         "FX-RACE-07",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "a process killed during a quarantine move is reconciled by the journal on Unix; Windows has no quarantine moves yet, so there is nothing to kill there",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_07_killed_during_quarantine_move_journal_reconciles",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_07_killed_during_quarantine_move_journal_reconciles",
+        )]),
+    ),
     // §3.5 Executor, plans, quarantine, restore (FX-EXEC)
     fx(
         "FX-EXEC-01",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                E2E_EXEC,
-                "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
+        )]),
     )
     .pending_ci(PHASE2_PENDING),
     fx(
@@ -1266,36 +1266,30 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                RESTORE,
-                "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            RESTORE,
+            "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
+        )]),
     ),
     fx(
         "FX-EXEC-05",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                RESTORE,
-                "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            RESTORE,
+            "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
+        )]),
     ),
     fx(
         "FX-EXEC-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                QUAR,
-                "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            QUAR,
+            "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
+        )]),
     ),
     fx(
         "FX-EXEC-07",
@@ -1344,9 +1338,15 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Implemented(&[
-            t(CLI_CLEAN, "fx_exec_11_irreversible_s1_needs_allow_permanent"),
+            t(
+                CLI_CLEAN,
+                "fx_exec_11_irreversible_s1_needs_allow_permanent",
+            ),
             // The typed count on a terminal (script(1), Linux only).
-            t(CLI_CLEAN, "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count"),
+            t(
+                CLI_CLEAN,
+                "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count",
+            ),
         ]),
     )
     .pending_ci(PHASE2_PENDING),
@@ -1355,9 +1355,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(CLI_CLEAN, "fx_exec_12_elevated_run_refused_without_allow_root"),
-        ]),
+        Status::Implemented(&[t(
+            CLI_CLEAN,
+            "fx_exec_12_elevated_run_refused_without_allow_root",
+        )]),
     )
     .pending_ci(PHASE2_PENDING),
     fx(
@@ -1441,20 +1442,35 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 E2E_PHY,
                 "fx_phy_02_apfs_clone_low_confidence_measured_and_explained",
             ),
-            t(MEASURE_UNIT, "fx_phy_02_apfs_clone_low_confidence_explained"),
+            t(
+                MEASURE_UNIT,
+                "fx_phy_02_apfs_clone_low_confidence_explained",
+            ),
         ]),
     )
     .pending_ci("M"),
     fx("FX-PHY-03", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
-    fx("FX-PHY-04", Gate::V1_0, "L", Mode::Nightly, Status::Deferred),
+    fx(
+        "FX-PHY-04",
+        Gate::V1_0,
+        "L",
+        Mode::Nightly,
+        Status::Deferred,
+    ),
     fx(
         "FX-PHY-05",
         Gate::Mvp,
         "MW",
         Mode::Ci,
         Status::Implemented(&[
-            t(E2E_PHY, "fx_phy_05_ntfs_compressed_file_uses_allocated_size"),
-            t(E2E_PHY, "fx_phy_05_apfs_compressed_file_uses_allocated_size"),
+            t(
+                E2E_PHY,
+                "fx_phy_05_ntfs_compressed_file_uses_allocated_size",
+            ),
+            t(
+                E2E_PHY,
+                "fx_phy_05_apfs_compressed_file_uses_allocated_size",
+            ),
             t(MEASURE_UNIT, "fx_phy_05_compression_uses_allocated_bytes"),
         ]),
     )
@@ -1557,9 +1573,18 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         // D-36 (provisional, #30): an orphaned cache is removed through the Executor only
         // with fresh evidence and a per-tool confirmation; unconfirmed, it is only reported.
         Status::Implemented(&[
-            t(CLI_CLEAN_CACHES, "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool"),
-            t(CLI_CLEAN_CACHES, "fx_qc_05_remove_orphaned_flag_through_the_binary"),
-            t(QC, "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed"),
+            t(
+                CLI_CLEAN_CACHES,
+                "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool",
+            ),
+            t(
+                CLI_CLEAN_CACHES,
+                "fx_qc_05_remove_orphaned_flag_through_the_binary",
+            ),
+            t(
+                QC,
+                "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
+            ),
         ]),
     )
     .pending_ci(PHASE2_PENDING),
@@ -1662,7 +1687,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Mode::Ci,
         Status::Implemented(&[
             t(RULES, "fx_cfg_06_command_fields_are_rejected_at_load"),
-            t(RULES, "fx_cfg_06_command_fields_rejected_anywhere_in_the_file"),
+            t(
+                RULES,
+                "fx_cfg_06_command_fields_rejected_anywhere_in_the_file",
+            ),
         ]),
     ),
     // §3.10 Windows-specific (FX-WIN)
@@ -1774,7 +1802,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         )]),
     )
     .pending_ci(WINDOWS_PENDING),
-    fx("FX-WIN-09", Gate::V1_0, "W", Mode::Nightly, Status::Deferred),
+    fx(
+        "FX-WIN-09",
+        Gate::V1_0,
+        "W",
+        Mode::Nightly,
+        Status::Deferred,
+    ),
     fx(
         "FX-WIN-10",
         Gate::Mvp,
@@ -1829,7 +1863,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "M",
         Mode::Ci,
         Status::Implemented(&[
-            t(ENGINE_ROOTS, "fx_mac_03_firmlinked_root_is_not_counted_twice"),
+            t(
+                ENGINE_ROOTS,
+                "fx_mac_03_firmlinked_root_is_not_counted_twice",
+            ),
             t(
                 ENGINE_ROOTS,
                 "fx_mac_03_root_nested_through_an_alias_is_not_counted_twice",
@@ -1897,18 +1934,15 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_lnx_02_trash_on_a_real_second_volume_uses_its_topdir",
             ),
             t(
-                    TRASH,
-                    "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
-                ),
-                t(
-                    TRASH,
-                    "fx_lnx_02_shared_sticky_trash_uses_uid_subdirectory",
-                ),
-                t(TRASH, "fx_lnx_02_unsafe_shared_trash_is_skipped"),
-                t(
-                    TRASH,
-                    "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
-                ),
+                TRASH,
+                "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
+            ),
+            t(TRASH, "fx_lnx_02_shared_sticky_trash_uses_uid_subdirectory"),
+            t(TRASH, "fx_lnx_02_unsafe_shared_trash_is_skipped"),
+            t(
+                TRASH,
+                "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
+            ),
         ]),
     ),
     fx(
@@ -2136,7 +2170,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "MLW",
         Mode::Ci,
         Status::Implemented(&[
-            t(E2E_OUT, "fx_out_03_cli_and_mcp_give_identical_classifications"),
+            t(
+                E2E_OUT,
+                "fx_out_03_cli_and_mcp_give_identical_classifications",
+            ),
             t(E2E_OUT, "fx_out_03_cli_and_mcp_plan_identical_contents"),
         ]),
     )
