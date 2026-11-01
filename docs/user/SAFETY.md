@@ -230,7 +230,9 @@ make the real gain differ from the estimate, and scull explains differences over
 
 `scull headroom create` sets aside a reserve file, so a completely full disk still leaves room
 to clean up. It is off until you create one. The reserve lives only in scull's own data folder.
-scull releases only the file it created and recorded, with the same identity and size. A link
+scull releases only the file it created and recorded: the same identity, size and modification
+time, and the same 32 random bytes it wrote at the start of the file. Identity alone isn't
+enough, because filesystems reuse file numbers. A link
 or any other file at that path is left alone. Creating and releasing are both recorded.
 
 ## scull refuses to run as root or Administrator

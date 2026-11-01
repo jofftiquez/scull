@@ -72,11 +72,16 @@ pub enum EventKind {
     /// transaction as the deletion by [`Store::purge_insights_recorded`], with the cutoff and
     /// the rows deleted per stream. Never deleted by the purge itself.
     InsightsPurged,
+    /// The MCP client an agent plan was prepared through, as the client named itself in
+    /// `initialize` (#78; sanitized, length-capped: [`AgentClient`]). Recorded in the same
+    /// transaction as the plan by [`Store::insert_agent_plan`]; shown to the human who
+    /// approves. Display only: it is never trusted for anything.
+    AgentPlanClient,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 9] = [
+    pub const ALL: [EventKind; 10] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
@@ -86,6 +91,7 @@ impl EventKind {
         EventKind::Headroom,
         EventKind::PrepareRefused,
         EventKind::InsightsPurged,
+        EventKind::AgentPlanClient,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
@@ -98,7 +104,8 @@ impl EventKind {
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
-    /// `approval_revoked`, `revoke_refused`, `headroom`, `prepare_refused`, `insights_purged`.
+    /// `approval_revoked`, `revoke_refused`, `headroom`, `prepare_refused`, `insights_purged`,
+    /// `agent_plan_client`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -110,6 +117,7 @@ impl EventKind {
             EventKind::Headroom => "headroom",
             EventKind::PrepareRefused => "prepare_refused",
             EventKind::InsightsPurged => "insights_purged",
+            EventKind::AgentPlanClient => "agent_plan_client",
         }
     }
 
@@ -161,6 +169,97 @@ pub struct AgentAuditEvent {
 /// Window in which a repeated agent refusal is folded into the row already recorded
 /// (see the module docs).
 pub const AGENT_EVENT_MERGE_SECS: i64 = 60;
+
+/// [`EventKind::ApprovalDenied`] reasons that are a human's final "no" (#78): `denied` (typed
+/// `deny`, an empty answer, the desktop Deny button) and `wrong_code` (the code typed wrong
+/// too often). Recorded only by [`Store::deny_plan`]; once one is recorded for a plan, the
+/// plan can never be approved. Refused attempts (`no_terminal`, an agent-driven terminal,
+/// an expired plan, ...) are not denials.
+pub const FINAL_DENIAL_REASONS: [&str; 2] = ["denied", "wrong_code"];
+
+/// Sources of a human denial: `scull approve` (`cli`) and the desktop dialog (`desktop`).
+pub const HUMAN_DENIAL_SOURCES: [&str; 2] = ["cli", "desktop"];
+
+/// SQL condition (on an `events` row aliased `e`) that the row is a human's final denial of
+/// the plan whose ID is the SQL expression `plan`.
+pub(crate) fn final_denial_sql(plan: &str) -> String {
+    format!(
+        "e.kind = 'approval_denied' AND e.source IN ('cli', 'desktop') \
+         AND json_extract(e.payload_json, '$.plan_id') = {plan} \
+         AND json_extract(e.payload_json, '$.reason') IN ('denied', 'wrong_code')"
+    )
+}
+
+/// A human's final denial of an agent plan ([`Store::plan_denial`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanDenial {
+    /// When it was first denied (Unix seconds).
+    pub at: i64,
+    /// One of [`FINAL_DENIAL_REASONS`].
+    pub reason: String,
+    /// Where: `terminal` or `desktop`.
+    pub channel: String,
+}
+
+/// Longest [`AgentClient::name`] kept.
+pub const MAX_CLIENT_NAME_CHARS: usize = 64;
+/// Longest [`AgentClient::version`] kept.
+pub const MAX_CLIENT_VERSION_CHARS: usize = 32;
+
+/// The MCP client an agent plan came through, as the client **declared** itself in
+/// `initialize` (`clientInfo.name` / `version`): unverified, display only (#78). Every
+/// character outside ASCII letters, digits, space and `. _ - + / ( ) @ :` becomes `?`, runs
+/// of spaces collapse, and the parts are capped at [`MAX_CLIENT_NAME_CHARS`] and
+/// [`MAX_CLIENT_VERSION_CHARS`] characters, so nothing in it can reach a terminal or a
+/// dialog as a control sequence or a homoglyph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentClient {
+    /// The client's name.
+    pub name: String,
+    /// Its version, if it gave a usable one.
+    pub version: Option<String>,
+}
+
+impl AgentClient {
+    /// The sanitized client info, or `None` when the name is empty after sanitizing.
+    pub fn new(name: &str, version: Option<&str>) -> Option<Self> {
+        let name = sanitize_client_text(name, MAX_CLIENT_NAME_CHARS)?;
+        let version = version.and_then(|v| sanitize_client_text(v, MAX_CLIENT_VERSION_CHARS));
+        Some(Self { name, version })
+    }
+
+    /// `name version` (or the name alone).
+    pub fn display(&self) -> String {
+        match &self.version {
+            Some(v) => format!("{} {v}", self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    fn is_sanitized(&self) -> bool {
+        Self::new(&self.name, self.version.as_deref()).as_ref() == Some(self)
+    }
+}
+
+fn sanitize_client_text(s: &str, max: usize) -> Option<String> {
+    let mut out = String::new();
+    for c in s.chars() {
+        let c = if c.is_ascii_alphanumeric() || " ._-+/()@:".contains(c) {
+            c
+        } else {
+            '?'
+        };
+        if c == ' ' && (out.is_empty() || out.ends_with(' ')) {
+            continue;
+        }
+        if out.chars().count() == max {
+            break;
+        }
+        out.push(c);
+    }
+    let out = out.trim_end().to_owned();
+    (!out.is_empty() && out.chars().any(|c| c != '?')).then_some(out)
+}
 
 /// Longest `machine_id` or `user` an [`AgentAuditEvent`] may carry.
 const MAX_PRINCIPAL_CHARS: usize = 256;
@@ -424,61 +523,85 @@ impl Store {
                 "approval_revoked is recorded only by Store::revoke_approval",
             ));
         }
+        if is_final_denial(e) {
+            return Err(StoreError::rejected(
+                ErrorKind::Usage,
+                "a human's denial is recorded only by Store::deny_plan",
+            ));
+        }
         let event = e.to_event()?;
-        let json = serde_json::to_string(&event.payload).map_err(internal)?;
+        self.write(|tx| insert_agent_event(tx, e, &event))
+    }
+
+    /// Record a human's final denial of an agent plan (#78): `e` is an
+    /// [`EventKind::ApprovalDenied`] with one of [`FINAL_DENIAL_REASONS`], from one of
+    /// [`HUMAN_DENIAL_SOURCES`], naming the plan. **In one transaction** with the check for an
+    /// approval: [`Store::insert_approval`] refuses a denied plan in its own transaction, so a
+    /// denial and a concurrent approval can't both win. Returns `true` when the plan is now
+    /// denied, `false` when it already had an approval (the attempt is still audited, but
+    /// the approval stands). A repeated denial folds into the earlier row (module docs).
+    pub fn deny_plan(&mut self, e: &AgentAuditEvent) -> Result<bool> {
+        if !is_final_denial(e) || e.plan_id.is_none() {
+            return Err(StoreError::rejected(
+                ErrorKind::Usage,
+                "deny_plan records a human's approval_denied (denied or wrong_code) of a plan",
+            ));
+        }
+        let event = e.to_event()?;
         let plan = e.plan_id.as_ref().map(PlanId::as_str);
         self.write(|tx| {
-            let known: bool = match plan {
-                Some(p) => tx.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM plans WHERE plan_id = ?1)",
-                    [p],
-                    |r| r.get(0),
-                )?,
-                None => false,
-            };
-            let existing: Option<i64> = tx
-                .query_row(
-                    "SELECT event_id FROM events WHERE kind = ?1 AND source = ?2 \
-                     AND occurred_at > ?3 - ?4 AND occurred_at <= ?3 \
-                     AND json_extract(payload_json, '$.reason') = ?5 \
-                     AND json_extract(payload_json, '$.channel') = ?6 \
-                     AND json_extract(payload_json, '$.machine_id') = ?7 \
-                     AND json_extract(payload_json, '$.user') = ?8 \
-                     AND CASE WHEN ?10 THEN json_extract(payload_json, '$.plan_id') = ?9 \
-                         ELSE (json_extract(payload_json, '$.plan_id') IS NULL \
-                               OR NOT EXISTS (SELECT 1 FROM plans \
-                                   WHERE plan_id = json_extract(payload_json, '$.plan_id'))) \
-                         END \
-                     ORDER BY event_id DESC LIMIT 1",
-                    params![
-                        event.kind.as_str(),
-                        event.source,
-                        event.at,
-                        AGENT_EVENT_MERGE_SECS,
-                        e.reason,
-                        e.channel,
-                        e.machine_id,
-                        e.user,
-                        plan,
-                        known,
-                    ],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match existing {
-                Some(id) => tx.execute(
-                    "UPDATE events SET payload_json = json_set(payload_json, '$.count', \
-                     coalesce(json_extract(payload_json, '$.count'), 1) + 1) WHERE event_id = ?1",
-                    [id],
-                )?,
-                None => tx.execute(
-                    "INSERT INTO events (occurred_at, kind, source, payload_json) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![event.at, event.kind.as_str(), event.source, json],
-                )?,
-            };
-            Ok(())
+            let approved: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM approvals WHERE plan_id = ?1)",
+                [plan],
+                |r| r.get(0),
+            )?;
+            insert_agent_event(tx, e, &event)?;
+            Ok(!approved)
         })
+    }
+
+    /// The human's final denial of plan `plan_id`, if one was recorded ([`Store::deny_plan`];
+    /// the first, when there are several).
+    pub fn plan_denial(&self, plan_id: &PlanId) -> Result<Option<PlanDenial>> {
+        self.read(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!(
+                        "SELECT e.occurred_at, json_extract(e.payload_json, '$.reason'), \
+                         json_extract(e.payload_json, '$.channel') FROM events e \
+                         WHERE {} ORDER BY e.occurred_at, e.event_id LIMIT 1",
+                        final_denial_sql("?1")
+                    ),
+                    [plan_id.as_str()],
+                    |r| {
+                        Ok(PlanDenial {
+                            at: r.get(0)?,
+                            reason: r.get(1)?,
+                            channel: r.get(2)?,
+                        })
+                    },
+                )
+                .optional()?)
+        })
+    }
+
+    /// The MCP client plan `plan_id` was prepared through, as it declared itself
+    /// ([`EventKind::AgentPlanClient`]), if one was recorded.
+    pub fn plan_client(&self, plan_id: &PlanId) -> Result<Option<AgentClient>> {
+        let row: Option<(String, Option<String>)> = self.read(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT json_extract(payload_json, '$.name'), \
+                     json_extract(payload_json, '$.version') FROM events \
+                     WHERE kind = ?1 AND json_extract(payload_json, '$.plan_id') = ?2 \
+                     ORDER BY event_id LIMIT 1",
+                    params![EventKind::AgentPlanClient.as_str(), plan_id.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?)
+        })?;
+        // Re-sanitized on the way out: the database is not trusted for display either.
+        Ok(row.and_then(|(name, version)| AgentClient::new(&name, version.as_deref())))
     }
 
     /// The most recent `limit` agent audit events at or after `since` (every
@@ -651,6 +774,98 @@ impl Store {
     }
 }
 
+fn is_final_denial(e: &AgentAuditEvent) -> bool {
+    e.kind == EventKind::ApprovalDenied
+        && FINAL_DENIAL_REASONS.contains(&e.reason.as_str())
+        && HUMAN_DENIAL_SOURCES.contains(&e.source.as_str())
+}
+
+/// Insert agent audit event `e` (already validated as `event`), or fold it into the matching
+/// row recorded in the last [`AGENT_EVENT_MERGE_SECS`] (module docs).
+fn insert_agent_event(
+    tx: &rusqlite::Transaction<'_>,
+    e: &AgentAuditEvent,
+    event: &Event,
+) -> Result<()> {
+    let json = serde_json::to_string(&event.payload).map_err(internal)?;
+    let plan = e.plan_id.as_ref().map(PlanId::as_str);
+    let known: bool = match plan {
+        Some(p) => tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM plans WHERE plan_id = ?1)",
+            [p],
+            |r| r.get(0),
+        )?,
+        None => false,
+    };
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT event_id FROM events WHERE kind = ?1 AND source = ?2 \
+             AND occurred_at > ?3 - ?4 AND occurred_at <= ?3 \
+             AND json_extract(payload_json, '$.reason') = ?5 \
+             AND json_extract(payload_json, '$.channel') = ?6 \
+             AND json_extract(payload_json, '$.machine_id') = ?7 \
+             AND json_extract(payload_json, '$.user') = ?8 \
+             AND CASE WHEN ?10 THEN json_extract(payload_json, '$.plan_id') = ?9 \
+                 ELSE (json_extract(payload_json, '$.plan_id') IS NULL \
+                       OR NOT EXISTS (SELECT 1 FROM plans \
+                           WHERE plan_id = json_extract(payload_json, '$.plan_id'))) \
+                 END \
+             ORDER BY event_id DESC LIMIT 1",
+            params![
+                event.kind.as_str(),
+                event.source,
+                event.at,
+                AGENT_EVENT_MERGE_SECS,
+                e.reason,
+                e.channel,
+                e.machine_id,
+                e.user,
+                plan,
+                known,
+            ],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match existing {
+        Some(id) => tx.execute(
+            "UPDATE events SET payload_json = json_set(payload_json, '$.count', \
+             coalesce(json_extract(payload_json, '$.count'), 1) + 1) WHERE event_id = ?1",
+            [id],
+        )?,
+        None => tx.execute(
+            "INSERT INTO events (occurred_at, kind, source, payload_json) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![event.at, event.kind.as_str(), event.source, json],
+        )?,
+    };
+    Ok(())
+}
+
+/// Record that agent plan `plan_id` came through `client` ([`EventKind::AgentPlanClient`]).
+pub(crate) fn insert_plan_client(
+    tx: &rusqlite::Transaction<'_>,
+    plan_id: &PlanId,
+    client: &AgentClient,
+    at: i64,
+) -> Result<()> {
+    if !client.is_sanitized() {
+        return Err(StoreError::rejected(
+            ErrorKind::Usage,
+            "the MCP client info must be sanitized (AgentClient::new)",
+        ));
+    }
+    let payload = serde_json::json!({
+        "plan_id": plan_id.as_str(),
+        "name": client.name,
+        "version": client.version,
+    });
+    tx.execute(
+        "INSERT INTO events (occurred_at, kind, source, payload_json) VALUES (?1, ?2, 'mcp', ?3)",
+        params![at, EventKind::AgentPlanClient.as_str(), payload.to_string()],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,7 +999,10 @@ mod tests {
         denied.source = "cli".into();
         denied.channel = "terminal".into();
         denied.content_hash = None;
-        s.record_agent_event(&denied).expect("record");
+        // A final denial is recorded through deny_plan only (#78); the plan isn't recorded
+        // here, so it had no approval either.
+        assert!(s.record_agent_event(&denied).is_err());
+        assert!(s.deny_plan(&denied).expect("record"));
         let mut no_plan = agent(EventKind::ExecuteRefused, 30, "invalid_arguments");
         no_plan.plan_id = None;
         no_plan.content_hash = None;

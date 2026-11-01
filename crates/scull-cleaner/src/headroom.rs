@@ -4,14 +4,18 @@
 //! (read-only). This module is the only code that writes or removes it:
 //!
 //! * [`create`] writes `<data dir>/headroom/reserve.bin`. The file is created exclusively and
-//!   owner-only (never through a link), filled with bytes that don't compress, and fsynced.
+//!   owner-only (never through a link), starts with a 32-byte marker from the OS's random
+//!   source, is filled with bytes that don't compress, and fsynced.
 //!   Its allocated size is then checked: on a filesystem that keeps it sparse, compressed or
 //!   deduplicated, the file is removed again and creation refuses. Last, the manifest
 //!   (`headroom.json`) records its identity, size and allocated bytes. Creation refuses when
 //!   free space is already below, or would drop below, the forecast reserve, and when the size
 //!   is outside the limits.
-//! * [`release`] removes the reserve only when the manifest describes it and its no-follow
-//!   identity, kind and size still match. Removal goes through
+//! * [`release`] removes the reserve only when the manifest describes it: its no-follow
+//!   identity, kind, size and modification time still match, **and** its first 32 bytes are the
+//!   random marker written at creation, read through a no-follow handle whose identity is
+//!   checked (`scull_proactive::headroom::marker_mismatch`; an identity alone can be reused by
+//!   the filesystem, phase2 run 41321040626). Removal goes through
 //!   [`crate::own_data::purge_own_files`]: fd-relative, no-follow, anchored at the data
 //!   directory with its identity, the same walker as every other deletion (SAFE-10). Anything
 //!   else at the path is refused and left alone. The manifest is removed last, the same way.
@@ -28,8 +32,9 @@ use scull_core::config::TEST_SANDBOX_ENV;
 use scull_core::{ErrorKind, FileIdentity, FsPath, ScullError};
 use scull_platform::{EntryKind, Native, Platform};
 use scull_proactive::headroom::{
-    DEFAULT_SIZE, HEADROOM_DIR, HeadroomManifest, MANIFEST_FILE, MANIFEST_VERSION, MAX_SIZE,
-    MIN_SIZE, mismatch, read_manifest, really_allocated, reserve_relative, size_refusal_within,
+    DEFAULT_SIZE, HEADROOM_DIR, HeadroomManifest, MANIFEST_FILE, MANIFEST_VERSION, MARKER_LEN,
+    MAX_SIZE, MIN_SIZE, hex, marker_mismatch, mismatch, mtime_mismatch, read_manifest,
+    really_allocated, reserve_relative, size_refusal_within,
 };
 use scull_storage::{Event, EventKind, Store, StoreError};
 use serde::Serialize;
@@ -229,9 +234,17 @@ pub fn create_with(
             .map_err(|e| ScullError::new(ErrorKind::Io, e.to_string()))?,
     }
 
+    // The marker: 32 bytes from the OS's random source, the file's first bytes. Without one
+    // there is no reserve (it is what release checks, beyond an identity the OS may reuse).
+    let mut marker = [0u8; MARKER_LEN];
+    getrandom::fill(&mut marker).map_err(|e| {
+        blocked(format!(
+            "no random marker for the reserve ({e}); nothing created"
+        ))
+    })?;
     let file = scull_platform::create_file_owner_only(&path)
         .map_err(|e| ScullError::new(ErrorKind::Io, e.to_string()))?;
-    let written = fill(file, opts.size_bytes);
+    let written = fill(file, opts.size_bytes, &marker);
     let md = native.metadata(&path).ok();
     let identity = md.as_ref().and_then(|m| m.identity);
     let discard = |why: String| -> ScullError {
@@ -272,6 +285,8 @@ pub fn create_with(
         allocated_bytes: allocated,
         volume_id: volume.mount_point.to_string_lossy().into_owned(),
         created_at: opts.now,
+        mtime_unix: md.mtime_unix,
+        marker: hex(&marker),
     };
     if let Err(e) = write_manifest(data_dir, &manifest) {
         return Err(discard(format!(
@@ -281,11 +296,14 @@ pub fn create_with(
     Ok(manifest)
 }
 
-/// Fill `file` with `size` bytes that don't compress or deduplicate, then fsync.
-fn fill(mut file: std::fs::File, size: u64) -> std::io::Result<()> {
+/// Fill `file` with `size` bytes: `marker` first, then bytes that don't compress or
+/// deduplicate; then fsync.
+fn fill(mut file: std::fs::File, size: u64, marker: &[u8; MARKER_LEN]) -> std::io::Result<()> {
+    let head = usize::try_from(size.min(MARKER_LEN as u64)).unwrap_or(MARKER_LEN);
+    file.write_all(&marker[..head])?;
     let mut buf = vec![0u8; CHUNK];
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut left = size;
+    let mut left = size - head as u64;
     while left > 0 {
         for word in buf.chunks_exact_mut(8) {
             // xorshift64*: a different pseudo-random block every chunk.
@@ -347,7 +365,12 @@ pub fn release(data_dir: &Path) -> Result<Released, ScullError> {
             )));
         }
         Ok(md) => {
-            if let Some(why) = mismatch(&manifest, md.kind, md.identity, md.logical_size) {
+            // Identity, kind and size, then the modification time and the marker read through
+            // a no-follow handle: an inode number the filesystem reused is not enough.
+            if let Some(why) = mismatch(&manifest, md.kind, md.identity, md.logical_size)
+                .or_else(|| mtime_mismatch(&manifest, md.mtime_unix))
+                .or_else(|| marker_mismatch(&path, &manifest))
+            {
                 return Err(blocked(format!(
                     "{}: {why}; nothing released",
                     path.display()
@@ -446,8 +469,15 @@ mod tests {
     fn fill_writes_incompressible_distinct_chunks() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("f");
-        fill(std::fs::File::create(&p).unwrap(), 3 * CHUNK as u64 + 5).unwrap();
+        let marker = [7u8; MARKER_LEN];
+        fill(
+            std::fs::File::create(&p).unwrap(),
+            3 * CHUNK as u64 + 5,
+            &marker,
+        )
+        .unwrap();
         let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(bytes[..MARKER_LEN], marker, "the marker comes first");
         assert_eq!(bytes.len(), 3 * CHUNK + 5);
         assert_ne!(
             bytes[..CHUNK],

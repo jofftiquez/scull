@@ -969,8 +969,10 @@ room again.
   when free space is already below your forecast reserve (`[proactive] reserve_gib`, 10 GiB by
   default), or would drop below it.
 * **`release`** deletes the reserve and frees its space. scull deletes only the exact file it
-  created: `headroom.json` records the file's identity and size, and anything else at that path
-  is refused and left alone. Links are never followed. The deletion uses the same safe removal
+  created. At creation it writes 32 random bytes at the start of the file. `headroom.json`
+  records them along with the file's identity, size and modification time. Before deleting,
+  scull reads those first bytes back without following links. Anything that doesn't match is
+  refused and left alone, even a file the OS gave the same identity. Links are never followed. The deletion uses the same safe removal
   path as every cleanup.
 * **`status`** says whether there is a reserve, how big it is, and whether it can be released.
   `scull status` mentions a ready reserve too, and the desktop shows it in Settings.
