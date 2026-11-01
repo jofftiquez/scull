@@ -47,6 +47,9 @@
 //! `tests/safe10.rs` fails the build if either changes. Cleanups reach the Executor through a
 //! plan and a human approval, never through the desktop bridge.
 
+// Forbidden at the root, so no local allow can lift it (SAFE-10; tests/safe10.rs).
+#![forbid(unsafe_code)]
+
 pub mod approvals;
 pub mod cleanup;
 pub mod db;
