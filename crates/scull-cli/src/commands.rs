@@ -124,9 +124,13 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
-        Command::Approve { plan_id, revoke } => match revoke {
+        Command::Approve {
+            plan_id,
+            revoke,
+            run,
+        } => match revoke {
             Some(id) => crate::cmd::approve::run_revoke(id, ui)?,
-            None => crate::cmd::approve::run(plan_id.as_deref(), ui)?,
+            None => crate::cmd::approve::run(plan_id.as_deref(), *run, ui)?,
         },
         Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
