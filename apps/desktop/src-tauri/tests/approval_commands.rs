@@ -66,6 +66,7 @@ fn data_with_agent_plan(dir: &Path) -> Plan {
             machine_id,
             user,
             origin: PlanOrigin::Mcp,
+            operations_watermark: None,
         },
         vec![PlanItem::from_candidate(&candidate(1, "/tmp/never/touched/target")).unwrap()],
     )

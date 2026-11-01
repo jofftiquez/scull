@@ -103,6 +103,7 @@ fn plan(suffix: &str, origin: PlanOrigin, user: &str, at: i64, cands: &[Candidat
             machine_id: MACHINE.into(),
             user: user.into(),
             origin,
+            operations_watermark: None,
         },
         cands
             .iter()
