@@ -15,6 +15,7 @@ import {
   type SettingsView,
 } from '../../bridge';
 import { formatBytes } from '../../lib/format';
+import { THEME_OPTIONS, isThemePref, useTheme } from '../../lib/theme';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import SettingRow from '../../components/settings/SettingRow.vue';
 import SettingSwitch from '../../components/settings/SettingSwitch.vue';
@@ -134,6 +135,14 @@ async function act(what: () => Promise<void>, done: string, after?: () => void) 
   } catch (e) {
     saveError.value = toBridgeError(e).message;
   }
+}
+
+/** Theme (P5-UI-01): a display preference of this machine, saved locally, not in config. */
+const theme = useTheme();
+function pickTheme(v: string) {
+  if (!isThemePref(v)) return;
+  theme.setTheme(v);
+  flashSaved();
 }
 
 const app = <K extends AppKey>(k: K) => (changed.value.get(k) ?? APP_DEFAULTS[k]) as (typeof APP_DEFAULTS)[K];
@@ -279,6 +288,12 @@ const versionText = computed(() => info.value?.version ?? '');
             </SettingRow>
             <SettingRow title="Open at login" description="Only the menu bar widget starts; scanning stays on schedule.">
               <SettingSwitch label="Open at login" :on="app('app.open_at_login')" @toggle="set('app.open_at_login', !app('app.open_at_login'))" />
+            </SettingRow>
+          </section>
+          <section class="settings-section" data-testid="appearance">
+            <h2>Appearance</h2>
+            <SettingRow title="Theme" description="Follows your system's light or dark mode unless you pick one. Saved on this computer and used by the menu bar widget too.">
+              <SegmentedControl label="Theme" :options="THEME_OPTIONS" :value="theme.pref.value" @pick="pickTheme" />
             </SettingRow>
           </section>
         </template>

@@ -243,7 +243,7 @@ export function runSummary(results: readonly RunResult[], planned: number): { co
 
 /** Burst particles (design 08b): 20 pieces in the duotone, staggered. */
 export function particles(): { size: number; round: boolean; color: string; anim: string }[] {
-  const colors = ['#D6268A', '#FFFFFF', '#9C78FF', '#FFB547', '#DCCBFF'];
+  const colors = ['var(--color-accent)', 'var(--color-on-ink)', 'var(--color-violet-light)', 'var(--color-tier-s2)', 'var(--color-tier-s1)'];
   return Array.from({ length: 20 }, (_, i) => ({
     size: [8, 10, 12, 9][i % 4]!,
     round: i % 3 !== 0,

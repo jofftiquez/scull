@@ -71,7 +71,7 @@ const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? on
 export const ICONS: Record<OperationKind, { text: string; bg: string; fg: string; label: string }> = {
   quick_clean: { text: 'QC', bg: 'var(--color-violet-tint)', fg: 'var(--color-violet-text)', label: 'Quick Clean' },
   cleanup: { text: 'CL', bg: 'var(--color-ink)', fg: 'var(--color-on-ink)', label: 'Cleanup' },
-  worktrees: { text: 'WT', bg: 'var(--color-category-ring)', fg: 'var(--color-tier-s3)', label: 'Worktrees' },
+  worktrees: { text: 'WT', bg: 'var(--color-category-ring)', fg: 'var(--color-tier-s3-fg)', label: 'Worktrees' },
   agent: { text: 'AI', bg: 'var(--color-accent-tint)', fg: 'var(--color-accent-text)', label: 'Agent cleanup' },
 };
 
@@ -203,11 +203,11 @@ export function itemState(op: HistoryOperation, it: HistoryItem): { text: string
 }
 
 export const LOG_COLORS: Record<AuditLineKind, string> = {
-  approval: '#E8E3EE',
-  check: '#9C93A6',
-  action: '#C9B2FF',
-  measured: '#FF8CC6',
-  warning: '#FFB547',
+  approval: 'var(--color-on-ink-soft)',
+  check: 'var(--color-on-ink-subtle)',
+  action: 'var(--color-on-ink-violet)',
+  measured: 'var(--color-on-ink-magenta)',
+  warning: 'var(--color-on-ink-amber)',
 };
 
 export interface Figures {

@@ -181,6 +181,6 @@ export function toolNames(tools: readonly QuickCleanTool[]): string {
 export const BURST = Array.from({ length: 14 }, (_, i) => ({
   size: [6, 8, 7][i % 3]!,
   radius: i % 3 === 0 ? '2px' : '50%',
-  color: ['#D6268A', '#7C4DFF', '#15121A', '#FFB547'][i % 4]!,
+  color: ['var(--color-accent)', 'var(--color-tier-s0)', 'var(--color-ink)', 'var(--color-tier-s2)'][i % 4]!,
   animation: `scull-b${i % 10} ${650 + (i % 4) * 80}ms ${i >= 10 ? 100 : 0}ms cubic-bezier(.15,.7,.3,1) both`,
 }));

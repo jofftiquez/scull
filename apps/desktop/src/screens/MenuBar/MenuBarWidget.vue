@@ -285,7 +285,7 @@ const SEVERITY: Record<string, string> = { critical: 'Critical', warning: 'Warni
           :class="{
             'bg-ink text-on-ink': phase === 'idle',
             'bg-surface-raised text-ink': phase === 'cleaning',
-            'done bg-tier-s0 text-on-ink': phase === 'done',
+            'done bg-tier-s0 text-tier-s0-text': phase === 'done',
             'border border-border bg-transparent text-ink': phase === 'unavailable',
           }"
           :aria-label="phase === 'done' ? `${frame.label}. Activate to reset.` : undefined"
@@ -362,7 +362,7 @@ const SEVERITY: Record<string, string> = { critical: 'Critical', warning: 'Warni
   transition: stroke-dashoffset 200ms linear;
 }
 .fill {
-  background: repeating-linear-gradient(135deg, #7c4dff 0 10px, #9c78ff 10px 20px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 10px, var(--color-violet-light) 10px 20px);
   background-size: 40px 100%;
   animation: scull-shimmer 600ms linear infinite;
   transition: width 120ms linear;

@@ -67,7 +67,7 @@ describe('tier toolbar', () => {
 
 describe('storage wheel', () => {
   const arcs = layoutWheel(buildWheelModel(DESIGN_CANDIDATES));
-  const center = { k: 'Development', kColor: '#B81E74', v: '186.0 GiB', n: '' };
+  const center = { k: 'Development', kColor: 'var(--color-accent-text)', v: '186.0 GiB', n: '' };
 
   it('patterns uncertain and protected items, solid fills for the others', () => {
     const w = mount(StorageWheel, { props: { arcs, filter: 'all', selected: null, center, sweep: 1, scanning: false } });
@@ -75,7 +75,7 @@ describe('storage wheel', () => {
       const fill = p.attributes('fill')!;
       const tier = p.attributes('data-tier');
       if (tier === 'S2' || tier === 'S3') expect(fill).toMatch(/^url\(#/);
-      else expect(fill).toMatch(/^#/);
+      else expect(fill).toMatch(/^var\(--color-tier-s[01]-swatch\)$/);
     }
     expect(w.findAll('path[data-kind="category"]')).toHaveLength(arcs.length);
   });

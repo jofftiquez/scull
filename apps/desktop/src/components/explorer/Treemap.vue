@@ -52,18 +52,18 @@ interface Look {
 }
 
 function look(n: ExNode): Look {
-  if (n.kind === 'drive') return { fill: '#15121A', fg: '#FFFFFF' };
-  if (n.kind === 'folder') return { fill: '#EEEAF4', fg: '#15121A' };
-  if (n.kind === 'group') return { fill: '#F2EFEA', fg: '#15121A' };
+  if (n.kind === 'drive') return { fill: 'var(--color-drive-tile)', fg: 'var(--color-on-drive-tile)' };
+  if (n.kind === 'folder') return { fill: 'var(--color-category-ring)', fg: 'var(--color-ink)' };
+  if (n.kind === 'group') return { fill: 'var(--color-surface-raised)', fg: 'var(--color-ink)' };
   switch (n.tier) {
     case 'S0':
-      return { fill: '#7C4DFF', fg: '#FFFFFF' };
+      return { fill: 'var(--color-tier-s0)', fg: 'var(--color-tier-s0-text)' };
     case 'S1':
-      return { fill: '#DCCBFF', fg: '#15121A' };
+      return { fill: 'var(--color-tier-s1)', fg: 'var(--color-tier-s1-text)' };
     case 'S2':
-      return { fill: `url(#${uid}-s2)`, fg: '#15121A' };
+      return { fill: `url(#${uid}-s2)`, fg: 'var(--color-tier-s2-text)' };
     default:
-      return { fill: `url(#${uid}-s3)`, fg: '#FFFFFF' };
+      return { fill: `url(#${uid}-s3)`, fg: 'var(--color-tier-s3-text)' };
   }
 }
 
@@ -126,12 +126,12 @@ function activate(n: ExNode) {
     >
       <defs>
         <pattern :id="`${uid}-s2`" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
-          <rect width="4" height="8" fill="#FFB547" />
-          <rect x="4" width="4" height="8" fill="#FFD08A" />
+          <rect width="4" height="8" fill="var(--color-tier-s2)" />
+          <rect x="4" width="4" height="8" fill="var(--color-tier-s2-stripe)" />
         </pattern>
         <pattern :id="`${uid}-s3`" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
-          <rect width="3" height="6" fill="#3B2A4F" />
-          <rect x="3" width="3" height="6" fill="#5A4772" />
+          <rect width="3" height="6" fill="var(--color-tier-s3)" />
+          <rect x="3" width="3" height="6" fill="var(--color-tier-s3-stripe)" />
         </pattern>
         <clipPath v-for="(t, i) in tiles" :id="`${uid}-c${i}`" :key="t.node.id">
           <rect :x="t.x" :y="t.y" :width="t.w" :height="t.h" :rx="RADIUS" />

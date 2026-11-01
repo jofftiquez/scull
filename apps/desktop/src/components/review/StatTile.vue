@@ -11,7 +11,7 @@ defineProps<{ label: string; value: string; sub: string; tone?: 'accent' | 'mute
     <span class="text-label font-medium text-text-secondary">{{ label }}</span>
     <span
       class="text-[36px] leading-[1.1] font-semibold tracking-[-0.03em] tabular-nums"
-      :class="tone === 'accent' ? 'text-[#9C78FF]' : tone === 'muted' ? 'text-text-secondary' : 'text-ink'"
+      :class="tone === 'accent' ? 'text-violet-light' : tone === 'muted' ? 'text-text-secondary' : 'text-ink'"
       aria-live="polite"
     >{{ value }}</span>
     <span class="text-label text-text-secondary">{{ sub }}</span>

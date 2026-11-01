@@ -41,6 +41,13 @@ dev dependency. Like Playwright, it is installed in a separate tooling directory
 (`npm install axe-core@4.14.0`) and mounted into the container. It never enters
 `package.json`, the lockfile or a bundle.
 
+**Dark theme (P5-UI-01).** `A11Y_COLOR_SCHEME=dark apps/desktop/a11y/audit.sh …` runs the same
+audit with `prefers-color-scheme: dark`; the route list includes the menu bar widget
+(`menubar.html`). Both themes: 0 axe violations on all 13 routes. Text pairs are checked for
+both palettes in `src/a11y.test.ts`, and so is colour-blind safety: every pair of tiers
+(S0–S3) stays at least ΔE 20 apart under simulated protanopia, deuteranopia and tritanopia
+(Machado et al. 2009), and pairs with no lightness step differ in pattern (stripes / hatch).
+
 Unit tests hold the parts that can be checked without a browser (`src/a11y.test.ts`): token
 contrast pairs, the 44 px spacing unit, the reduced-motion rule, the skip link, page titles
 and focus after navigation. The Insights tests cover the forecast chart's keyboard use and its

@@ -2,6 +2,7 @@
 // Playwright container against the Vite dev server (mock bridge), started by a11y/audit.sh.
 //
 //   node audit.mjs <baseUrl> <out.json> [shotsDir]
+//   A11Y_COLOR_SCHEME=dark node audit.mjs ...   # the same audit in the dark theme (P5-UI-01)
 //
 // Per route: axe-core (WCAG 2.0/2.1/2.2 A+AA rules and best practices), a 44 px target-size
 // check (scull's own bar, stricter than WCAG 2.5.8's 24 px), a keyboard pass (Tab order, a
@@ -16,6 +17,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 
 const [base, outFile, shots] = process.argv.slice(2);
+const colorScheme = process.env.A11Y_COLOR_SCHEME === 'dark' ? 'dark' : 'light';
 const axeSource = await readFile('/axe/node_modules/axe-core/axe.min.js', 'utf8');
 if (shots) await mkdir(shots, { recursive: true });
 
@@ -33,6 +35,8 @@ export const ROUTES = [
   { path: '/history', ready: 'main' },
   { path: '/settings', ready: 'main' },
   { path: '/onboarding', ready: 'h1' },
+  // The menu bar widget is a page of its own (P4-UI-01), in its small window.
+  { path: 'menubar.html', ready: '#app > *', viewport: { width: 400, height: 640 } },
 ];
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
@@ -65,15 +69,16 @@ async function settle(page) {
   );
 }
 
-async function open(browser, path, reduced) {
+async function open(browser, route, reduced) {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
+    viewport: route.viewport ?? { width: 1440, height: 900 },
     reducedMotion: reduced ? 'reduce' : 'no-preference',
+    colorScheme,
   });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(`${base}/#${path}`);
+  await page.goto(route.path.endsWith('.html') ? `${base}/${route.path}` : `${base}/#${route.path}`);
   return { context, page, errors };
 }
 
@@ -108,7 +113,7 @@ function describe() {
 const withoutKey = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'key'));
 
 async function audit(browser, route) {
-  const { context, page, errors } = await open(browser, route.path, false);
+  const { context, page, errors } = await open(browser, route, false);
   await page.waitForSelector(route.ready, { timeout: 30_000 });
   await settle(page);
 
@@ -185,7 +190,7 @@ async function audit(browser, route) {
   await context.close();
 
   // Reduced motion: load again and check nothing finite is still animating once settled.
-  const rm = await open(browser, route.path, true);
+  const rm = await open(browser, route, true);
   await rm.page.waitForSelector(route.ready, { timeout: 30_000 });
   const motion = await rm.page.evaluate(() =>
     document
@@ -202,6 +207,7 @@ async function audit(browser, route) {
 
   return {
     path: route.path,
+    colorScheme,
     violations,
     incomplete,
     smallTargets: small,
@@ -219,7 +225,7 @@ for (const route of ROUTES) {
   const r = await audit(browser, route);
   results.push(r);
   process.stderr.write(
-    `${route.path}: ${r.violations.length} axe violation(s), ${r.smallTargets.filter((t) => !t.inline).length} small target(s), ` +
+    `${route.path} (${colorScheme}): ${r.violations.length} axe violation(s), ${r.smallTargets.filter((t) => !t.inline).length} small target(s), ` +
       `${r.tabStops} tab stops (${r.noFocusIndicator.length} without indicator), ${r.reducedMotionRunning.length} animation(s) under reduced motion\n`,
   );
 }

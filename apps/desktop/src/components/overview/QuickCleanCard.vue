@@ -94,7 +94,7 @@ const CHIP = {
   off: 'border-border bg-transparent text-text-tertiary',
   on: 'border-ink bg-ink text-on-ink',
   active: 'chip-active border-accent bg-ink text-on-ink',
-  done: 'chip-done border-[#7C4DFF] bg-[#7C4DFF] text-on-ink',
+  done: 'chip-done border-tier-s0 bg-tier-s0 text-tier-s0-text',
 } as const;
 </script>
 
@@ -156,7 +156,7 @@ const CHIP = {
 
     <div
       v-if="phase === 'done' && result"
-      class="done absolute inset-0 flex flex-col items-center justify-center gap-1 rounded-tile-lg bg-[#7C4DFF] p-5 text-center text-on-ink"
+      class="done absolute inset-0 flex flex-col items-center justify-center gap-1 rounded-tile-lg bg-tier-s0 p-5 text-center text-tier-s0-text"
       role="status"
       data-testid="qc-done"
     >
@@ -178,7 +178,7 @@ const CHIP = {
       >
         Nice
       </button>
-      <span v-if="result.simulated" class="rise-2 mt-1 font-mono text-[11px] text-on-ink">simulated · mock bridge, nothing deleted</span>
+      <span v-if="result.simulated" class="rise-2 mt-1 font-mono text-[11px] text-tier-s0-text">simulated · mock bridge, nothing deleted</span>
     </div>
   </section>
 </template>
@@ -196,7 +196,7 @@ const CHIP = {
   animation: scull-pop 340ms ease-out;
 }
 .fill {
-  background: repeating-linear-gradient(135deg, #7c4dff 0 12px, #9c78ff 12px 24px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
   background-size: 48px 100%;
   animation: scull-shimmer 600ms linear infinite;
   transition: width 120ms linear;
