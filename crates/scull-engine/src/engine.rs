@@ -211,7 +211,10 @@ impl Engine {
     }
 
     /// Canonicalize and check scan roots: each must be an existing directory (not a link).
-    /// Roots inside another root are dropped.
+    /// Duplicates and roots inside another root are dropped, compared by path and by file
+    /// identity (volume + file ID), so two paths to one folder that `canonicalize` keeps apart
+    /// (macOS firmlinks: `~/x` and `/System/Volumes/Data/Users/<me>/x`) are scanned once
+    /// (FX-MAC-03, #249). The first of two aliases is kept.
     pub fn prepare_roots(&self, roots: &[PathBuf]) -> Result<Vec<PathBuf>, ScullError> {
         let mut out: Vec<PathBuf> = Vec::new();
         for r in roots {
@@ -265,7 +268,35 @@ impl Engine {
         }
         let all = out.clone();
         out.retain(|r| !all.iter().any(|o| o != r && is_within(r, o)));
-        Ok(out)
+        Ok(self.dedupe_roots_by_identity(out))
+    }
+
+    /// Drop roots that are the same folder as, or lie inside, another root by file identity:
+    /// a root whose own identity, or one of its ancestors' identities, is another root's. Of
+    /// two roots with the same identity the earlier one is kept. Roots without an identity
+    /// (the platform can't tell) are compared by path only.
+    fn dedupe_roots_by_identity(&self, roots: Vec<PathBuf>) -> Vec<PathBuf> {
+        let identity = |p: &Path| self.platform.metadata(p).ok().and_then(|md| md.identity);
+        let own: Vec<_> = roots.iter().map(|r| identity(r)).collect();
+        let mut keep = Vec::with_capacity(roots.len());
+        for (i, root) in roots.iter().enumerate() {
+            // Same folder as an earlier root.
+            let alias = own[i].is_some() && own[..i].contains(&own[i]);
+            // Inside another root through an ancestor that is that root by identity.
+            let nested = || {
+                root.ancestors().skip(1).any(|a| {
+                    identity(a).is_some_and(|id| {
+                        own.iter()
+                            .enumerate()
+                            .any(|(j, o)| j != i && *o == Some(id))
+                    })
+                })
+            };
+            if !alias && !nested() {
+                keep.push(root.clone());
+            }
+        }
+        keep
     }
 
     /// Scan `roots` and classify everything found. Read-only: nothing on disk changes except
