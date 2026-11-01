@@ -253,6 +253,23 @@ const nextDigestText = computed(() => {
   return app('app.weekly_digest') && t ? `Next digest ${formatWhen(t)}.` : 'Turn on Weekly digest to get it every Monday.';
 });
 
+/** The emergency headroom file (PRO-06): read-only here; the CLI creates and releases it. */
+const headroomLine = computed(() => {
+  const h = view.value?.data.headroom;
+  switch (h?.state) {
+    case 'ready':
+      return `${formatBytes(h.releasable_bytes ?? 0)} reserved for a full disk. Free it with \`scull headroom release\`.`;
+    case 'missing':
+      return 'The reserve file is gone; `scull headroom release` clears its record.';
+    case 'changed':
+    case 'unreadable':
+    case 'unrecorded':
+      return `Something at the reserve's path isn't the file scull created, so scull won't release it${h.detail ? ` (${h.detail})` : ''}.`;
+    default:
+      return 'Off. `scull headroom create` sets aside 2 GiB you can free when the disk is full.';
+  }
+});
+
 const footprintPct = computed(() => Math.min(100, ((view.value?.data.footprint_bytes ?? 0) / DATA_BUDGET_BYTES) * 100));
 const versionText = computed(() => info.value?.version ?? '');
 </script>
@@ -564,6 +581,11 @@ const versionText = computed(() => info.value?.version ?? '');
             </div>
             <SettingRow title="Keep detailed history for" description="Older data is summarized, then kept as monthly totals.">
               <SegmentedControl label="Keep detailed history for" :options="HISTORY_KEEP" :value="app('app.history_keep')" @pick="set('app.history_keep', $event)" />
+            </SettingRow>
+            <SettingRow title="Emergency headroom" description="-">
+              <template #description>
+                <span data-testid="headroom">{{ headroomLine }}</span>
+              </template>
             </SettingRow>
             <div class="flex flex-wrap gap-2 border-t border-line py-3.5">
               <button type="button" class="settings-outline" @click="act(() => writer.exportData(), 'Export requested.')">Export everything</button>

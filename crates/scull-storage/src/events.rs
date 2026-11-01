@@ -61,17 +61,21 @@ pub enum EventKind {
     /// expired, another account's plan, lost the race to the execution). An
     /// [`AgentAuditEvent`].
     RevokeRefused,
+    /// The emergency headroom file (PRO-06) was created, released or refused (audit trail of
+    /// `scull_cleaner::headroom`).
+    Headroom,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 6] = [
+    pub const ALL: [EventKind; 7] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
         EventKind::ApprovalRevoked,
         EventKind::RevokeRefused,
+        EventKind::Headroom,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
@@ -83,7 +87,7 @@ impl EventKind {
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
-    /// `approval_revoked`, `revoke_refused`.
+    /// `approval_revoked`, `revoke_refused`, `headroom`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -92,6 +96,7 @@ impl EventKind {
             EventKind::ExecuteRefused => "execute_refused",
             EventKind::ApprovalRevoked => "approval_revoked",
             EventKind::RevokeRefused => "revoke_refused",
+            EventKind::Headroom => "headroom",
         }
     }
 

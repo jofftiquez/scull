@@ -13,6 +13,7 @@ pub mod doctor;
 pub mod doctor_report;
 pub mod exec;
 pub mod forecast;
+pub mod headroom;
 pub mod history;
 pub mod init;
 pub mod insights;

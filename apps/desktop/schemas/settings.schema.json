@@ -242,6 +242,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "headroom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadroomStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The emergency headroom file (PRO-06, off by default; `None` without a data\ndirectory). Read-only here: `scull headroom create|release` changes it."
         }
       },
       "required": [
@@ -340,6 +351,26 @@
       "pattern": "^\\s*[0-9]+[smhdw]\\s*$",
       "type": "string"
     },
+    "FileIdentity": {
+      "additionalProperties": false,
+      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
+      "properties": {
+        "file": {
+          "description": "Inode / file ID as lowercase hex.",
+          "pattern": "^[0-9a-f]{1,32}$",
+          "type": "string"
+        },
+        "volume": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "volume",
+        "file"
+      ],
+      "type": "object"
+    },
     "ForgeConfig": {
       "additionalProperties": false,
       "description": "Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).",
@@ -350,6 +381,138 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "HeadroomManifest": {
+      "additionalProperties": false,
+      "description": "What scull recorded when it created the reserve.",
+      "properties": {
+        "allocated_bytes": {
+          "description": "Its allocated size when created (bytes): the space it really holds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "description": "When it was created (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/FileIdentity",
+          "description": "Its no-follow identity when created."
+        },
+        "relative": {
+          "description": "The reserve, relative to the data directory (always [`reserve_relative`]).",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "Its logical size (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "Format version ([`MANIFEST_VERSION`]).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "The volume it is on (mount point).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "relative",
+        "identity",
+        "size_bytes",
+        "allocated_bytes",
+        "volume_id",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "HeadroomState": {
+      "description": "What the reserve looks like now.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No reserve (the default).",
+          "type": "string"
+        },
+        {
+          "const": "ready",
+          "description": "The reserve exists and matches its manifest: it can be released.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "The manifest is there but the file is gone (released outside scull, or a release\nwhose record is missing). Releasing only removes the manifest.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "Something at the path differs from the manifest (identity, kind or size): scull will\nnot release it.",
+          "type": "string"
+        },
+        {
+          "const": "unreadable",
+          "description": "The manifest can't be read: scull will not release anything.",
+          "type": "string"
+        },
+        {
+          "const": "unrecorded",
+          "description": "A file is at the reserve's path but there is no manifest: scull didn't record it and\nwill not release it.",
+          "type": "string"
+        }
+      ]
+    },
+    "HeadroomStatus": {
+      "additionalProperties": false,
+      "description": "The reserve's status (`scull headroom status`, `scull status`, the desktop).",
+      "properties": {
+        "detail": {
+          "description": "Why it isn't ready, in one sentence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadroomManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The manifest, when it could be read."
+        },
+        "path": {
+          "description": "The reserve's path.",
+          "type": "string"
+        },
+        "releasable_bytes": {
+          "description": "Bytes releasing it would free now (its allocated size), when [`HeadroomState::Ready`].",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/HeadroomState",
+          "description": "What it looks like."
+        }
+      },
+      "required": [
+        "state",
+        "path"
+      ],
       "type": "object"
     },
     "McpConfig": {

@@ -209,6 +209,27 @@ describe('Settings screen', () => {
     expect(known).toContain('scull.db-wal');
   });
 
+  it('Data & privacy shows the emergency headroom read-only', async () => {
+    const w = await mountScreen({ tab: 'data' });
+    expect(w.get('[data-testid="headroom"]').text()).toBe('Off. `scull headroom create` sets aside 2 GiB you can free when the disk is full.');
+    const base = createMockBridge();
+    const ready: ScullBridge = {
+      ...base,
+      settings: async () => {
+        const v = await base.settings();
+        return {
+          ...v,
+          data: {
+            ...v.data,
+            headroom: { state: 'ready', path: '/x/headroom/reserve.bin', manifest: null, releasable_bytes: 2 * 1024 ** 3, detail: null },
+          },
+        };
+      },
+    };
+    const r = await mountScreen({ tab: 'data', bridge: ready });
+    expect(r.get('[data-testid="headroom"]').text()).toBe('2.0 GiB reserved for a full disk. Free it with `scull headroom release`.');
+  });
+
   it('About shows the version and the config file state', async () => {
     const w = await mountScreen({ tab: 'about' });
     expect(w.get('[data-testid="version"]').text()).toMatch(/^v\d+\.\d+\.\d+ · MIT OR Apache-2.0/);

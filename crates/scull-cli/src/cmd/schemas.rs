@@ -141,9 +141,9 @@ pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
 }
 
 /// Line schemas of the `phase2` commands (`clean`, `clean caches`, `clean --purge-quarantine`,
-/// `history`, `restore`, `data`): each prints one record whose `data` is its `--json` payload.
+/// `history`, `restore`, `data`, `headroom`): each prints one record whose `data` is its `--json` payload.
 fn phase2_line_schemas() -> Vec<(String, serde_json::Value)> {
-    use super::{clean, clean_caches, data, history, restore};
+    use super::{clean, clean_caches, data, headroom, history, restore};
     fn single<T: JsonSchema>(id: SchemaId, kind: &str) -> (String, serde_json::Value) {
         (file_name(id, true), single_record_schema::<T>(id, kind))
     }
@@ -158,6 +158,7 @@ fn phase2_line_schemas() -> Vec<(String, serde_json::Value)> {
         single::<data::DataShowReport>(data::DATA_SHOW_SCHEMA, "data"),
         single::<data::DataExportReport>(data::DATA_EXPORT_SCHEMA, "data"),
         single::<data::DataPurgeReport>(data::DATA_PURGE_SCHEMA, "data"),
+        single::<headroom::HeadroomReport>(headroom::HEADROOM_SCHEMA, "headroom"),
     ]
 }
 
