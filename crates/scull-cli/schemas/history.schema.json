@@ -180,7 +180,7 @@
           ]
         },
         "method": {
-          "description": "How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`).",
+          "description": "How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`, `auto_policy`).",
           "type": "string"
         },
         "moved_bytes": {

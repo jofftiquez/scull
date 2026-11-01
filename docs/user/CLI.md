@@ -139,7 +139,7 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull check` | Light scan, free-space forecast, alerts, a ready-to-review plan | Records history and writes a plan file; never deletes |
 | `scull schedule enable\|disable\|status` | Run `scull check` periodically through the OS scheduler | `enable`/`disable` write or remove scheduler files, with consent |
 | `scull insights [export\|purge]` | Local trends from scull's own history | `purge` deletes history rows only |
-| `scull ask QUESTION` | Optional assistant over scull's read-only tools (off by default; your own model) | No |
+| `scull ask QUESTION` | Optional assistant over scull's read-only tools (off by default; your own model); with `[mcp] destructive = true` it can also prepare a plan for you to approve | No |
 | `scull completions SHELL` | Shell completion script | No |
 | `scull mcp serve` | Read-only MCP server for AI agents | No |
 
@@ -621,6 +621,7 @@ JSON: `scull/clean-caches@1` (`mode` = `preview` or `run`, `tools[]`, `skipped[]
 
 ```text
 scull approve [PLAN_ID]
+scull approve PLAN_ID --run
 scull approve --revoke PLAN_ID
 ```
 
@@ -633,14 +634,21 @@ agent's shell tool it exits 5 and changes nothing; with `--json` it exits 2. Nev
   run.
 * With one, it shows the full plan and a short code. Type the code to approve (single use,
   lapses with the plan, at most 15 minutes after the agent prepared it), or `deny`.
+* `PLAN_ID --run` approves the plan and runs it right away, in your terminal, instead of
+  leaving it for the agent. Same checks, same plan and code; then scull rescans the plan's
+  items, and if any changed on disk the plan is void and nothing runs (exit 4). Otherwise the
+  Executor runs it, exactly like the agent's `execute_cleanup` would (S0 deleted, S1/S2
+  quarantined, every item checked again right before it is touched). The approval is spent
+  by the run, so if the agent calls `execute_cleanup` at the same moment, only one of the
+  two runs it. If nothing could run (another cleanup holds the lock, exit 6), the approval
+  is revoked. Only you can do this: there is no MCP tool, setting or environment variable
+  for it.
 * `--revoke PLAN_ID` withdraws an approval the agent has not used yet. If the agent's
   `execute_cleanup` already started, the revocation is refused (`approval_used`); otherwise
   the agent's execution is refused (`approval_revoked`) and nothing runs.
 
-Denials, refused attempts and revocations are recorded (`scull history`).
-
-Approving and running a plan in one terminal step (`scull approve <plan-id> --run`) is coming
-(#97); today the agent runs an approved plan with `execute_cleanup`.
+Denials, refused attempts, revocations and how each `--run` ended are recorded
+(`scull history`).
 
 ```console
 $ scull approve --revoke plan_6b4b2f1c8e0d9a7b3c2d1e0f
@@ -1003,7 +1011,7 @@ JSON: `scull/headroom@1`.
 ### `scull check`
 
 ```text
-scull check [--no-scan] [--include-s1]
+scull check [--no-scan] [--include-s1] [--no-auto-policies]
 ```
 
 A light, unattended check, meant for the OS scheduler (`scull schedule`):
@@ -1017,13 +1025,22 @@ A light, unattended check, meant for the OS scheduler (`scull schedule`):
 4. Raises alerts: a drive below its reserve or forecast to drop below it within
    `[proactive] alert_days`, budgets, stale worktrees, build outputs and caches, growth
    spikes and fast free-space drops. Staleness and ecosystem or path budgets need the scan.
-5. Prepares a **ready-to-review** cleanup plan of S0 items (S1 too with `--include-s1`) and
+5. Runs your **auto-policies**, only if you enabled one in the config file (off by default;
+   see [Configuration](#configuration-and-environment) and
+   [SAFETY.md](SAFETY.md#auto-policies-opt-in-s0-only-quarantine-only)). The first time a
+   policy only previews what it would move. Later checks move idle S0 build outputs into
+   quarantine (never delete them), within the per-run and per-day caps. `--no-auto-policies`
+   stops them for this run.
+6. Prepares a **ready-to-review** cleanup plan of S0 items (S1 too with `--include-s1`) and
    tells you how to review it: `scull clean --plan <file>`.
 
 It never deletes anything. Alerts point to a reviewed cleanup, and the plan runs only through
-`scull clean --plan`, with a fresh check of every item and your confirmation. It writes only
-history rows, the plan record and the plan file. The exit code is 0 whether or not alerts
-fired. JSON: `scull/check@1`.
+`scull clean --plan`, with a fresh check of every item and your confirmation. Without an
+enabled auto-policy it writes only history rows, the plan record and the plan file. With one,
+it also writes the owner-only state file `auto-policies.json` in scull's data folder, and each
+run is an operation in `scull history` that `scull restore` undoes. The exit code is 0 whether
+or not alerts fired. JSON: `scull/check@1`, with an `auto_policies` object (`off`, `stopped`,
+`refused` or `checked`, and each policy's outcome).
 
 ### `scull schedule`
 
@@ -1045,7 +1062,9 @@ priority, every 6 hours by default (`--every` takes 15 minutes to 7 days: `30m`,
   run as the user it belongs to. `--dry-run` and `status` still work.
 * `status` shows whether checks are registered. It is read-only.
 
-The scheduled job only reads and records, like `scull check`; it never deletes anything.
+The scheduled job only reads and records, like `scull check`; it never deletes anything. If
+you enabled an auto-policy, it also moves idle S0 build outputs into quarantine (see
+`scull check`).
 JSON: `scull/schedule@1`.
 
 The desktop app can also watch from the menu bar or system tray while it runs. It shows OS
@@ -1097,11 +1116,25 @@ until you turn it on.
   sent, and to whom, and asks you to agree. `--show-request` prints the notice and the exact
   first request (key masked) and sends nothing. It works even while the assistant is off.
   `--yes` agrees without a prompt and is required when there is no terminal.
-* **Read-only.** The model can only call scull's read-only tools, the same ones
-  `scull mcp serve` offers minus `register_worktree`, with the same scan-root allowlist and
-  path redaction (`[mcp] redact_home`, `hash_names`). It can't delete, move or change files,
-  and it can't prepare or approve a cleanup. Letting it prepare a plan for your review is
-  tracked in #22.
+* **Read-only.** The model calls scull's read-only tools, the same ones `scull mcp serve`
+  offers minus `register_worktree`, with the same scan-root allowlist and path redaction
+  (`[mcp] redact_home`, `hash_names`). It can't delete, move or change files, and it can't
+  approve or run a cleanup.
+* **Preparing a plan (opt-in).** With `[mcp] destructive = true` in `config.toml` (the same
+  switch as the MCP server's destructive mode; never when scull runs elevated), the model may
+  also prepare a cleanup plan when you ask it to free space. Preparing changes nothing. After
+  the answer, scull itself prints the plan ID and the command to review and approve it:
+
+  ```console
+  The assistant prepared a cleanup plan; nothing has been changed. It runs only after you review and approve it yourself:
+    plan plan_01JC…: 1 item(s), 4.0 KiB reclaimable
+      scull approve plan_01JC…
+  ```
+
+  `scull ask` cannot run the plan: after you approve it, an AI agent connected to
+  `scull mcp serve` in destructive mode can run it. The same limits as for agents apply
+  (`mcp.max_pending_plans`, `mcp.prepare_per_minute`), and consent given while the assistant
+  was read-only is asked again.
 
 What you send goes to the provider you configured. Nothing else leaves your machine.
 
@@ -1138,7 +1171,7 @@ These commands are built; `scull <command> --help` describes their options:
 
 | Command | Purpose |
 |---|---|
-| `scull approve [PLAN_ID]`, `scull approve --revoke PLAN_ID` | Approve a plan an AI agent prepared, or revoke an approval, in your own terminal (interactive only; see above) |
+| `scull approve [PLAN_ID] [--run]`, `scull approve --revoke PLAN_ID` | Approve a plan an AI agent prepared (and with `--run`, run it yourself right away), or revoke an approval, in your own terminal (interactive only; see above) |
 | `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
 | `scull agent install\|uninstall CLIENT [--yes \| --dry-run]` | Write (or remove) scull's MCP entry and short guidance for an AI client (`claude-code`, `codex`, `cursor`, `vscode`, `gemini-cli`); shows each file's diff and asks first |
 | `scull doctor --report` | A shareable, redacted diagnostic report, shown as a preview first |
@@ -1182,7 +1215,27 @@ base = "~/.scull-q"                      # for items on the drive holding this f
 
 [quarantine.bases]                       # optional, per drive: longest matching prefix wins
 "/Volumes/Data" = "/Volumes/Data/me/.scull-q"
+
+[auto]                                   # opt-in auto-policies; off unless a policy is enabled
+paused = false                           # kill switch
+max_items_per_run = 50
+max_gib_per_run = 20
+max_gib_per_day = 50
+
+[[auto.policy]]
+name = "old-build-outputs"
+enabled = true
+kind = "build_outputs"                   # S0 build outputs of idle projects, quarantined
+idle = "60d"
+every = "7d"
 ```
+
+`[auto]` is read only from this file, never from a flag or variable, and only when the file
+and its folder are writable by you alone. `scull check` then moves the idle S0 build outputs
+a policy picks into quarantine (never deletes them), after a dry run the first time, within
+the caps. `SCULL_NO_AUTO_POLICIES=1`, `--no-auto-policies` or a file named
+`auto-policies.off` in the config folder stops every policy. See
+[SAFETY.md](SAFETY.md#auto-policies-opt-in-s0-only-quarantine-only).
 
 Without `[quarantine]`, scull picks the quarantine folder itself: the shallowest folder you
 own above the item, on its drive (usually your home folder). A configured base holds

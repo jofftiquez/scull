@@ -15,9 +15,11 @@
 //! "Every agent request, approval, denial and result is audited." Plans, approvals and
 //! operations have their own append-only tables; what an agent was **refused** is recorded
 //! here as an [`AgentAuditEvent`]: a human denying an approval, a refused `execute_cleanup`,
-//! a human revoking an approval before it was used, and a `prepare_cleanup` refused by the
-//! agent limits ([`EventKind::ApprovalDenied`], [`EventKind::ExecuteRefused`],
-//! [`EventKind::ApprovalRevoked`], [`EventKind::PrepareRefused`]; a revocation is recorded
+//! a human revoking an approval before it was used, a `prepare_cleanup` refused by the
+//! agent limits, and a human approving and running an agent plan in one step with
+//! `scull approve --run` ([`EventKind::ApprovalDenied`], [`EventKind::ExecuteRefused`],
+//! [`EventKind::ApprovalRevoked`], [`EventKind::PrepareRefused`],
+//! [`EventKind::ApproveRun`]; a revocation is recorded
 //! in the same transaction that spends the approval, [`Store::revoke_approval`]). Each
 //! carries only stable codes and identifiers (reason, plan ID, plan hash, channel, machine
 //! and user), never free text, so it can never hold a confirmation code or a secret
@@ -77,11 +79,16 @@ pub enum EventKind {
     /// transaction as the plan by [`Store::insert_agent_plan`]; shown to the human who
     /// approves. Display only: it is never trusted for anything.
     AgentPlanClient,
+    /// The human approved an agent plan with `scull approve <plan-id> --run` and scull ran it
+    /// at once in that terminal (source `cli`, channel `terminal`): the reason says how that
+    /// ended (`executed`, `plan_changed`, `approval_used`, `lock_held`, ...). The approval and
+    /// the operation have their own records. An [`AgentAuditEvent`].
+    ApproveRun,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 10] = [
+    pub const ALL: [EventKind; 11] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
@@ -92,20 +99,22 @@ impl EventKind {
         EventKind::PrepareRefused,
         EventKind::InsightsPurged,
         EventKind::AgentPlanClient,
+        EventKind::ApproveRun,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
-    pub const AGENT: [EventKind; 5] = [
+    pub const AGENT: [EventKind; 6] = [
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
         EventKind::ApprovalRevoked,
         EventKind::RevokeRefused,
         EventKind::PrepareRefused,
+        EventKind::ApproveRun,
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
     /// `approval_revoked`, `revoke_refused`, `headroom`, `prepare_refused`, `insights_purged`,
-    /// `agent_plan_client`.
+    /// `agent_plan_client`, `approve_run`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -118,6 +127,7 @@ impl EventKind {
             EventKind::PrepareRefused => "prepare_refused",
             EventKind::InsightsPurged => "insights_purged",
             EventKind::AgentPlanClient => "agent_plan_client",
+            EventKind::ApproveRun => "approve_run",
         }
     }
 

@@ -187,6 +187,11 @@ pub enum Command {
         /// Revoke the approval of this plan before the agent executes it.
         #[arg(long, value_name = "PLAN_ID", conflicts_with = "plan_id")]
         revoke: Option<String>,
+        /// Approve the plan and run it at once, here, through the Executor. Everything is
+        /// re-checked first: if any item changed on disk, the plan is void and nothing runs.
+        /// The single-use approval is spent by this run.
+        #[arg(long, requires = "plan_id", conflicts_with = "revoke")]
+        run: bool,
     },
 
     /// List or validate detection rules.
@@ -359,6 +364,11 @@ pub struct CheckArgs {
     /// it holds S0 items only (D-28). The plan is never executed by `check`.
     #[arg(long)]
     pub include_s1: bool,
+
+    /// Kill switch for this run: run no auto-policy, even one enabled in the config file
+    /// (PRO-10, D-11). Auto-policies are off unless enabled there.
+    #[arg(long)]
+    pub no_auto_policies: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.

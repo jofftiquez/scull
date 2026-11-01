@@ -536,6 +536,7 @@ fn plan_file_cmd(file: &Path, args: &CleanArgs, ui: &Ui) -> Result<(), ScullErro
                 match plan.origin() {
                     PlanOrigin::Mcp => "MCP server (an AI agent)",
                     PlanOrigin::Desktop => "desktop app",
+                    PlanOrigin::Policy => "auto-policy runner (it runs only from `scull check`)",
                     PlanOrigin::Cli => "CLI",
                 }
             ),
