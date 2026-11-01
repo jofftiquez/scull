@@ -8,10 +8,13 @@ import '@fontsource/dm-sans/700.css';
 import '@fontsource/dm-mono/400.css';
 import '@fontsource/dm-mono/500.css';
 import './styles/main.css';
+import { initTheme } from './lib/theme';
 import App from './App.vue';
 import { BRIDGE_KEY, selectBridge } from './bridge';
 import { routes } from './navigation';
 
 const router = createRouter({ history: createWebHashHistory(), routes });
 
+// The saved theme (P5-UI-01) applies before the first paint.
+initTheme();
 createApp(App).provide(BRIDGE_KEY, selectBridge()).use(router).mount('#app');

@@ -74,11 +74,11 @@ function why(d: Drive): string {
 /* Drive bars from design/html/Main.html: the system drive in striped violet, others in a
    muted lilac. The pattern keeps the two apart without relying on color alone. */
 .bar-system {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 6px, #9c78ff 6px 12px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 6px, var(--color-violet-light) 6px 12px);
   transition: width 200ms linear;
 }
 .bar-other {
-  background: #8e7fb0;
+  background: var(--color-drive-bar);
   transition: width 200ms linear;
 }
 </style>

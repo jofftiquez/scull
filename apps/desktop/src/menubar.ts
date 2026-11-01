@@ -7,7 +7,9 @@ import '@fontsource/dm-sans/600.css';
 import '@fontsource/dm-sans/700.css';
 import '@fontsource/dm-mono/400.css';
 import './styles/main.css';
+import { initTheme } from './lib/theme';
 import MenuBarWidget from './screens/MenuBar/MenuBarWidget.vue';
 import { BRIDGE_KEY, selectBridge } from './bridge';
 
+initTheme();
 createApp(MenuBarWidget).provide(BRIDGE_KEY, selectBridge()).mount('#app');

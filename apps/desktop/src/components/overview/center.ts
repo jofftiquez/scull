@@ -13,7 +13,7 @@ export interface WheelCenter {
   n: string;
 }
 
-const ACCENT = '#B81E74';
+const ACCENT = 'var(--color-accent-text)';
 
 /** Shorten a path for the center line: home becomes "~", long paths keep their tail. */
 export function shortPath(p: string, home: string | null = null, max = 34): string {

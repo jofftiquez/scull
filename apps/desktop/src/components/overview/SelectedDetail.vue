@@ -80,7 +80,7 @@ const fileManager = /Mac/i.test(globalThis.navigator?.userAgent ?? '')
         :style="
           view.tier
             ? { background: view.tier.badgeBg, color: view.tier.badgeFg, borderColor: view.tier.badgeBorder }
-            : { background: '#F2EFEA', color: '#6E6870', borderColor: '#D8D3CB' }
+            : { background: 'var(--color-surface-raised)', color: 'var(--color-text-tertiary)', borderColor: 'var(--color-border)' }
         "
         data-testid="badge"
       >{{ view.tier ? view.tier.label : '—' }}</span>

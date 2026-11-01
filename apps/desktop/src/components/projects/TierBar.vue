@@ -37,7 +37,7 @@ const label = computed(() =>
   background: var(--tier-s1-fill);
 }
 .seg-s2 {
-  background: repeating-linear-gradient(135deg, #ffb547 0 3px, #ffd08a 3px 6px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s2) 0 3px, var(--color-tier-s2-stripe) 3px 6px);
 }
 .seg-s3 {
   background: var(--tier-s3-fill);
