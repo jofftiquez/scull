@@ -394,16 +394,57 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of `f` before its unit-test module: everything up to a `#[cfg(test)]` line that is
-/// directly followed by `mod tests` (the text `#[cfg(test)]` anywhere else doesn't end it).
+/// The code of `f` without its unit-test modules: each `#[cfg(test)]` line directly followed by
+/// `mod tests` is cut out together with that module's braces. Code after a test module is still
+/// checked, and the text `#[cfg(test)]` anywhere else cuts nothing.
 fn code_of(f: &Path) -> String {
-    let text = std::fs::read_to_string(f).unwrap();
-    let lines: Vec<&str> = text.lines().collect();
-    let end = lines
-        .windows(2)
-        .position(|w| w[0].trim() == "#[cfg(test)]" && w[1].trim_start().starts_with("mod tests"))
-        .unwrap_or(lines.len());
-    lines[..end].join("\n")
+    strip_test_modules(&std::fs::read_to_string(f).unwrap())
+}
+
+fn strip_test_modules(text: &str) -> String {
+    let mut out = String::new();
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let starts_tests = line.trim() == "#[cfg(test)]"
+            && lines
+                .peek()
+                .is_some_and(|n| n.trim_start().starts_with("mod tests"));
+        if !starts_tests {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        // Skip the module: up to the line where its braces balance.
+        let mut depth = 0i32;
+        let mut opened = false;
+        for l in lines.by_ref() {
+            for c in l.chars() {
+                match c {
+                    '{' => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if opened && depth <= 0 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn code_after_a_test_module_is_still_checked() {
+    let text = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() { remove_file(x) }\n}\nfn b() { remove_tree(y) }\n";
+    let code = strip_test_modules(text);
+    assert!(!code.contains("remove_file"), "{code}");
+    assert!(
+        code.contains("fn a()") && code.contains("remove_tree(y)"),
+        "{code}"
+    );
 }
 
 #[test]
@@ -424,6 +465,206 @@ fn desktop_sources_have_no_filesystem_mutation() {
         for api in MUTATION_APIS {
             assert!(!code.contains(api), "{} uses {api}", f.display());
         }
+    }
+}
+
+/// Every desktop Rust source (bridge, Tauri app crate and its build script), cleanup.rs included.
+fn desktop_rust_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for d in ["bridge/src", "src-tauri/src", "src-tauri/build.rs"] {
+        let p = desktop().join(d);
+        if p.is_file() {
+            files.push(p);
+        } else {
+            rust_sources(&p, &mut files);
+        }
+    }
+    assert!(files.len() >= 3, "found {files:?}");
+    files
+}
+
+/// The `scull-platform` modules behind its `delete` feature (`exec_lock`, `quarantine`,
+/// `remove`, `trash`), read from its lib.rs.
+fn platform_delete_modules() -> std::collections::BTreeSet<String> {
+    let lib =
+        std::fs::read_to_string(repo_root().join("crates/scull-platform/src/lib.rs")).unwrap();
+    let lines: Vec<&str> = lib.lines().map(str::trim).collect();
+    let mut mods = std::collections::BTreeSet::new();
+    for w in lines.windows(2) {
+        if w[0] == "#[cfg(feature = \"delete\")]" {
+            if let Some(m) = w[1].strip_prefix("pub mod ") {
+                mods.insert(m.trim_end_matches(';').trim().to_string());
+            }
+        }
+    }
+    assert!(
+        mods.contains("remove") && mods.contains("trash") && mods.contains("quarantine"),
+        "{mods:?}"
+    );
+    mods
+}
+
+/// The entry points of those modules that move or delete files or take the deletion lock: every
+/// top-level `pub fn` in their sources, plus their request and lock types.
+fn platform_delete_items(
+    mods: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let src = repo_root().join("crates/scull-platform/src");
+    let mut files = Vec::new();
+    for m in mods {
+        let f = src.join(format!("{m}.rs"));
+        if f.is_file() {
+            files.push(f);
+        }
+        rust_sources(&src.join(m), &mut files);
+    }
+    let mut items: std::collections::BTreeSet<String> = [
+        "RemoveRequest",
+        "MoveRequest",
+        "TrashRequest",
+        "ExclusiveLock",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    for f in files {
+        for line in std::fs::read_to_string(&f).unwrap().lines() {
+            if let Some(rest) = line.strip_prefix("pub fn ") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                items.insert(name);
+            }
+        }
+    }
+    for must in [
+        "remove_tree",
+        "remove_tree_observed",
+        "move_no_replace",
+        "move_to_trash",
+    ] {
+        assert!(items.contains(must), "{must} not found in {items:?}");
+    }
+    items
+}
+
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+}
+
+/// Problems with how `code` names scull-platform's delete-gated modules (empty when none).
+/// The cleaner turns on `scull-platform/delete`, and Cargo unifies features, so these modules
+/// compile in every desktop crate: only this source guard keeps them out.
+fn platform_delete_uses(
+    code: &str,
+    mods: &std::collections::BTreeSet<String>,
+    items: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let mut bad = Vec::new();
+    for w in words(code) {
+        if items.contains(w) {
+            bad.push(format!("names scull-platform's {w}"));
+        }
+    }
+    for (i, _) in code.match_indices("scull_platform") {
+        let rest = code[i + "scull_platform".len()..].trim_start();
+        if rest.starts_with("as ") || rest.starts_with("as\n") || rest.starts_with("as\t") {
+            bad.push("aliases scull_platform".into());
+            continue;
+        }
+        let Some(path) = rest.strip_prefix("::") else {
+            continue;
+        };
+        let path = path.trim_start();
+        if path.starts_with('*') {
+            bad.push("glob-imports scull_platform".into());
+        } else if path.starts_with('{') {
+            // A use group: everything up to its matching brace.
+            let mut depth = 0i32;
+            let mut end = path.len();
+            for (k, c) in path.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let group = &path[..end];
+            if group.contains('*') {
+                bad.push("glob-imports from scull_platform".into());
+            }
+            for w in words(group) {
+                if mods.contains(w) || w == "self" {
+                    bad.push(format!("imports scull_platform::{w}"));
+                }
+            }
+        } else {
+            let seg: String = path
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if mods.contains(&seg) {
+                bad.push(format!("uses scull_platform::{seg}"));
+            }
+        }
+    }
+    bad
+}
+
+#[test]
+fn no_desktop_source_reaches_platform_deletion() {
+    let mods = platform_delete_modules();
+    let items = platform_delete_items(&mods);
+    for f in desktop_rust_files() {
+        let bad = platform_delete_uses(&code_of(&f), &mods, &items);
+        assert!(bad.is_empty(), "{}: {bad:?}", f.display());
+    }
+}
+
+#[test]
+fn platform_deletion_guard_sees_every_spelling() {
+    let mods = platform_delete_modules();
+    let items = platform_delete_items(&mods);
+    for text in [
+        "scull_platform::remove::remove_tree(r)",
+        "use scull_platform::remove;",
+        "use scull_platform::{remove::RemoveRequest};",
+        "use scull_platform::{trash as t}; t::run(x)",
+        "use scull_platform::{\n    volumes,\n    quarantine,\n};",
+        "use scull_platform as p;",
+        "extern crate scull_platform as p;",
+        "use scull_platform::*;",
+        "use scull_platform::{self as p};",
+        "use scull_platform::{volumes, *};",
+        "::scull_platform::exec_lock::lock_exclusive(d)",
+        "let r = x::move_to_trash(p);",
+        "use something::remove_tree_observed;",
+        "fn f(_: MoveRequest) {}",
+    ] {
+        assert!(
+            !platform_delete_uses(text, &mods, &items).is_empty(),
+            "not caught: {text}"
+        );
+    }
+    for text in [
+        "use scull_platform::{Elevation, EntryKind, volumes};",
+        "scull_platform::startup_env::remove_vars_before_threads()",
+        "scull_platform::create_dir_owner_only(&dir)",
+        "let trash = settings.trash_dir();",
+    ] {
+        assert_eq!(
+            platform_delete_uses(text, &mods, &items),
+            Vec::<String>::new(),
+            "false positive: {text}"
+        );
     }
 }
 
@@ -461,6 +702,10 @@ fn the_cleanup_module_deletes_only_through_the_executor() {
             );
         }
     }
+    assert!(
+        !imports.contains('*'),
+        "{CLEANUP_MODULE} glob-imports scull_cleaner: {imports}"
+    );
     for word in imports
         .replace("use scull_cleaner", " ")
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
