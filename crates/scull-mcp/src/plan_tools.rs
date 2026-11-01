@@ -982,6 +982,40 @@ fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output,
 mod tests {
     use super::*;
 
+    struct Never;
+
+    impl CleanupRunner for Never {
+        fn run(&self, _: RunRequest<'_>) -> Result<RunSummary, ScullError> {
+            unreachable!("never runs")
+        }
+    }
+
+    /// The sliding window: `per_window` calls are admitted, the next is refused with the
+    /// seconds to wait, and the budget refills once the oldest call leaves the window.
+    #[test]
+    fn rate_limiter_admits_per_window_and_refills() {
+        let tools = PlanTools::new(
+            Arc::new(Never),
+            Principal {
+                machine_id: "m".into(),
+                user: "u".into(),
+            },
+            PathBuf::from("unused"),
+            PlanLimits {
+                max_pending: 1,
+                per_window: 2,
+                window: Duration::from_millis(300),
+            },
+        );
+        assert_eq!(tools.admit(), Ok(()));
+        assert_eq!(tools.admit(), Ok(()));
+        assert_eq!(tools.admit(), Err(1), "refused; retry in (at least) 1 s");
+        std::thread::sleep(Duration::from_millis(350));
+        assert_eq!(tools.admit(), Ok(()), "refilled");
+        assert_eq!(tools.admit(), Ok(()));
+        assert_eq!(tools.admit(), Err(1));
+    }
+
     #[test]
     fn definitions_match_names_and_mark_execution_destructive() {
         let defs = definitions();

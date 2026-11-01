@@ -1387,20 +1387,21 @@ fn prepare_refusals(env: &Env) -> Vec<String> {
 
 /// #299: `prepare_cleanup` is rate-limited per session. Calls beyond the budget are refused
 /// (`rate_limited`) before any scan, nothing is recorded for them, and the refusals of one
-/// window are audited once (a looping agent can't flood the audit). Another session has its
-/// own budget, and the budget refills after the window.
+/// window are audited as one counted row (a looping agent can't flood the audit). Another
+/// session has its own budget.
 #[tokio::test(flavor = "multi_thread")]
 async fn prepare_is_rate_limited_per_session_and_audited_once_per_window() {
     let env = Env::new();
+    // A long window: slow scans (a loaded CI machine) can't let a call slip through. The
+    // window's refill is unit-tested on the limiter itself (plan_tools.rs).
     let limits = PlanLimits {
         max_pending: 50,
         per_window: 2,
-        window: std::time::Duration::from_secs(3),
+        window: std::time::Duration::from_secs(600),
     };
     let client = connect(env.server(true, true).with_plan_limits(limits)).await;
     let item = candidate(&client, "app/target").await["id"].clone();
     let args = json!({ "item_ids": [item] });
-    let started = std::time::Instant::now();
     for _ in 0..2 {
         ok(
             "prepare",
@@ -1412,10 +1413,6 @@ async fn prepare_is_rate_limited_per_session_and_audited_once_per_window() {
         assert_eq!(error_code(&r), "rate_limited");
         assert!(text_of(&r).contains("try again"), "{}", text_of(&r));
     }
-    assert!(
-        started.elapsed() < limits.window,
-        "the test outran its window"
-    );
     assert_eq!(
         prepare_refusals(&env),
         ["rate_limited x4"],
@@ -1427,23 +1424,17 @@ async fn prepare_is_rate_limited_per_session_and_audited_once_per_window() {
         "prepare",
         &call(&other, "prepare_cleanup", args.clone()).await,
     );
-    other.cancel().await.unwrap();
-    // After the window the budget refills.
-    tokio::time::sleep(limits.window).await;
-    ok(
-        "prepare",
-        &call(&client, "prepare_cleanup", args.clone()).await,
-    );
-    let r = call(&client, "prepare_cleanup", args.clone()).await;
+    let r = call(&other, "prepare_cleanup", args.clone()).await;
     ok("prepare", &r);
-    let r = call(&client, "prepare_cleanup", args).await;
+    let r = call(&other, "prepare_cleanup", args).await;
     assert_eq!(error_code(&r), "rate_limited");
+    other.cancel().await.unwrap();
     assert_eq!(prepare_refusals(&env), ["rate_limited x5"]);
     let store = env.store();
     let pending = store
         .pending_agent_plans(MACHINE, USER, now_unix())
         .unwrap();
-    assert_eq!(pending, 5, "only admitted calls recorded plans");
+    assert_eq!(pending, 4, "only admitted calls recorded plans");
     assert_eq!(env.calls(), 0);
     client.cancel().await.unwrap();
     env.invariants(&[]);
