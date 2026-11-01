@@ -206,13 +206,7 @@ fn go_env_beats_env_file_beats_default() {
 
         // The environment beats the file; GOPATH gives `<first entry>/pkg/mod`.
         let sep = if os == Os::Windows { ";" } else { ":" };
-        // (A Unix layout checked on a Windows host can't hold drive-letter paths in a
-        // `:`-separated list: one entry there.)
-        let gopath = if cfg!(windows) && os != Os::Windows {
-            abs(&fx, "gopath1")
-        } else {
-            format!("{}{sep}{}", abs(&fx, "gopath1"), abs(&fx, "gopath2"))
-        };
+        let gopath = format!("{}{sep}{}", abs(&fx, "gopath1"), abs(&fx, "gopath2"));
         let scan = locate(&env(
             &fx,
             os,
@@ -222,20 +216,33 @@ fn go_env_beats_env_file_beats_default() {
                 ("GOENV", "off".into()),
             ],
         ));
-        assert_eq!(
-            found(&fx, &scan),
-            [
-                (CacheTool::GoBuild, "envcache".to_owned()),
-                (CacheTool::GoMod, "gopath1/pkg/mod".to_owned())
-            ],
-            "{os:?}"
-        );
-        assert_eq!(
-            the(&scan, CacheTool::GoMod).source,
-            CacheSource::Env {
-                var: "GOPATH".into()
-            }
-        );
+        if cfg!(windows) && os != Os::Windows {
+            // A Unix layout checked on a Windows host can't hold drive-letter paths in a
+            // `:`-separated list (`C:\x` splits at the drive colon): the first entry, `C`, is
+            // relative and refused, so no module cache is offered. Never the case on a real
+            // machine, where the layout is the host's.
+            assert_eq!(
+                found(&fx, &scan),
+                [(CacheTool::GoBuild, "envcache".to_owned())],
+                "{os:?}"
+            );
+            assert!(refused_tools(&scan).contains(&CacheTool::GoMod), "{os:?}");
+        } else {
+            assert_eq!(
+                found(&fx, &scan),
+                [
+                    (CacheTool::GoBuild, "envcache".to_owned()),
+                    (CacheTool::GoMod, "gopath1/pkg/mod".to_owned())
+                ],
+                "{os:?}"
+            );
+            assert_eq!(
+                the(&scan, CacheTool::GoMod).source,
+                CacheSource::Env {
+                    var: "GOPATH".into()
+                }
+            );
+        }
 
         // GOCACHE=off: the build cache is disabled, nothing is offered.
         let scan = locate(&env(&fx, os, &[("GOCACHE", "off".into())]));

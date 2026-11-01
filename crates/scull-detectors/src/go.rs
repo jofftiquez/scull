@@ -267,7 +267,13 @@ mod tests {
             gopath_entries(Some("/a:/b"), &unix),
             vec!["/a".to_owned(), "/b".to_owned()]
         );
-        assert_eq!(gopath_entries(None, &unix), vec!["/home/u/go".to_owned()]);
+        // Joined with the host's separator (`/home/u\\go` when a Windows host checks a Unix
+        // layout); on a real machine layout and host always agree.
+        let default = std::path::Path::new("/home/u").join("go");
+        assert_eq!(
+            gopath_entries(None, &unix),
+            vec![default.to_string_lossy().into_owned()]
+        );
         let win = CacheEnv::with_vars("C:\\Users\\u", Os::Windows, Vec::<(String, String)>::new());
         assert_eq!(
             gopath_entries(Some("C:\\go;D:\\work"), &win),

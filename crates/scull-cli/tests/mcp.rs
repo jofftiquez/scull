@@ -180,7 +180,8 @@ fn serves_read_only_tools_over_stdio() {
     assert_eq!(sc["server"]["read_only"], true, "{status}");
     assert_eq!(
         sc["server"]["allowlisted_roots"],
-        json!(["~/root"]),
+        // Native separators: `~\root` on Windows.
+        json!([format!("~{}root", std::path::MAIN_SEPARATOR)]),
         "{status}"
     );
     let refused = s.request(

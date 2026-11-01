@@ -229,7 +229,10 @@ fn has_parent_component(p: &Path) -> bool {
 }
 
 /// The local path of a `file://` URI (MCP roots), or `None` for any other scheme or a remote
-/// host. Percent-escapes are decoded; Windows drive URIs (`file:///C:/x`) become `C:/x`.
+/// host. Percent-escapes are decoded. Windows drive URIs (`file:///C:/x`, `file:///c%3A/x`)
+/// become native Windows paths (`C:\x`): backslashes and an upper-case drive letter, the
+/// spelling the home folder has, so home redaction recognizes them (a `C:/Users/<name>`
+/// spelling was returned unredacted).
 pub fn path_from_file_uri(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let (host, path) = rest.split_at(rest.find('/')?);
@@ -238,10 +241,13 @@ pub fn path_from_file_uri(uri: &str) -> Option<PathBuf> {
     }
     let path = path.split(['?', '#']).next().unwrap_or(path);
     let decoded = percent_decode(path)?;
-    // `/C:/x` → `C:/x` (Windows drive letter).
+    // `/c:/x` → `C:\x` (Windows drive letter).
     let b = decoded.as_bytes();
     let decoded = if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
-        decoded[1..].to_owned()
+        let mut win = String::with_capacity(decoded.len());
+        win.push(char::from(b[1].to_ascii_uppercase()));
+        win.push_str(&decoded[2..].replace('/', "\\"));
+        win
     } else {
         decoded
     };
@@ -397,7 +403,11 @@ mod tests {
         );
         assert_eq!(
             path_from_file_uri("file:///C:/Users/me"),
-            Some(PathBuf::from("C:/Users/me"))
+            Some(PathBuf::from(r"C:\Users\me"))
+        );
+        assert_eq!(
+            path_from_file_uri("file:///c%3A/Users/me/x"),
+            Some(PathBuf::from(r"C:\Users\me\x"))
         );
         assert_eq!(path_from_file_uri("file://server/share/x"), None);
         assert_eq!(path_from_file_uri("https://example.com/x"), None);
