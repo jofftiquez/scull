@@ -3,8 +3,9 @@
 //! Every test checks the invariants.
 //!
 //! Fixture IDs (docs/FIXTURES.md): FX-EXEC-02 (restore half), FX-EXEC-04, FX-EXEC-05.
+//! macOS, Linux and Windows (FX-EXEC-05's swapped folder is a symlink on Unix, a junction on
+//! Windows).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
 
 #[path = "common/ops.rs"]
 mod ops;
@@ -143,9 +144,14 @@ fn fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative()
     let qdir = entry.entry.quarantine_path.to_path_buf();
     let copy = qdir.parent().unwrap().join(DISK_MANIFEST);
     let text = std::fs::read_to_string(&copy).unwrap();
+    // As the paths appear in the JSON (escaped `\` on Windows), without the quotes.
+    let json = |p: &str| {
+        let s = serde_json::to_string(p).unwrap();
+        s[1..s.len() - 1].to_owned()
+    };
     let tampered = text.replace(
-        entry.entry.original_path.as_str(),
-        ssh.join("target").to_str().unwrap(),
+        &json(entry.entry.original_path.as_str()),
+        &json(ssh.join("target").to_str().unwrap()),
     );
     assert_ne!(text, tampered);
     std::fs::write(&copy, tampered).unwrap();
@@ -156,7 +162,7 @@ fn fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative()
     // 3. The original folder is swapped for a link to `.ssh`.
     let app = fx.root().join("app");
     std::fs::rename(&app, fx.root().join("app-moved")).unwrap();
-    std::os::unix::fs::symlink(&ssh, &app).unwrap();
+    link_dir(&ssh, &app);
     fx.checkpoint().unwrap();
     let exec = locked(&fx);
     let refused = exec.restore(&mut s, id, now_unix());
@@ -175,7 +181,7 @@ fn fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative()
     assert_eq!(log[0].reason.as_deref(), Some("parent_changed"));
 
     // 4. With the real folder back, restore goes to the recorded path only.
-    std::fs::remove_file(&app).unwrap();
+    unlink_dir(&app);
     std::fs::rename(fx.root().join("app-moved"), &app).unwrap();
     fx.checkpoint().unwrap();
     let ok = exec.restore(&mut s, id, now_unix());
@@ -286,6 +292,31 @@ fn purged_entry_or_missing_lock_is_refused() {
     );
     // The quarantine (outside the root) was purged; inside the root only the item left.
     check_fs(&fx, &["app/target"]);
+}
+
+/// A directory link at `link` to `target`: a symlink on Unix, a junction on Windows (no
+/// privilege needed, and what an attacker without one would use).
+fn link_dir(target: &std::path::Path, link: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let o = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+/// Remove the link made by [`link_dir`] (never its target).
+fn unlink_dir(link: &std::path::Path) {
+    #[cfg(unix)]
+    std::fs::remove_file(link).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(link).unwrap();
 }
 
 /// I-2 and I-3 for a restore (no plan executed here: I-1 and I-8 are not applicable).
