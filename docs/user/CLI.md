@@ -19,7 +19,7 @@ machine the same folders are usually S0.
   `restore`
 * [Set up and maintain](#set-up-and-maintain): `init`, `doctor`, `rules`, `data`,
   `completions`, `mcp serve`
-* [Not built yet](#not-built-yet)
+* [More commands](#more-commands)
 * [Configuration and environment](#configuration-and-environment)
 * [JSON Schemas](#json-schemas)
 
@@ -909,18 +909,19 @@ $ echo $?
 2
 ```
 
-## Not built yet
+## More commands
 
-These commands exist in `--help` but exit 1 with "not implemented yet (tracked in #N)":
+These commands are built; `scull <command> --help` describes their options:
 
-| Command | Purpose | Issue |
-|---|---|---|
-| `scull approve PLAN_ID` | Approve a plan an AI agent prepared, in your own terminal | #108 |
-| `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live | #111 |
-| `scull check` | Light scan, forecast and alerts, for the OS scheduler | #114 |
-| `scull schedule enable\|disable` | Register periodic checks | #114 |
-| `scull insights [export\|purge]` | Local trends and insights | #116 |
-| `scull agent install CLIENT` | Write MCP config for an AI client, with your consent | #110 |
+| Command | Purpose |
+|---|---|
+| `scull approve PLAN_ID` | Approve a plan an AI agent prepared, in your own terminal (interactive only) |
+| `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
+| `scull check` | Light scan, forecast and alerts, for the OS scheduler |
+| `scull schedule enable\|disable\|status` | Register periodic checks |
+| `scull insights [export]` | Local trends and insights (`insights purge` is refused in this build) |
+| `scull agent install\|uninstall CLIENT` | Write MCP config for an AI client, with your consent |
+| `scull doctor --report` | A shareable, redacted diagnostic report, shown as a preview first |
 
 ## Configuration and environment
 
@@ -1006,8 +1007,8 @@ tier, add roots, enable rules or move the quarantine.
 Every `--json`/`--ndjson` document has a published JSON Schema (draft 2020-12):
 
 * Command envelopes: [`crates/scull-cli/schemas/`](../../crates/scull-cli/schemas/), one
-  `<name>.schema.json` per document and `<name>.ndjson.schema.json` per NDJSON record where
-  the stream differs.
+  `<name>.schema.json` per document and `<name>.ndjson.schema.json` for its NDJSON lines
+  (every command that prints NDJSON publishes one).
 * Shared types (candidate, plan, error, tier breakdown, drop reason, config):
   [`schemas/v1/`](../../schemas/v1/), with example payloads in `schemas/v1/examples/`.
 
@@ -1028,4 +1029,7 @@ Every `--json`/`--ndjson` document has a published JSON Schema (draft 2020-12):
 | `scull/doctor@1` | `doctor` |
 | `scull/rules-list@1`, `scull/rules-validate@1` | `rules list`, `rules validate` |
 | `scull/data-show@1`, `scull/data-export@1`, `scull/data-purge@1`, `scull/data-dump@1` | `data` |
+| `scull/doctor-report@1` | `doctor --report` |
+| `scull/worktree-registration@1` | `worktrees register` |
+| `scull/check@1`, `scull/schedule@1`, `scull/insights@1`, `scull/agent@1` | `check`, `schedule`, `insights`, `agent` |
 | `scull/error@1` | any error in JSON mode (stderr) |
