@@ -1965,8 +1965,9 @@ mod tests {
         assert!(err.message.contains(TOOL_NATIVE_UNSUPPORTED), "{err}");
     }
 
-    /// A long-tail tool cache (P5-DET-05) is a package cache Quick Clean doesn't run yet: it
-    /// is excluded as not supported, never pointed at `scull clean caches`, never planned.
+    /// A long-tail tool cache Quick Clean doesn't run (#44: Puppeteer) is excluded as not
+    /// supported, never pointed at `scull clean caches`, never planned; one it runs (ccache)
+    /// is pointed at `scull clean caches`, and `scull clean` never runs it either.
     #[test]
     fn long_tail_tool_caches_are_never_planned() {
         let ccache = tool_candidate(
@@ -1977,11 +1978,23 @@ mod tests {
                 args: vec!["--clear".into()],
             },
         );
-        assert!(!is_quick_clean_tool("ccache"));
+        assert!(is_quick_clean_tool("ccache"));
         let (reason, why) = ineligible(&ccache).unwrap();
+        assert_eq!(reason, ExcludeReason::PackageCache);
+        assert!(why.contains("scull clean caches"), "{why}");
+        let puppeteer = tool_candidate(
+            Category::PackageCache,
+            "puppeteer.browsers",
+            Action::ToolCommand {
+                tool: "puppeteer".into(),
+                args: vec!["browsers".into(), "clear".into()],
+            },
+        );
+        assert!(!is_quick_clean_tool("puppeteer"));
+        let (reason, why) = ineligible(&puppeteer).unwrap();
         assert_eq!(reason, ExcludeReason::NotSupported);
-        assert!(why.contains("does not run `ccache`"), "{why}");
-        let cands = [ccache];
+        assert!(why.contains("does not run `puppeteer`"), "{why}");
+        let cands = [puppeteer];
         assert!(
             select(&cands, true, &[], Path::new("/"))
                 .unwrap()
