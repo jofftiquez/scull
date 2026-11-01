@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Browser screenshot for Evidence comments (HANDOVER.md §6), via the official Playwright
+# Browser screenshot for Evidence comments, via the official Playwright
 # container (no system browser libraries needed on the host).
 #
 #   scripts/evidence/web.sh <url-or-repo-relative-html> <out.png> [width] [height] [fullPage]

@@ -6,7 +6,7 @@
 //!   schema is exercised, error envelopes validate, hostile file names keep JSON and NDJSON
 //!   valid (one record per line) and never reach the terminal raw, and a plan built from a real
 //!   scan validates against `schemas/v1/plan.schema.json`.
-//! * **FX-OUT-02**: the exit-code table of PRD §12 (CLI-05) is exactly `scull_core::ExitCode`,
+//! * **FX-OUT-02**: the documented exit-code table (`docs/user/CLI.md`, CLI-05) is exactly `scull_core::ExitCode`,
 //!   and the binary returns the documented code for each condition: 0, 1, 2, 3, 4, 5, 6 (the
 //!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (Unix).
 //!
@@ -639,9 +639,9 @@ fn fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema() {
 // FX-OUT-02: exit codes
 // ------------------------------------------------------------------------------------------
 
-/// The `| Code | Meaning |` table of PRD §12.
+/// The `| Code | Meaning |` exit-code table of `docs/user/CLI.md` (CLI-05).
 fn prd_exit_codes() -> BTreeMap<i32, String> {
-    let prd = std::fs::read_to_string(workspace().join("docs/PRD.md")).unwrap();
+    let prd = std::fs::read_to_string(workspace().join("docs/user/CLI.md")).unwrap();
     let mut out = BTreeMap::new();
     let mut in_table = false;
     for line in prd.lines() {
@@ -672,7 +672,7 @@ fn prd_exit_codes() -> BTreeMap<i32, String> {
 #[test]
 fn fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum() {
     let doc = prd_exit_codes();
-    println!("PRD §12 exit codes: {doc:#?}");
+    println!("documented exit codes: {doc:#?}");
     let code_set: BTreeSet<i32> = ExitCode::ALL.iter().map(|c| c.as_i32()).collect();
     let doc_set: BTreeSet<i32> = doc.keys().copied().collect();
     assert_eq!(code_set, doc_set);
@@ -794,7 +794,7 @@ fn expect(
         .push(format!("scull {}", args.join(" ")));
 }
 
-/// FX-OUT-02 (end to end): every documented exit condition returns the code PRD §12 documents,
+/// FX-OUT-02 (end to end): every documented exit condition returns the documented code,
 /// from the real binary: 0, 1, 2 (usage and config), 3 (an item skipped during `scull clean`),
 /// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and, on Unix, 130 (SIGINT).
 #[test]
@@ -899,7 +899,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
             .or_default()
             .push("SIGINT to scull mcp serve (after the MCP handshake)".into());
     }
-    println!("--- exit codes observed (PRD §12) ---");
+    println!("--- exit codes observed (docs/user/CLI.md) ---");
     for (n, meaning) in &doc {
         match seen.get(n) {
             Some(cmds) => println!("  {n:>3} {meaning}: {}", cmds.join("; ")),

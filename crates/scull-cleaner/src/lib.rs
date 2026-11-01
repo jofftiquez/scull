@@ -1,6 +1,6 @@
 //! The Executor: the only code path in scull that deletes anything (SAFE-10).
 //!
-//! See `docs/PRD.md` §10 and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` and `docs/user/SAFETY.md` for responsibilities and boundaries.
 //!
 //! * [`Executor`]: takes one already verified and narrowed plan item
 //!   ([`scull_core::narrow`]) and deletes it through the platform's handle-relative, no-follow

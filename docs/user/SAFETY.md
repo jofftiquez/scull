@@ -1,8 +1,7 @@
 # How scull keeps your files safe
 
 scull deletes files, so safety comes first. This page explains, in plain language, what scull
-will and won't do. The full specification is in the [PRD](../PRD.md) (§8 to §10, §13) and the
-[threat model](../THREAT_MODEL.md).
+will and won't do. The architecture is described in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## The short version
 

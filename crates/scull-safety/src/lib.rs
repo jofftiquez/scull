@@ -12,7 +12,7 @@
 //!   file identity (SAFE-03, SAFE-13): [`ProtectedSet::check`] gives the rubric's
 //!   `in_protected_root`, `protect_marker` and `user_excluded` signals.
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` for responsibilities and boundaries.
 
 pub mod activity;
 pub mod protect;

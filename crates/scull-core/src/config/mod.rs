@@ -112,7 +112,7 @@ pub const QUARANTINE_BASE_ENV: &str = "SCULL_QUARANTINE_BASE";
 /// Set (to a directory) by the test fixtures (`scull-fixtures`) on every scull process a test
 /// starts. Under it, the Executor never uses a location outside that directory: quarantine
 /// with no configured base is blocked instead of using the automatic location, a configured
-/// base, a Trash or a quarantine entry outside it is refused (P2-EXEC-13, HANDOVER rule 2).
+/// base, a Trash or a quarantine entry outside it is refused (P2-EXEC-13).
 /// It can only add refusals, never remove one, so it is safe to honor in release builds.
 pub const TEST_SANDBOX_ENV: &str = "SCULL_TEST_SANDBOX";
 
