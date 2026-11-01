@@ -1,0 +1,32 @@
+# Steps dist inserts into every `build-local-artifacts` job before `dist build`
+# (`github-build-setup` in dist-workspace.toml; P2-REL-01). They only report and prepare code
+# signing; they never print a secret.
+#
+# * macOS: with the CODESIGN_* secrets set, dist signs `scull` with the Developer ID identity.
+#   Notarization needs the hardened runtime, which dist passes from CODESIGN_OPTIONS. Without
+#   the secrets, dist skips signing ("CODESIGN_IDENTITY is missing") and this step says so.
+# * Windows: with the SSLDOTCOM_* secrets set, dist signs `scull.exe` (Authenticode, SSL.com
+#   eSigner). Without them dist skips signing and this step says so.
+- name: Code signing status
+  shell: bash
+  run: |
+    case "$RUNNER_OS" in
+      macOS)
+        if [ -n "${CODESIGN_IDENTITY:-}" ] && [ -n "${CODESIGN_CERTIFICATE:-}" ] && [ -n "${CODESIGN_CERTIFICATE_PASSWORD:-}" ]; then
+          echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"
+          echo "::notice title=macOS signing::Developer ID signing is on (hardened runtime)."
+        else
+          echo "::notice title=macOS signing skipped::CODESIGN_IDENTITY, CODESIGN_CERTIFICATE and CODESIGN_CERTIFICATE_PASSWORD are not all set; the macOS binaries in this run are NOT signed."
+        fi
+        ;;
+      Windows)
+        if [ -n "${SSLDOTCOM_USERNAME:-}" ] && [ -n "${SSLDOTCOM_PASSWORD:-}" ] && [ -n "${SSLDOTCOM_CREDENTIAL_ID:-}" ] && [ -n "${SSLDOTCOM_TOTP_SECRET:-}" ]; then
+          echo "::notice title=Windows signing::Authenticode signing (SSL.com eSigner) is on."
+        else
+          echo "::notice title=Windows signing skipped::SSLDOTCOM_USERNAME, SSLDOTCOM_PASSWORD, SSLDOTCOM_CREDENTIAL_ID and SSLDOTCOM_TOTP_SECRET are not all set; the Windows binary in this run is NOT signed."
+        fi
+        ;;
+      *)
+        echo "No code signing for $RUNNER_OS builds (Linux archives are covered by checksums and build-provenance attestations)."
+        ;;
+    esac

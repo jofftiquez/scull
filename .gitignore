@@ -11,3 +11,6 @@ apps/desktop/src-tauri/target/
 # Private planning docs and screenshots, kept locally only
 local/
 CLAUDE.local.md
+
+# Python bytecode (packaging/ and scripts/ self-tests)
+__pycache__/

@@ -9,6 +9,12 @@ name: Release gates
 #   `dist plan`, and optionally a local Linux build kept as a workflow artifact. A dry run never
 #   creates a tag, a GitHub release or an upload anywhere else.
 #
+# P2-REL-01 adds to the dry run: the packaging self-tests, the CycloneDX SBOMs, and (with
+# "Also build") dist's global artifacts for that one archive (installers, the Homebrew formula
+# `scull.rb`, `sha256.sum`, verified with `sha256sum -c`), all kept as a workflow artifact; and a
+# "signing readiness" job that reports which signing and publishing secrets are configured
+# (names only, never values) without signing anything.
+#
 # Linux only on purpose: the gates check what the binary wires up, which is the same on every
 # OS, and macOS minutes cost 10x. Per-OS smoke tests of the published binaries are a manual
 # step in RELEASING.md.
@@ -76,15 +82,73 @@ jobs:
           dist --version
       - name: dist plan (also fails if release.yml is stale)
         run: dist plan | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Packaging self-tests (SBOM, Scoop manifest)
+        run: python3 packaging/test_release_packaging.py
+      - name: CycloneDX SBOM per release target
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python3 packaging/sbom.py --all-targets --out-dir target/distrib
       - name: Local build (no upload)
         if: inputs.build
-        run: dist build --artifacts=local --target x86_64-unknown-linux-gnu
-      - name: Keep the local archive as a workflow artifact
+        run: |
+          dist build --artifacts=local --target x86_64-unknown-linux-gnu --output-format=json \
+            > target/distrib/x86_64-unknown-linux-gnu-dist-manifest.json
+      - name: Global artifacts for that build (installers, Homebrew formula, sha256.sum)
         if: inputs.build
+        run: |
+          dist build --artifacts=global
+          cd target/distrib
+          sha256sum -c sha256.sum
+          ruby -c scull.rb
+      - name: Keep the dry-run outputs as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scull-dry-run-x86_64-unknown-linux-gnu
+          name: scull-dry-run
           path: |
             target/distrib/*.tar.gz
             target/distrib/*.sha256
+            target/distrib/sha256.sum
+            target/distrib/scull.rb
+            target/distrib/scull-cli-installer.*
+            target/distrib/*.cdx.json
           retention-days: 7
+
+  signing-readiness:
+    name: Signing readiness (dry run)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+      CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+      CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+      SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+      SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+      SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+    steps:
+      - name: Which release secrets are set (names only)
+        shell: bash
+        run: |
+          report() {
+            local what=$1; shift
+            local missing=()
+            for v in "$@"; do [ -n "${!v:-}" ] || missing+=("$v"); done
+            if [ ${#missing[@]} -eq 0 ]; then
+              echo "ready:   $what" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "skipped: $what (not set: ${missing[*]})" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "::notice title=$what will be skipped::not set: ${missing[*]}"
+            fi
+          }
+          report "macOS Developer ID signing" CODESIGN_IDENTITY CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD
+          report "macOS notarization" CODESIGN_IDENTITY APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
+          report "Windows Authenticode (SSL.com eSigner)" SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET
+          report "Homebrew tap update" HOMEBREW_TAP_TOKEN
+          report "Scoop bucket update" SCOOP_BUCKET_TOKEN
+          echo "Checksums, SBOMs and build-provenance attestations need no secret." | tee -a "$GITHUB_STEP_SUMMARY"
