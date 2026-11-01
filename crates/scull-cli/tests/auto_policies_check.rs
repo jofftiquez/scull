@@ -366,6 +366,67 @@ fn clean_refuses_an_auto_policy_plan() {
     env.invariants(&[]);
 }
 
+/// Set in the child [`rerun_in_pid_namespace`] starts.
+const PID_NS_ENV: &str = "SCULL_TEST_PID_NAMESPACE";
+
+/// Re-run `test` alone in a new PID namespace (`sudo -n unshare --pid --fork --mount-proc`),
+/// dropped back to this user with `setpriv`, and assert it passed. Only on disposable CI
+/// runners (`SCULL_FIXTURES_ALLOW_SUDO=1`); the child never runs as root (scull refuses to
+/// change anything elevated, SAFE-14).
+#[cfg(target_os = "linux")]
+fn rerun_in_pid_namespace(test: &str) {
+    let id = |flag: &str| {
+        let o = Command::new("id").arg(flag).output().unwrap();
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    let (uid, gid) = (id("-u"), id("-g"));
+    let mut c = Command::new("sudo");
+    c.args([
+        "-n",
+        "unshare",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setpriv",
+    ])
+    .arg(format!("--reuid={uid}"))
+    .arg(format!("--regid={gid}"))
+    .args(["--init-groups", "env"])
+    .arg(format!("{PID_NS_ENV}=1"));
+    for k in [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "CI",
+        "RUST_BACKTRACE",
+        "CARGO_TERM_COLOR",
+    ] {
+        if let Some(v) = std::env::var_os(k) {
+            let mut kv = std::ffi::OsString::from(format!("{k}="));
+            kv.push(v);
+            c.arg(kv);
+        }
+    }
+    c.arg(std::env::current_exe().unwrap()).args([
+        test,
+        "--exact",
+        "--nocapture",
+        "--test-threads",
+        "1",
+    ]);
+    let o = c.output().unwrap();
+    println!("{}", String::from_utf8_lossy(&o.stdout));
+    eprintln!("{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.status.success(),
+        "{test} in a private PID namespace failed"
+    );
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("1 passed"),
+        "{test} did not run in the PID namespace"
+    );
+}
+
 /// Whether this machine's in-use probe lets the fixture's build outputs be S0.
 fn has_s0(env: &Env) -> bool {
     let o = env.run(&["scan", "--no-history", "--json", &env.root()]);
@@ -383,6 +444,17 @@ fn has_s0(env: &Env) -> bool {
 /// config file's location, never `SCULL_QUARANTINE_BASE`'s. On CI this must not skip.
 #[test]
 fn fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it() {
+    // CI (Linux, `SCULL_FIXTURES_ALLOW_SUDO=1`): hosted runners have processes the user can't
+    // inspect, so "in use" is unknown and nothing is S0. Run this test in a fresh PID
+    // namespace, back as the normal user, where every process is inspectable, and require the
+    // run there.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os(PID_NS_ENV).is_none()
+        && std::env::var_os(scull_fixtures::privileged::ALLOW_SUDO_ENV).is_some_and(|v| v == "1")
+    {
+        rerun_in_pid_namespace("fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it");
+        return;
+    }
     let env = Env::new(POLICY);
     let a = env.check(&[]);
     assert_eq!(a["state"], "checked", "{a:#}");
@@ -406,9 +478,9 @@ fn fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it() {
         // "in use" unknown, hence S2): nothing qualifies. `tests/auto_policies.rs` runs the
         // same path in process with a stand-in probe.
         assert!(
-            std::env::var_os("CI").is_none() || std::env::var_os("SCULL_TEST_ALLOW_SKIP").is_some(),
-            "no S0 candidate on CI: the end-to-end auto-policy run would be skipped \
-             (set SCULL_TEST_ALLOW_SKIP=1 to allow it)"
+            std::env::var_os(PID_NS_ENV).is_none(),
+            "no S0 candidate even in a private PID namespace: the end-to-end auto-policy run \
+             can't happen here"
         );
         assert_eq!(p["outcome"]["items"], 0);
         eprintln!("no S0 candidate on this machine; end-to-end run skipped");
