@@ -1189,6 +1189,9 @@ fn windows_ctrl_c_exits_130(fx: &Fixture) {
     use std::time::{Duration, Instant};
 
     let mcp = mcp_cli(&[fx.root()]);
+    // CI runners start the job with Ctrl-C ignored, and children inherit that: undo it so the
+    // server processes Ctrl-C like it does in a user's terminal.
+    scull_platform::console::process_ctrl_c_again().expect("re-enable Ctrl-C");
     let mut command = mcp.command(&["mcp", "serve"]);
     command.creation_flags(scull_platform::console::CREATE_NEW_CONSOLE);
     let mut m = Mcp::start_command(command);

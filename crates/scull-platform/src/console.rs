@@ -18,6 +18,20 @@ use windows_sys::Win32::System::Console::{
 /// `CREATE_NEW_CONSOLE`: the process creation flag that gives the target its own console.
 pub const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
+/// Make this process, and the children it starts from now on, process Ctrl-C again.
+///
+/// A process started in a new process group (`CREATE_NEW_PROCESS_GROUP`, which CI runners use
+/// for their jobs) ignores Ctrl-C, and the ignore flag is inherited by every child: a child
+/// would then never see the Ctrl-C a test sends, whatever handler it installs. Call this
+/// before starting the child.
+pub fn process_ctrl_c_again() -> io::Result<()> {
+    // SAFETY: a null handler with FALSE restores normal Ctrl-C processing (documented).
+    if unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Deliver `CTRL_C_EVENT` to every process attached to the console of process `pid` (started
 /// with [`CREATE_NEW_CONSOLE`]). The calling process leaves its own console for good and
 /// ignores the event; run it in a helper process that does nothing else afterwards.
