@@ -394,63 +394,76 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of `f` without its unit-test modules: each `#[cfg(test)]` line directly followed by
-/// `mod tests` is cut out together with that module's braces. Code after a test module is still
-/// checked, and the text `#[cfg(test)]` anywhere else cuts nothing.
+/// The code of `f` without its unit-test module. Only an inline `#[cfg(test)]` + `mod tests {`
+/// at column 0 that ends the file is cut: rustfmt (enforced in CI) indents everything inside
+/// it, so every line after it must be indented up to a final `}`. Anything else at column 0
+/// after it fails the check (code can't hide after or inside a fake test module), and a file
+/// test module (`mod tests;`) cuts nothing: its file is scanned like any other.
 fn code_of(f: &Path) -> String {
-    strip_test_modules(&std::fs::read_to_string(f).unwrap())
+    strip_test_module(&std::fs::read_to_string(f).unwrap())
+        .unwrap_or_else(|e| panic!("{}: {e}", f.display()))
 }
 
-fn strip_test_modules(text: &str) -> String {
-    let mut out = String::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        let starts_tests = line.trim() == "#[cfg(test)]"
-            && lines
-                .peek()
-                .is_some_and(|n| n.trim_start().starts_with("mod tests"));
-        if !starts_tests {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        // Skip the module: up to the line where its braces balance.
-        let mut depth = 0i32;
-        let mut opened = false;
-        for l in lines.by_ref() {
-            for c in l.chars() {
-                match c {
-                    '{' => {
-                        depth += 1;
-                        opened = true;
-                    }
-                    '}' => depth -= 1,
-                    _ => {}
-                }
-            }
-            if opened && depth <= 0 {
-                break;
-            }
-        }
+fn strip_test_module(text: &str) -> Result<String, String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.windows(2).position(|w| {
+        w[0] == "#[cfg(test)]" && w[1].starts_with("mod tests") && w[1].trim_end().ends_with('{')
+    }) else {
+        return Ok(text.to_owned());
+    };
+    let rest: Vec<&str> = lines[start + 2..]
+        .iter()
+        .copied()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let Some((last, body)) = rest.split_last() else {
+        return Err("unterminated test module".into());
+    };
+    if *last != "}" {
+        return Err(format!("the test module must end the file, found {last:?}"));
     }
-    out
+    if let Some(l) = body.iter().find(|l| !l.starts_with(char::is_whitespace)) {
+        return Err(format!(
+            "unindented line inside or after the test module: {l:?} (the test module must be \
+             the file's last item)"
+        ));
+    }
+    Ok(lines[..start].join("\n"))
 }
 
 #[test]
-fn code_after_a_test_module_is_still_checked() {
-    let text = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() { remove_file(x) }\n}\nfn b() { remove_tree(y) }\n";
-    let code = strip_test_modules(text);
-    assert!(!code.contains("remove_file"), "{code}");
+fn only_a_final_inline_test_module_is_cut() {
+    let ok = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() { remove_file(\"{\") }\n}\n";
+    let code = strip_test_module(ok).unwrap();
     assert!(
-        code.contains("fn a()") && code.contains("remove_tree(y)"),
+        code.contains("fn a()") && !code.contains("remove_file"),
         "{code}"
     );
+    for bad in [
+        // Code after the module.
+        "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn b() { remove_tree(y) }\n",
+        // A file module followed by an item with braces.
+        "#[cfg(test)]\nmod tests_x;\nfn evil() { remove_tree(r) }\n",
+        // A brace in a string that would unbalance a counter.
+        "#[cfg(test)]\nmod tests {\n    const S: &str = \"{\";\n}\nfn evil() { remove_tree(r) }\n",
+    ] {
+        let kept = strip_test_module(bad);
+        assert!(
+            kept.as_ref().is_err() || kept.as_ref().unwrap().contains("remove_tree"),
+            "hidden: {bad}"
+        );
+    }
 }
 
 #[test]
 fn desktop_sources_have_no_filesystem_mutation() {
     let mut files = Vec::new();
-    for d in ["bridge/src", "src-tauri/src", "src-tauri/build.rs"] {
+    for d in [
+        "bridge/src",
+        "bridge/build.rs",
+        "src-tauri/src",
+        "src-tauri/build.rs",
+    ] {
         let p = desktop().join(d);
         if p.is_file() {
             files.push(p);
@@ -471,7 +484,12 @@ fn desktop_sources_have_no_filesystem_mutation() {
 /// Every desktop Rust source (bridge, Tauri app crate and its build script), cleanup.rs included.
 fn desktop_rust_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for d in ["bridge/src", "src-tauri/src", "src-tauri/build.rs"] {
+    for d in [
+        "bridge/src",
+        "bridge/build.rs",
+        "src-tauri/src",
+        "src-tauri/build.rs",
+    ] {
         let p = desktop().join(d);
         if p.is_file() {
             files.push(p);
@@ -624,8 +642,14 @@ fn no_desktop_source_reaches_platform_deletion() {
     let mods = platform_delete_modules();
     let items = platform_delete_items(&mods);
     for f in desktop_rust_files() {
-        let bad = platform_delete_uses(&code_of(&f), &mods, &items);
+        let code = code_of(&f);
+        let bad = platform_delete_uses(&code, &mods, &items);
         assert!(bad.is_empty(), "{}: {bad:?}", f.display());
+        // Every desktop source is one of the files read here: no module or code pulled in
+        // from elsewhere.
+        for pulled in ["#[path", "include!"] {
+            assert!(!code.contains(pulled), "{} uses {pulled}", f.display());
+        }
     }
 }
 
