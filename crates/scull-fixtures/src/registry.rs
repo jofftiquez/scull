@@ -1443,8 +1443,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(MEASURE_UNIT, "fx_phy_02_apfs_clone_low_confidence_explained"),
         ]),
-    )
-    .pending_ci("M"),
+    ),
     fx("FX-PHY-03", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
     fx("FX-PHY-04", Gate::V1_0, "L", Mode::Nightly, Status::Deferred),
     fx(
@@ -1712,8 +1711,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             EXEC_WIN,
             "fx_win_03_file_held_open_by_another_process_is_skipped_and_named",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-04",
         Gate::Mvp,
@@ -2105,31 +2103,23 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-OUT-02",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 251,
-            reason: "the binary returns every documented code (0, 1, 2, 3, 4, 5, 6, and 130 on \
-                     Unix, also for Ctrl-C before the MCP handshake); 130 is not exercised on \
-                     Windows (no console Ctrl-C injection in the test)",
-            partial: &[
-                t(
-                    E2E_OUT,
-                    "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
-                ),
-                t(
-                    E2E_OUT,
-                    "fx_out_02_binary_returns_the_documented_exit_codes",
-                ),
-            ],
-        },
-    )
-    .pending_ci(PHASE2_PENDING),
+        Status::Implemented(&[
+            t(
+                E2E_OUT,
+                "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
+            ),
+            t(
+                E2E_OUT,
+                "fx_out_02_binary_returns_the_documented_exit_codes",
+            ),
+        ]),
+    ),
     fx(
         "FX-OUT-03",
         Gate::Mvp,
