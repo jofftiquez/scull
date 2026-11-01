@@ -271,6 +271,9 @@ const STORE_DATA: &str = "crates/scull-storage/tests/data_fixtures.rs";
 const STORE_UNIT: &str = "crates/scull-storage/src/tests/mod.rs";
 const HISTORY: &str = "crates/scull-storage/tests/history.rs";
 const CLI_DATA: &str = "crates/scull-cli/tests/data.rs";
+const CLI_CLEAN: &str = "crates/scull-cli/tests/clean.rs";
+/// Custom harness (`harness = false`): tests are listed in its `TESTS` table, not `#[test]`.
+const CLI_CLEAN_CACHES: &str = "crates/scull-cli/tests/clean_caches/main.rs";
 const CLI_DOCTOR_REPORT: &str = "crates/scull-cli/tests/doctor_report.rs";
 const ENGINE_ROOTS: &str = "crates/scull-engine/tests/roots.rs";
 
@@ -1207,14 +1210,12 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 76,
-            reason: "the S0 delete after a consumed approval and the reported measured delta are end-to-end with I-4 on the Executor's audit, but I-5 can't hold: Operation::finish always records measured_delta_bytes as None",
-            partial: &[t(
+        Status::Implemented(&[
+            t(
                 E2E_EXEC,
                 "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
-            )],
-        },
+            ),
+        ]),
     )
     .pending_ci(PHASE2_PENDING),
     fx(
@@ -1352,23 +1353,23 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 77,
-            reason: "type-to-confirm and the --allow-permanent refusal for permanent S1 deletion are not implemented yet (P2-EXEC-11)",
-            partial: &[],
-        },
-    ),
+        Status::Implemented(&[
+            t(CLI_CLEAN, "fx_exec_11_irreversible_s1_needs_allow_permanent"),
+            // The typed count on a terminal (script(1), Linux only).
+            t(CLI_CLEAN, "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
     fx(
         "FX-EXEC-12",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 77,
-            reason: "the Executor's refusal to run elevated without --allow-root is not implemented yet (P2-EXEC-11; Quick Clean already refuses)",
-            partial: &[],
-        },
-    ),
+        Status::Implemented(&[
+            t(CLI_CLEAN, "fx_exec_12_elevated_run_refused_without_allow_root"),
+        ]),
+    )
+    .pending_ci(PHASE2_PENDING),
     fx(
         "FX-EXEC-13",
         Gate::Mvp,
@@ -1567,14 +1568,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 217,
-            reason: "QC-03 says remove the orphaned cache through the safe executor, but Delete is S0-only (D-28) and caches are S1; until decision D-36 (#217) is confirmed and implemented the tool is skipped as not installed and the folder reported for manual removal, never removed",
-            partial: &[t(
-                QC,
-                "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
-            )],
-        },
+        // D-36 (provisional, #30): an orphaned cache is removed through the Executor only
+        // with fresh evidence and a per-tool confirmation; unconfirmed, it is only reported.
+        Status::Implemented(&[
+            t(CLI_CLEAN_CACHES, "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool"),
+            t(CLI_CLEAN_CACHES, "fx_qc_05_remove_orphaned_flag_through_the_binary"),
+            t(QC, "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed"),
+        ]),
     )
     .pending_ci(PHASE2_PENDING),
     fx(
@@ -2149,16 +2149,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 108,
-            reason: "classifications and tiers are identical through the CLI binary and its \
-                     MCP server; plan contents can't be compared until the MCP plan tools \
-                     (prepare_cleanup, #108) exist",
-            partial: &[t(
-                E2E_OUT,
-                "fx_out_03_cli_and_mcp_give_identical_classifications",
-            )],
-        },
+        Status::Implemented(&[
+            t(E2E_OUT, "fx_out_03_cli_and_mcp_give_identical_classifications"),
+            t(E2E_OUT, "fx_out_03_cli_and_mcp_plan_identical_contents"),
+        ]),
     )
     .pending_ci(PHASE2_PENDING),
 ];

@@ -57,12 +57,12 @@ const TESTS: &[Test] = &[
         run_report_with_observable_activity,
     ),
     (
-        "orphaned_caches_removed_only_per_confirmed_tool",
-        orphaned_caches_removed_only_per_confirmed_tool,
+        "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool",
+        fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool,
     ),
     (
-        "remove_orphaned_flag_through_the_binary",
-        remove_orphaned_flag_through_the_binary,
+        "fx_qc_05_remove_orphaned_flag_through_the_binary",
+        fx_qc_05_remove_orphaned_flag_through_the_binary,
     ),
 ];
 
@@ -789,7 +789,7 @@ fn orphaned_setup(
 /// the Executor (under the execution lock) and leaves the Bun cache and npm's cache untouched;
 /// the result carries the freed bytes and the measured free-space delta (I-5) and validates
 /// against the schema.
-fn orphaned_caches_removed_only_per_confirmed_tool() {
+fn fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool() {
     use scull_cli::cmd::clean_caches::{
         apply_orphaned, ask_orphaned, preview, render, with_orphaned,
     };
@@ -984,7 +984,7 @@ fn orphaned_caches_removed_only_per_confirmed_tool() {
 /// is installed; or pnpm where "in use" can't be observed and the store is S2) is listed in
 /// `orphaned_unmatched` and, with `--confirm`, makes the run exit 3 with nothing removed.
 /// Where the pnpm store qualifies, `--confirm --remove-orphaned pnpm` removes exactly it.
-fn remove_orphaned_flag_through_the_binary() {
+fn fx_qc_05_remove_orphaned_flag_through_the_binary() {
     let env = Env::new();
     let (code, v) = env.json(&["--remove-orphaned", "pnpm"]);
     assert_eq!(code, 0, "{v:#}");
