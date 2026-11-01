@@ -3,6 +3,51 @@
 cargo-dist copies the section whose heading matches the tagged version into the GitHub
 release notes, so keep one `## <version>` heading per release (see RELEASING.md).
 
+## Unreleased
+
+The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
+[safety model](docs/user/SAFETY.md) describe every command and safeguard below.
+
+### Added
+
+- **Cleanup.** `scull clean` plans a cleanup (a dry run by default), reviews a plan against a
+  fresh scan, and runs it after your confirmation. S0 items are deleted. S1 and S2 items go to
+  a same-drive quarantine for 7 days, or to the Trash where quarantine is impossible, and are
+  left alone when neither works. Every item is checked again right before it is touched, one
+  cleanup runs at a time, every step is journaled for crash recovery, and every outcome is
+  audited.
+- `scull history` and `scull restore`: past operations and putting quarantined items back,
+  never overwriting. `scull clean --purge-quarantine` permanently deletes expired quarantine,
+  with a stronger confirmation.
+- `scull clean caches` (Quick Clean): package-manager caches cleaned with each tool's own
+  command, including ccache, Conan, Arduino CLI, Deno and Cypress, each limited to the folder
+  scull found. Tools whose command can't be limited that way (CocoaPods, Playwright,
+  Puppeteer) are refused. Orphaned caches of uninstalled tools are removed only with a
+  confirmation for that tool.
+- `scull data purge` and `scull insights purge`: forget scull's own files or recorded trends.
+- `scull headroom create|release|status`: an opt-in emergency reserve file, released on
+  command when the disk is full. Only the exact file scull created (random marker, identity,
+  size and modification time) is ever released.
+- `scull check` and `scull schedule enable|disable|status`: a periodic, low-priority check
+  through launchd, systemd or Task Scheduler, with forecasts, alerts and a ready-to-review plan
+  that never runs by itself. One disk-full forecast is shared by every surface
+  ([FORECAST.md](docs/FORECAST.md)).
+- MCP destructive mode (opt-in twice): an agent can prepare a plan, and only you approve it
+  in your own terminal with `scull approve`, or in the desktop app's approval dialog, and can
+  withdraw an approval (`--revoke`, or **Revoke approval** in the app). Denials are final,
+  pending plans and the preparation rate are capped, and everything is audited.
+- `scull ask`: an optional assistant with your own model (or a local one) over scull's
+  read-only tools, with a consent notice before the first request.
+- `scull agent install|uninstall`, `scull insights`, `scull worktrees register --ttl`,
+  `scull doctor --report`.
+- In the repository, not in the CLI release: the desktop app (Tauri, Phase 3), with menu bar
+  and tray monitoring and an opt-in weekly digest.
+
+### Not in this release yet
+
+- Opt-in auto-policies (#20), approve-and-run in one terminal step (`scull approve --run`,
+  #97), and plan preparation from `scull ask` (#22).
+
 ## 0.1.0-alpha.1
 
 > **Alpha, inspect-only: no cleanup commands.** This build can scan and explain what is using

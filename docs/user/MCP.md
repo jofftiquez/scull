@@ -94,9 +94,10 @@ Check your client's documentation if these locations have changed.
 
 ## The tools
 
-All tools are marked read-only, non-destructive and idempotent. Each one takes structured
-JSON arguments (unknown fields are refused) and returns structured results plus a short text
-summary.
+All tools but one are marked read-only, non-destructive and idempotent. `register_worktree`
+writes a reminder to scull's own data folder (never to your files), so it is marked
+non-destructive but not read-only. Each tool takes structured JSON arguments (unknown fields
+are refused) and returns structured results plus a short text summary.
 
 | Tool | What it returns | Arguments |
 |---|---|---|
@@ -111,6 +112,8 @@ summary.
 | `find_large_files` | Largest files under a folder: names and sizes only | `path`, `min_size_bytes`, `max_results` |
 | `get_cleanup_candidates` | Items that could be cleaned, by tier and category, largest first. Never prepares a cleanup. | `path`, `tiers`, `category`, `max_results` |
 | `get_cleanup_history` | Storage history from past scans: bytes per category over time, items that came back, one item's lifecycle | `category`, `item_id`, `since_days`, `max_results` |
+| `check_capacity` | Is there room for more work? Free space of the drives holding the roots (or one folder), the regenerable bytes there, the disk-full forecast, and whether `worktrees` × `bytes_per_worktree` (or `needed_bytes`) fits above the reserve. Lists worktrees whose registered TTL ran out, as review suggestions. | `path`, `worktrees`, `bytes_per_worktree`, `needed_bytes` |
+| `register_worktree` | Records that a Git worktree the agent created (inside a root) should be finished within `ttl` (e.g. `7d`). Metadata only: the worktree is never touched, and when the TTL runs out it becomes a review suggestion for you; nothing is deleted. | `path`, `ttl` |
 
 By default there are no plan, approve or execute tools. They exist only in destructive
 mode, below.
@@ -139,28 +142,41 @@ It is never offered when scull runs as root or administrator.
 How a cleanup goes:
 
 1. The agent calls `prepare_cleanup` and tells you the plan ID.
-2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan, the
-   MCP client that prepared it (the name and version the client gave itself, not verified)
-   and a short code; type the code to approve, or `deny`. A denial is final: `deny` (or
-   three wrong codes) means that plan can never be approved, and the agent sees `denied`
-   and has to prepare a new plan if you still want a cleanup. It refuses to run without an interactive
-   terminal (a pipe, a script, an agent's shell tool) and as root. It also refuses a terminal
-   that looks driven by an agent: an AI agent's environment variables are set, an agent client
-   or a terminal-automation tool (`script`, `expect`) started it, or its parent processes
-   can't be read. That check is a heuristic, not a proof of a human; see
-   [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
+2. You approve it outside the chat, in one of two places:
+   * **The scull desktop app.** While it is open, scull shows a notification ("An AI agent
+     wants to clean 37.1 GiB", with **Review** and **Later**; it never approves anything).
+     **Review**, or the link `scull://approve/<plan-id>` the agent gives you, opens Cleanup
+     Review on that plan: tick each item once you have looked at it, type the short code shown
+     next to the plan, and press **Approve**, or **Deny**. The code is made for that one
+     opening of the dialog, stays in the app, and is checked by scull's core; three wrong codes
+     deny the plan. A denial is final here too: the agent sees `denied`.
+   * **`scull approve <plan-id>` in your own terminal.** It shows the full plan, the MCP
+     client that prepared it (the name and version the client gave itself, not verified)
+     and a short code; type the code to approve, or `deny`. A denial is final: `deny` (or
+     three wrong codes) means that plan can never be approved, and the agent sees `denied`
+     and has to prepare a new plan if you still want a cleanup. It refuses to run without an
+     interactive terminal (a pipe, a script, an agent's shell tool) and as root. It also
+     refuses a terminal that looks driven by an agent: an AI agent's environment variables are
+     set, an agent client or a terminal-automation tool (`script`, `expect`) started it, or its
+     parent processes can't be read. That check is a heuristic, not a proof of a human; see
+     [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
 3. The agent calls `execute_cleanup`. It runs only with your approval: bound to the plan's
    exact content, unexpired, used once. If any item changed on disk since the plan was made,
    the whole plan is void and the agent has to prepare a new one. Every item is checked again
    right before it is touched; S0 items are deleted, S1/S2 items quarantined (`scull restore`
    puts them back).
 
-Changed your mind after approving? Run `scull approve --revoke <plan-id>` in your terminal
-before the agent executes it (`scull approve` with no plan ID lists approved plans not yet
-run). The approval is withdrawn in the same atomic step that execution uses to claim it, so
-exactly one of the two happens: either the revocation is refused because the cleanup already
-started, or `execute_cleanup` is refused with `approval_revoked` and nothing runs. The plan
-then reports `revoked`.
+Changed your mind after approving? Press **Revoke approval** in the desktop app, or run
+`scull approve --revoke <plan-id>` in your terminal, before the agent executes it (`scull
+approve` with no plan ID lists approved plans not yet run). The approval is withdrawn in the
+same atomic step that execution uses to claim it, so exactly one of the two happens: either the
+revocation is refused because the cleanup already started, or `execute_cleanup` is refused with
+`approval_revoked` and nothing runs. The plan then reports `revoked`.
+
+The desktop dialog works only in the app's main window. The menu bar widget and any other page
+can't open, approve or deny a plan. Like the terminal, the dialog shows the client's name as
+the client gave it, not verified. Approving or running in one terminal step
+(`scull approve <plan-id> --run`) is coming (#97).
 
 ### Limits on what the agent can ask for
 
@@ -295,6 +311,15 @@ A `get_status` call, from a real session:
 | Every path is refused | Call `get_status` to see the allowlist, and add the folder to `scan.roots` in scull's config file. |
 | Names look like hashes | `mcp.hash_names` is on. |
 | Garbage in the client log | scull writes only JSON-RPC on stdout; messages go to stderr. Make sure nothing wraps the command in a shell that prints to stdout. |
+
+## `scull ask`: a read-only assistant in your terminal
+
+`scull ask` is the other way to put a model to work: you ask a question in your terminal, and
+a model you configure answers it by calling scull's read-only tools. These are the tools
+listed above, minus `register_worktree`, with the same allowlist and redaction. The model gets
+none of the destructive-mode tools, so it can't prepare or approve a cleanup. It is off by
+default, uses your own API key or a local server, and asks for your consent before the first
+request to each provider. See [the CLI reference](CLI.md#scull-ask).
 
 ## What is out of scope
 

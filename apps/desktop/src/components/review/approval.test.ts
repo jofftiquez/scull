@@ -82,6 +82,18 @@ describe('approval mode state machine', () => {
     expect(run(s, { type: 'code', value: '' }).code).toBe('k7q4mp');
   });
 
+  it('approved elsewhere (e.g. scull approve in a terminal) moves a pending dialog to approved', () => {
+    const s = run(start(), { type: 'approved_elsewhere', at: T0 + 5_000, channel: 'terminal' });
+    expect(s.phase).toBe('approved');
+    expect(s.approvedAt).toBe(T0 + 5_000);
+    expect(s.approvedVia).toBe('terminal');
+    // Only from pending: an approval made here, or a closed request, is left alone.
+    const mine = run(ready(), { type: 'approve', at: T0 + 1_000 });
+    expect(run(mine, { type: 'approved_elsewhere', at: T0 + 2_000, channel: 'desktop' })).toBe(mine);
+    const denied = run(start(), { type: 'deny', at: T0 + 1_000 });
+    expect(run(denied, { type: 'approved_elsewhere', at: T0 + 2_000, channel: 'terminal' })).toBe(denied);
+  });
+
   it('deny closes a pending request; revoke closes an approved one', () => {
     expect(run(start(), { type: 'deny', at: T0 + 1 }).phase).toBe('denied');
     expect(run(ready(), { type: 'approve', at: T0 + 1 }, { type: 'revoke', at: T0 + 2 }).phase).toBe('revoked');

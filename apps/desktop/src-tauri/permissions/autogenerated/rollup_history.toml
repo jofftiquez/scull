@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rollup-history"
+description = "Enables the rollup_history command without any pre-configured scope."
+commands.allow = ["rollup_history"]
+
+[[permission]]
+identifier = "deny-rollup-history"
+description = "Denies the rollup_history command without any pre-configured scope."
+commands.deny = ["rollup_history"]
