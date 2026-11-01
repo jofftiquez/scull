@@ -130,7 +130,7 @@ async function run(action: 'neverSuggest' | 'reveal') {
           :key="f.id"
           type="button"
           :aria-pressed="filter === f.id"
-          class="min-h-touch cursor-pointer rounded-chip border-0 px-3.5 font-[inherit] text-label font-medium transition-colors duration-200"
+          class="min-h-touch min-w-touch cursor-pointer rounded-chip border-0 px-3.5 font-[inherit] text-label font-medium transition-colors duration-200"
           :class="filter === f.id ? 'bg-ink text-on-ink' : 'bg-transparent text-text-strong-muted hover:text-ink'"
           data-testid="filter"
           @click="filter = f.id"

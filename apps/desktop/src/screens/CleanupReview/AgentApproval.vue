@@ -555,7 +555,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             </template>
           </PlanRow>
           <template v-if="plan.left_out.length">
-            <h3 class="m-0 border-t border-line px-6 pt-4 pb-2 text-label font-medium text-text-secondary">Left out by scull · not in this plan, can't be added</h3>
+            <div role="listitem"><h3 class="m-0 border-t border-line px-6 pt-4 pb-2 text-label font-medium text-text-secondary">Left out by scull · not in this plan, can't be added</h3></div>
             <div
               v-for="l in plan.left_out"
               :key="l.label"

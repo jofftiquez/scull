@@ -29,7 +29,7 @@ function why(d: Drive): string {
   <section aria-label="Drives" class="flex flex-col gap-3 rounded-[18px] bg-surface-raised p-3.5" data-testid="drives">
     <div class="flex items-center justify-between">
       <span class="text-caption font-semibold text-text-secondary">Drives</span>
-      <RouterLink to="/settings" class="text-caption text-text-secondary">Manage</RouterLink>
+      <RouterLink to="/settings" class="-my-3 inline-flex min-h-touch min-w-touch items-center justify-end text-caption text-text-secondary">Manage</RouterLink>
     </div>
 
     <span v-if="failed" class="text-caption text-text-secondary">Drive list unavailable.</span>

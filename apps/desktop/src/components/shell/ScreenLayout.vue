@@ -9,7 +9,7 @@ const status = useShellStatus();
 </script>
 
 <template>
-  <main class="flex min-w-0 flex-[999_1_600px] flex-col gap-page-gap">
+  <main id="content" tabindex="-1" class="flex min-w-0 flex-[999_1_600px] flex-col gap-page-gap outline-none">
     <AppHeader :status="status">
       <template #actions><slot name="actions" /></template>
     </AppHeader>

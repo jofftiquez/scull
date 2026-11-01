@@ -25,10 +25,21 @@ export default tseslint.config(
     languageOptions: { globals: { process: 'readonly', console: 'readonly' } },
   },
   {
-    // Benchmark drivers (node); page.evaluate callbacks run in the browser.
-    files: ['bench/**/*.mjs'],
+    // Benchmark and audit drivers (node); page.evaluate callbacks run in the browser.
+    files: ['bench/**/*.mjs', 'a11y/**/*.mjs'],
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly', setTimeout: 'readonly', URL: 'readonly', window: 'readonly', document: 'readonly' },
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        URL: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+        getComputedStyle: 'readonly',
+        MutationObserver: 'readonly',
+        SVGElement: 'readonly',
+      },
     },
   },
   {

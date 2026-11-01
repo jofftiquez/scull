@@ -112,7 +112,7 @@ const CHIP = {
         :key="c.tool.id"
         type="button"
         :aria-pressed="c.state !== 'off'"
-        class="chip min-h-[34px] cursor-pointer rounded-chip border px-3 text-label font-medium"
+        class="chip min-h-touch cursor-pointer rounded-chip border px-3 text-label font-medium"
         :class="CHIP[c.state]"
         :data-chip="c.state"
         @click="toggle(c.tool.id)"

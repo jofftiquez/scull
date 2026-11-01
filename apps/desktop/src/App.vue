@@ -2,17 +2,38 @@
 // App shell (D-18): paper ground, 12px gaps, full-height sidebar, then the current screen's
 // main column (and its optional right column). Routes with `meta.bare` (onboarding) take the
 // whole window.
-import { onMounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue';
+import { START_LOCATION, useRoute, useRouter } from 'vue-router';
 import AppSidebar from './components/shell/AppSidebar.vue';
 import { useBridge } from './bridge';
 import { shell } from './state/shell';
 import { core, refresh } from './state/core';
 import { needsOnboarding } from './components/onboarding/model';
+import type { NavItem } from './navigation';
 
 const bridge = useBridge();
 const route = useRoute();
 const router = useRouter();
+// WCAG 2.4.2 / 2.4.3: each screen has its own title, and after a navigation focus moves to the
+// new screen's <main> so keyboard and screen-reader users start there (not on the old link).
+watch(
+  () => route.path,
+  () => {
+    const item = route.meta.item as NavItem | undefined;
+    document.title = item ? `${item.label} · scull` : route.name === 'onboarding' ? 'Welcome · scull' : 'scull';
+  },
+  { immediate: true },
+);
+// Not on the first load (focus starts at the top of the page), only on later navigations.
+const stopFocusHook = router.afterEach((to, from, failure) => {
+  if (!failure && from !== START_LOCATION && to.path !== from.path) void nextTick(skipToContent);
+});
+onBeforeUnmount(stopFocusHook);
+
+/** Move focus to the screen's <main> (hash routing: the link must not change the URL). */
+function skipToContent() {
+  document.getElementById('content')?.focus();
+}
 onMounted(async () => {
   try {
     shell.version = (await bridge.appInfo()).version;
@@ -27,6 +48,16 @@ onMounted(async () => {
 
 <template>
   <div class="flex min-h-screen flex-wrap items-stretch gap-page-gap bg-ground p-page-padding text-body text-ink">
+    <!-- WCAG 2.4.1: the first Tab stop skips the sidebar's navigation. -->
+    <a
+      v-if="!route.meta.bare"
+      href="#content"
+      class="sr-only rounded-button bg-ink px-4 text-on-ink focus:not-sr-only focus:fixed focus:px-4 focus:top-3 focus:left-3 focus:z-50 focus:flex focus:min-h-touch focus:items-center"
+      data-testid="skip-link"
+      @click.prevent="skipToContent"
+    >
+      Skip to main content
+    </a>
     <AppSidebar v-if="!route.meta.bare" :version="shell.version" :counts="shell.counts" />
     <RouterView />
   </div>

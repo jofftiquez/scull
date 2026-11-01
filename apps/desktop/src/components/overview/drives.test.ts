@@ -156,11 +156,13 @@ describe('overview drive switcher', () => {
   it('switches the wheel, forecast, Quick Clean and quarantine line per drive', async () => {
     const w = await mountOverview(designScenarioBridge(createMockBridge(), 0, true));
     const opts = () => w.findAll('[data-testid="drive-option"]');
-    expect(opts().map((o) => o.attributes('aria-label'))).toEqual([
-      'All drives: 20 items, 338.7 GiB',
-      'Macintosh HD: 16 items, 186.0 GiB, 92% used',
-      'Dev SSD, external: 4 items, 152.7 GiB, 61% used',
+    // The accessible name is the visible text plus details (WCAG 2.5.3 label in name).
+    expect(opts().map((o) => o.element.textContent!.replace(/\s+/g, ' ').trim())).toEqual([
+      'All drives338.7 GiB, 20 items',
+      'Macintosh HD92% used, 16 items, 186.0 GiB',
+      'Dev SSD · external61% used, 4 items, 152.7 GiB',
     ]);
+    expect(opts().every((o) => o.attributes('aria-label') === undefined)).toBe(true);
     expect(opts()[0]!.attributes('aria-pressed')).toBe('true');
     expect(w.get('[data-testid="center"]').text()).toContain('338.7 GiB');
     expect(w.get('[data-testid="forecast"]').text()).toContain('Macintosh HD full in about 9 days.');

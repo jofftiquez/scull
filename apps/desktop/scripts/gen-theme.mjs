@@ -71,6 +71,10 @@ export function renderTheme(tokens) {
     line(`  --radius-${kebab(k)}: ${px}px;`);
   }
   line();
+  // The spacing unit is 4 px, not Tailwind's 0.25rem: the root font size is the 14 px body
+  // size, so rem-based spacing came out 12.5% small (`min-h-11` was 38.5 px, under the 44 px
+  // touch target, and `px-6` was 21 px where the design says 24 px).
+  line('  --spacing: 4px;');
   for (const [k, px] of Object.entries(tokens.space)) {
     line(`  --spacing-${kebab(k)}: ${px}px;`);
   }

@@ -158,7 +158,7 @@ function cancelScan() {
 </script>
 
 <template>
-  <div class="w-full" data-testid="onboarding">
+  <main class="w-full" data-testid="onboarding">
     <div class="mx-auto grid max-w-[1200px] grid-cols-12 gap-page-gap">
       <header class="col-span-12 flex flex-wrap items-end justify-between gap-6 rounded-tile bg-surface p-8">
         <div class="flex flex-col gap-4">
@@ -281,7 +281,7 @@ function cancelScan() {
         <p v-if="saveNote" class="m-0 basis-full text-caption text-text-strong-muted" data-testid="save-note">{{ saveNote }}</p>
       </SetupSummary>
     </div>
-  </div>
+  </main>
 </template>
 
 <style scoped>
