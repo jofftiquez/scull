@@ -64,7 +64,7 @@ pub struct HistoryReport {
 pub struct AgentEventLine {
     /// When (Unix seconds).
     pub at: i64,
-    /// `approval_denied`, `execute_refused` or `approval_revoked`.
+    /// `approval_denied`, `execute_refused`, `approval_revoked` or `revoke_refused`.
     pub kind: String,
     /// Stable reason code (`denied`, `wrong_code`, `no_terminal`, `not_approved`,
     /// `approval_used`, `plan_changed`, ...).
@@ -469,6 +469,7 @@ fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
             "approval_denied" => "approval denied",
             "execute_refused" => "execution refused",
             "approval_revoked" => "approval revoked",
+            "revoke_refused" => "revoke refused",
             other => other,
         };
         t.push(vec![

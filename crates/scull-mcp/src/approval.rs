@@ -886,8 +886,43 @@ pub struct Revoked {
 /// [`Reason::ApprovalUsed`] and nothing is written. Refused with [`Reason::NotApproved`]
 /// when there is no approval (the plan just expires unused), [`Reason::ApprovalRevoked`]
 /// when already revoked, [`Reason::ApprovalExpired`] when it lapsed. Never creates an
-/// approval.
+/// approval. Every refusal is audited as `revoke_refused` with its reason code (that
+/// event says nothing about the approval itself).
 pub fn revoke(
+    store: &mut Store,
+    id: &PlanId,
+    channel: HumanChannel,
+    who: &Principal,
+    now: i64,
+) -> Result<Revoked, Refused> {
+    let r = revoke_checked(store, id, channel, who, now);
+    if let Err(refusal) = &r {
+        // Audited (bounded like every refusal); the outcome stands either way.
+        let _ = store.record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::RevokeRefused,
+            source: channel_source(channel).into(),
+            plan_id: Some(id.clone()),
+            content_hash: recorded_hash(store, id),
+            reason: refusal.reason.code().into(),
+            channel: channel_name(channel.method()).into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            count: 1,
+        });
+    }
+    r
+}
+
+fn channel_source(channel: HumanChannel) -> &'static str {
+    match channel {
+        HumanChannel::Terminal => "cli",
+        HumanChannel::Desktop => "desktop",
+    }
+}
+
+fn revoke_checked(
     store: &mut Store,
     id: &PlanId,
     channel: HumanChannel,
@@ -941,6 +976,7 @@ pub fn revoke(
         channel: channel_name(channel.method()).into(),
         machine_id: who.machine_id.clone(),
         user: who.user.clone(),
+        count: 1,
     };
     let done = store
         .revoke_approval(id, &approval.content_hash, now, &audit)

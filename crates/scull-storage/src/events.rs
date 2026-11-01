@@ -55,29 +55,35 @@ pub enum EventKind {
     /// under D-34, refused by the Executor's gate, ...). An [`AgentAuditEvent`].
     ExecuteRefused,
     /// A human revoked an agent plan's approval before it was used
-    /// ([`Store::revoke_approval`]). An [`AgentAuditEvent`].
+    /// ([`Store::revoke_approval`], the only way to record one). An [`AgentAuditEvent`].
     ApprovalRevoked,
+    /// An attempt to revoke an approval was refused (no approval, already used or revoked,
+    /// expired, another account's plan, lost the race to the execution). An
+    /// [`AgentAuditEvent`].
+    RevokeRefused,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 5] = [
+    pub const ALL: [EventKind; 6] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
         EventKind::ApprovalRevoked,
+        EventKind::RevokeRefused,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
-    pub const AGENT: [EventKind; 3] = [
+    pub const AGENT: [EventKind; 4] = [
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
         EventKind::ApprovalRevoked,
+        EventKind::RevokeRefused,
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
-    /// `approval_revoked`.
+    /// `approval_revoked`, `revoke_refused`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -85,6 +91,7 @@ impl EventKind {
             EventKind::ApprovalDenied => "approval_denied",
             EventKind::ExecuteRefused => "execute_refused",
             EventKind::ApprovalRevoked => "approval_revoked",
+            EventKind::RevokeRefused => "revoke_refused",
         }
     }
 
@@ -388,7 +395,17 @@ impl Store {
     /// recorded in the last [`AGENT_EVENT_MERGE_SECS`] (see the module docs); one transaction.
     /// Rejected with [`ErrorKind::Usage`] if its kind is not one of [`EventKind::AGENT`] or a
     /// field is not a code (see [`AgentAuditEvent`]). `event_id` and `count` are ignored.
+    ///
+    /// [`EventKind::ApprovalRevoked`] is refused here: a revocation is recorded only by
+    /// [`Store::revoke_approval`], together with spending the approval, so a forged
+    /// "revoked" entry can't make an approval look withdrawn.
     pub fn record_agent_event(&mut self, e: &AgentAuditEvent) -> Result<()> {
+        if e.kind == EventKind::ApprovalRevoked {
+            return Err(StoreError::rejected(
+                ErrorKind::Usage,
+                "approval_revoked is recorded only by Store::revoke_approval",
+            ));
+        }
         let event = e.to_event()?;
         let json = serde_json::to_string(&event.payload).map_err(internal)?;
         let plan = e.plan_id.as_ref().map(PlanId::as_str);

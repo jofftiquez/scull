@@ -1220,8 +1220,8 @@ async fn revoked_approval_never_executes() {
         let errors: Vec<String> = validator.iter_errors(v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{name}: {errors:?}\n{v:#}");
     }
-    let events = env.store().agent_events(0).unwrap();
-    let got: Vec<(&str, &str, &str, &str)> = events
+    let events = env.store().agent_events(0, 10_000).unwrap();
+    let got: Vec<(&str, &str, &str, &str, &str)> = events
         .iter()
         .map(|e| {
             (
@@ -1229,14 +1229,32 @@ async fn revoked_approval_never_executes() {
                 e.source.as_str(),
                 e.channel.as_str(),
                 e.reason.as_str(),
+                e.user.as_str(),
             )
         })
         .collect();
+    // Failed revocations are audited too (with who tried), and only `revoke_approval`
+    // wrote the one `approval_revoked`.
     assert_eq!(
         got,
         vec![
-            ("approval_revoked", "desktop", "desktop", "revoked"),
-            ("execute_refused", "mcp", "mcp", "approval_revoked"),
+            ("revoke_refused", "cli", "terminal", "not_approved", USER),
+            (
+                "revoke_refused",
+                "cli",
+                "terminal",
+                "plan_foreign",
+                "mallory"
+            ),
+            ("approval_revoked", "desktop", "desktop", "revoked", USER),
+            (
+                "revoke_refused",
+                "cli",
+                "terminal",
+                "approval_revoked",
+                USER
+            ),
+            ("execute_refused", "mcp", "mcp", "approval_revoked", USER),
         ]
     );
 
@@ -1261,6 +1279,19 @@ async fn revoked_approval_never_executes() {
     )
     .unwrap_err();
     assert_eq!(e.reason, Reason::ApprovalUsed);
+    assert!(!store.approval_revoked(&done).unwrap());
+    let last = store.agent_events(0, 10_000).unwrap().pop().unwrap();
+    assert_eq!(
+        (last.kind.as_str(), last.reason.as_str()),
+        ("revoke_refused", "approval_used")
+    );
+    // A forged "revoked" entry is refused: only revoke_approval writes one, with the spend.
+    let forged = scull_storage::AgentAuditEvent {
+        kind: scull_storage::EventKind::ApprovalRevoked,
+        reason: "revoked".into(),
+        ..last
+    };
+    assert!(store.record_agent_event(&forged).is_err());
     assert!(!store.approval_revoked(&done).unwrap());
     client.cancel().await.unwrap();
     env.invariants(&[]);
@@ -1320,7 +1351,7 @@ async fn revoke_racing_consumption_has_exactly_one_winner() {
     }
     let revocations = env
         .store()
-        .agent_events(0)
+        .agent_events(0, 10_000)
         .unwrap()
         .iter()
         .filter(|e| e.kind.as_str() == "approval_revoked")

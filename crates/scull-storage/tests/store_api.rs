@@ -664,6 +664,7 @@ fn revocation(p: &scull_core::Plan, at: i64) -> scull_storage::AgentAuditEvent {
         channel: "terminal".into(),
         machine_id: "machine-a".into(),
         user: "dev".into(),
+        count: 1,
     }
 }
 
@@ -702,7 +703,7 @@ fn revoking_spends_the_approval_and_audits_atomically() {
         )
         .unwrap()
     );
-    assert!(s.agent_events(0).unwrap().is_empty());
+    assert!(s.agent_events(0, 10_000).unwrap().is_empty());
     assert!(!s.approval_revoked(p.id()).unwrap());
     // Revoked once, then the Executor's consumption fails, and so does a second revocation.
     assert!(
@@ -722,7 +723,7 @@ fn revoking_spends_the_approval_and_audits_atomically() {
         !s.revoke_approval(p.id(), p.content_hash(), T0 + 32, &revocation(&p, T0 + 32))
             .unwrap()
     );
-    let events = s.agent_events(0).unwrap();
+    let events = s.agent_events(0, 10_000).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, scull_storage::EventKind::ApprovalRevoked);
     // A used approval is not "revoked" after the fact.
@@ -739,6 +740,18 @@ fn revoking_spends_the_approval_and_audits_atomically() {
             .unwrap()
     );
     assert!(!s.approval_revoked(q.id()).unwrap());
+    // Only revoke_approval writes a revocation: a forged one through record_agent_event is
+    // refused and changes nothing.
+    let r = plan(3);
+    s.insert_plan(&r).unwrap();
+    s.insert_approval(&approval_for(&r, T0 + 10, T0 + 600))
+        .unwrap();
+    assert_eq!(
+        rejected_kind(s.record_agent_event(&revocation(&r, T0 + 41)).unwrap_err()),
+        ErrorKind::Usage
+    );
+    assert!(!s.approval_revoked(r.id()).unwrap());
+    assert_eq!(s.get_approval(r.id()).unwrap().unwrap().used_at, None);
     // The audit must be a revocation of the same plan.
     let mut wrong = revocation(&q, T0 + 42);
     wrong.plan_id = Some(p.id().clone());
@@ -794,5 +807,5 @@ fn revocation_and_consumption_race_with_exactly_one_winner() {
         assert!(s.get_approval(p.id()).unwrap().unwrap().used_at.is_some());
         revoked_wins += usize::from(revoked);
     }
-    assert_eq!(s.agent_events(0).unwrap().len(), revoked_wins);
+    assert_eq!(s.agent_events(0, 10_000).unwrap().len(), revoked_wins);
 }

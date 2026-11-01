@@ -834,6 +834,7 @@ fn revoke_through_the_cli_stops_the_agent() {
         listed,
         [
             ("execute_refused", "approval_revoked"),
+            ("revoke_refused", "approval_revoked"),
             ("approval_revoked", "revoked"),
         ]
     );

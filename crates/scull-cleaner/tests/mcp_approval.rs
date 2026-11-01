@@ -721,6 +721,7 @@ fn revocation(plan: &Plan) -> AgentAuditEvent {
         channel: "terminal".into(),
         machine_id: MACHINE.into(),
         user: me(),
+        count: 1,
     }
 }
 
