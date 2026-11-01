@@ -444,7 +444,14 @@ fn an_s0_item_is_deleted_and_the_rest_left_alone() {
         panic!("no S0 candidate: {tiers:?} {why:?}");
     };
     let id = s0.id.as_str().to_owned();
-    let rel = s0.path.as_str().split("/root/").nth(1).unwrap().to_owned();
+    let rel = s0
+        .path
+        .as_str()
+        .replace('\\', "/")
+        .split("/root/")
+        .nth(1)
+        .unwrap()
+        .to_owned();
     let plan = e
         .desk
         .prepare(&e.session, Some(std::slice::from_ref(&id)), now_unix())
