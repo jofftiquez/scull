@@ -279,6 +279,29 @@ fn s0_item(env: &Env) -> String {
         .to_owned()
 }
 
+/// Set by CI's standard-user run of this test binary on Windows
+/// (`scripts/ci/run-as-standard-user.ps1`): an elevated process then fails instead of skipping.
+const REQUIRE_NOT_ELEVATED_ENV: &str = "SCULL_TEST_REQUIRE_NOT_ELEVATED";
+
+/// Elevated, scull refuses (SAFE-14), so `test`'s non-elevated part stops here. GitHub's Windows
+/// runners are elevated; CI runs this binary again as a standard user with
+/// [`REQUIRE_NOT_ELEVATED_ENV`] set, where the skip is a failure and a `RUN` marker is printed.
+fn skip_if_elevated(test: &str, why: &str) -> bool {
+    let required = std::env::var_os(REQUIRE_NOT_ELEVATED_ENV).is_some_and(|v| !v.is_empty());
+    if scull_platform::is_elevated().blocks_destructive() {
+        assert!(
+            !required,
+            "{test}: {REQUIRE_NOT_ELEVATED_ENV} is set but this process runs elevated"
+        );
+        eprintln!("SKIP {test}: running elevated, {why} (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
+}
+
 /// AI-05 end to end: with `[mcp] destructive = true` in the config file, the model can prepare
 /// a plan (never execute it); scull itself prints the plan ID and the `scull approve` command
 /// after the answer, the plan awaits approval, nothing on disk changes, and the recorded consent
@@ -316,6 +339,13 @@ fn opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it() {
     let consent = env.run(&["ask", "--show-request", "q"]);
     assert_eq!(consent.status.code(), Some(0), "{}", text(&consent.stderr));
     assert!(text(&consent.stdout).contains("prepare or approve a cleanup"));
+    if skip_if_elevated(
+        "opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it",
+        "so scull ask offers no plan tool",
+    ) {
+        env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    }
     env.write(
         "config.toml",
         &format!("[scan]\nroots = [\"{root}\"]\n\n[mcp]\ndestructive = true\n"),

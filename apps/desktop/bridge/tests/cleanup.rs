@@ -110,7 +110,7 @@ impl Env {
             .unwrap()
             .candidates
             .iter()
-            .find(|c| c.path.as_str().ends_with(suffix))
+            .find(|c| ends(c.path.as_str(), suffix))
             .unwrap_or_else(|| panic!("no candidate {suffix}"))
             .id
             .as_str()
@@ -122,8 +122,43 @@ impl Env {
     }
 }
 
+/// Whether `path` ends with `suffix` (written with `/`), whatever the OS separator.
+fn ends(path: &str, suffix: &str) -> bool {
+    path.replace('\\', "/").ends_with(suffix)
+}
+
+/// Set by CI's standard-user run on Windows (`scripts/ci/run-as-standard-user.ps1`): an
+/// elevated process then fails instead of skipping.
+const REQUIRE_NOT_ELEVATED_ENV: &str = "SCULL_TEST_REQUIRE_NOT_ELEVATED";
+
+fn elevated_here() -> bool {
+    scull_platform::is_elevated().blocks_destructive()
+}
+
+/// Elevated, the desktop refuses to clean (SAFE-14): `test` stops here. GitHub's Windows
+/// runners are elevated; CI runs this binary again as a standard user with
+/// [`REQUIRE_NOT_ELEVATED_ENV`] set, where a skip is a failure and a `RUN` marker is printed.
+fn skip_if_elevated(test: &str) -> bool {
+    let required = std::env::var_os(REQUIRE_NOT_ELEVATED_ENV).is_some_and(|v| !v.is_empty());
+    if elevated_here() {
+        assert!(
+            !required,
+            "{test}: {REQUIRE_NOT_ELEVATED_ENV} is set but this process runs elevated"
+        );
+        eprintln!("SKIP {test}: running elevated, so the desktop refuses to clean (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
+}
+
 #[test]
 fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
+    if skip_if_elevated("cleanup_review_runs_exactly_the_chosen_items_through_the_executor") {
+        return;
+    }
     let e = env();
     let now = now_unix();
     // No scan yet: nothing to plan from.
@@ -139,7 +174,7 @@ fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
     assert!(
         plan.left_out
             .iter()
-            .any(|l| l.path.ends_with("vault/target") && l.tier == Tier::S3)
+            .any(|l| ends(l.path.as_str(), "vault/target") && l.tier == Tier::S3)
     );
     assert_eq!(
         plan.expires_at - plan.created_at,
@@ -223,7 +258,7 @@ fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
         .desk
         .restore(&e.session, &run.operation_id, &target, now_unix())
         .unwrap();
-    assert!(r.restored_to.ends_with("app/target"), "{}", r.restored_to);
+    assert!(ends(&r.restored_to, "app/target"), "{}", r.restored_to);
     assert!(!r.sibling && !r.already);
     assert!(e.fx.root().join("app/target").is_dir());
     let again = e
@@ -242,6 +277,9 @@ fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
 
 #[test]
 fn a_plan_from_a_scan_older_than_an_operation_on_its_items_is_refused() {
+    if skip_if_elevated("a_plan_from_a_scan_older_than_an_operation_on_its_items_is_refused") {
+        return;
+    }
     let e = env();
     let now = now_unix();
     e.scan();
@@ -322,12 +360,18 @@ fn elevated_runs_and_plans_made_elsewhere_are_refused() {
     assert_eq!(err.kind, ErrorKind::SafetyBlocked);
     assert!(elevated.restore(&e.session, "op_x", &all[0], now).is_err());
     assert!(elevated.quick_clean(&e.session, &all, now).is_err());
+    if elevated_here() {
+        // The real desk refuses everything elevated (SAFE-14); the rest needs a standard user.
+        e.fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+            .assert_ok();
+        return;
+    }
     // A CLI plan can't be executed from the desktop.
     let scan = e.session.last_scan().unwrap();
     let c = scan
         .candidates
         .iter()
-        .find(|c| c.path.as_str().ends_with("app/target"))
+        .find(|c| ends(c.path.as_str(), "app/target"))
         .unwrap();
     let cli = scull_core::Plan::new(
         scull_core::PlanParams {
@@ -366,6 +410,9 @@ fn elevated_runs_and_plans_made_elsewhere_are_refused() {
 
 #[test]
 fn quick_clean_with_no_chip_ticked_runs_nothing() {
+    if skip_if_elevated("quick_clean_with_no_chip_ticked_runs_nothing") {
+        return;
+    }
     let e = env();
     let r = e.desk.quick_clean(&e.session, &[], now_unix()).unwrap();
     assert!(r.operation_id.is_none());
@@ -377,6 +424,9 @@ fn quick_clean_with_no_chip_ticked_runs_nothing() {
 
 #[test]
 fn an_s0_item_is_deleted_and_the_rest_left_alone() {
+    if skip_if_elevated("an_s0_item_is_deleted_and_the_rest_left_alone") {
+        return;
+    }
     let e = env_with(true);
     e.scan();
     let scan = e.session.last_scan().unwrap();
@@ -394,7 +444,14 @@ fn an_s0_item_is_deleted_and_the_rest_left_alone() {
         panic!("no S0 candidate: {tiers:?} {why:?}");
     };
     let id = s0.id.as_str().to_owned();
-    let rel = s0.path.as_str().split("/root/").nth(1).unwrap().to_owned();
+    let rel = s0
+        .path
+        .as_str()
+        .replace('\\', "/")
+        .split("/root/")
+        .nth(1)
+        .unwrap()
+        .to_owned();
     let plan = e
         .desk
         .prepare(&e.session, Some(std::slice::from_ref(&id)), now_unix())
@@ -451,6 +508,9 @@ fn a_cancelled_scan_is_never_planned_from() {
 
 #[test]
 fn a_plan_runs_only_under_the_basis_of_its_own_scan() {
+    if skip_if_elevated("a_plan_runs_only_under_the_basis_of_its_own_scan") {
+        return;
+    }
     let e = env();
     let now = now_unix();
     e.scan();
@@ -508,6 +568,9 @@ fn a_plan_runs_only_under_the_basis_of_its_own_scan() {
 
 #[test]
 fn a_narrowed_plan_keeps_the_reviewed_plans_lifetime() {
+    if skip_if_elevated("a_narrowed_plan_keeps_the_reviewed_plans_lifetime") {
+        return;
+    }
     let e = env();
     e.scan();
     let target = e.id_of("app/target");
