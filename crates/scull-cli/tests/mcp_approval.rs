@@ -943,15 +943,17 @@ fn under_script(program: &std::path::Path, cmd: &str) -> Option<Command> {
         return None;
     }
     let mut c = Command::new(program);
+    // `; exit $?` keeps `program` alive as script's parent: a shell given a single command
+    // with `-c` may exec it in place (bash does), and `program` would leave the parent chain.
     if cfg!(target_os = "macos") {
         c.args([
             "-c",
-            &format!("script -q /dev/null sh -c {}", shell_quote(cmd)),
+            &format!("script -q /dev/null sh -c {}; exit $?", shell_quote(cmd)),
         ]);
     } else {
         c.args([
             "-c",
-            &format!("script -q -e -c {} /dev/null", shell_quote(cmd)),
+            &format!("script -q -e -c {} /dev/null; exit $?", shell_quote(cmd)),
         ]);
     }
     Some(c)
