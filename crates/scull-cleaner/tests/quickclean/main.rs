@@ -3674,7 +3674,9 @@ fn long_tail_expected(tool: CacheTool, dir: &Path) -> (Vec<OsString>, Vec<(Strin
         ),
         CacheTool::Conan => {
             let mut storage = OsString::from("core.cache:storage_path=");
-            storage.push(dir);
+            // The located folder as the scanner spells it (Windows: `\` throughout), like the
+            // other path arguments (`path_arg`).
+            storage.push(path_arg(dir));
             let mut args = os(&["cache", "clean", "--source", "--build", "--temp", "-cc"]);
             args.push(storage);
             args.extend(os(&["-cc", "core:non_interactive=True"]));
