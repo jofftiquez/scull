@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "RunItem": {
+      "additionalProperties": false,
+      "description": "One item of a run.",
+      "properties": {
+        "freed_bytes": {
+          "description": "Bytes freed (the planned estimate for a completed delete).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "item_id": {
+          "description": "Plan item.",
+          "type": "string"
+        },
+        "moved_bytes": {
+          "description": "Bytes moved aside (quarantine, Trash).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/RunItemOutcome",
+          "description": "What happened."
+        },
+        "reason": {
+          "description": "Stable reason code when not cleaned (or only partly).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item_id",
+        "outcome",
+        "freed_bytes",
+        "moved_bytes"
+      ],
+      "type": "object"
+    },
+    "RunItemOutcome": {
+      "description": "What happened to one item of a run.",
+      "oneOf": [
+        {
+          "const": "deleted",
+          "description": "Deleted (S0).",
+          "type": "string"
+        },
+        {
+          "const": "quarantined",
+          "description": "Moved into quarantine (restorable).",
+          "type": "string"
+        },
+        {
+          "const": "trashed",
+          "description": "Moved to the Trash (quarantine was impossible).",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "Not touched: it changed since the scan, is in use, the run was cancelled, or the\nExecutor refused it.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/desktop-run.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The result of a Cleanup Review run.",
+  "properties": {
+    "cancelled": {
+      "description": "Whether the run stopped early.",
+      "type": "boolean"
+    },
+    "finished_at": {
+      "description": "When it finished (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "items": {
+      "description": "Every item, in plan order.",
+      "items": {
+        "$ref": "#/$defs/RunItem"
+      },
+      "type": "array"
+    },
+    "measured_delta_bytes": {
+      "description": "Free space after minus before, when measured.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "moved_bytes": {
+      "description": "Bytes moved aside.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "operation_id": {
+      "description": "The recorded operation (`scull history <id>`).",
+      "type": "string"
+    },
+    "plan_id": {
+      "description": "The plan that ran (the reviewed one, or the chosen subset of it).",
+      "type": "string"
+    },
+    "predicted_bytes": {
+      "description": "Bytes the plan predicted.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "plan_id",
+    "operation_id",
+    "items",
+    "predicted_bytes",
+    "moved_bytes",
+    "cancelled",
+    "finished_at"
+  ],
+  "title": "DesktopRun",
+  "type": "object"
+}

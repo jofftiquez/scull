@@ -1,0 +1,27 @@
+{
+  "$id": "scull-desktop/desktop-restore.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A restored quarantine entry.",
+  "properties": {
+    "already": {
+      "description": "`true` when it had already been restored (nothing moved now).",
+      "type": "boolean"
+    },
+    "restored_to": {
+      "description": "Where it is now.",
+      "type": "string"
+    },
+    "sibling": {
+      "description": "`true` when the original path was taken and a `.scull-restored-<n>` sibling was used.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "restored_to",
+    "sibling",
+    "already"
+  ],
+  "title": "DesktopRestore",
+  "type": "object"
+}

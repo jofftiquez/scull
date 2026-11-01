@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: scull's own commands (including approving an AI agent's plan, P4-MCP-02) and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: the desktop never mutates the filesystem).",
+  "description": "The main window: scull's own commands (including approving an AI agent's plan, P4-MCP-02, and running reviewed cleanups through the core Executor, P3-EXEC-01) and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: deletion only through the core Executor).",
   "windows": [
     "main"
   ],
@@ -36,6 +36,10 @@
     "allow-deny-agent-plan",
     "allow-revoke-agent-approval",
     "allow-agent-plan-status",
-    "allow-take-deep-link"
+    "allow-take-deep-link",
+    "allow-prepare-desktop-plan",
+    "allow-execute-desktop-plan",
+    "allow-restore-quarantined",
+    "allow-quick-clean"
   ]
 }

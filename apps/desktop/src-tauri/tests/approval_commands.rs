@@ -8,7 +8,7 @@ use scull_core::{
     Action, Candidate, Category, FileIdentity, Flags, FsPath, ItemId, Plan, PlanId, PlanItem,
     PlanOrigin, PlanParams, ReasonCode, Regeneration, RuleRef, ScanId, Sizes, Tier, TierReason,
 };
-use scull_desktop::{DeepLinks, approval_handler, approve_link_plan};
+use scull_desktop::{DeepLinks, approve_link_plan, main_window_handler};
 use scull_desktop_bridge::{ApprovalDesk, Session, Setup, now_unix};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -95,7 +95,8 @@ fn app_as(dir: &Path, label: &str) -> (tauri::App<MockRuntime>, WebviewWindow<Mo
         .manage(Arc::new(ApprovalDesk::new(Some(dir.to_path_buf()))))
         .manage(Arc::new(Session::new(setup)))
         .manage(DeepLinks::default())
-        .invoke_handler(approval_handler())
+        .manage(Arc::new(scull_desktop_bridge::CleanupDesk::new()))
+        .invoke_handler(main_window_handler())
         .build(tauri::generate_context!(test = true))
         .unwrap();
     let webview = match app.get_webview_window(label) {
@@ -317,6 +318,40 @@ fn the_menu_bar_widget_cannot_reach_the_approval_commands() {
     };
     let list = invoke(&main, "approval_requests", json!({})).unwrap();
     assert_eq!(list["requests"][0]["plan_id"], id);
+}
+
+/// P3-EXEC-01: the cleanup commands are the main window's only (the menu bar widget and any
+/// remote page are refused before the command runs), and from the main window they reach the
+/// core: with no scan yet there is nothing to plan, and nothing is changed.
+#[test]
+fn cleanup_commands_are_the_main_windows_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let cmds = [
+        ("prepare_desktop_plan", json!({"items": null})),
+        (
+            "execute_desktop_plan",
+            json!({"planId": "plan_01JX", "contentHash": "0".repeat(64), "items": ["a"], "typedCount": null}),
+        ),
+        (
+            "restore_quarantined",
+            json!({"operationId": "op_01JX", "itemId": "a"}),
+        ),
+        ("quick_clean", json!({"items": []})),
+    ];
+    let (_app, widget) = app_as(dir.path(), "menubar");
+    for (cmd, args) in &cmds {
+        let e = invoke(&widget, cmd, args.clone()).unwrap_err();
+        assert!(e.to_string().contains("not allowed"), "menubar {cmd}: {e}");
+    }
+    let (_app2, main) = app(dir.path());
+    for (cmd, args) in &cmds {
+        let e = invoke_from(&main, "https://example.com", cmd, args.clone()).unwrap_err();
+        assert!(e.to_string().contains("not allowed"), "remote {cmd}: {e}");
+    }
+    let e = invoke(&main, "prepare_desktop_plan", json!({"items": null})).unwrap_err();
+    assert_eq!(e["kind"], "usage", "no scan yet: {e}");
+    let e = invoke(&main, "execute_desktop_plan", cmds[1].1.clone()).unwrap_err();
+    assert!(!e.to_string().contains("not allowed"), "{e}");
 }
 
 #[test]

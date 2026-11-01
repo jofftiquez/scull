@@ -3,8 +3,8 @@
 //! in the invoke handler. The menu bar widget's window commands (src-tauri/src/tray.rs) match
 //! `WINDOW_COMMANDS` in src/bridge/tauri.ts, and tray monitoring's (src-tauri/src/monitor.rs)
 //! match `COMMANDS.monitorStatus` plus `MONITOR_COMMANDS`. The approval commands (P4-MCP-02)
-//! match `APPROVAL_COMMANDS` in src/bridge/tauriPlans.ts, and `approval_handler` registers
-//! exactly them. Reads sources only (the app crate needs WebKit to build on Linux).
+//! match `APPROVAL_COMMANDS` and the cleanup commands `CLEANUP_COMMANDS` in src/bridge/tauriPlans.ts,
+//! and `main_window_handler` registers exactly them. Reads sources only (the app crate needs WebKit to build on Linux).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -104,8 +104,10 @@ fn frontend_and_app_name_the_same_commands() {
     let lib = read("src-tauri/src/lib.rs");
     let rust = rust_commands(&lib);
     let approval = ts_table(&read("src/bridge/tauriPlans.ts"), "APPROVAL_COMMANDS");
+    let cleanup = ts_table(&read("src/bridge/tauriPlans.ts"), "CLEANUP_COMMANDS");
     let mut ts = ts_commands(&read("src/bridge/types.ts"));
     ts.extend(approval.iter().cloned());
+    ts.extend(cleanup.iter().cloned());
     assert!(rust.len() >= 9, "{rust:?}");
     // Tray monitoring: its read command is on ScullBridge, the rest in MONITOR_COMMANDS.
     let monitor = rust_commands(&read("src-tauri/src/monitor.rs"));
@@ -113,7 +115,7 @@ fn frontend_and_app_name_the_same_commands() {
     reads.insert("monitor_status".to_owned());
     assert_eq!(
         reads, ts,
-        "Rust commands vs src/bridge/types.ts COMMANDS and tauriPlans.ts APPROVAL_COMMANDS"
+        "Rust commands vs src/bridge/types.ts COMMANDS and tauriPlans.ts APPROVAL/CLEANUP_COMMANDS"
     );
     let mut controls = monitor.clone();
     assert!(controls.remove("monitor_status"), "{monitor:?}");
@@ -137,13 +139,13 @@ fn frontend_and_app_name_the_same_commands() {
         registered(&lib),
         "every command is registered, nothing else"
     );
-    // `approval_handler` (mounted by the Tauri command tests) registers exactly the approval
-    // commands.
-    let approval_handler = handlers(&lib)
+    // `main_window_handler` (mounted by the Tauri command tests) registers exactly the
+    // main-window-only commands: approvals and cleanups.
+    let main_window = handlers(&lib)
         .into_iter()
         .find(|h| h.contains("approve_agent_plan") && !h.contains("app_info"))
-        .expect("approval_handler");
-    assert_eq!(approval_handler, approval);
+        .expect("main_window_handler");
+    assert_eq!(main_window, &approval | &cleanup);
 }
 
 /// The quoted names in build.rs's `COMMANDS` (the app manifest).
@@ -184,7 +186,11 @@ fn approval_commands_are_granted_to_the_main_window_only() {
         all,
         "build.rs app manifest vs registered commands"
     );
-    let approval = ts_table(&read("src/bridge/tauriPlans.ts"), "APPROVAL_COMMANDS");
+    let mut main_only = ts_table(&read("src/bridge/tauriPlans.ts"), "APPROVAL_COMMANDS");
+    main_only.extend(ts_table(
+        &read("src/bridge/tauriPlans.ts"),
+        "CLEANUP_COMMANDS",
+    ));
     assert_eq!(
         granted("src-tauri/capabilities/default.json"),
         all,
@@ -192,11 +198,11 @@ fn approval_commands_are_granted_to_the_main_window_only() {
     );
     let menubar = granted("src-tauri/capabilities/menubar.json");
     assert!(
-        menubar.is_disjoint(&approval),
-        "the menu bar widget must not approve: {menubar:?}"
+        menubar.is_disjoint(&main_only),
+        "the menu bar widget must not approve or clean: {menubar:?}"
     );
     assert_eq!(
-        &menubar | &approval,
+        &menubar | &main_only,
         all,
         "menu bar widget: everything else"
     );
@@ -282,13 +288,16 @@ fn progress_event_name_matches() {
 
 #[test]
 fn no_command_can_mutate() {
-    // SAFE-10: no command mutates files, by name too. (The approval commands record the human's
-    // decision on an agent plan in scull's database; they execute nothing.)
+    // SAFE-10: the only commands that change files are the cleanup commands (P3-EXEC-01: through
+    // the core Executor, main window only, checked above); every other command is read-only by
+    // name too. (The approval commands record a human's decision in scull's database.)
+    let cleanup = ts_table(&read("src/bridge/tauriPlans.ts"), "CLEANUP_COMMANDS");
+    assert_eq!(cleanup.len(), 4, "{cleanup:?}");
     let mut names = rust_commands(&read("src-tauri/src/lib.rs"));
     names.extend(rust_commands(&read("src-tauri/src/tray.rs")));
     names.extend(rust_commands(&read("src-tauri/src/monitor.rs")));
     assert!(names.contains("open_main_window"), "{names:?}");
-    for name in names {
+    for name in names.into_iter().filter(|n| !cleanup.contains(n)) {
         for bad in [
             "delete",
             "remove",

@@ -1,10 +1,14 @@
 //! The scull desktop app's Tauri shell.
 //!
-//! Each command is a thin wrapper over `scull_desktop_bridge`, which calls the read-only scull
-//! crates. Nothing here (or in the bridge) can delete, move or modify a scanned file
-//! (SAFE-10): the crate graph has no `scull-cleaner`, and the window's capabilities grant no
-//! filesystem plugin. The only writes are to scull's own database: the human's decisions on AI
-//! agent plans, below. Errors reach the frontend as [`ScullError`] JSON; long operations stream
+//! Each command is a thin wrapper over `scull_desktop_bridge`, which calls the scull crates.
+//! Nothing here deletes, moves or modifies a file itself (SAFE-10 as the PRD states it:
+//! deletion only through the core Executor): the cleanup commands (`prepare_desktop_plan`,
+//! `execute_desktop_plan`, `restore_quarantined`, `quick_clean`; P3-EXEC-01) call the bridge's
+//! `cleanup` module, which runs reviewed plans through the core Executor under the
+//! execution lock with full revalidation, D-28 actions and the audit, after the human's
+//! confirmation in the main window. They and the approval commands are granted to the main
+//! window only (`capabilities/`), never to the menu bar widget, and none is reachable from MCP.
+//! The window's capabilities grant no filesystem plugin. Errors reach the frontend as [`ScullError`] JSON; long operations stream
 //! [`ProgressEvent`]s on `scull://progress` and stop on `cancel_operation`.
 //!
 //! Frontend side: `apps/desktop/src/bridge/tauri.ts` (types generated from the same Rust
@@ -20,7 +24,7 @@
 //!
 //! # Approving an AI agent's plan (P4-MCP-02, PRD §13.3)
 //!
-//! The approval commands ([`approval_handler`]) wrap [`ApprovalDesk`]: list the agent plans
+//! The approval commands ([`main_window_handler`]) wrap [`ApprovalDesk`]: list the agent plans
 //! waiting for the human, open one (the broker's challenge and its confirmation code stay in
 //! this process; the webview gets the code only to display it), approve it with the code the
 //! human typed, deny it, revoke an approval, and report what the agent did with it. Approving
@@ -65,7 +69,8 @@ pub mod tray;
 use scull_core::{ErrorKind, PlanId, ScullError};
 use scull_desktop_bridge::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
-    AppInfo, ApprovalDesk, CachesReport, CapabilitiesReport, DesktopStatus, DigestView, Drive,
+    AppInfo, ApprovalDesk, CachesReport, CapabilitiesReport, CleanupDesk, DesktopPlan,
+    DesktopQuickClean, DesktopRestore, DesktopRun, DesktopStatus, DigestView, Drive,
     FootprintHistory, ForecastsView, FreeSpaceHistory, HistoryView, OpId, ProgressEvent,
     ProjectsView, RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView,
     Setup, WorktreesView, now_unix,
@@ -80,6 +85,9 @@ type Shared<'a> = State<'a, Arc<Session>>;
 
 /// The approval desk shared by the approval commands.
 type Desk<'a> = State<'a, Arc<ApprovalDesk>>;
+
+/// The cleanup runner shared by the cleanup commands (P3-EXEC-01).
+type Cleanup<'a> = State<'a, Arc<CleanupDesk>>;
 
 /// Variables that could turn on a web view's remote debugging or inspector, or inject browser
 /// arguments or another browser build. [`sanitize_browser_env`] removes them at start.
@@ -329,6 +337,66 @@ async fn agent_plan_status(desk: Desk<'_>, plan_id: String) -> Result<AgentPlanS
     blocking(move || desk.status(&plan_id, now_unix())).await
 }
 
+/// `prepare_desktop_plan`: a Cleanup Review plan from the last scan (every eligible item, or
+/// `items`). Recorded, never executed.
+#[tauri::command]
+async fn prepare_desktop_plan(
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+    items: Option<Vec<String>>,
+) -> Result<DesktopPlan, ScullError> {
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || cleanup.prepare(&session, items.as_deref(), now_unix())).await
+}
+
+/// `execute_desktop_plan`: run the items the human chose and confirmed in Cleanup Review,
+/// through the core Executor (lock, revalidation, D-28, audit). The main window only.
+#[tauri::command]
+async fn execute_desktop_plan(
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+    plan_id: String,
+    content_hash: String,
+    items: Vec<String>,
+    typed_count: Option<u64>,
+) -> Result<DesktopRun, ScullError> {
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || {
+        cleanup.execute(
+            &session,
+            &plan_id,
+            &content_hash,
+            &items,
+            typed_count,
+            now_unix(),
+        )
+    })
+    .await
+}
+
+/// `restore_quarantined`: put a quarantined item back (never overwriting). The main window only.
+#[tauri::command]
+async fn restore_quarantined(
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+    operation_id: String,
+    item_id: String,
+) -> Result<DesktopRestore, ScullError> {
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || cleanup.restore(&session, &operation_id, &item_id, now_unix())).await
+}
+
+/// `quick_clean`: run the trusted tools of the ticked cache chips. The main window only.
+#[tauri::command]
+async fn quick_clean(
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+    items: Vec<String>,
+) -> Result<DesktopQuickClean, ScullError> {
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || cleanup.quick_clean(&session, &items, now_unix())).await
+}
+
 /// `take_deep_link`: the plan a `scull://approve/<plan-id>` link opened the app with, once.
 #[tauri::command]
 fn take_deep_link(links: State<'_, DeepLinks>) -> Option<String> {
@@ -367,9 +435,10 @@ fn open_links<R: Runtime>(app: &AppHandle<R>, urls: impl IntoIterator<Item = Str
     }
 }
 
-/// The approval commands alone, for any runtime (the Tauri command tests mount them on a mock
-/// app). [`run`] registers the same commands.
-pub fn approval_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+/// The main window's own commands, granted to no other window: approving an AI agent's plan
+/// and running cleanups through the core Executor. For any runtime (the Tauri command tests
+/// mount them on a mock app with the real capabilities); [`run`] registers the same commands.
+pub fn main_window_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         approval_requests,
         open_approval_request,
@@ -377,7 +446,11 @@ pub fn approval_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Syn
         deny_agent_plan,
         revoke_agent_approval,
         agent_plan_status,
-        take_deep_link
+        take_deep_link,
+        prepare_desktop_plan,
+        execute_desktop_plan,
+        restore_quarantined,
+        quick_clean
     ]
 }
 
@@ -417,6 +490,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .manage(session)
         .manage(desk)
+        .manage(Arc::new(CleanupDesk::new()))
         .manage(links)
         .setup(|app| {
             monitor::start(app.handle())?;
@@ -463,7 +537,11 @@ pub fn run() {
             deny_agent_plan,
             revoke_agent_approval,
             agent_plan_status,
-            take_deep_link
+            take_deep_link,
+            prepare_desktop_plan,
+            execute_desktop_plan,
+            restore_quarantined,
+            quick_clean
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

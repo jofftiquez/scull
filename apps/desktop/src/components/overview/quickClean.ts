@@ -1,15 +1,17 @@
 // Quick Clean on the Overview (design 01 / 01c; D-20): pick package caches, confirm, watch the
 // chips pop one by one while the total counts down, then a burst and the freed figure.
 //
-// THE DESKTOP NEVER DELETES (yet). There is no bridge method that cleans anything (the bridge
-// is read-only by design, SAFE-10). `quickCleanPreview` is the stub the button calls:
+// `quickCleanPreview` runs it after the card's confirmation:
 //   - with the mock bridge it resolves a SIMULATED result (nothing exists to delete; the UI
 //     marks the result "simulated");
-//   - with the Tauri bridge it rejects with QUICK_CLEAN_UNAVAILABLE, so the real app can never
-//     show a success that did not happen.
-// When the core grows a reviewed Quick Clean command (P2-QC-01 runner behind a plan), replace
-// the stub with that bridge call and keep the animation.
-import type { Candidate, ScullBridge } from '../../bridge';
+//   - inside Tauri it calls `quick_clean` (P3-EXEC-01): the core runs each ticked tool's own
+//     cleanup command (trusted locations, private sandbox) as one audited operation. The webview
+//     never touches a file (SAFE-10). Only the main window may call it; the menu bar widget
+//     opens the main window instead.
+import { toBridgeError, type Candidate, type ScullBridge } from '../../bridge';
+import type { DesktopQuickClean } from '../../bridge/generated';
+import { realTransport, type TauriTransport } from '../../bridge/tauri';
+import { CLEANUP_COMMANDS } from '../../bridge/tauriPlans';
 import { formatBytes } from '../../lib/format';
 
 /** Cleaning animation length (design: 2600 ms). */
@@ -119,18 +121,33 @@ export interface QuickCleanResult {
   simulated: boolean;
 }
 
-export const QUICK_CLEAN_UNAVAILABLE =
-  'Quick Clean is not available in the desktop app yet: the app never deletes until the reviewed cleanup engine lands. Nothing was deleted.';
-
 /**
- * STUB (see the header comment). Never deletes, moves or modifies anything, in any bridge.
- * Mock: a simulated result (measured = 98% of the expected bytes, as in the design).
- * Tauri: rejects with QUICK_CLEAN_UNAVAILABLE.
+ * Run Quick Clean on the ticked chips, after the card's confirmation.
+ * Mock: a simulated result (measured = 98% of the expected bytes, as in the design); touches
+ * nothing. Tauri: `quick_clean` (P3-EXEC-01, main window only): each tool's own command, found
+ * only in trusted locations and run in a private sandbox, as one audited operation.
  */
-export async function quickCleanPreview(bridge: ScullBridge, tools: readonly QuickCleanTool[]): Promise<QuickCleanResult> {
-  if (bridge.kind !== 'mock') throw new Error(QUICK_CLEAN_UNAVAILABLE);
-  const freed = tools.reduce((a, t) => a + t.bytes, 0);
-  return { freed, measured: Math.round(freed * 0.98), simulated: true };
+export async function quickCleanPreview(
+  bridge: ScullBridge,
+  tools: readonly QuickCleanTool[],
+  t: TauriTransport = realTransport,
+): Promise<QuickCleanResult> {
+  if (bridge.kind === 'mock') {
+    const freed = tools.reduce((a, x) => a + x.bytes, 0);
+    return { freed, measured: Math.round(freed * 0.98), simulated: true };
+  }
+  let r: DesktopQuickClean;
+  try {
+    r = await t.invoke<DesktopQuickClean>(CLEANUP_COMMANDS.quickClean, { items: tools.map((x) => x.id) });
+  } catch (e) {
+    throw toBridgeError(e);
+  }
+  if (!r.operation_id) {
+    const why = r.skipped.map((s) => `${s.tool}: ${s.reason}`).join('; ');
+    throw new Error(`Nothing was run${why ? ` (${why})` : ''}. Nothing was deleted.`);
+  }
+  const freed = r.tools.reduce((a, x) => a + Math.max(0, x.cache_bytes_freed ?? 0), 0);
+  return { freed, measured: Math.max(0, r.measured_delta_bytes ?? freed), simulated: false };
 }
 
 /** Particles of the burst (design: 20, five colors, keyframes scull-b0..b9). */

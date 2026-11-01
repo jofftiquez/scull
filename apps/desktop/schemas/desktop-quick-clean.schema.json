@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "QuickCleanSkip": {
+      "additionalProperties": false,
+      "description": "A tool Quick Clean didn't run.",
+      "properties": {
+        "reason": {
+          "description": "Why, for display.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "The tool.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "QuickCleanTool": {
+      "additionalProperties": false,
+      "description": "One tool Quick Clean ran.",
+      "properties": {
+        "cache_bytes_freed": {
+          "description": "Bytes the cache shrank by, when measured.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "item_id": {
+          "description": "The cache's candidate (the Quick Clean chip).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "succeeded": {
+          "description": "Whether its command succeeded.",
+          "type": "boolean"
+        },
+        "tool": {
+          "description": "The tool (`npm`, `pnpm`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "succeeded"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/desktop-quick-clean.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The result of a Quick Clean.",
+  "properties": {
+    "measured_delta_bytes": {
+      "description": "Free space after minus before, when measured.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "operation_id": {
+      "description": "The recorded operation, when anything ran.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "predicted_bytes": {
+      "description": "Bytes the caches held before (estimate).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "skipped": {
+      "description": "Tools not run, with the reason (`not trusted`, `in use`, ...).",
+      "items": {
+        "$ref": "#/$defs/QuickCleanSkip"
+      },
+      "type": "array"
+    },
+    "tools": {
+      "description": "The tools that ran.",
+      "items": {
+        "$ref": "#/$defs/QuickCleanTool"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "tools",
+    "skipped",
+    "predicted_bytes"
+  ],
+  "title": "DesktopQuickClean",
+  "type": "object"
+}

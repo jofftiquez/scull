@@ -1,8 +1,11 @@
-// The plan bridge inside Tauri (P4-MCP-02): AI agent plans through the core's approval broker
-// (apps/desktop/src-tauri, `approval_handler`). The human approves, denies or revokes here; the
-// agent executes an approved plan itself, through `scull mcp serve` and the Executor. This app
-// never executes anything (SAFE-10), so the desktop's own plans (`preparePlan`, `executePlan`)
-// still refuse with `unsupported_platform`.
+// The plan bridge inside Tauri.
+//
+// * AI agent plans (P4-MCP-02) through the core's approval broker: the human approves, denies or
+//   revokes here; the agent executes an approved plan itself, through `scull mcp serve`.
+// * The desktop's own plans (P3-EXEC-01): `preparePlan` records a plan from the app's last scan;
+//   `executePlan` runs exactly the items the human confirmed through the core Executor (lock,
+//   revalidation, D-28, audit with the desktop channel; apps/desktop/bridge/src/cleanup.rs).
+//   The webview never touches a file (SAFE-10: deletion only through the Executor).
 //
 // The confirmation code arrives with the opened request for DISPLAY ONLY: the core keeps the
 // challenge in its own memory and checks the code the human typed (`approvePlan` sends it
@@ -12,6 +15,9 @@
 // turns changes into the dialog's events (approved elsewhere, agent started, item outcomes,
 // finished, voided, denied, revoked, expired).
 import type {
+  DesktopPlan,
+  DesktopRun,
+  RunItemOutcome,
   AgentApprovalRequest,
   AgentApproved,
   AgentDenied,
@@ -33,7 +39,7 @@ import type {
   PlanPreview,
 } from './plan';
 import { realTransport, type TauriTransport } from './tauri';
-import { BridgeError, toBridgeError } from './types';
+import { toBridgeError } from './types';
 
 /** The Tauri commands and event (apps/desktop/src-tauri/src/lib.rs). */
 export const APPROVAL_COMMANDS = {
@@ -46,6 +52,55 @@ export const APPROVAL_COMMANDS = {
   takeDeepLink: 'take_deep_link',
 } as const;
 export const OPEN_REQUEST_EVENT = 'scull://open-request';
+
+/** The cleanup commands (P3-EXEC-01; main window only). */
+export const CLEANUP_COMMANDS = {
+  prepare: 'prepare_desktop_plan',
+  execute: 'execute_desktop_plan',
+  restore: 'restore_quarantined',
+  quickClean: 'quick_clean',
+} as const;
+
+const RUN_OUTCOME: Record<RunItemOutcome, ItemOutcomeKind> = {
+  deleted: 'deleted',
+  quarantined: 'quarantined',
+  trashed: 'trashed',
+  skipped: 'skipped',
+};
+
+/** A recorded desktop plan as Cleanup Review shows it. */
+export function desktopPlanOf(p: DesktopPlan): PlanPreview {
+  return {
+    plan_id: p.plan_id,
+    hash: p.content_hash,
+    created_at: iso(p.created_at),
+    expires_at: iso(p.expires_at),
+    source: { kind: 'desktop' },
+    items: p.items.map((candidate) => ({ candidate })),
+    skipped: [],
+    left_out: p.left_out.map((l) => ({ label: l.path, tier: l.tier, reason: l.reason })),
+    estimate_notes: [],
+  };
+}
+
+/** A finished run as Cleanup Review shows it. */
+export function desktopRunOf(r: DesktopRun): ExecutionResult {
+  const items: ItemOutcome[] = r.items.map((i) => ({
+    item_id: i.item_id,
+    outcome: RUN_OUTCOME[i.outcome],
+    freed_bytes: i.freed_bytes,
+    moved_bytes: i.moved_bytes,
+    ...(i.reason ? { reason: i.reason } : {}),
+  }));
+  return {
+    plan_id: r.plan_id,
+    items,
+    predicted_bytes: r.predicted_bytes,
+    measured_freed_bytes: Math.max(0, r.measured_delta_bytes ?? items.reduce((a, i) => a + i.freed_bytes, 0)),
+    moved_bytes: r.moved_bytes,
+    finished_at: iso(r.finished_at),
+  };
+}
 
 /** How often an open dialog asks the core where its plan stands. */
 export const STATUS_POLL_MS = 1000;
@@ -208,17 +263,27 @@ export function createTauriPlanBridge(opts: TauriPlanOptions = {}): PlanBridge {
       throw toBridgeError(e);
     }
   };
-  const notConnected = (): never => {
-    throw new BridgeError({
-      kind: 'unsupported_platform',
-      message: 'Cleanup plans are not connected to the core yet; nothing was changed.',
-    });
-  };
 
   return {
     kind: 'tauri',
-    preparePlan: async () => notConnected(),
-    executePlan: async () => notConnected(),
+
+    async preparePlan(req) {
+      return desktopPlanOf(await call<DesktopPlan>(CLEANUP_COMMANDS.prepare, { items: req.items ?? null }));
+    },
+
+    async executePlan(req, o = {}) {
+      // Sent only from the Confirm button: the reviewed plan, its hash and the chosen items.
+      const r = desktopRunOf(
+        await call<DesktopRun>(CLEANUP_COMMANDS.execute, {
+          planId: req.plan_id,
+          contentHash: req.hash,
+          items: req.items,
+          typedCount: null,
+        }),
+      );
+      for (const outcome of r.items) o.onEvent?.({ kind: 'item_finished', outcome });
+      return r;
+    },
 
     async approvalRequests() {
       const r = await call<AgentRequests>(APPROVAL_COMMANDS.requests);
