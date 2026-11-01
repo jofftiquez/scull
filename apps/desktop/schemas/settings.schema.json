@@ -123,7 +123,9 @@
             "destructive": false,
             "enabled": false,
             "hash_names": false,
+            "max_pending_plans": 5,
             "max_results": 1000,
+            "prepare_per_minute": 6,
             "redact_home": true
           },
           "description": "The MCP server."
@@ -151,6 +153,14 @@
             "stale_worktree": "336h"
           },
           "description": "Alert policies for proactive protection (PRD §16)."
+        },
+        "quarantine": {
+          "$ref": "#/$defs/QuarantineConfig",
+          "default": {
+            "base": null,
+            "bases": {}
+          },
+          "description": "Where quarantined items are kept."
         },
         "rules": {
           "$ref": "#/$defs/RulesConfig",
@@ -234,6 +244,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "headroom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadroomStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The emergency headroom file (PRO-06, off by default; `None` without a data\ndirectory). Read-only here: `scull headroom create|release` changes it."
         }
       },
       "required": [
@@ -332,6 +353,26 @@
       "pattern": "^\\s*[0-9]+[smhdw]\\s*$",
       "type": "string"
     },
+    "FileIdentity": {
+      "additionalProperties": false,
+      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
+      "properties": {
+        "file": {
+          "description": "Inode / file ID as lowercase hex.",
+          "pattern": "^[0-9a-f]{1,32}$",
+          "type": "string"
+        },
+        "volume": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "volume",
+        "file"
+      ],
+      "type": "object"
+    },
     "ForgeConfig": {
       "additionalProperties": false,
       "description": "Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).",
@@ -342,6 +383,151 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "HeadroomManifest": {
+      "additionalProperties": false,
+      "description": "What scull recorded when it created the reserve.",
+      "properties": {
+        "allocated_bytes": {
+          "description": "Its allocated size when created (bytes): the space it really holds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "description": "When it was created (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/FileIdentity",
+          "description": "Its no-follow identity when created."
+        },
+        "marker": {
+          "description": "The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.",
+          "type": "string"
+        },
+        "mtime_unix": {
+          "description": "Its modification time when created (Unix seconds), when the OS reports one.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "relative": {
+          "description": "The reserve, relative to the data directory (always [`reserve_relative`]).",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "Its logical size (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "Format version ([`MANIFEST_VERSION`]).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "The volume it is on (mount point).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "relative",
+        "identity",
+        "size_bytes",
+        "allocated_bytes",
+        "volume_id",
+        "created_at",
+        "marker"
+      ],
+      "type": "object"
+    },
+    "HeadroomState": {
+      "description": "What the reserve looks like now.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No reserve (the default).",
+          "type": "string"
+        },
+        {
+          "const": "ready",
+          "description": "The reserve exists and matches its manifest: it can be released.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "The manifest is there but the file is gone (released outside scull, or a release\nwhose record is missing). Releasing only removes the manifest.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "Something at the path differs from the manifest (identity, kind or size): scull will\nnot release it.",
+          "type": "string"
+        },
+        {
+          "const": "unreadable",
+          "description": "The manifest can't be read: scull will not release anything.",
+          "type": "string"
+        },
+        {
+          "const": "unrecorded",
+          "description": "A file is at the reserve's path but there is no manifest: scull didn't record it and\nwill not release it.",
+          "type": "string"
+        }
+      ]
+    },
+    "HeadroomStatus": {
+      "additionalProperties": false,
+      "description": "The reserve's status (`scull headroom status`, `scull status`, the desktop).",
+      "properties": {
+        "detail": {
+          "description": "Why it isn't ready, in one sentence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadroomManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The manifest, when it could be read."
+        },
+        "path": {
+          "description": "The reserve's path.",
+          "type": "string"
+        },
+        "releasable_bytes": {
+          "description": "Bytes releasing it would free now (its allocated size), when [`HeadroomState::Ready`].",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/HeadroomState",
+          "description": "What it looks like."
+        }
+      },
+      "required": [
+        "state",
+        "path"
+      ],
       "type": "object"
     },
     "McpConfig": {
@@ -363,9 +549,23 @@
           "description": "Hash project and directory names in results.",
           "type": "boolean"
         },
+        "max_pending_plans": {
+          "default": 5,
+          "description": "Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a\n`prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;\n`0` counts as `1`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_results": {
           "default": 1000,
           "description": "Maximum number of results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prepare_per_minute": {
+          "default": 6,
+          "description": "Most `prepare_cleanup` calls per minute in one MCP session; more are refused\n(`rate_limited`). File-only setting; `0` counts as `1`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -583,6 +783,29 @@
           "$ref": "#/$defs/DurationSpec",
           "default": "336h",
           "description": "Worktrees idle for longer than this are stale (PRO-02)."
+        }
+      },
+      "type": "object"
+    },
+    "QuarantineConfig": {
+      "additionalProperties": false,
+      "description": "Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).\n\nBy default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is\nchosen automatically: the shallowest directory above the item, on its volume, that the\ncurrent user owns (usually the home directory). These settings replace that choice:\n\n```toml\n[quarantine]\nbase = \"~/.scull-q\"                       # for items on the volume holding this directory\n\n[quarantine.bases]                        # per volume: longest matching prefix wins\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n\"D:\\\\\" = \"D:\\\\Users\\\\me\\\\q\"\n```\n\n* For an item, the entry of `bases` whose key is the longest path prefix of the item's path\n  applies; otherwise `base`; otherwise the automatic choice.\n* A configured base must be on the **same volume** as the item. If it isn't, that item is\n  not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It\n  is never moved across volumes and never deleted instead.\n* The base is created owner-only (`0700` / protected DACL) when missing, must be a real\n  directory (not a link) and must not be inside an item being cleaned; the\n  `.scull-quarantine` folder inside it is created and checked owner-only.\n* Repository files (`.scull.toml`) can't set these (CFG-03).",
+      "properties": {
+        "base": {
+          "default": null,
+          "description": "Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Per volume (or any directory): items under the key use the value as their base.",
+          "type": "object"
         }
       },
       "type": "object"

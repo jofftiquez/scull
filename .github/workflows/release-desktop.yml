@@ -7,6 +7,8 @@ name: Release desktop
 # * Tags `v1*`..`v9*` only (v1.0.0, v1.0.0-rc.1, ...): the CLI alphas (v0.x) never build the
 #   desktop.
 # * Pull requests that touch the bundling inputs build the Linux bundles as a dry run.
+# * On a tag, the bundles wait for the release gates (job `gates`, the same workflow the CLI
+#   release waits for).
 # * Manual dry run (Actions -> Release desktop -> Run workflow): builds unsigned-or-signed
 #   bundles (whatever the secrets allow) and keeps them as workflow artifacts. Nothing is
 #   attached to a release, no tag is created.
@@ -87,9 +89,19 @@ jobs:
           fi
           echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
 
+  # A tag's desktop bundles wait for the same release gates as the CLI (release.yml runs them
+  # through dist's plan-jobs): the MVP gates for every non-alpha tag (#66, docs/PHASE2_MERGE.md).
+  # Pull requests and manual dry runs build without them.
+  gates:
+    name: release gates
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/release-gates.yml
+    secrets: inherit
+
   bundle:
     name: bundle (${{ matrix.name }})
-    needs: plan
+    needs: [plan, gates]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.gates.result == 'success' || needs.gates.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

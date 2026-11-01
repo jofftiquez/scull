@@ -6,8 +6,7 @@
 
 use crate::cancel;
 use crate::cli::{
-    CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
-    WorktreesAction,
+    CleanAction, Cli, Command, DataAction, McpAction, ProjectsAction, RulesAction, WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -21,13 +20,6 @@ pub struct Planned {
     pub name: &'static str,
     /// GitHub issue that implements it.
     pub issue: Option<u32>,
-}
-
-const fn planned(name: &'static str, issue: u32) -> Option<Planned> {
-    Some(Planned {
-        name,
-        issue: Some(issue),
-    })
 }
 
 /// The tracking issue for a command that is not implemented yet, or `None` if the command is
@@ -44,29 +36,21 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             ..
         } => None,
         Command::Clean(args) => match args.action {
-            None => planned("clean", 79),
-            Some(CleanAction::Caches { .. }) => planned("clean caches", 80),
+            None => None,
+            Some(CleanAction::Caches(_)) => None,
         },
         Command::LargeFiles { .. } => None,
-        Command::History => planned("history", 81),
-        Command::Restore { .. } => planned("restore", 81),
-        Command::Approve { .. } => planned("approve", 108),
+        Command::History(_) | Command::Restore(_) => None,
+        Command::Approve { .. } => None,
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
         Command::Check(_) => None,
-        Command::Insights {
-            action: Some(InsightsAction::Purge { .. }),
-            ..
-        } => Some(crate::cmd::insights::PURGE),
         Command::Insights { .. } => None,
         Command::Agent { .. } => None,
         Command::Schedule { .. } => None,
-        Command::Data { action } => match action {
-            DataAction::Show => planned("data show", 82),
-            DataAction::Export => planned("data export", 82),
-            DataAction::Purge => planned("data purge", 82),
-        },
+        Command::Data { .. } => None,
+        Command::Headroom { .. } => None,
         Command::Doctor(_) => None,
         Command::Ask(_) => None,
         Command::Mcp {
@@ -127,12 +111,23 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             ..
         } => crate::cmd::worktrees::register(path, ttl, ui)?,
         Command::Caches => crate::cmd::caches::run(ui)?,
+        Command::History(args) => crate::cmd::history::run(args, ui)?,
+        Command::Restore(args) => crate::cmd::restore::run_restore(args, ui)?,
+        Command::Clean(args) => match &args.action {
+            None if args.purge_quarantine => crate::cmd::restore::run_purge(args, ui)?,
+            None => crate::cmd::clean::run(args, ui)?,
+            Some(CleanAction::Caches(a)) => crate::cmd::clean_caches::run(a, ui)?,
+        },
         Command::LargeFiles {
             path,
             min_size,
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Approve { plan_id, revoke } => match revoke {
+            Some(id) => crate::cmd::approve::run_revoke(id, ui)?,
+            None => crate::cmd::approve::run(plan_id.as_deref(), ui)?,
+        },
         Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
@@ -147,9 +142,35 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Mcp {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
+        Command::Data {
+            action: DataAction::Show,
+        } => crate::cmd::data::run_show(ui)?,
+        Command::Data {
+            action: DataAction::Export { format, out },
+        } => crate::cmd::data::run_export(ui, *format, out.as_deref())?,
+        Command::Data {
+            action:
+                DataAction::Purge {
+                    older_than,
+                    confirm,
+                    include_quarantine,
+                    ..
+                },
+        } => {
+            let scope = match older_than {
+                Some(secs) => crate::cmd::data::PurgeScope::OlderThan(*secs),
+                None => crate::cmd::data::PurgeScope::All,
+            };
+            let opts = crate::cmd::data::PurgeOptions {
+                scope,
+                include_quarantine: *include_quarantine,
+            };
+            crate::cmd::data::run_purge(ui, &opts, *confirm)?;
+        }
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
         Command::Ask(args) => crate::cmd::ask::run(args, ui)?,
         Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
+        Command::Headroom { action } => crate::cmd::headroom::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
@@ -190,43 +211,22 @@ mod tests {
         planned_for(&cli.command)
     }
 
+    /// No command is a stub in this build; the stub machinery stays for future commands.
     #[test]
-    fn every_planned_command_names_its_issue() {
-        let table: &[(&[&str], &str, Option<u32>)] = &[
-            (&["clean"], "clean", Some(79)),
-            (
-                &["clean", "--dry-run", "--output", "p.json"],
-                "clean",
-                Some(79),
-            ),
-            (
-                &["clean", "--plan", "p.json", "--confirm"],
-                "clean",
-                Some(79),
-            ),
-            (&["clean", "caches"], "clean caches", Some(80)),
-            (&["history"], "history", Some(81)),
-            (&["restore", "op-1"], "restore", Some(81)),
-            (&["approve", "plan-1"], "approve", Some(108)),
-            (&["insights", "purge"], "insights purge", Some(266)),
-            (
-                &["insights", "purge", "--older-than", "90d", "--confirm"],
-                "insights purge",
-                Some(266),
-            ),
-            (&["data", "show"], "data show", Some(82)),
-            (&["data", "export"], "data export", Some(82)),
-            (&["data", "purge"], "data purge", Some(82)),
-        ];
-        for (args, name, issue) in table {
-            assert_eq!(
-                planned_of(args),
-                Some(Planned {
-                    name,
-                    issue: *issue
-                }),
-                "{args:?}"
-            );
+    fn no_command_is_planned_and_stubs_name_their_issue() {
+        let p = Planned {
+            name: "example",
+            issue: Some(7),
+        };
+        assert_eq!(
+            not_implemented(p).message,
+            "`scull example` is not implemented yet (tracked in #7)"
+        );
+        for purge in [
+            &["insights", "purge"][..],
+            &["insights", "purge", "--older-than", "90d", "--confirm"],
+        ] {
+            assert_eq!(planned_of(purge), None, "{purge:?}");
         }
         assert_eq!(planned_of(&["completions", "bash"]), None);
         assert_eq!(planned_of(&["doctor"]), None);
@@ -238,6 +238,20 @@ mod tests {
             &["worktrees", "inspect", "."],
             &["worktrees", "register", ".", "--ttl", "7d"],
             &["caches"],
+            &["data", "show"],
+            &["data", "export"],
+            &["data", "purge", "--all"],
+            &["data", "purge", "--older-than", "30d"],
+            &["clean"],
+            &["clean", "--dry-run", "--output", "p.json"],
+            &["clean", "--plan", "p.json", "--confirm"],
+            &["clean", "caches"],
+            &["history"],
+            &["restore", "op_1"],
+            &["clean", "--purge-quarantine"],
+            &["clean", "caches", "--confirm", "--wipe"],
+            &["approve"],
+            &["approve", "plan-1"],
             &["schedule", "enable"],
             &["schedule", "disable"],
             &["schedule", "status"],

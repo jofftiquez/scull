@@ -817,6 +817,13 @@ export type DbState = "ok" | "missing" | "empty" | "newer_schema" | "needs_migra
  */
 export type OwnFileKind = "database" | "wal" | "shm" | "backup" | "damaged";
 /**
+ * What the reserve looks like now.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomState".
+ */
+export type HeadroomState = "none" | "ready" | "missing" | "changed" | "unreadable" | "unrecorded";
+/**
  * Where an effective config value came from.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -1549,8 +1556,9 @@ export interface VolumeSampleView {
  */
 export interface HistoryView {
   /**
-   * Whether this build of the core can read operations and their audit chain. `false`
-   * before the Phase 2 audit API: the list is then empty by construction.
+   * Whether this build of the core can read operations and their audit chain (always
+   * `true` since the Phase 2 audit API; `false` only from a build without it, whose list
+   * is empty by construction).
    */
   audit_api: boolean;
   /**
@@ -2530,6 +2538,7 @@ export interface Config {
   mcp?: McpConfig;
   output?: OutputConfig;
   proactive?: ProactiveConfig;
+  quarantine?: QuarantineConfig;
   rules?: RulesConfig;
   scan?: ScanConfig;
 }
@@ -2565,9 +2574,20 @@ export interface McpConfig {
    */
   hash_names?: boolean;
   /**
+   * Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+   * `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+   * `0` counts as `1`.
+   */
+  max_pending_plans?: number;
+  /**
    * Maximum number of results per tool call.
    */
   max_results?: number;
+  /**
+   * Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+   * (`rate_limited`). File-only setting; `0` counts as `1`.
+   */
+  prepare_per_minute?: number;
   /**
    * Replace the home directory prefix with `~` in results (on by default, PRD §13.5).
    */
@@ -2667,6 +2687,47 @@ export interface Budget {
   path?: string | null;
 }
 /**
+ * Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).
+ *
+ * By default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is
+ * chosen automatically: the shallowest directory above the item, on its volume, that the
+ * current user owns (usually the home directory). These settings replace that choice:
+ *
+ * ```toml
+ * [quarantine]
+ * base = "~/.scull-q"                       # for items on the volume holding this directory
+ *
+ * [quarantine.bases]                        # per volume: longest matching prefix wins
+ * "/Volumes/Data" = "/Volumes/Data/me/.q"
+ * "D:\\" = "D:\\Users\\me\\q"
+ * ```
+ *
+ * * For an item, the entry of `bases` whose key is the longest path prefix of the item's path
+ *   applies; otherwise `base`; otherwise the automatic choice.
+ * * A configured base must be on the **same volume** as the item. If it isn't, that item is
+ *   not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It
+ *   is never moved across volumes and never deleted instead.
+ * * The base is created owner-only (`0700` / protected DACL) when missing, must be a real
+ *   directory (not a link) and must not be inside an item being cleaned; the
+ *   `.scull-quarantine` folder inside it is created and checked owner-only.
+ * * Repository files (`.scull.toml`) can't set these (CFG-03).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuarantineConfig".
+ */
+export interface QuarantineConfig {
+  /**
+   * Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.
+   */
+  base?: string | null;
+  /**
+   * Per volume (or any directory): items under the key use the value as their base.
+   */
+  bases?: {
+    [k: string]: string | undefined;
+  };
+}
+/**
  * Optional (user or community) rules. Disabled until enabled here (CLS-04).
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -2737,6 +2798,11 @@ export interface DataInfo {
    * Their total size in bytes.
    */
   footprint_bytes: number;
+  /**
+   * The emergency headroom file (PRO-06, off by default; `None` without a data
+   * directory). Read-only here: `scull headroom create|release` changes it.
+   */
+  headroom?: HeadroomStatus | null;
 }
 /**
  * The database, from its header.
@@ -2779,6 +2845,72 @@ export interface OwnFile {
    * Where it is.
    */
   path: string;
+}
+/**
+ * The reserve's status (`scull headroom status`, `scull status`, the desktop).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomStatus".
+ */
+export interface HeadroomStatus {
+  /**
+   * Why it isn't ready, in one sentence.
+   */
+  detail?: string | null;
+  /**
+   * The manifest, when it could be read.
+   */
+  manifest?: HeadroomManifest | null;
+  /**
+   * The reserve's path.
+   */
+  path: string;
+  /**
+   * Bytes releasing it would free now (its allocated size), when [`HeadroomState::Ready`].
+   */
+  releasable_bytes?: number | null;
+  state: HeadroomState;
+}
+/**
+ * What scull recorded when it created the reserve.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomManifest".
+ */
+export interface HeadroomManifest {
+  /**
+   * Its allocated size when created (bytes): the space it really holds.
+   */
+  allocated_bytes: number;
+  /**
+   * When it was created (Unix seconds).
+   */
+  created_at: number;
+  identity: FileIdentity;
+  /**
+   * The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.
+   */
+  marker: string;
+  /**
+   * Its modification time when created (Unix seconds), when the OS reports one.
+   */
+  mtime_unix?: number | null;
+  /**
+   * The reserve, relative to the data directory (always [`reserve_relative`]).
+   */
+  relative: string;
+  /**
+   * Its logical size (bytes).
+   */
+  size_bytes: number;
+  /**
+   * Format version ([`MANIFEST_VERSION`]).
+   */
+  version: number;
+  /**
+   * The volume it is on (mount point).
+   */
+  volume_id: string;
 }
 /**
  * `status`: the header's freshness line and the nav figures come from here.

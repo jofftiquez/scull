@@ -8,10 +8,16 @@
 //! * The allowlist is `scan.roots`; broad roots (a filesystem root, the home folder or a
 //!   folder containing it, CFG-04) are left out with a warning.
 //! * stdout carries only JSON-RPC; everything else goes to stderr. Ctrl-C stops the server.
+//! * **Destructive mode** (MCP-04, FX-MCP-07): the plan and execute tools are offered only
+//!   when `[mcp] destructive = true` is in the user config file **and** the server is started
+//!   with `--allow-destructive`, and never when running elevated. Plans the agent prepares
+//!   run only after the user approves them with `scull approve` ([`super::approve`]); execution
+//!   goes through the Executor ([`super::mcp_runner`]).
 
 use super::doctor::CONFIG_FILE_NAME;
 use super::init::replace_owner_only;
-use super::pipeline;
+use super::mcp_runner::ExecutorRunner;
+use super::{exec, pipeline};
 use crate::cancel;
 use crate::output::Ui;
 use scull_core::config::{ConfigLayer, validate_roots};
@@ -19,6 +25,7 @@ use scull_core::{ErrorKind, FsPath, ScullError};
 use scull_detectors::CacheEnv;
 use scull_detectors::rules::Platform as RulesOs;
 use scull_engine::paths::canon;
+use scull_mcp::approval::Principal;
 use scull_mcp::{DISCLOSURE, ScullMcp, ServerOptions};
 use scull_platform::app_dirs;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -42,14 +49,12 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
     if let Some(d) = &dirs {
         disclose_once(&d.state);
     }
-    if allow_destructive {
-        pipeline::warn(
-            ui,
-            "--allow-destructive has no effect: this version has no destructive MCP tools; \
-             serving read-only tools only",
-        );
-    }
     let server = build_server(&loaded, dirs.map(|d| d.data), ui)?;
+    let server = if allow_destructive {
+        destructive(server, &loaded, ui)?
+    } else {
+        server
+    };
     // Ctrl-C ends the session with exit 130 (CLI-05), whether it came before or after the
     // client's `initialize` (#251): a handshake cut short by the stop is reported as cancelled,
     // not as a failed session.
@@ -57,6 +62,52 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
         Err(_) if cancel::is_cancelled() => Err(cancel::cancelled_error()),
         other => other,
     }
+}
+
+/// `--allow-destructive`: offer the plan tools when the config file also allows them and the
+/// server is not elevated; otherwise say why it stays read-only.
+fn destructive(
+    server: ScullMcp,
+    loaded: &pipeline::Loaded,
+    ui: &Ui,
+) -> Result<ScullMcp, ScullError> {
+    if !loaded.config.mcp.destructive {
+        pipeline::warn(
+            ui,
+            "--allow-destructive has no effect without `[mcp] destructive = true` in scull's \
+             config file (both are required); serving read-only tools only",
+        );
+        return Ok(server);
+    }
+    if exec::elevation().blocks_destructive() {
+        pipeline::warn(
+            ui,
+            "destructive mode is never offered to agents when scull runs as root/administrator \
+             (or when that can't be told); serving read-only tools only",
+        );
+        return Ok(server);
+    }
+    let who = exec::who()?;
+    let runner = ExecutorRunner {
+        quarantine: exec::quarantine_settings(&loaded.config.quarantine),
+        trash: exec::trash_locations(),
+    };
+    let server = server.with_plan_tools(
+        true,
+        std::sync::Arc::new(runner),
+        Principal {
+            machine_id: who.machine_id,
+            user: who.user,
+        },
+    );
+    if server.plan_tools_enabled() {
+        pipeline::warn(
+            ui,
+            "destructive mode: agents can prepare cleanup plans; each one runs only after you \
+             approve it with `scull approve <plan-id>` in your own terminal",
+        );
+    }
+    Ok(server)
 }
 
 /// The read-only server over `scan.roots` (without broad roots) and the `[mcp]` settings: what

@@ -1492,10 +1492,21 @@ dependencies = [
 name = "scull-cleaner"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.3.4",
+ "schemars",
  "scull-core",
+ "scull-detectors",
+ "scull-engine",
+ "scull-fixtures",
+ "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
+ "scull-scanner",
  "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1507,6 +1518,7 @@ dependencies = [
  "ctrlc",
  "jsonschema",
  "proptest",
+ "rusqlite",
  "schemars",
  "scull-ask",
  "scull-cleaner",
@@ -1603,6 +1615,8 @@ dependencies = [
 name = "scull-fixtures"
 version = "0.0.0"
 dependencies = [
+ "jsonschema",
+ "scull-cleaner",
  "scull-cli",
  "scull-core",
  "scull-detectors",
@@ -1611,9 +1625,11 @@ dependencies = [
  "scull-platform",
  "scull-safety",
  "scull-scanner",
+ "scull-storage",
  "serde_json",
  "sha2",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -1648,6 +1664,7 @@ dependencies = [
 name = "scull-mcp"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.3.4",
  "jsonschema",
  "proptest",
  "rmcp",
@@ -1674,7 +1691,9 @@ name = "scull-platform"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "rustix",
  "scull-core",
+ "scull-fixtures",
  "serde",
  "serde_json",
  "tempfile",
@@ -1727,6 +1746,7 @@ dependencies = [
  "scull-core",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

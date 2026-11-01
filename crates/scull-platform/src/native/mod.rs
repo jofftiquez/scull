@@ -4,6 +4,7 @@ use crate::{
     Capabilities, DirEntry, DirIter, DirSource, Exposure, Metadata, Operation, Platform,
     PlatformError, Result,
 };
+use scull_core::FileIdentity;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io;
@@ -15,7 +16,7 @@ mod unix;
 use unix as os;
 
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(windows)]
 use windows as os;
 
@@ -67,6 +68,12 @@ pub fn native_path_bytes(path: &Path) -> Cow<'_, [u8]> {
 
 // Crate-internal entry points for the OS-independent modules (`app_dirs`, `owner_only`).
 
+/// The effective user ID of this process.
+#[cfg(all(unix, feature = "delete"))]
+pub(crate) fn effective_uid() -> u32 {
+    os::effective_uid()
+}
+
 /// The account this process acts as: `uid:<n>` on Unix, the user SID on Windows.
 pub(crate) fn current_user_id() -> io::Result<String> {
     os::current_user_id()
@@ -85,6 +92,12 @@ pub(crate) fn create_dir_owner_only(path: &Path) -> io::Result<()> {
 /// Creates a new file (`create_new`) with owner-only permissions, opened read-write.
 pub(crate) fn create_file_owner_only(path: &Path) -> io::Result<File> {
     os::create_file_owner_only(path)
+}
+
+/// Opens an existing regular file read-only without following a link at its last component,
+/// with the identity read from the opened handle.
+pub(crate) fn open_file_no_follow(path: &Path) -> io::Result<(File, Option<FileIdentity>)> {
+    os::open_file_no_follow(path)
 }
 
 /// Narrows an existing file or directory to owner-only, without following a link.

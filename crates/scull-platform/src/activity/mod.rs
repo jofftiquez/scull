@@ -52,6 +52,14 @@ mod windows;
 #[cfg(windows)]
 use windows as os;
 
+/// Processes holding `file` open, from Restart Manager (query only: `RmShutdown` is never
+/// called). The removal walker uses it to name the holder of a locked file it skips
+/// (FX-WIN-03); the path is used for this query only, never to delete.
+#[cfg(all(windows, feature = "delete"))]
+pub(crate) fn processes_holding(file: &Path) -> Result<Vec<Hit>, String> {
+    windows::restart_manager(&[file.to_path_buf()], file)
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod unsupported;
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

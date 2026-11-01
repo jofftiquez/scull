@@ -1,0 +1,100 @@
+{
+  "$defs": {
+    "DataDump": {
+      "additionalProperties": false,
+      "description": "The `scull-data.json` document: every table with its columns and rows (values as recorded).\nOnly used for the schema; the file is streamed in the same shape.",
+      "properties": {
+        "database": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Database exported."
+        },
+        "exported_at": {
+          "description": "When it was exported (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "schema_version": {
+          "description": "Its schema version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tables": {
+          "description": "Every table, in a fixed order.",
+          "items": {
+            "$ref": "#/$defs/TableDump"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "exported_at",
+        "database",
+        "schema_version",
+        "tables"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "TableDump": {
+      "additionalProperties": false,
+      "description": "One table of [`DataDump`].",
+      "properties": {
+        "columns": {
+          "description": "Column names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "description": "Rows, keyed by column name. Integers and reals are numbers, text is a string, NULL is\n`null`, a BLOB is a hex string.",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "table": {
+          "description": "Table name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/DataDump",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/data-dump@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/data-dump@1",
+  "type": "object"
+}

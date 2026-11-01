@@ -116,6 +116,7 @@ fn params(created_unix: i64, origin: PlanOrigin) -> PlanParams {
         machine_id: MACHINE.into(),
         user: USER.into(),
         origin,
+        operations_watermark: None,
     }
 }
 

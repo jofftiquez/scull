@@ -3,6 +3,17 @@
 cargo-dist copies the section whose heading matches the tagged version into the GitHub
 release notes, so keep one `## <version>` heading per release (see RELEASING.md).
 
+## Unreleased
+
+Cleanup arrives: `scull clean` (reviewed plans, quarantine for S1/S2, deletion for S0),
+`scull clean caches` (Quick Clean through each tool's own command), `scull restore`,
+`scull history`, `scull data`, `scull insights purge`, the MCP approval broker
+(`scull approve`, `scull mcp serve --allow-destructive`) and the emergency headroom file.
+Every destructive path goes through the Executor (lock, write-ahead journal, audit,
+revalidation right before each item). Release builds are gated by the MVP release gates
+(`packaging/check_mvp_gates.py`) instead of the inspect-only gate. The alpha notes below are
+kept as history.
+
 ## 0.1.0-alpha.1
 
 > **Alpha, inspect-only: no cleanup commands.** This build can scan and explain what is using

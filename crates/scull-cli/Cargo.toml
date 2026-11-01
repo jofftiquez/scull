@@ -21,6 +21,9 @@ scull-detectors.workspace = true
 scull-git.workspace = true
 scull-safety.workspace = true
 scull-storage.workspace = true
+# Phase 2 (D-33): the single deletion path, used by `scull clean`, `clean caches`, `restore` and
+# `data purge`. Release builds are checked by the MVP gates (packaging/check_mvp_gates.py);
+# the inspect-only gate (packaging/check_inspect_only.py) applies to `-alpha` tags only.
 scull-cleaner.workspace = true
 scull-mcp.workspace = true
 # `scull ask` (optional, off by default): the only crate here that talks to a network endpoint.
@@ -48,11 +51,20 @@ scull-fixtures.workspace = true
 scull-insights = { workspace = true, features = ["fixtures"] }
 # The desktop bridge, for the cross-surface forecast test (tests/forecast_surfaces.rs) only.
 scull-desktop-bridge = { path = "../../apps/desktop/bridge" }
+# Tests only: seed quarantine manifest rows (no public writer before #71) and a newer schema.
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 tempfile = "3"
 
 [[bin]]
 name = "scull"
 path = "src/main.rs"
+
+# `scull clean caches` end to end: the test executable doubles as fake package managers, so it
+# needs its own `main` (see tests/clean_caches/main.rs).
+[[test]]
+name = "clean_caches"
+path = "tests/clean_caches/main.rs"
+harness = false
 
 # Release packaging (P1-REL-01): the workspace is `publish = false` (nothing goes to
 # crates.io), which cargo-dist reads as "not distributable" unless opted in here. Only this

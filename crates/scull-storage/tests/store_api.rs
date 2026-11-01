@@ -7,8 +7,8 @@ mod common;
 use common::*;
 use scull_core::{Action, Category, ContentHash, ErrorKind, FsPath, OperationId, Tier};
 use scull_storage::{
-    ApprovalMethod, AuditEntry, AuditOutcome, NewApproval, OperationStart, Rollup, ScanFinish,
-    ScanStatus, ScanTotals, Store, StoreError,
+    ApprovalMethod, ItemOutcome, ItemRecord, NewApproval, OperationEnd, OperationFinish,
+    OperationStart, Rollup, ScanFinish, ScanStatus, ScanTotals, Store, StoreError,
 };
 
 fn approval_for(plan: &scull_core::Plan, approved_at: i64, expires_at: i64) -> NewApproval {
@@ -53,40 +53,31 @@ fn populated() -> (tempfile::TempDir, std::path::PathBuf, Store) {
     s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
         .unwrap();
     let op = OperationId::from_suffix("O1").unwrap();
-    s.record_operation_start(&OperationStart {
-        operation_id: op.clone(),
-        plan_id: p.id().clone(),
-        content_hash: p.content_hash().clone(),
-        approver: "dev".into(),
-        method: ApprovalMethod::CliTty,
-        started_at: T0 + 20,
-    })
-    .unwrap();
+    let mut audit = s
+        .begin_operation(
+            &OperationStart {
+                operation_id: op,
+                plan_id: p.id().clone(),
+                content_hash: p.content_hash().clone(),
+                approver: "dev".into(),
+                method: ApprovalMethod::CliTty,
+                started_at: T0 + 20,
+            },
+            &TestPerms::default(),
+        )
+        .unwrap();
     let item = &p.items()[0];
-    s.append_audit(&[
-        AuditEntry {
-            operation_id: op.clone(),
-            recorded_at: T0 + 21,
-            item_id: Some(item.item_id.clone()),
-            path: Some(item.path.clone()),
-            action: Some("delete".into()),
-            outcome: AuditOutcome::Succeeded,
-            reason: None,
-            predicted_bytes: Some(item.reclaimable_bytes),
-            measured_bytes: Some(item.reclaimable_bytes - 1),
+    let mut rec = ItemRecord::new(item.item_id.clone(), T0 + 21, ItemOutcome::Removed);
+    rec.freed_bytes = Some(item.reclaimable_bytes - 1);
+    s.record_item(&mut audit, &rec).unwrap();
+    s.finish_operation(
+        &mut audit,
+        &OperationFinish {
+            finished_at: T0 + 22,
+            end: OperationEnd::Cancelled,
+            measured_delta_bytes: None,
         },
-        AuditEntry {
-            operation_id: op,
-            recorded_at: T0 + 22,
-            item_id: None,
-            path: None,
-            action: None,
-            outcome: AuditOutcome::OperationFinished,
-            reason: None,
-            predicted_bytes: None,
-            measured_bytes: None,
-        },
-    ])
+    )
     .unwrap();
     (dir, path, s)
 }
@@ -100,7 +91,7 @@ fn append_only_triggers_reject_update_and_delete() {
     assert_blocked(&c, "UPDATE plans SET expires_at = expires_at + 1");
     assert_blocked(&c, "UPDATE plans SET canonical_json = '{}'");
     assert_blocked(&c, "DELETE FROM plans");
-    assert_blocked(&c, "UPDATE audit SET measured_bytes = 0");
+    assert_blocked(&c, "UPDATE audit SET freed_bytes = 0");
     assert_blocked(&c, "UPDATE audit SET outcome = 'failed'");
     assert_blocked(&c, "DELETE FROM audit");
     assert_blocked(&c, "UPDATE operations SET approver = 'mallory'");
@@ -120,7 +111,7 @@ fn append_only_triggers_reject_update_and_delete() {
     let rows: i64 = c
         .query_row("SELECT count(*) FROM audit", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(rows, 2);
+    assert_eq!(rows, 3, "started, one item, finished");
 }
 
 #[test]
@@ -167,7 +158,8 @@ fn quarantine_manifest_paths_are_immutable_and_rows_never_deleted() {
     let c = raw(&path);
     c.execute(
         "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, quarantine_path, \
-         bytes, quarantined_at) VALUES ('op_O1', 'i', '/work/p1/target', '/q/1', 10, 5)",
+         bytes, quarantined_at, entry_identity, entry_kind, parent_identity, logical_bytes) \
+         VALUES ('op_O1', 'i', '/work/p1/target', '/q/1', 10, 5, '7:1', 'dir', '7:2', 8)",
         [],
     )
     .unwrap();
@@ -223,6 +215,7 @@ fn different_plan_under_same_id_is_rejected() {
             machine_id: "machine-a".into(),
             user: "dev".into(),
             origin: scull_core::PlanOrigin::Mcp,
+            operations_watermark: None,
         },
         items,
     )
@@ -275,6 +268,37 @@ fn approval_is_single_use() {
         .insert_approval(&approval_for(&p, T0 + 40, T0 + 600))
         .unwrap_err();
     assert_eq!(rejected_kind(err), ErrorKind::Usage);
+}
+
+/// What a human can approve (§13.3): unexpired plans of one origin without an approval
+/// record, newest first; approved, expired and other-origin plans are left out.
+#[test]
+fn plans_awaiting_approval_lists_unapproved_unexpired_plans_of_one_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for n in 1..=3 {
+        s.insert_plan(&plan(n)).unwrap();
+    }
+    let ids = |s: &scull_storage::Store, now| {
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, now, 10)
+            .unwrap()
+    };
+    assert_eq!(ids(&s, T0 + 1), vec![plan_id(3), plan_id(2), plan_id(1)]);
+    assert_eq!(
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 1, 1)
+            .unwrap(),
+        vec![plan_id(3)]
+    );
+    assert!(
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Cli, T0 + 1, 10)
+            .unwrap()
+            .is_empty()
+    );
+    s.insert_approval(&approval_for(&plan(2), T0 + 10, T0 + 600))
+        .unwrap();
+    assert_eq!(ids(&s, T0 + 20), vec![plan_id(3), plan_id(1)]);
+    // MCP plans expire after 15 minutes.
+    assert!(ids(&s, T0 + 15 * 60).is_empty());
 }
 
 #[test]
@@ -361,8 +385,8 @@ fn audit_rows_record_hash_approver_method_and_bytes() {
     let row: (String, String, String, String, i64, i64) = raw(&path)
         .query_row(
             "SELECT o.content_hash, o.approver, o.method, a.outcome, a.predicted_bytes, \
-             a.measured_bytes FROM audit a JOIN operations o USING (operation_id) \
-             WHERE a.item_id IS NOT NULL",
+             a.freed_bytes FROM audit a JOIN operations o USING (operation_id) \
+             WHERE a.kind = 'item'",
             [],
             |r| {
                 Ok((
@@ -379,7 +403,7 @@ fn audit_rows_record_hash_approver_method_and_bytes() {
     assert_eq!(row.0, plan(1).content_hash().as_str());
     assert_eq!(
         (row.1.as_str(), row.2.as_str(), row.3.as_str()),
-        ("dev", "cli_tty", "succeeded")
+        ("dev", "cli_tty", "removed")
     );
     assert_eq!(row.4 - row.5, 1);
 }
@@ -391,14 +415,17 @@ fn operation_must_match_recorded_plan_hash() {
     let p = plan(1);
     s.insert_plan(&p).unwrap();
     let err = s
-        .record_operation_start(&OperationStart {
-            operation_id: OperationId::from_suffix("O1").unwrap(),
-            plan_id: p.id().clone(),
-            content_hash: other_hash(),
-            approver: "dev".into(),
-            method: ApprovalMethod::Desktop,
-            started_at: T0,
-        })
+        .begin_operation(
+            &OperationStart {
+                operation_id: OperationId::from_suffix("O1").unwrap(),
+                plan_id: p.id().clone(),
+                content_hash: other_hash(),
+                approver: "dev".into(),
+                method: ApprovalMethod::Desktop,
+                started_at: T0,
+            },
+            &TestPerms::default(),
+        )
         .unwrap_err();
     assert!(err.to_string().contains("does not match"), "{err}");
 }
@@ -504,4 +531,395 @@ fn items_require_a_recorded_scan() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = open(&db_in(&dir));
     assert!(s.upsert_items(&scan_id(7), T0, &candidates()).is_err());
+}
+
+/// `open_read_only` (desktop History, SAFE-10) reads a current database, refuses every write,
+/// and never creates, migrates or changes a file.
+#[test]
+fn open_read_only_reads_but_never_writes_or_creates() {
+    use scull_storage::StoreOptions;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scull.db");
+    let opts = StoreOptions::default();
+
+    // Missing: refused, nothing created.
+    let e = Store::open_read_only(&path, &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::NotFound);
+    assert!(!path.exists());
+    // A folder at the path: refused.
+    std::fs::create_dir(dir.path().join("dir.db")).unwrap();
+    let e = Store::open_read_only(&dir.path().join("dir.db"), &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::Config);
+
+    // A current database with one plan.
+    let mut store = Store::open(&path, &TestPerms::default()).unwrap();
+    let plan = plan(1);
+    store.insert_plan(&plan).unwrap();
+    drop(store);
+    let before = std::fs::read(&path).unwrap();
+
+    let ro = Store::open_read_only(&path, &opts).unwrap();
+    assert_eq!(ro.get_plan(plan.id()).unwrap().unwrap().id(), plan.id());
+    assert!(ro.operations(0).unwrap().is_empty());
+    assert!(ro.backups_taken().is_empty());
+    // Every write is refused by SQLite.
+    let mut ro = ro;
+    assert!(ro.insert_plan(&plan_with_items(2, 1)).is_err());
+    drop(ro);
+    assert_eq!(std::fs::read(&path).unwrap(), before, "byte-identical");
+
+    // An older schema is not migrated.
+    let old = dir.path().join("old.db");
+    std::fs::copy(&path, &old).unwrap();
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.pragma_update(None, "user_version", 1).unwrap();
+    }
+    let old_bytes = std::fs::read(&old).unwrap();
+    let e = Store::open_read_only(&old, &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::Config);
+    assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
+}
+
+fn refusal_event(
+    at: i64,
+    reason: &str,
+    plan: Option<scull_core::PlanId>,
+) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ExecuteRefused,
+        source: "mcp".into(),
+        plan_id: plan,
+        content_hash: None,
+        reason: reason.into(),
+        channel: "mcp".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// Audit flooding: 1000 identical refusals within the merge window are one row counting
+/// 1000; refusals naming 1000 made-up plan IDs fold together too; a recorded plan, another
+/// reason, or the next window gets its own row. Listing is capped and newest-first by limit.
+#[test]
+fn repeated_agent_refusals_fold_into_bounded_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    for i in 0..1000 {
+        s.record_agent_event(&refusal_event(
+            T0 + i % 30,
+            "not_approved",
+            Some(p.id().clone()),
+        ))
+        .unwrap();
+    }
+    for i in 0..1000u32 {
+        let made_up = scull_core::PlanId::from_suffix(&format!("fake{i}")).unwrap();
+        s.record_agent_event(&refusal_event(T0 + 5, "unknown_plan", Some(made_up)))
+            .unwrap();
+    }
+    s.record_agent_event(&refusal_event(T0 + 6, "invalid_arguments", None))
+        .unwrap();
+    s.record_agent_event(&refusal_event(T0 + 7, "invalid_arguments", None))
+        .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 3);
+    let rows = s.agent_events(0, 100).unwrap();
+    let got: Vec<(&str, u64)> = rows.iter().map(|e| (e.reason.as_str(), e.count)).collect();
+    assert_eq!(
+        got,
+        vec![
+            ("not_approved", 1000),
+            ("unknown_plan", 1000),
+            ("invalid_arguments", 2)
+        ]
+    );
+    // The next window starts a new row.
+    s.record_agent_event(&refusal_event(
+        T0 + scull_storage::AGENT_EVENT_MERGE_SECS + 1,
+        "not_approved",
+        Some(p.id().clone()),
+    ))
+    .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 4);
+    // Capped listing: the most recent ones, oldest first.
+    let last2 = s.agent_events(0, 2).unwrap();
+    assert_eq!(last2.len(), 2);
+    assert_eq!(last2[1].count, 1);
+    assert_eq!(last2[1].reason, "not_approved");
+}
+
+fn revocation(p: &scull_core::Plan, at: i64) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ApprovalRevoked,
+        source: "cli".into(),
+        plan_id: Some(p.id().clone()),
+        content_hash: Some(p.content_hash().clone()),
+        reason: "revoked".into(),
+        channel: "terminal".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// #298: a revocation spends an unused, unexpired approval and records its audit event in
+/// the same transaction; it never creates an approval, and a used, expired or mismatched
+/// approval is not revoked (nothing written).
+#[test]
+fn revoking_spends_the_approval_and_audits_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    // No approval: nothing to revoke, none created, nothing audited.
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 5, &revocation(&p, T0 + 5))
+            .unwrap()
+    );
+    assert!(s.get_approval(p.id()).unwrap().is_none());
+    s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
+        .unwrap();
+    // Other content, before it was given, after it lapsed: refused.
+    assert!(
+        !s.revoke_approval(p.id(), &other_hash(), T0 + 20, &revocation(&p, T0 + 20))
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 5, &revocation(&p, T0 + 5))
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(
+            p.id(),
+            p.content_hash(),
+            T0 + 600,
+            &revocation(&p, T0 + 600)
+        )
+        .unwrap()
+    );
+    assert!(s.agent_events(0, 10_000).unwrap().is_empty());
+    assert!(!s.approval_revoked(p.id()).unwrap());
+    // Revoked once, then the Executor's consumption fails, and so does a second revocation.
+    assert!(
+        s.revoke_approval(p.id(), p.content_hash(), T0 + 30, &revocation(&p, T0 + 30))
+            .unwrap()
+    );
+    assert_eq!(
+        s.get_approval(p.id()).unwrap().unwrap().used_at,
+        Some(T0 + 30)
+    );
+    assert!(s.approval_revoked(p.id()).unwrap());
+    assert!(
+        !s.consume_approval(p.id(), p.content_hash(), T0 + 31)
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 32, &revocation(&p, T0 + 32))
+            .unwrap()
+    );
+    let events = s.agent_events(0, 10_000).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, scull_storage::EventKind::ApprovalRevoked);
+    // A used approval is not "revoked" after the fact.
+    let q = plan(2);
+    s.insert_plan(&q).unwrap();
+    s.insert_approval(&approval_for(&q, T0 + 10, T0 + 600))
+        .unwrap();
+    assert!(
+        s.consume_approval(q.id(), q.content_hash(), T0 + 40)
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(q.id(), q.content_hash(), T0 + 41, &revocation(&q, T0 + 41))
+            .unwrap()
+    );
+    assert!(!s.approval_revoked(q.id()).unwrap());
+    // Only revoke_approval writes a revocation: a forged one through record_agent_event is
+    // refused and changes nothing.
+    let r = plan(3);
+    s.insert_plan(&r).unwrap();
+    s.insert_approval(&approval_for(&r, T0 + 10, T0 + 600))
+        .unwrap();
+    assert_eq!(
+        rejected_kind(s.record_agent_event(&revocation(&r, T0 + 41)).unwrap_err()),
+        ErrorKind::Usage
+    );
+    assert!(!s.approval_revoked(r.id()).unwrap());
+    assert_eq!(s.get_approval(r.id()).unwrap().unwrap().used_at, None);
+    // The audit must be a revocation of the same plan.
+    let mut wrong = revocation(&q, T0 + 42);
+    wrong.plan_id = Some(p.id().clone());
+    assert_eq!(
+        rejected_kind(
+            s.revoke_approval(q.id(), q.content_hash(), T0 + 42, &wrong)
+                .unwrap_err()
+        ),
+        ErrorKind::Usage
+    );
+}
+
+/// #298: a revocation racing the Executor's consumption of the same approval, each through
+/// its own connection: exactly one wins, every time, and the audit matches the winner.
+#[test]
+fn revocation_and_consumption_race_with_exactly_one_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let mut revoked_wins = 0;
+    for n in 1..=25u32 {
+        let p = plan(n);
+        s.insert_plan(&p).unwrap();
+        s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let (pa, pb) = (p.clone(), p.clone());
+        let (ba, bb) = (barrier.clone(), barrier);
+        let (path_a, path_b) = (path.clone(), path.clone());
+        let consume = std::thread::spawn(move || {
+            let mut c = open(&path_a);
+            ba.wait();
+            c.consume_approval(pa.id(), pa.content_hash(), T0 + 30)
+                .unwrap()
+        });
+        let revoke = std::thread::spawn(move || {
+            let mut c = open(&path_b);
+            bb.wait();
+            c.revoke_approval(
+                pb.id(),
+                pb.content_hash(),
+                T0 + 30,
+                &revocation(&pb, T0 + 30),
+            )
+            .unwrap()
+        });
+        let (consumed, revoked) = (consume.join().unwrap(), revoke.join().unwrap());
+        assert!(
+            consumed ^ revoked,
+            "plan {n}: consumed={consumed} revoked={revoked}"
+        );
+        assert_eq!(s.approval_revoked(p.id()).unwrap(), revoked);
+        assert!(s.get_approval(p.id()).unwrap().unwrap().used_at.is_some());
+        revoked_wins += usize::from(revoked);
+    }
+    assert_eq!(s.agent_events(0, 10_000).unwrap().len(), revoked_wins);
+}
+
+/// #299: the pending cap is enforced in the insert's own transaction: concurrent sessions
+/// recording agent plans for one user get exactly `max_pending` in; approved, expired and
+/// other users' plans don't count; non-agent plans are refused by this call.
+#[test]
+fn agent_plan_cap_holds_under_concurrency() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let handles: Vec<_> = (1..=8u32)
+        .map(|n| {
+            let (path, barrier) = (path.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let mut c = open(&path);
+                barrier.wait();
+                c.insert_agent_plan(&plan(n), T0 + 1, 3).unwrap()
+            })
+        })
+        .collect();
+    let inserted = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .filter(|i| *i)
+        .count();
+    assert_eq!(inserted, 3);
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 1).unwrap(),
+        3
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "other", T0 + 1).unwrap(),
+        0
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-b", "dev", T0 + 1).unwrap(),
+        0
+    );
+    // An approved plan no longer counts; an expired one neither.
+    let ids = s
+        .plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 1, 10)
+        .unwrap();
+    let first = s.get_plan(&ids[0]).unwrap().unwrap();
+    s.insert_approval(&approval_for(&first, T0 + 2, T0 + 600))
+        .unwrap();
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 3).unwrap(),
+        2
+    );
+    assert!(s.insert_agent_plan(&plan(20), T0 + 3, 3).unwrap());
+    assert!(!s.insert_agent_plan(&plan(21), T0 + 3, 3).unwrap());
+    assert!(
+        s.get_plan(&plan_id(21)).unwrap().is_none(),
+        "nothing recorded"
+    );
+    assert_eq!(
+        s.pending_agent_plans("machine-a", "dev", T0 + 15 * 60)
+            .unwrap(),
+        0
+    );
+}
+
+fn denial(
+    at: i64,
+    plan: &scull_core::Plan,
+    reason: &str,
+    source: &str,
+) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ApprovalDenied,
+        source: source.into(),
+        plan_id: Some(plan.id().clone()),
+        content_hash: Some(plan.content_hash().clone()),
+        reason: reason.into(),
+        channel: "terminal".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// #299 review: a plan the human denied (`denied`, or too many wrong codes) no longer counts
+/// toward the pending cap and leaves the approval list; a refused attempt (`no_terminal`,
+/// what an agent's shell tool gets) does not free a slot.
+#[test]
+fn denied_plans_stop_counting_as_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for n in 1..=4 {
+        s.insert_plan(&plan(n)).unwrap();
+    }
+    let pending = |s: &Store| s.pending_agent_plans("machine-a", "dev", T0 + 5).unwrap();
+    let listed = |s: &Store| {
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 5, 10)
+            .unwrap()
+    };
+    assert_eq!(pending(&s), 4);
+    s.record_agent_event(&denial(T0 + 1, &plan(1), "denied", "cli"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(2), "wrong_code", "desktop"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(3), "no_terminal", "cli"))
+        .unwrap();
+    s.record_agent_event(&denial(T0 + 1, &plan(4), "plan_expired", "cli"))
+        .unwrap();
+    assert_eq!(pending(&s), 2);
+    assert_eq!(listed(&s), vec![plan_id(4), plan_id(3)]);
+    // The cap counts the same way.
+    assert!(s.insert_agent_plan(&plan(5), T0 + 5, 3).unwrap());
+    assert!(!s.insert_agent_plan(&plan(6), T0 + 5, 3).unwrap());
 }

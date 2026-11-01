@@ -172,19 +172,21 @@ pub enum Command {
         top: usize,
     },
 
-    /// Show past cleanup operations.
-    History,
+    /// Show past cleanup operations, or one operation in detail (read-only).
+    History(HistoryArgs),
 
-    /// Restore items from a past operation (Trash or quarantine).
-    Restore {
-        /// Operation ID from `scull history`.
-        operation_id: String,
-    },
+    /// Restore quarantined items of a past operation to where they were (never overwriting).
+    Restore(RestoreArgs),
 
-    /// Approve a plan prepared by an MCP client (interactive terminal only).
+    /// Approve a cleanup plan an AI agent prepared through MCP, or revoke an approval before
+    /// the agent uses it (interactive terminal only).
     Approve {
-        /// Plan ID to approve.
-        plan_id: String,
+        /// Plan ID to approve; omit to list the agent plans awaiting approval (and the approved
+        /// ones not yet run).
+        plan_id: Option<String>,
+        /// Revoke the approval of this plan before the agent executes it.
+        #[arg(long, value_name = "PLAN_ID", conflicts_with = "plan_id")]
+        revoke: Option<String>,
     },
 
     /// List or validate detection rules.
@@ -230,6 +232,14 @@ pub enum Command {
         /// Subcommand.
         #[command(subcommand)]
         action: ScheduleAction,
+    },
+
+    /// Emergency headroom: a reserve file scull releases on command when the disk is full
+    /// (off by default).
+    Headroom {
+        /// Subcommand.
+        #[command(subcommand)]
+        action: HeadroomAction,
     },
 
     /// Inspect, export or delete everything scull has recorded locally.
@@ -439,35 +449,113 @@ pub enum WorktreesAction {
 }
 
 /// Arguments for `scull clean`. Without a subcommand this plans a cleanup (dry run by
-/// default); executing requires `--plan` plus `--confirm` (CLI-03).
+/// default); executing requires `--plan` plus `--confirm` (CLI-03), or answering the prompt
+/// on a terminal.
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
+#[command(group(clap::ArgGroup::new("confirm_target").args(["plan", "purge_quarantine"])))]
 pub struct CleanArgs {
     /// Optional subcommand.
     #[command(subcommand)]
     pub action: Option<CleanAction>,
 
-    /// Only plan; never delete (the default).
+    /// Scan root; repeat for several (default: `scan.roots` from the config file; with
+    /// --plan, the roots the plan was made from).
+    #[arg(long = "root", value_name = "PATH")]
+    pub roots: Vec<PathBuf>,
+
+    /// Allow scanning a filesystem root, your home folder, or a folder that contains it
+    /// (refused by default, CFG-04).
+    #[arg(long)]
+    pub allow_broad_roots: bool,
+
+    /// Allow scan roots on network or virtual volumes such as NFS, SMB, FUSE, tmpfs or
+    /// overlay (skipped by default, D-22).
+    #[arg(long)]
+    pub allow_network_roots: bool,
+
+    /// Also plan S1 (costly to recreate) items; they are quarantined, not deleted.
+    #[arg(long, conflicts_with = "plan")]
+    pub include_s1: bool,
+
+    /// Plan exactly these items (item ID or path; repeat for several). The only way to plan
+    /// an S2 (uncertain) item.
+    #[arg(long = "item", value_name = "ID|PATH", conflicts_with_all = ["plan", "include_s1"])]
+    pub items: Vec<String>,
+
+    /// Only plan or review; never execute or ask (the default without a terminal).
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,
 
-    /// Write the plan to this file.
+    /// Write the plan to this file (owner-only).
     #[arg(long, value_name = "FILE", conflicts_with = "plan")]
     pub output: Option<PathBuf>,
 
-    /// Execute this reviewed plan file (requires --confirm).
+    /// Review or execute this plan file (made by `scull clean --output`).
     #[arg(long, value_name = "FILE")]
     pub plan: Option<PathBuf>,
 
-    /// Confirm execution of --plan.
-    #[arg(long, requires = "plan")]
+    /// Execute --plan (or --purge-quarantine) without asking.
+    #[arg(long, requires = "confirm_target")]
     pub confirm: bool,
 
-    /// Allow permanent deletion of costly or uncertain items (elevated confirmation).
+    /// Confirm items that can't be undone at S1/S2 without typing their count (elevated
+    /// confirmation, SAFE-07; required for them without a terminal).
     #[arg(long, requires = "confirm")]
     pub allow_permanent: bool,
 
-    /// Allow running as root/administrator (refused by default).
+    /// Allow running as root/administrator (refused by default, SAFE-14).
+    #[arg(long)]
+    pub allow_root: bool,
+
+    /// Permanently delete quarantined items whose retention has expired (or, with
+    /// --older-than, that were quarantined more than AGE ago). Not undoable: needs the
+    /// elevated confirmation (typed count, or --allow-permanent with --confirm).
+    #[arg(long, conflicts_with_all = ["plan", "output", "items", "include_s1", "roots"])]
+    pub purge_quarantine: bool,
+
+    /// With --purge-quarantine: also purge items quarantined more than AGE ago (90m, 12h,
+    /// 30d, 2w), even before their retention ends.
+    #[arg(long, value_name = "AGE", requires = "purge_quarantine",
+          value_parser = crate::cmd::data::parse_age)]
+    pub older_than: Option<u64>,
+
+    /// With --purge-quarantine: purge every held item, also those whose retention hasn't
+    /// ended (empties the quarantine).
+    #[arg(long, requires = "purge_quarantine", conflicts_with = "older_than")]
+    pub include_unexpired: bool,
+}
+
+/// Arguments for `scull history`.
+#[derive(Debug, Clone, Args)]
+pub struct HistoryArgs {
+    /// Show this operation in detail (items, audit chain, quarantine entries).
+    pub operation_id: Option<String>,
+    /// Only operations started within AGE (90m, 12h, 30d, 2w).
+    #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age, conflicts_with = "operation_id")]
+    pub since: Option<u64>,
+    /// Most entries listed under "Refused to AI agents" (newest first; default 50). Without
+    /// --since they come from the last 30 days.
+    #[arg(long, value_name = "N", default_value_t = crate::cmd::history::AGENT_EVENTS_LIMIT, conflicts_with = "operation_id")]
+    pub limit: u32,
+}
+
+/// Arguments for `scull restore`.
+#[derive(Debug, Clone, Args)]
+pub struct RestoreArgs {
+    /// Operation ID from `scull history`.
+    pub operation_id: String,
+    /// Restore only this item (item ID, original path, or quarantine entry number); repeat
+    /// for several.
+    #[arg(long = "item", value_name = "ITEM")]
+    pub items: Vec<String>,
+    /// Restore without asking (required without a terminal).
+    #[arg(long)]
+    pub confirm: bool,
+    /// Only show what would be restored.
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+    /// Allow running as root/administrator (refused by default, SAFE-14).
     #[arg(long)]
     pub allow_root: bool,
 }
@@ -476,14 +564,37 @@ pub struct CleanArgs {
 #[derive(Debug, Subcommand)]
 pub enum CleanAction {
     /// Quick Clean: prune package-manager caches with their native commands.
-    Caches {
-        /// Run the commands (otherwise only show them).
-        #[arg(long)]
-        confirm: bool,
-        /// Wipe caches entirely instead of pruning.
-        #[arg(long, requires = "confirm")]
-        wipe: bool,
-    },
+    Caches(CleanCachesArgs),
+}
+
+/// Arguments for `scull clean caches` (QC-04). Without `--confirm` (and without a terminal
+/// to ask on) it only shows what would run.
+#[derive(Debug, Clone, Args)]
+pub struct CleanCachesArgs {
+    /// Run the commands without asking (otherwise only show them, or ask on a terminal).
+    #[arg(long)]
+    pub confirm: bool,
+    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm and conda
+    /// are never wiped).
+    #[arg(long)]
+    pub wipe: bool,
+    /// Leave this tool's cache alone; repeat for several (npm, pnpm, bun, yarn,
+    /// yarn-classic, yarn-berry, pip, uv, conda, go, go-build, go-mod, nuget).
+    #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
+    pub untick: Vec<crate::cmd::clean_caches::Untick>,
+    /// Also remove this uninstalled tool's orphaned cache folder, when the preview lists it as
+    /// removable (D-36): scull deletes it itself, which is not undoable. Repeat for several.
+    /// This is the per-tool confirmation; on a terminal, each orphaned cache not named here
+    /// is asked about separately. conda's `pkgs/` is never removed this way (environments
+    /// hard-link into it).
+    #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
+    pub remove_orphaned: Vec<crate::cmd::clean_caches::Untick>,
+    /// Only show what would run; never ask or run.
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+    /// Allow running as root/administrator (refused by default, SAFE-14).
+    #[arg(long)]
+    pub allow_root: bool,
 }
 
 /// `scull rules` subcommands.
@@ -520,7 +631,6 @@ pub enum InsightsAction {
         since: Option<crate::cmd::insights::When>,
     },
     /// Forget recorded trends (history rows only; scans, plans, audit and files are kept).
-    /// Refused in the inspect-only alpha (#266).
     Purge {
         /// Only delete history older than this: a duration (90d, 12w) or a UTC date.
         #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
@@ -657,15 +767,66 @@ pub struct ConsentArgs {
     pub dry_run: bool,
 }
 
+/// `scull headroom` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum HeadroomAction {
+    /// Show whether there is a reserve, its size and whether it can be released (read-only).
+    Status,
+    /// Reserve disk space for emergencies in scull's data folder (asks first, or `--yes`).
+    Create {
+        /// Size, e.g. `2G` or `512M` (256 MiB to 10 GiB, at most 5% of the volume).
+        #[arg(long, value_name = "SIZE", value_parser = crate::cmd::headroom::parse_size)]
+        size: Option<u64>,
+        /// Create without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Release the reserve to free its space, e.g. when the disk is full (asks first, or
+    /// `--yes`). Only the file scull created is ever removed.
+    Release {
+        /// Release without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
 /// `scull data` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum DataAction {
-    /// Show what scull has recorded and where.
+    /// Show what scull has recorded and where (read-only).
     Show,
-    /// Export everything scull has recorded.
-    Export,
-    /// Delete everything scull has recorded.
-    Purge,
+    /// Export everything scull has recorded (JSON or CSV; Parquet is not built yet).
+    Export {
+        /// File format.
+        #[arg(long, value_enum, default_value_t = crate::cmd::data::ExportFormat::Json)]
+        format: crate::cmd::data::ExportFormat,
+        /// Folder to write to, created owner-only if missing (default:
+        /// `./scull-export-<unix time>`). Existing files are never overwritten.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
+    /// Delete scull's own files: the database, its backups and damaged copies, audit mirrors
+    /// and the MCP salt. Never anything else; the configuration and quarantine are kept.
+    Purge {
+        /// Delete every file scull has recorded (FX-DATA-04).
+        #[arg(
+            long,
+            conflicts_with = "older_than",
+            required_unless_present = "older_than"
+        )]
+        all: bool,
+        /// Delete only migration backups and damaged copies older than AGE (90m, 12h, 30d,
+        /// 2w).
+        #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age)]
+        older_than: Option<u64>,
+        /// Delete without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        confirm: bool,
+        /// Also purge quarantine contents (refused: use `scull clean --purge-quarantine`,
+        /// which goes through the Executor's purge, #71).
+        #[arg(long)]
+        include_quarantine: bool,
+    },
 }
 
 /// `scull mcp` subcommands.
@@ -738,18 +899,33 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["scull", "clean", "--dry-run", "--confirm"]).is_err());
-        let cli = Cli::try_parse_from(["scull", "clean", "caches", "--confirm", "--wipe"])
-            .expect("parses");
-        assert!(matches!(
-            cli.command,
-            Command::Clean(CleanArgs {
-                action: Some(CleanAction::Caches {
-                    confirm: true,
-                    wipe: true
-                }),
-                ..
-            })
-        ));
-        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--wipe"]).is_err());
+        let cli = Cli::try_parse_from([
+            "scull",
+            "clean",
+            "caches",
+            "--confirm",
+            "--wipe",
+            "--untick",
+            "pnpm",
+            "--untick",
+            "yarn",
+        ])
+        .expect("parses");
+        let Command::Clean(CleanArgs {
+            action: Some(CleanAction::Caches(a)),
+            ..
+        }) = cli.command
+        else {
+            panic!("not clean caches");
+        };
+        assert!(a.confirm && a.wipe);
+        assert_eq!(a.untick.len(), 2);
+        assert_eq!(a.untick[1].0.len(), 2, "yarn = classic + berry");
+        // A dry-run preview of the wipe is allowed; an unknown tool is not.
+        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--wipe"]).is_ok());
+        assert!(Cli::try_parse_from(["scull", "clean", "caches", "--untick", "cargo"]).is_err());
+        assert!(
+            Cli::try_parse_from(["scull", "clean", "caches", "--dry-run", "--confirm"]).is_err()
+        );
     }
 }

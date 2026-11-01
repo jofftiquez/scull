@@ -53,8 +53,10 @@ Do not tag `v1.0.0` until every box is ticked, each with a link to its evidence.
       signing group `ready` (RELEASING.md).
 - [ ] A desktop dry run with all bundles (Actions → Release desktop → Run workflow →
       `all`) is green; with secrets set, its signature/notarization checks pass.
-- [ ] The inspect-only gate is replaced by the MVP gates (the Executor ships in v1.0; the
-      safety lane owns `packaging/check_inspect_only.py` and `release-gates.yml`).
+- [x] The inspect-only gate is replaced by the MVP gates for every non-alpha tag (the
+      Executor ships in v1.0; the safety lane owns `packaging/check_mvp_gates.py` and
+      `release-gates.yml`). Desktop bundles for a tag wait for the same gates
+      (`release-desktop.yml`, job `gates`).
 
 ## 3. Version bump plan
 

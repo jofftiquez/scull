@@ -17,7 +17,9 @@
 //!   layer's entries are kept, so a CLI flag or env var can never drop a path the user config
 //!   protects (FX-CFG-04). For `scan.min_tier` the most protective tier wins per path.
 //! * `mcp.destructive` is read **only** from the user config file. The `--allow-destructive`
-//!   launch flag is a separate, second switch checked by the MCP server (PRD §13.2).
+//!   launch flag is a separate, second switch checked by the MCP server (PRD §13.2). So are
+//!   the agent limits `mcp.max_pending_plans` and `mcp.prepare_per_minute` (#299): an agent
+//!   that can set its MCP server's environment or flags can't raise them.
 //!
 //! The user config file format is [`ConfigLayer`] in TOML (unknown keys are rejected with an
 //! [`ErrorKind::Config`](crate::ErrorKind::Config) error, exit code 2). Environment variables are
@@ -48,7 +50,7 @@ mod roots;
 pub use duration::DurationSpec;
 pub use layer::{
     ConfigLayer, ENV_VARS, EnvLayer, EnvVar, ForgeLayer, McpLayer, Origin, OutputLayer,
-    ResolvedConfig, RulesLayer, ScanLayer, resolve,
+    QuarantineLayer, ResolvedConfig, RulesLayer, ScanLayer, resolve,
 };
 pub use proactive::{
     Budget, DEFAULT_ALERT_DAYS, DEFAULT_RESERVE_GIB, DEFAULT_SPIKE_GIB, DEFAULT_SPIKE_MIN_GIB,
@@ -73,9 +75,16 @@ pub const DEFAULT_ACTIVITY_WINDOW: DurationSpec = DurationSpec::from_hours(24);
 /// Default cap on the number of results an MCP tool returns (PRD §13.5).
 pub const DEFAULT_MCP_MAX_RESULTS: u32 = 1000;
 
+/// Default cap on agent plans awaiting approval (unexpired, unapproved) per machine and user
+/// (#299).
+pub const DEFAULT_MCP_MAX_PENDING_PLANS: u32 = 5;
+
+/// Default number of `prepare_cleanup` calls an MCP session may make per minute (#299).
+pub const DEFAULT_MCP_PREPARE_PER_MINUTE: u32 = 6;
+
 /// Every effective config field, as the dotted key used in TOML, [`ResolvedConfig::origins`]
 /// and `scull config show`.
-pub const FIELDS: [&str; 26] = [
+pub const FIELDS: [&str; 30] = [
     "scan.roots",
     "scan.exclude",
     "scan.protect",
@@ -89,6 +98,8 @@ pub const FIELDS: [&str; 26] = [
     "mcp.redact_home",
     "mcp.hash_names",
     "mcp.max_results",
+    "mcp.max_pending_plans",
+    "mcp.prepare_per_minute",
     "forge.enabled",
     "output.color",
     "output.units",
@@ -102,7 +113,19 @@ pub const FIELDS: [&str; 26] = [
     "proactive.spike_percent",
     "proactive.spike_min_gib",
     "proactive.budgets",
+    "quarantine.base",
+    "quarantine.bases",
 ];
+
+/// Environment variable that sets `quarantine.base` (see [`QuarantineConfig`]).
+pub const QUARANTINE_BASE_ENV: &str = "SCULL_QUARANTINE_BASE";
+
+/// Set (to a directory) by the test fixtures (`scull-fixtures`) on every scull process a test
+/// starts. Under it, the Executor never uses a location outside that directory: quarantine
+/// with no configured base is blocked instead of using the automatic location, a configured
+/// base, a Trash or a quarantine entry outside it is refused (P2-EXEC-13).
+/// It can only add refusals, never remove one, so it is safe to honor in release builds.
+pub const TEST_SANDBOX_ENV: &str = "SCULL_TEST_SANDBOX";
 
 /// The fields whose values from every layer are combined instead of overridden.
 pub const ADDITIVE_FIELDS: [&str; 3] = ["scan.exclude", "scan.protect", "scan.min_tier"];
@@ -123,6 +146,71 @@ pub struct Config {
     pub output: OutputConfig,
     /// Alert policies for proactive protection (PRD §16).
     pub proactive: ProactiveConfig,
+    /// Where quarantined items are kept.
+    pub quarantine: QuarantineConfig,
+}
+
+/// Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).
+///
+/// By default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is
+/// chosen automatically: the shallowest directory above the item, on its volume, that the
+/// current user owns (usually the home directory). These settings replace that choice:
+///
+/// ```toml
+/// [quarantine]
+/// base = "~/.scull-q"                       # for items on the volume holding this directory
+///
+/// [quarantine.bases]                        # per volume: longest matching prefix wins
+/// "/Volumes/Data" = "/Volumes/Data/me/.q"
+/// "D:\\" = "D:\\Users\\me\\q"
+/// ```
+///
+/// * For an item, the entry of `bases` whose key is the longest path prefix of the item's path
+///   applies; otherwise `base`; otherwise the automatic choice.
+/// * A configured base must be on the **same volume** as the item. If it isn't, that item is
+///   not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It
+///   is never moved across volumes and never deleted instead.
+/// * The base is created owner-only (`0700` / protected DACL) when missing, must be a real
+///   directory (not a link) and must not be inside an item being cleaned; the
+///   `.scull-quarantine` folder inside it is created and checked owner-only.
+/// * Repository files (`.scull.toml`) can't set these (CFG-03).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct QuarantineConfig {
+    /// Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.
+    pub base: Option<PathBuf>,
+    /// Per volume (or any directory): items under the key use the value as their base.
+    pub bases: BTreeMap<PathBuf, PathBuf>,
+}
+
+impl QuarantineConfig {
+    /// The configured base for an item at `item` (absolute): the `bases` entry with the longest
+    /// key that is a path prefix of `item`, else `base`. `None`: nothing configured (the
+    /// automatic choice applies).
+    pub fn base_for(&self, item: &Path) -> Option<&Path> {
+        quarantine_base_for(&self.bases, self.base.as_deref(), item)
+    }
+
+    /// Whether any base is configured.
+    pub fn is_configured(&self) -> bool {
+        self.base.is_some() || !self.bases.is_empty()
+    }
+}
+
+/// The quarantine base for an item at `item`: the entry of `bases` with the longest key that is
+/// a (component-wise) prefix of `item`, else `base`. Shared by [`QuarantineConfig::base_for`]
+/// and the Executor's settings.
+pub fn quarantine_base_for<'a>(
+    bases: &'a BTreeMap<PathBuf, PathBuf>,
+    base: Option<&'a Path>,
+    item: &Path,
+) -> Option<&'a Path> {
+    bases
+        .iter()
+        .filter(|(k, _)| item.starts_with(k))
+        .max_by_key(|(k, _)| k.components().count())
+        .map(|(_, v)| v.as_path())
+        .or(base)
 }
 
 /// Scan settings.
@@ -181,6 +269,13 @@ pub struct McpConfig {
     pub hash_names: bool,
     /// Maximum number of results per tool call.
     pub max_results: u32,
+    /// Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+    /// `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+    /// `0` counts as `1`.
+    pub max_pending_plans: u32,
+    /// Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+    /// (`rate_limited`). File-only setting; `0` counts as `1`.
+    pub prepare_per_minute: u32,
 }
 
 impl Default for McpConfig {
@@ -191,6 +286,8 @@ impl Default for McpConfig {
             redact_home: true,
             hash_names: false,
             max_results: DEFAULT_MCP_MAX_RESULTS,
+            max_pending_plans: DEFAULT_MCP_MAX_PENDING_PLANS,
+            prepare_per_minute: DEFAULT_MCP_PREPARE_PER_MINUTE,
         }
     }
 }
@@ -258,6 +355,13 @@ impl Config {
                 b.path = Some(expand_home(p, home));
             }
         }
+        let q = &mut c.quarantine;
+        q.base = q.base.as_ref().map(|p| expand_home(p, home));
+        q.bases = q
+            .bases
+            .iter()
+            .map(|(k, v)| (expand_home(k, home), expand_home(v, home)))
+            .collect();
         c
     }
 

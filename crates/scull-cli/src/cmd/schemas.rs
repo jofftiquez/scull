@@ -142,6 +142,33 @@ pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
             ndjson_schema::<large_files::LargeFilesRecord>(large_files::LARGE_FILES_SCHEMA),
         ),
     ]
+    .into_iter()
+    .chain(phase2_line_schemas())
+    .collect()
+}
+
+/// Line schemas of the `phase2` commands (`clean`, `clean caches`, `clean --purge-quarantine`,
+/// `history`, `restore`, `data`, `headroom`, `insights purge`): each prints one record whose
+/// `data` is its `--json` payload.
+fn phase2_line_schemas() -> Vec<(String, serde_json::Value)> {
+    use super::{clean, clean_caches, data, headroom, history, insights, restore};
+    fn single<T: JsonSchema>(id: SchemaId, kind: &str) -> (String, serde_json::Value) {
+        (file_name(id, true), single_record_schema::<T>(id, kind))
+    }
+    vec![
+        single::<clean::CleanPlanReport>(clean::CLEAN_PLAN_SCHEMA, "plan"),
+        single::<clean::CleanRunReport>(clean::CLEAN_RUN_SCHEMA, "run"),
+        single::<clean_caches::CleanCachesReport>(clean_caches::CLEAN_CACHES_SCHEMA, "caches"),
+        single::<restore::PurgeReport>(restore::PURGE_SCHEMA, "purge"),
+        single::<restore::RestoreReport>(restore::RESTORE_SCHEMA, "restore"),
+        single::<history::HistoryReport>(history::HISTORY_SCHEMA, "history"),
+        single::<history::OperationDetail>(history::HISTORY_OPERATION_SCHEMA, "operation"),
+        single::<data::DataShowReport>(data::DATA_SHOW_SCHEMA, "data"),
+        single::<data::DataExportReport>(data::DATA_EXPORT_SCHEMA, "data"),
+        single::<data::DataPurgeReport>(data::DATA_PURGE_SCHEMA, "data"),
+        single::<headroom::HeadroomReport>(headroom::HEADROOM_SCHEMA, "headroom"),
+        single::<insights::InsightsPurgeReport>(insights::INSIGHTS_PURGE_SCHEMA, "insights_purge"),
+    ]
 }
 
 /// Every committed command schema this module generates: `(file name, schema)`.

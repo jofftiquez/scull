@@ -1,0 +1,216 @@
+{
+  "$defs": {
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "Mode": {
+      "description": "Preview or run.",
+      "oneOf": [
+        {
+          "const": "preview",
+          "description": "Nothing changed.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "Executed.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotRestorable": {
+      "additionalProperties": false,
+      "description": "An item scull can't restore.",
+      "properties": {
+        "hint": {
+          "description": "What to do instead.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "What was done (`removed`, `moved_to_trash`, `tool_run`, ...).",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The item's path."
+        }
+      },
+      "required": [
+        "path",
+        "outcome",
+        "hint"
+      ],
+      "type": "object"
+    },
+    "OperationId": {
+      "pattern": "^op_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "RestoreLine": {
+      "additionalProperties": false,
+      "description": "One quarantine entry of a restore.",
+      "properties": {
+        "bytes": {
+          "description": "Allocated bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entry_id": {
+          "description": "Manifest entry number.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The plan item."
+        },
+        "message": {
+          "description": "Why, when refused or not restorable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it goes back to."
+        },
+        "outcome": {
+          "description": "What this run did: `restored`, `restored_to_sibling`, `already_restored`, `refused`,\nor `none` (preview, or purged: gone for good).",
+          "type": "string"
+        },
+        "quarantine_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it is held."
+        },
+        "restored_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where it is now, when restored."
+        },
+        "state": {
+          "description": "State before this run: `held`, `restored` or `purged`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "item_id",
+        "original_path",
+        "quarantine_path",
+        "bytes",
+        "state",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "RestoreReport": {
+      "additionalProperties": false,
+      "description": "`scull restore` (`scull/restore@1`).",
+      "properties": {
+        "entries": {
+          "description": "The selected quarantine entries.",
+          "items": {
+            "$ref": "#/$defs/RestoreLine"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode",
+          "description": "Preview or run."
+        },
+        "next_step": {
+          "description": "What to run next, if anything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not_restorable": {
+          "description": "Items of the operation scull can't restore (deleted, moved to the Trash).",
+          "items": {
+            "$ref": "#/$defs/NotRestorable"
+          },
+          "type": "array"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "description": "The operation."
+        },
+        "refused": {
+          "description": "Entries refused.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restored": {
+          "description": "Entries restored in this run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restored_to_sibling": {
+          "description": "Entries restored to a sibling path because the original path was taken.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "mode",
+        "entries",
+        "not_restorable",
+        "restored",
+        "restored_to_sibling",
+        "refused"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/restore@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/RestoreReport",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/restore@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "restore",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/restore@1 (NDJSON line)",
+  "type": "object"
+}

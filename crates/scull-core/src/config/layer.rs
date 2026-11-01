@@ -1,6 +1,8 @@
 //! Config layers (CLI, environment, user file), the merge (CFG-02) and value origins.
 
-use super::{ColorChoice, Config, DurationSpec, FIELDS, ProactiveLayer, SizeUnits};
+use super::{
+    ColorChoice, Config, DurationSpec, FIELDS, ProactiveLayer, QUARANTINE_BASE_ENV, SizeUnits,
+};
 use crate::error::{ErrorKind, ScullError};
 use crate::tier::Tier;
 use schemars::JsonSchema;
@@ -35,6 +37,8 @@ use std::path::PathBuf;
 /// redact_home = true
 /// hash_names = false
 /// max_results = 1000
+/// max_pending_plans = 5    # agent plans awaiting approval (file only)
+/// prepare_per_minute = 6   # prepare_cleanup calls per session per minute (file only)
 ///
 /// [forge]
 /// enabled = false
@@ -46,6 +50,12 @@ use std::path::PathBuf;
 /// [proactive]              # alert policies; see `ProactiveConfig`
 /// reserve_gib = 10
 /// alert_days = 14
+///
+/// [quarantine]             # optional; see `QuarantineConfig`
+/// base = "~/.scull-q"
+///
+/// [quarantine.bases]       # optional, per volume
+/// "/Volumes/Data" = "/Volumes/Data/me/.q"
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +78,9 @@ pub struct ConfigLayer {
     /// Alert policies (user config file only).
     #[serde(default, skip_serializing_if = "ProactiveLayer::is_empty")]
     pub proactive: ProactiveLayer,
+    /// Where quarantined items are kept.
+    #[serde(default, skip_serializing_if = "QuarantineLayer::is_empty")]
+    pub quarantine: QuarantineLayer,
 }
 
 /// `[scan]` in a [`ConfigLayer`]. See [`super::ScanConfig`] for the meaning of each field.
@@ -125,6 +138,14 @@ pub struct McpLayer {
     /// Maximum results per tool call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
+    /// Most agent plans awaiting approval per machine and user. Only honored from the user
+    /// config file (see [`resolve`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pending_plans: Option<u32>,
+    /// Most `prepare_cleanup` calls per minute in one MCP session. Only honored from the user
+    /// config file (see [`resolve`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare_per_minute: Option<u32>,
 }
 
 /// `[forge]` in a [`ConfigLayer`].
@@ -146,6 +167,25 @@ pub struct OutputLayer {
     /// How to print sizes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<SizeUnits>,
+}
+
+/// `[quarantine]` in a [`ConfigLayer`]. See [`super::QuarantineConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuarantineLayer {
+    /// Directory that holds `.scull-quarantine` for items on its volume (replaces lower
+    /// layers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<PathBuf>,
+    /// Per volume (or directory) → base directory (replaces lower layers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bases: Option<BTreeMap<PathBuf, PathBuf>>,
+}
+
+impl QuarantineLayer {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl ScanLayer {
@@ -220,7 +260,7 @@ pub struct EnvVar {
 /// accept `1/0`, `true/false`, `yes/no`, `on/off`. For `output.color`, `SCULL_COLOR` wins over
 /// `SCULL_NO_COLOR`, which wins over the standard `NO_COLOR`. There is deliberately no variable
 /// for `mcp.destructive` or `scan.min_tier`.
-pub const ENV_VARS: [EnvVar; 16] = [
+pub const ENV_VARS: [EnvVar; 17] = [
     EnvVar {
         name: "SCULL_ROOTS",
         field: "scan.roots",
@@ -300,6 +340,11 @@ pub const ENV_VARS: [EnvVar; 16] = [
         name: "SCULL_UNITS",
         field: "output.units",
         help: "binary or decimal",
+    },
+    EnvVar {
+        name: QUARANTINE_BASE_ENV,
+        field: "quarantine.base",
+        help: "absolute directory holding .scull-quarantine (same volume as the items)",
     },
 ];
 
@@ -451,6 +496,18 @@ impl EnvLayer {
             l.output.units = Some(parse_enum("SCULL_UNITS", &v, "binary or decimal")?);
             set("output.units", "SCULL_UNITS");
         }
+        if let Some(v) = get(QUARANTINE_BASE_ENV) {
+            let p = PathBuf::from(v.trim());
+            if !p.is_absolute() {
+                return Err(env_err(
+                    QUARANTINE_BASE_ENV,
+                    &v,
+                    "expected an absolute directory",
+                ));
+            }
+            l.quarantine.base = Some(p);
+            set("quarantine.base", QUARANTINE_BASE_ENV);
+        }
         Ok(out)
     }
 }
@@ -508,7 +565,8 @@ impl ResolvedConfig {
 /// [`Config::default`]. See the [module docs](super) for which fields are additive.
 ///
 /// `mcp.destructive` is taken from `user` only; values in `cli` or `env` are ignored, so
-/// destructive MCP tools always need an explicit line in the config file.
+/// destructive MCP tools always need an explicit line in the config file. The agent limits
+/// `mcp.max_pending_plans` and `mcp.prepare_per_minute` are file-only too.
 pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> ResolvedConfig {
     let env_origin = |field: &str| Origin::Env {
         var: env
@@ -577,11 +635,32 @@ pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> Resolve
     pick!(proactive.spike_percent, scalar);
     pick!(proactive.spike_min_gib, scalar);
     pick!(proactive.budgets, scalar);
+    pick!(quarantine.bases);
+    if let Some((i, v)) = layers
+        .iter()
+        .enumerate()
+        .find_map(|(i, l)| l.quarantine.base.as_ref().map(|v| (i, v)))
+    {
+        config.quarantine.base = Some(v.clone());
+        origins.insert(
+            "quarantine.base".into(),
+            vec![origin_of(i, "quarantine.base")],
+        );
+    }
 
     // File-only: destructive MCP tools.
     if let Some(v) = user.mcp.destructive {
         config.mcp.destructive = v;
         origins.insert("mcp.destructive".into(), vec![Origin::UserConfig]);
+    }
+    // File-only: the agent limits (#299).
+    if let Some(v) = user.mcp.max_pending_plans {
+        config.mcp.max_pending_plans = v;
+        origins.insert("mcp.max_pending_plans".into(), vec![Origin::UserConfig]);
+    }
+    if let Some(v) = user.mcp.prepare_per_minute {
+        config.mcp.prepare_per_minute = v;
+        origins.insert("mcp.prepare_per_minute".into(), vec![Origin::UserConfig]);
     }
 
     // Additive protection fields.

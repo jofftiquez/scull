@@ -1,16 +1,19 @@
 //! Storage behind local insights (P4-INS-01): the storage budget and downsampling
 //! (FX-DATA-02, INS-02, DATA-05/06), the typed reads (item timelines, operation accuracy) and
-//! `purge_insights`. All databases live in temp dirs.
+//! `purge_insights` (and its recorded form). All databases live in temp dirs.
 #![allow(clippy::unwrap_used)]
 
 mod common;
 
 use common::*;
-use scull_core::{Action, Candidate, FileIdentity, FsPath, ItemId, OperationId, Tier};
+use scull_core::{
+    Action, Candidate, FileIdentity, FsPath, ItemId, OperationId, Plan, PlanItem, PlanOrigin,
+    PlanParams, Tier,
+};
 use scull_storage::{
-    ApprovalMethod, AuditEntry, AuditOutcome, ItemEventKind, OperationStart, RetentionPolicy,
-    ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store, VolumeSample,
-    rollups_from_candidates,
+    ApprovalMethod, EventKind, ItemEventKind, ItemOutcome, ItemRecord, OperationEnd,
+    OperationFinish, OperationStart, RetentionPolicy, ScanFinish, ScanRecord, ScanStart,
+    ScanStatus, ScanTotals, Store, VolumeSample, rollups_from_candidates,
 };
 
 const HOUR: i64 = 3600;
@@ -283,46 +286,82 @@ fn fx_ins_01_item_timelines_give_sizes_at_any_time_in_the_window() {
 
 // ---- operation accuracy ------------------------------------------------------------------------
 
-fn operation(s: &mut Store, n: u32, at: i64, rows: &[(Option<u64>, Option<u64>, ItemId)]) {
-    let p = plan(n);
-    s.insert_plan(&p).unwrap();
-    let op = OperationId::from_suffix(&format!("O{n}")).unwrap();
-    s.record_operation_start(&OperationStart {
-        operation_id: op.clone(),
-        plan_id: p.id().clone(),
-        content_hash: p.content_hash().clone(),
-        approver: "dev".into(),
-        method: ApprovalMethod::CliTty,
-        started_at: at,
-    })
-    .unwrap();
-    let mut entries: Vec<AuditEntry> = rows
+/// Records operation `n` over `rows` (candidate, predicted bytes, freed bytes): each item is
+/// planned with its predicted bytes and removed, freeing the given bytes (`None`: a move to
+/// quarantine, which frees nothing yet and is not compared).
+fn operation(s: &mut Store, n: u32, at: i64, rows: &[(Candidate, u64, Option<u64>)]) {
+    let items: Vec<PlanItem> = rows
         .iter()
-        .enumerate()
-        .map(|(i, (pred, meas, item))| AuditEntry {
-            operation_id: op.clone(),
-            recorded_at: at + 1 + i as i64,
-            item_id: Some(item.clone()),
-            path: None,
-            action: Some("delete".into()),
-            outcome: AuditOutcome::Succeeded,
-            reason: None,
-            predicted_bytes: *pred,
-            measured_bytes: *meas,
+        .map(|(c, pred, freed)| {
+            let mut c = c.clone();
+            c.sizes.reclaimable.bytes = *pred;
+            if freed.is_none() {
+                c.tier = Tier::S1;
+                c.reasons = vec![scull_core::TierReason::new(
+                    Tier::S1,
+                    scull_core::ReasonCode::Regenerable,
+                    "test",
+                )];
+                c.action = Action::Quarantine;
+            }
+            PlanItem::from_candidate(&c).unwrap()
         })
         .collect();
-    entries.push(AuditEntry {
-        operation_id: op,
-        recorded_at: at + 100,
-        item_id: None,
-        path: None,
-        action: None,
-        outcome: AuditOutcome::OperationFinished,
-        reason: None,
-        predicted_bytes: None,
-        measured_bytes: None,
-    });
-    s.append_audit(&entries).unwrap();
+    let p = Plan::new(
+        PlanParams {
+            id: plan_id(n),
+            scan_id: scan_id(1),
+            created_unix: at - 10,
+            ttl_secs: None,
+            machine_id: "machine-a".into(),
+            user: "dev".into(),
+            origin: PlanOrigin::Cli,
+            operations_watermark: None,
+        },
+        items,
+    )
+    .unwrap();
+    s.insert_plan(&p).unwrap();
+    let mut audit = s
+        .begin_operation(
+            &OperationStart {
+                operation_id: OperationId::from_suffix(&format!("O{n}")).unwrap(),
+                plan_id: p.id().clone(),
+                content_hash: p.content_hash().clone(),
+                approver: "dev".into(),
+                method: ApprovalMethod::CliTty,
+                started_at: at,
+            },
+            &TestPerms::default(),
+        )
+        .unwrap();
+    for (i, (c, pred, freed)) in rows.iter().enumerate() {
+        let at = at + 1 + i as i64;
+        let rec = match freed {
+            Some(f) => {
+                let mut r = ItemRecord::new(c.id.clone(), at, ItemOutcome::Removed);
+                r.freed_bytes = Some(*f);
+                r.entries_removed = Some(1);
+                r.entries_kept = Some(0);
+                r
+            }
+            None => {
+                let mut r = ItemRecord::new(c.id.clone(), at, ItemOutcome::Quarantined);
+                r.moved_bytes = Some(*pred);
+                r
+            }
+        };
+        s.record_item(&mut audit, &rec).unwrap();
+    }
+    s.finish_operation(
+        &mut audit,
+        &OperationFinish {
+            finished_at: at + 100,
+            end: OperationEnd::Normal,
+            measured_delta_bytes: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -336,8 +375,8 @@ fn fx_ins_02_operation_accuracy_compares_predicted_and_measured_and_counts_rebui
         1,
         T0 + 100,
         &[
-            (Some(100 * MIB), Some(90 * MIB), nm(1).id),
-            (Some(5), None, nm(9).id), // not measured: not compared
+            (nm(1), 100 * MIB, Some(90 * MIB)),
+            (nm(9), 5, None), // moved, nothing freed: not compared
         ],
     );
     // Cleaned, then rebuilt (new file identity at the same path).
@@ -347,7 +386,7 @@ fn fx_ins_02_operation_accuracy_compares_predicted_and_measured_and_counts_rebui
         &mut s,
         2,
         T0 + 3 * DAY,
-        &[(Some(10 * MIB), Some(10 * MIB), nm(2).id)],
+        &[(nm(2), 10 * MIB, Some(10 * MIB))],
     );
 
     let ops = s.operation_accuracy(0).unwrap();
@@ -384,7 +423,7 @@ fn fx_ins_03_purge_forgets_history_but_keeps_live_items_scans_and_append_only_ro
     );
     scan(&mut s, 2, T0 + DAY, &[]);
     scan(&mut s, 3, T0 + 2 * DAY, &[nm(2, 120)]);
-    operation(&mut s, 1, T0 + 3 * DAY, &[(Some(1), Some(1), nm(2, 0).id)]);
+    operation(&mut s, 1, T0 + 3 * DAY, &[(nm(2, 0), 1, Some(1))]);
     let audit_before = count(&path, "SELECT count(*) FROM audit");
 
     // Older-than: only rows before the cutoff go; the gone items' rows go with their events.
@@ -429,6 +468,45 @@ fn fx_ins_03_purge_forgets_history_but_keeps_live_items_scans_and_append_only_ro
     let h = s.item_history(&nm(2, 0).id).unwrap().unwrap();
     assert_eq!(h.events.len(), 1);
     assert_eq!(h.events[0].kind, ItemEventKind::Changed);
+}
+
+/// `scull insights purge` records itself: the `insights_purged` event is written in the same
+/// transaction as the deletion, with the cutoff and the rows per stream, and a later purge
+/// never deletes it.
+#[test]
+fn recorded_purge_writes_an_insights_purged_event_that_purges_keep() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let nm = |file, mib| cand("/work/a/node_modules", file, mib * MIB);
+    scan(&mut s, 1, T0, &[nm(1, 100)]);
+    scan(&mut s, 2, T0 + DAY, &[]);
+    let purged = s
+        .purge_insights_recorded(Some(T0 + DAY + 1), T0 + 2 * DAY, "cli")
+        .unwrap();
+    assert!(purged.total() > 0);
+    let again = s
+        .purge_insights_recorded(None, T0 + 3 * DAY, "cli")
+        .unwrap();
+    let events = s.events(EventKind::InsightsPurged, 0).unwrap();
+    assert_eq!(events.len(), 2, "{events:#?}");
+    let first = &events[0];
+    assert_eq!(first.at, T0 + 2 * DAY);
+    assert_eq!(first.source, "cli");
+    assert_eq!(first.payload["older_than"], T0 + DAY + 1);
+    assert_eq!(first.payload["total"], purged.total());
+    assert_eq!(
+        first.payload["deleted"]["free_space_samples"],
+        purged.free_space_samples
+    );
+    assert_eq!(first.payload["deleted"]["gone_items"], purged.gone_items);
+    assert!(events[1].payload["older_than"].is_null());
+    assert_eq!(events[1].payload["total"], again.total());
+    assert_eq!(EventKind::InsightsPurged.as_str(), "insights_purged");
+    assert_eq!(
+        EventKind::parse("insights_purged"),
+        Some(EventKind::InsightsPurged)
+    );
 }
 
 #[test]

@@ -590,3 +590,68 @@ fn candidates_in_synced_folders_are_at_least_s2() {
     assert_eq!(at(&r, &root, "app/target").tier, Tier::S0);
     assert_read_only(&fx, &r);
 }
+
+/// FX-FS-03 (PRD §8.3, SAFE-04): a scan root reached through a symlink (or junction) that
+/// points outside the folder holding it makes everything found below it S3 (`link_escape`,
+/// with the real location as evidence), whether the link is the root itself or a folder above
+/// it. A link that stays inside its own folder is not an escape, and the same tree scanned by
+/// its real path is classified normally. Read-only (I-2, I-3).
+#[test]
+fn fx_fs_03_root_reached_through_an_escaping_link_is_s3() {
+    let mut fx = Fixture::new().unwrap();
+    fx.cargo_project("outside/app", "app")
+        .unwrap()
+        .cargo_target("outside/app", "app", 4096)
+        .unwrap()
+        .cargo_project("scan/real/lib", "lib")
+        .unwrap()
+        .cargo_target("scan/real/lib", "lib", 2048)
+        .unwrap();
+    let outside = canon(&fx.root().join("outside"));
+    let escaping = fx.symlink("scan/projects", &outside).unwrap();
+    let inside = fx.symlink("scan/alias", "real").unwrap();
+    fx.checkpoint().unwrap();
+    if !escaping.is_created() || !inside.is_created() {
+        eprintln!("SKIPPED fx_fs_03: symlinks can't be created here ({escaping:?}, {inside:?})");
+        return;
+    }
+    let e = engine(Some(Tri::No), false, Config::default());
+    let now = now_unix() + THREE_DAYS;
+
+    // By its real path: the usual tier.
+    let direct = scan(&e, &outside, now);
+    let app = at(&direct, &outside, "app/target");
+    assert_eq!(app.tier, Tier::S0, "{app:#?}");
+    assert!(!codes(app).contains(&ReasonCode::LinkEscape));
+    assert_read_only(&fx, &direct);
+
+    // Through the escaping link: the root itself, and a folder below it.
+    let scan_dir = fx.root().join("scan");
+    for (given, rel_path) in [
+        (scan_dir.join("projects"), "app/target"),
+        (scan_dir.join("projects").join("app"), "target"),
+    ] {
+        let real = canon(&given);
+        let r = scan(&e, &given, now);
+        let c = at(&r, &real, rel_path);
+        assert_eq!(c.tier, Tier::S3, "{}: {c:#?}", given.display());
+        assert_eq!(c.action, Action::None);
+        assert!(codes(c).contains(&ReasonCode::LinkEscape), "{c:#?}");
+        assert!(
+            c.evidence.iter().any(
+                |ev| matches!(ev, Evidence::LinkEscape { target } if target.to_path_buf() == real)
+            ),
+            "{:#?}",
+            c.evidence
+        );
+        assert_read_only(&fx, &r);
+    }
+
+    // A link that stays inside its folder (`scan/alias` → `scan/real`) is not an escape.
+    let alias = scan_dir.join("alias");
+    let r = scan(&e, &alias, now);
+    let lib = at(&r, &canon(&alias), "lib/target");
+    assert_eq!(lib.tier, Tier::S0, "{lib:#?}");
+    assert!(!codes(lib).contains(&ReasonCode::LinkEscape));
+    assert_read_only(&fx, &r);
+}

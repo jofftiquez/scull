@@ -1,0 +1,406 @@
+{
+  "$defs": {
+    "ChainLine": {
+      "additionalProperties": false,
+      "description": "The audit chain check of one operation.",
+      "properties": {
+        "finished": {
+          "description": "Whether the `finished` row exists.",
+          "type": "boolean"
+        },
+        "intact": {
+          "description": "No problem found.",
+          "type": "boolean"
+        },
+        "problems": {
+          "description": "Every problem, in chain order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "description": "Rows found.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "intact",
+        "rows",
+        "finished",
+        "problems"
+      ],
+      "type": "object"
+    },
+    "ContentHash": {
+      "description": "SHA-256 of the plan's canonical JSON, lowercase hex.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "ItemLine": {
+      "additionalProperties": false,
+      "description": "One recorded item outcome.",
+      "properties": {
+        "action": {
+          "description": "The plan's action.",
+          "type": "string"
+        },
+        "freed_bytes": {
+          "description": "Bytes freed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The plan item."
+        },
+        "moved_bytes": {
+          "description": "Bytes moved.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "op_seq": {
+          "description": "Position in the chain.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "What happened (`removed`, `quarantined`, `skipped`, ...).",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Its path in the plan."
+        },
+        "predicted_bytes": {
+          "description": "Predicted bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Reason code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "description": "When it was recorded.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "op_seq",
+        "recorded_at",
+        "item_id",
+        "path",
+        "action",
+        "outcome",
+        "predicted_bytes"
+      ],
+      "type": "object"
+    },
+    "OperationDetail": {
+      "additionalProperties": false,
+      "description": "`scull history <operation-id>` (`scull/history-operation@1`).",
+      "properties": {
+        "chain": {
+          "$ref": "#/$defs/ChainLine",
+          "description": "The audit chain check."
+        },
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash",
+          "description": "The executed plan's content hash."
+        },
+        "items": {
+          "description": "One entry per recorded item outcome, in chain order.",
+          "items": {
+            "$ref": "#/$defs/ItemLine"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "$ref": "#/$defs/OperationLine",
+          "description": "The summary line."
+        },
+        "quarantine": {
+          "description": "The operation's quarantine manifest entries.",
+          "items": {
+            "$ref": "#/$defs/QuarantineLine"
+          },
+          "type": "array"
+        },
+        "restore_hint": {
+          "description": "How to restore what is still held.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "content_hash",
+        "chain",
+        "items",
+        "quarantine"
+      ],
+      "type": "object"
+    },
+    "OperationId": {
+      "pattern": "^op_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "OperationLine": {
+      "additionalProperties": false,
+      "description": "One operation.",
+      "properties": {
+        "approver": {
+          "description": "Who approved it.",
+          "type": "string"
+        },
+        "chain_intact": {
+          "description": "Whether the audit hash chain verifies.",
+          "type": "boolean"
+        },
+        "finished_at": {
+          "description": "End, once finished.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "freed_bytes": {
+          "description": "Bytes freed by removal.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_done": {
+          "description": "Items removed, quarantined, moved to the Trash or cleaned by their tool.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_planned": {
+          "description": "Items in the plan (0 while unfinished).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_recorded": {
+          "description": "Items with a recorded outcome.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_skipped": {
+          "description": "Items skipped at revalidation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_with_errors": {
+          "description": "Items partly processed, failed or refused.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measured_delta_bytes": {
+          "description": "Measured free-space delta, if recorded.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method": {
+          "description": "How (`cli_flag`, `cli_interactive`, `cli_tty`, `desktop`).",
+          "type": "string"
+        },
+        "moved_bytes": {
+          "description": "Bytes moved aside (quarantine, Trash).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "description": "Operation ID (for `scull history <id>` and `scull restore <id>`)."
+        },
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "The executed plan."
+        },
+        "predicted_bytes": {
+          "description": "Bytes the plan predicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quarantine_held": {
+          "description": "Quarantined items still held (restorable).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "description": "Start (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "description": "`completed`, `completed_with_errors`, `failed`, `cancelled`, `interrupted`, or\n`unfinished` (crash recovery closes it on the next destructive run).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_id",
+        "approver",
+        "method",
+        "started_at",
+        "status",
+        "items_planned",
+        "items_recorded",
+        "items_done",
+        "items_with_errors",
+        "items_skipped",
+        "predicted_bytes",
+        "freed_bytes",
+        "moved_bytes",
+        "quarantine_held",
+        "chain_intact"
+      ],
+      "type": "object"
+    },
+    "PlanId": {
+      "pattern": "^plan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "QuarantineLine": {
+      "additionalProperties": false,
+      "description": "One quarantine manifest entry.",
+      "properties": {
+        "bytes": {
+          "description": "Allocated bytes held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entry_id": {
+          "description": "Manifest entry number (`scull restore <op> --item <n>`).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "description": "When its retention ends.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The plan item."
+        },
+        "original_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it came from (and goes back to)."
+        },
+        "purged_at": {
+          "description": "When it was purged.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "quarantine_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it is held."
+        },
+        "quarantined_at": {
+          "description": "When it was quarantined.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "restored_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where it was restored to."
+        },
+        "state": {
+          "description": "`held`, `restored` or `purged`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "item_id",
+        "original_path",
+        "quarantine_path",
+        "bytes",
+        "quarantined_at",
+        "state"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/OperationDetail",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/history-operation@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/history-operation@1",
+  "type": "object"
+}

@@ -29,10 +29,16 @@
 //!   Cargo/npm/pnpm project helpers.
 //! * [`TreeSnapshot`] / [`TreeDiff`]: no-follow snapshots (path, kind, size, SHA-256, mtime,
 //!   identity, permissions) and diffs.
-//! * [`check_invariants`]: runs I-2 and I-3 always, I-1 and I-8 when given a plan / tiers, I-6
-//!   always (a verified network sandbox or a best-effort socket detector, see [`net`]), and
-//!   reports I-4, I-5 and I-7 as [`Outcome::Unimplemented`] with the issue that will implement
-//!   them.
+//! * [`check_invariants`]: runs I-2 and I-3 always, I-6 always (a verified network sandbox or a
+//!   best-effort socket detector, see [`net`]), and the others when the fixture provides their
+//!   input: I-1 a plan, I-4 an operation's audit ([`InvariantInputs::audit`]), I-5 recorded
+//!   predicted and measured bytes, I-7 the spawned processes ([`InvariantInputs::spawned`]),
+//!   I-8 tiers. Without the input an invariant is reported not applicable, never passed.
+//! * Nothing outside the fixture (P2-EXEC-13): every scull process a test starts gets
+//!   [`Fixture::sandbox_env`] (the test sandbox and the quarantine base, both the fixture's temp
+//!   dir; the Executor then refuses any location outside it), and I-2 also fails when anything
+//!   appears in the automatic quarantine or Trash locations above the temp dir, or when an
+//!   audited quarantine path lies outside it.
 //! * [`net`]: the I-6 network guard and [`isolate_network!`], which re-runs a test inside an OS
 //!   network sandbox (Linux network namespace, macOS `sandbox-exec`; none on Windows).
 //!
@@ -56,6 +62,7 @@ pub mod invariants;
 pub mod mounts;
 pub mod net;
 mod os;
+mod outside;
 pub mod privileged;
 mod projects;
 pub mod registry;
@@ -65,7 +72,8 @@ pub use error::{FixtureError, Result};
 pub use fixture::{Canary, Fixture, LinkOutcome, Skipped, ago, days_ago};
 pub use git::{GIT_DATE, GIT_USER_EMAIL, GIT_USER_NAME, GitRepo};
 pub use invariants::{
-    InvariantId, InvariantInputs, InvariantReport, Outcome, PlanEntry, check_invariants,
+    ALLOWED_TOOLS, BytesRecord, InvariantId, InvariantInputs, InvariantReport, Outcome, PlanEntry,
+    SpawnRecord, check_invariants,
 };
 pub use mounts::Mounts;
 pub use projects::{CACHEDIR_TAG, NodeLock, WIDE_PROJECT_ENTRIES, WideTree};

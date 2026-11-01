@@ -29,6 +29,15 @@
 //! * [`current_user`] / [`machine_id`]: the account scull runs as (`uid:<n>` / the user SID)
 //!   and a random per-installation machine ID kept in the data directory, which plans are
 //!   bound to (SAFE-11, PRD §10.4).
+//! * `remove` (only with the `delete` cargo feature, which only `scull-cleaner` enables,
+//!   SAFE-10): the handle-relative, no-follow removal walker the Executor deletes through
+//!   (SAFE-04, SAFE-05, SAFE-18): `openat`/`unlinkat` on Unix (P2-EXEC-01), `NtCreateFile`
+//!   relative opens and handle-based deletion on Windows (P2-EXEC-02).
+//! * `quarantine` (same feature): atomic, same-volume, no-replace moves for quarantine and
+//!   restore (`renameat2(RENAME_NOREPLACE)` / `renameatx_np(RENAME_EXCL)`; D-3, SAFE-16).
+//!   Unix only for now (Windows: `Unsupported`, the item is blocked).
+//! * `exec_lock` (same feature): the per-user execution lock, an OS file lock (`flock` /
+//!   `LockFileEx`) released by the OS when its holder exits (SAFE-09, P2-EXEC-04).
 //! * [`docker`]: the read-only Docker Engine API transport (Unix socket, Windows named pipe,
 //!   loopback TCP): `GET` on allow-listed endpoints only, with a hard deadline (P5-DET-03).
 //!
@@ -50,29 +59,41 @@
 //!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
 pub mod activity;
+pub mod ancestry;
 pub mod app_dirs;
 pub mod cloud;
 pub mod docker;
 pub mod elevation;
 mod error;
+#[cfg(feature = "delete")]
+pub mod exec_lock;
 pub mod identity;
 mod native;
 pub mod owner_only;
+#[cfg(feature = "delete")]
+pub mod quarantine;
+#[cfg(feature = "delete")]
+pub mod remove;
 pub mod scheduler;
+#[cfg(feature = "delete")]
+pub mod trash;
 mod types;
 pub mod volumes;
 
 use std::path::Path;
 
+pub use ancestry::{MAX_ANCESTRY, ProcessInfo, ancestry};
 pub use app_dirs::{
     APP_NAME, AppDirs, AppDirsError, DirLayout, DirSource, HOME_OVERRIDE_ENV, app_dirs,
 };
 pub use cloud::{CloudProvider, CloudState, SyncMechanism, SyncedRoot, SyncedRoots};
 pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
-pub use identity::{MACHINE_ID_FILE, current_user, machine_id};
+pub use identity::{MACHINE_ID_FILE, current_user, existing_machine_id, machine_id};
 pub use native::{Native, native_path_bytes};
-pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
+pub use owner_only::{
+    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, open_file_no_follow,
+};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 pub use volumes::{
     FsFeatures, ScanPolicy, VolumeInfo, VolumeKind, free_space, is_mount_boundary, mounts_within,
@@ -104,7 +125,8 @@ pub type DirIter<'a> = Box<dyn Iterator<Item = Result<DirEntry>> + Send + 'a>;
 /// 3. **Never hydrate cloud placeholders** (PLT-04): metadata-only calls, no reads of file
 ///    contents.
 /// 4. **Read-only.** Nothing here creates, modifies or deletes anything. Deletion belongs to
-///    the executor in `scull-cleaner` (SAFE-10).
+///    the executor in `scull-cleaner` (SAFE-10), which uses the feature-gated `remove` module,
+///    never this trait.
 /// 5. **Don't guess.** A signal the OS can't provide is `None` and reported as unavailable in
 ///    [`Platform::capabilities`]; callers then lower confidence or block (PLT-08).
 pub trait Platform: Send + Sync {

@@ -42,6 +42,7 @@ fn fx_data_01_fresh_database_migrates_from_v0_to_latest() {
         "approvals",
         "operations",
         "audit",
+        "audit_v1",
         "quarantine_manifest",
         "events",
         "metrics",
@@ -232,14 +233,42 @@ fn fx_data_05_readers_proceed_while_a_writer_holds_a_transaction() {
     tx.commit().unwrap();
 }
 
+/// A write that finds another scull holding the write lock waits for it, then succeeds, and
+/// both writes are kept. Synchronised on events, never on wall-clock time (it held up under
+/// load only by luck before): the holder keeps the lock until the waiting writer has reported
+/// that it found the lock taken ([`Store::on_lock_wait`]), and releases it only then, so the
+/// writer provably met the lock and provably finished after its release.
 #[test]
 fn fx_data_05_writer_waits_for_the_lock_then_succeeds() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     let dir = tempfile::tempdir().unwrap();
     let path = db_in(&dir);
-    drop(open(&path));
+    // Opened (and migrated) before the lock is taken: only the write below meets it.
+    let mut s = Store::open_with(
+        &path,
+        &TestPerms::default(),
+        &StoreOptions {
+            busy_timeout: Duration::from_secs(60),
+        },
+    )
+    .unwrap();
+    let waits = Arc::new(AtomicUsize::new(0));
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    {
+        let waits = Arc::clone(&waits);
+        let waiting_tx = std::sync::Mutex::new(waiting_tx);
+        s.on_lock_wait(move || {
+            waits.fetch_add(1, Ordering::SeqCst);
+            let _ = waiting_tx.lock().unwrap().send(());
+        });
+    }
 
     let (locked_tx, locked_rx) = mpsc::channel();
+    let releasing = Arc::new(AtomicBool::new(false));
     let holder_path = path.clone();
+    let holder_releasing = Arc::clone(&releasing);
     let holder = std::thread::spawn(move || {
         let mut w = raw(&holder_path);
         let tx = w
@@ -248,24 +277,26 @@ fn fx_data_05_writer_waits_for_the_lock_then_succeeds() {
         tx.execute("INSERT INTO meta (key, value) VALUES ('holder', '1')", [])
             .unwrap();
         locked_tx.send(()).unwrap();
-        std::thread::sleep(Duration::from_millis(400));
+        // Keep the lock until the writer reports that it is waiting for it. (A generous
+        // deadlock guard, not a timing assumption: the report comes as soon as the write runs.)
+        waiting_rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("the writer reported waiting for the lock");
+        // Set before the commit: the writer can only get the lock after this.
+        holder_releasing.store(true, Ordering::SeqCst);
         tx.commit().unwrap();
     });
     locked_rx.recv().unwrap();
 
-    let mut s = Store::open_with(
-        &path,
-        &TestPerms::default(),
-        &StoreOptions {
-            busy_timeout: Duration::from_secs(10),
-        },
-    )
-    .unwrap();
-    let started = Instant::now();
     s.insert_plan(&plan(1)).unwrap();
     assert!(
-        started.elapsed() >= Duration::from_millis(200),
-        "the write should have waited for the lock"
+        releasing.load(Ordering::SeqCst),
+        "the write finished only after the holder released the lock"
+    );
+    assert_eq!(
+        waits.load(Ordering::SeqCst),
+        1,
+        "the write met the lock once"
     );
     holder.join().unwrap();
 
@@ -278,6 +309,10 @@ fn fx_data_05_writer_waits_for_the_lock_then_succeeds() {
         })
         .unwrap();
     assert_eq!(holder_row, 1);
+
+    // Without contention the observer is not called.
+    s.insert_plan(&plan(2)).unwrap();
+    assert_eq!(waits.load(Ordering::SeqCst), 1);
 }
 
 #[test]
