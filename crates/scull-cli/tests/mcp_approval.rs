@@ -238,6 +238,16 @@ impl Session {
     }
 }
 
+/// `kind/source/reason` of every agent audit event, oldest first.
+fn reasons(env: &Env) -> Vec<String> {
+    env.store()
+        .agent_events(0)
+        .unwrap()
+        .into_iter()
+        .map(|e| format!("{}/{}/{}", e.kind.as_str(), e.source, e.reason))
+        .collect()
+}
+
 fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
@@ -332,6 +342,16 @@ fn agent_plan_runs_only_after_the_human_approves() {
     );
     let (_, st) = s.call("get_approval_status", args.clone());
     assert_eq!(st["state"], "awaiting_approval");
+    // Audited (PRD §13.3 step 5): the refused execution, and both attempts without a
+    // terminal that named the plan (the usage error and the bare listing are not attempts).
+    assert_eq!(
+        reasons(&env),
+        [
+            "execute_refused/mcp/not_approved",
+            "approval_denied/cli/no_terminal",
+            "approval_denied/cli/no_terminal",
+        ]
+    );
 
     // The human approves in their terminal.
     env.human_approves(&id);
@@ -352,6 +372,58 @@ fn agent_plan_runs_only_after_the_human_approves() {
     let (_, st) = s.call("get_cleanup_status", args);
     assert_eq!(st["state"], "executed", "{st:#}");
     s.finish();
+
+    // `scull history` lists what was refused to the agent; `scull data show` counts it.
+    let o = env.run(&["history", "--json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let h: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let listed: Vec<(&str, &str)> = h["data"]["agent_events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{h:#}"))
+        .iter()
+        .map(|e| (e["kind"].as_str().unwrap(), e["reason"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("execute_refused", "approval_used"),
+            ("approval_denied", "no_terminal"),
+            ("approval_denied", "no_terminal"),
+            ("execute_refused", "not_approved"),
+        ],
+        "newest first"
+    );
+    assert!(
+        h["data"]["agent_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["plan_id"] == id.as_str()),
+        "{h:#}"
+    );
+    let o = env.run(&["history"]);
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(text.contains("Refused to AI agents (4"), "{text}");
+    assert!(
+        text.contains("no_terminal") && text.contains("not_approved"),
+        "{text}"
+    );
+    let o = env.run(&["data", "show", "--json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let d: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let rows = |k: &str| {
+        d["data"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == k)
+            .map_or(0, |e| e["rows"].as_u64().unwrap())
+    };
+    assert_eq!(
+        (rows("approval_denied"), rows("execute_refused")),
+        (2, 2),
+        "{d:#}"
+    );
 
     // The operation is recorded with the approval's channel and approver.
     let store = env.store();
@@ -432,6 +504,24 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
     assert_eq!(r.unwrap_err().kind, scull_core::ErrorKind::SafetyBlocked);
     assert_eq!(out.matches("Type WXY-Z23 to approve").count(), 3, "{out}");
     assert!(store.get_approval(&id).unwrap().is_none());
+    // Four denials and one give-up are audited, with the plan's hash and never the code.
+    let events = store.agent_events(0).unwrap();
+    let got: Vec<&str> = events.iter().map(|e| e.reason.as_str()).collect();
+    assert_eq!(got, ["denied", "denied", "denied", "denied", "wrong_code"]);
+    for e in &events {
+        assert_eq!(e.kind.as_str(), "approval_denied");
+        assert_eq!((e.source.as_str(), e.channel.as_str()), ("cli", "terminal"));
+        assert_eq!(e.plan_id.as_ref(), Some(&id));
+        assert_eq!(
+            e.content_hash.as_ref().map(|h| h.as_str()),
+            plan["content_hash"].as_str()
+        );
+        assert_eq!(e.user, who.user);
+    }
+    assert!(
+        !format!("{events:?}").contains("WXY"),
+        "no code in the audit"
+    );
     let (r, out) = answer(&mut store, "nope\nwxy z23\n");
     assert!(
         matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),

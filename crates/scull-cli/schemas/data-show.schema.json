@@ -12,6 +12,14 @@
           "$ref": "#/$defs/DirsReport",
           "description": "scull's directories."
         },
+        "events": {
+          "default": [],
+          "description": "Rows of the `events` table by kind (`alert`, `review_plan`, `approval_denied`,\n`execute_refused`, ...); empty when there are none or the database can't be read.",
+          "items": {
+            "$ref": "#/$defs/EventRows"
+          },
+          "type": "array"
+        },
         "files": {
           "description": "scull's own files.",
           "items": {
@@ -155,6 +163,27 @@
         "data",
         "cache",
         "state"
+      ],
+      "type": "object"
+    },
+    "EventRows": {
+      "additionalProperties": false,
+      "description": "Rows of one event kind.",
+      "properties": {
+        "kind": {
+          "description": "Stored kind name.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "Rows.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "rows"
       ],
       "type": "object"
     },

@@ -21,7 +21,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use scull_core::config::{Config, McpConfig};
-use scull_core::{ErrorKind, OperationId, PlanId, ScullError};
+use scull_core::{ErrorKind, OperationId, Plan, PlanId, PlanOrigin, PlanParams, ScullError};
 use scull_engine::{Engine, EngineConfig, FixedInUse, InUseSource, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs, NodeLock, days_ago};
 use scull_mcp::approval::{self, ApprovalState, ConfirmationCode, HumanChannel, Principal, Reason};
@@ -707,6 +707,14 @@ async fn plan_mutated_on_disk_after_approval_is_void() {
     assert_eq!(st["state"], "voided");
     assert!(st["operation"].is_null());
     assert_eq!(env.calls(), 0);
+    // Both refusals are audited (PRD §13.3 step 5).
+    assert_eq!(
+        audited(&env),
+        vec![
+            refusal("plan_changed", Some(&id)),
+            refusal("approval_used", Some(&id))
+        ]
+    );
     client.cancel().await.unwrap();
     env.invariants(&["app/target", "app/target-old", "app"]);
 }
@@ -876,6 +884,206 @@ async fn no_tool_can_approve() {
     }
     assert!(env.store().get_approval(&id).unwrap().is_none());
     assert_eq!(env.calls(), 0);
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// The agent audit events recorded so far: `(kind, source, reason, plan)`, oldest first.
+fn audited(env: &Env) -> Vec<(String, String, String, Option<String>)> {
+    env.store()
+        .agent_events(0)
+        .unwrap()
+        .into_iter()
+        .map(|e| {
+            assert_eq!(e.machine_id, MACHINE);
+            assert_eq!(e.user, USER);
+            (
+                e.kind.as_str().to_owned(),
+                e.source,
+                e.reason,
+                e.plan_id.map(|p| p.as_str().to_owned()),
+            )
+        })
+        .collect()
+}
+
+fn refusal(reason: &str, plan: Option<&PlanId>) -> (String, String, String, Option<String>) {
+    (
+        "execute_refused".into(),
+        "mcp".into(),
+        reason.into(),
+        plan.map(|p| p.as_str().to_owned()),
+    )
+}
+
+/// PRD §13.3 step 5: every refused `execute_cleanup` is audited with its reason (invalid
+/// arguments, a smuggled code, unknown, foreign, expired, unapproved, non-human, used), the
+/// plan and its hash, and no refusal creates, spends or changes an approval or reaches the
+/// runner. The code never appears in the audit.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_refused_execute_is_audited_without_touching_approvals() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let a = id_of(&prepare(&client, &["app/target"]).await);
+    let b = id_of(&prepare(&client, &["web/node_modules"]).await);
+    let mut store = env.store();
+    let plan_a = store.get_plan(&a).unwrap().unwrap();
+    let plan_b = store.get_plan(&b).unwrap().unwrap();
+    let variant = |id: &str, created: i64, user: &str| {
+        Plan::new(
+            PlanParams {
+                id: PlanId::from_suffix(id).unwrap(),
+                scan_id: plan_a.scan_id().clone(),
+                created_unix: created,
+                ttl_secs: None,
+                machine_id: MACHINE.into(),
+                user: user.into(),
+                origin: PlanOrigin::Mcp,
+            },
+            plan_a.items().to_vec(),
+        )
+        .unwrap()
+    };
+    let foreign = variant("01JAUDMALLORY", now_unix(), "mallory");
+    let expired = variant("01JAUDEXPIRED", now_unix() - 16 * 60, USER);
+    store.insert_plan(&foreign).unwrap();
+    store.insert_plan(&expired).unwrap();
+    store
+        .insert_approval(&NewApproval {
+            plan_id: b.clone(),
+            content_hash: plan_b.content_hash().clone(),
+            method: ApprovalMethod::CliFlag,
+            approver: USER.into(),
+            approved_at: now_unix(),
+            expires_at: plan_b.expires_unix(),
+        })
+        .unwrap();
+    let unknown = PlanId::from_suffix("01JAUDNOPE").unwrap();
+
+    let cases: Vec<(Value, &str)> = vec![
+        (json!({ "plan_id": "not a plan" }), "invalid_arguments"),
+        (json!({ "plan_id": unknown.as_str() }), "unknown_plan"),
+        (json!({ "plan_id": a.as_str() }), "not_approved"),
+        (
+            json!({ "plan_id": a.as_str(), "code": "ABCDEF", "approve": true }),
+            "invalid_arguments",
+        ),
+        (json!({ "plan_id": foreign.id().as_str() }), "plan_foreign"),
+        (json!({ "plan_id": expired.id().as_str() }), "plan_expired"),
+        (json!({ "plan_id": b.as_str() }), "not_human"),
+    ];
+    for (args, code) in &cases {
+        let r = call(&client, "execute_cleanup", args.clone()).await;
+        assert_eq!(error_code(&r), *code, "{args}");
+    }
+    assert_eq!(env.calls(), 0, "no refusal reaches the runner");
+    for id in [&a, foreign.id(), expired.id(), &unknown] {
+        assert!(store.get_approval(id).unwrap().is_none(), "none created");
+    }
+    assert_eq!(store.get_approval(&b).unwrap().unwrap().used_at, None);
+
+    human_approves(&mut store, &a);
+    ok(
+        "execute",
+        &call(&client, "execute_cleanup", json!({ "plan_id": a.as_str() })).await,
+    );
+    let r = call(&client, "execute_cleanup", json!({ "plan_id": a.as_str() })).await;
+    assert_eq!(error_code(&r), "approval_used");
+    assert_eq!(env.calls(), 1);
+
+    assert_eq!(
+        audited(&env),
+        vec![
+            refusal("invalid_arguments", None),
+            refusal("unknown_plan", Some(&unknown)),
+            refusal("not_approved", Some(&a)),
+            refusal("invalid_arguments", Some(&a)),
+            refusal("plan_foreign", Some(foreign.id())),
+            refusal("plan_expired", Some(expired.id())),
+            refusal("not_human", Some(&b)),
+            refusal("approval_used", Some(&a)),
+        ]
+    );
+    let events = store.agent_events(0).unwrap();
+    // Plan hashes as recorded (none for an unknown or invalid plan); channel `mcp`.
+    assert_eq!(events[2].content_hash.as_ref(), Some(plan_a.content_hash()));
+    assert_eq!(events[6].content_hash.as_ref(), Some(plan_b.content_hash()));
+    assert_eq!(events[1].content_hash, None);
+    assert!(events.iter().all(|e| e.channel == "mcp"));
+    let dump = format!("{events:?}");
+    assert!(!dump.contains("ABCDEF"), "no code in the audit: {dump}");
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// The broker's denial API (what `scull approve` and the desktop dialog call): one
+/// `approval_denied` event per denial with its reason, channel and source, and nothing about
+/// the approval changes; a later approval still works.
+#[tokio::test(flavor = "multi_thread")]
+async fn denials_are_audited_and_leave_the_plan_approvable() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let id = id_of(&prepare(&client, &["app/target"]).await);
+    let mut store = env.store();
+    let hash = approval::recorded_hash(&store, &id).unwrap();
+    for (denial, channel) in [
+        (approval::Denial::Denied, HumanChannel::Terminal),
+        (approval::Denial::WrongCode, HumanChannel::Desktop),
+        (approval::Denial::NoTerminal, HumanChannel::Terminal),
+        (
+            approval::Denial::Refused(Reason::PlanExpired),
+            HumanChannel::Terminal,
+        ),
+    ] {
+        approval::record_denial(
+            &mut store,
+            &id,
+            Some(&hash),
+            denial,
+            channel,
+            &who(),
+            now_unix(),
+        )
+        .unwrap();
+    }
+    assert!(store.get_approval(&id).unwrap().is_none());
+    let events = store.agent_events(0).unwrap();
+    let got: Vec<(&str, &str, &str, &str)> = events
+        .iter()
+        .map(|e| {
+            (
+                e.kind.as_str(),
+                e.source.as_str(),
+                e.channel.as_str(),
+                e.reason.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("approval_denied", "cli", "terminal", "denied"),
+            ("approval_denied", "desktop", "desktop", "wrong_code"),
+            ("approval_denied", "cli", "terminal", "no_terminal"),
+            ("approval_denied", "cli", "terminal", "plan_expired"),
+        ]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| e.content_hash.as_ref() == Some(&hash))
+    );
+    human_approves(&mut store, &id);
+    let r = ok(
+        "execute",
+        &call(
+            &client,
+            "execute_cleanup",
+            json!({ "plan_id": id.as_str() }),
+        )
+        .await,
+    );
+    assert_eq!(r["approved_via"], "terminal");
     client.cancel().await.unwrap();
     env.invariants(&[]);
 }

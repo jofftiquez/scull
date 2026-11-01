@@ -21,6 +21,11 @@
 //!   the plan's content hash, channel `terminal`, approver = this OS user, single use, lapsing
 //!   with the plan (at most 15 minutes after the agent prepared it). The agent's
 //!   `execute_cleanup` can then run it once; the Executor consumes the approval.
+//! * Every attempt that ends without an approval is audited (PRD §13.3 step 5;
+//!   [`approval::record_denial`]): `deny`, too many wrong codes, no terminal (when a plan ID
+//!   was given and scull's database already exists; nothing is created for it), and a
+//!   refused attempt (expired, foreign or unknown plan, already approved). `scull history`
+//!   lists them. Not when elevated: an elevated process never writes the user's database.
 
 use super::clean::utc_datetime;
 use super::exec;
@@ -32,7 +37,7 @@ use crate::output::style::{Style, tier_style, tier_text};
 use scull_core::{ErrorKind, PlanId, Restorability, ScullError};
 use scull_engine::now_unix;
 use scull_mcp::approval::{
-    self, Challenge, HumanChannel, MAX_CODE_ATTEMPTS, PlanSummary, Principal, Reason,
+    self, Challenge, Denial, HumanChannel, MAX_CODE_ATTEMPTS, PlanSummary, Principal, Reason,
 };
 use scull_storage::{Approval, Store};
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -48,12 +53,21 @@ pub enum Answer {
 
 /// `scull approve [<plan-id>]`.
 pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
-    require_interactive(
+    let interactive = require_interactive(
         ui.format.is_machine(),
         io::stdin().is_terminal(),
         io::stdout().is_terminal(),
         io::stderr().is_terminal(),
-    )?;
+    );
+    if let Err(e) = interactive {
+        if e.kind == ErrorKind::SafetyBlocked
+            && !exec::elevation().blocks_destructive()
+            && let Some(id) = plan_id.and_then(|p| PlanId::try_from(p.to_owned()).ok())
+        {
+            audit_without_terminal(&id);
+        }
+        return Err(e);
+    }
     if exec::elevation().blocks_destructive() {
         return Err(ScullError::new(
             ErrorKind::SafetyBlocked,
@@ -79,7 +93,20 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
             format!("{} is not a scull plan ID", escape_for_terminal(id)),
         )
     })?;
-    let challenge = approval::begin(&store, &id, &principal, now).map_err(ScullError::from)?;
+    let challenge = match approval::begin(&store, &id, &principal, now) {
+        Ok(c) => c,
+        Err(r) => {
+            let hash = approval::recorded_hash(&store, &id);
+            audit(
+                &mut store,
+                &id,
+                hash.as_ref(),
+                Denial::Refused(r.reason),
+                &principal,
+            );
+            return Err(r.into());
+        }
+    };
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut out = io::stdout().lock();
@@ -92,6 +119,54 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
             "not approved; the agent's plan will expire unused",
         )),
     }
+}
+
+/// Record a denied approval attempt through the terminal (best effort: the outcome stands
+/// either way; a failure to record is reported on stderr).
+fn audit(
+    store: &mut Store,
+    id: &PlanId,
+    hash: Option<&scull_core::ContentHash>,
+    denial: Denial,
+    who: &Principal,
+) {
+    if let Err(e) = approval::record_denial(
+        store,
+        id,
+        hash,
+        denial,
+        HumanChannel::Terminal,
+        who,
+        now_unix(),
+    ) {
+        let _ = writeln!(
+            io::stderr(),
+            "scull: could not record this in the audit log: {}",
+            e.message
+        );
+    }
+}
+
+/// FX-MCP-08 refusals are audited too (an agent's shell tool trying `scull approve`), but
+/// only into a database that already exists: nothing is created for a refused attempt.
+fn audit_without_terminal(id: &PlanId) {
+    let Ok(dirs) = exec::dirs() else { return };
+    let Ok(mut store) = crate::db::open_current(&crate::db::db_path(&dirs.data)) else {
+        return;
+    };
+    let Ok(who) = exec::who() else { return };
+    let principal = Principal {
+        machine_id: who.machine_id,
+        user: who.user,
+    };
+    let hash = approval::recorded_hash(&store, id);
+    audit(
+        &mut store,
+        id,
+        hash.as_ref(),
+        Denial::NoTerminal,
+        &principal,
+    );
 }
 
 /// FX-MCP-08: approving needs a human at an interactive terminal. `machine` is a JSON/NDJSON
@@ -122,7 +197,7 @@ pub fn require_interactive(
 
 /// Show the challenged plan and its code on `out`, read answers from `input` until the code
 /// matches (approved), `deny`/empty/end of input (denied), or [`MAX_CODE_ATTEMPTS`] wrong
-/// codes (refused with `safety_blocked`).
+/// codes (refused with `safety_blocked`). Every outcome but an approval is audited.
 pub fn ask(
     store: &mut Store,
     challenge: &Challenge,
@@ -132,6 +207,7 @@ pub fn ask(
     color: bool,
 ) -> Result<Answer, ScullError> {
     let io_err = |e: io::Error| ScullError::from_io(&e);
+    let plan = challenge.plan();
     write!(out, "{}", render_plan(challenge, now_unix(), color)).map_err(io_err)?;
     let code = challenge.code().display();
     for attempt in 1..=MAX_CODE_ATTEMPTS {
@@ -146,6 +222,13 @@ pub fn ask(
         let n = input.read_line(&mut line).map_err(io_err)?;
         let answer = line.trim();
         if n == 0 || answer.is_empty() || answer.eq_ignore_ascii_case("deny") {
+            audit(
+                store,
+                plan.id(),
+                Some(plan.content_hash()),
+                Denial::Denied,
+                who,
+            );
             writeln!(out, "\nNot approved. Nothing will be cleaned.").map_err(io_err)?;
             return Ok(Answer::Denied);
         }
@@ -177,16 +260,32 @@ pub fn ask(
                 .map_err(io_err)?;
             }
             Err(r) if r.reason == Reason::WrongCode => {
+                audit(
+                    store,
+                    plan.id(),
+                    Some(plan.content_hash()),
+                    Denial::WrongCode,
+                    who,
+                );
                 return Err(ScullError::new(
                     ErrorKind::SafetyBlocked,
                     format!(
                         "the code was typed wrong {MAX_CODE_ATTEMPTS} times; nothing was \
                          approved. Run `scull approve {}` again to retry.",
-                        challenge.plan().id()
+                        plan.id()
                     ),
                 ));
             }
-            Err(r) => return Err(r.into()),
+            Err(r) => {
+                audit(
+                    store,
+                    plan.id(),
+                    Some(plan.content_hash()),
+                    Denial::Refused(r.reason),
+                    who,
+                );
+                return Err(r.into());
+            }
         }
     }
     Ok(Answer::Denied)

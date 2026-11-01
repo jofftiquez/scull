@@ -30,7 +30,12 @@
 //!    right before it is touched (SAFE-05).
 //! 5. Without a valid approval everything fails closed. The plan, the approval and the
 //!    executed operation (with the approval's channel and approver, per-item outcomes) are
-//!    recorded in the store's append-only tables.
+//!    recorded in the store's append-only tables. What was **refused** is audited too, as
+//!    agent audit events (`scull history` lists them): a denied approval ([`record_denial`]:
+//!    `deny`, too many wrong codes, no terminal, or a refused attempt) and a refused
+//!    `execute_cleanup` ([`record_execute_refusal`]; the Executor's gate records its own).
+//!    They hold codes and identifiers only, never a confirmation code, and recording one
+//!    never creates, changes or spends an approval.
 //!
 //! # What the confirmation code is for, and what it is not
 //!
@@ -55,14 +60,17 @@
 //! [`awaiting`] (pending MCP plans, newest first, as [`PlanSummary`]), [`begin`] (a
 //! [`Challenge`] holding the plan as reviewed and the code to show; keep it in memory, never
 //! send it to the agent), [`approve`] (with [`HumanChannel::Desktop`] and the typed code) and
-//! [`status`]. Each takes the store, the [`Principal`] (this machine's ID and the current
-//! user) and the current time; nothing here touches the disk beyond the store.
+//! [`status`]; when the human cancels the dialog, [`record_denial`] with [`Denial::Denied`].
+//! Each takes the store, the [`Principal`] (this machine's ID and the current user) and the
+//! current time; nothing here touches the disk beyond the store.
 
 use scull_core::{
     Action, Candidate, ContentHash, DropReason, ErrorKind, ItemId, Plan, PlanId, PlanOrigin,
     ScullError, Tier, narrow,
 };
-use scull_storage::{Approval, ApprovalMethod, NewApproval, StoreError};
+use scull_storage::{
+    AgentAuditEvent, Approval, ApprovalMethod, EventKind, NewApproval, StoreError,
+};
 use scull_storage::{OperationRecord, Store};
 use serde::Serialize;
 
@@ -816,6 +824,106 @@ pub fn void(store: &mut Store, plan: &Plan, now: i64) -> Result<bool, Refused> {
     store
         .consume_approval(plan.id(), plan.content_hash(), now)
         .map_err(store_err)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Audit of refusals (PRD §13.3 step 5)
+// ---------------------------------------------------------------------------------------------
+
+/// Why an approval attempt ended without an approval (recorded by [`record_denial`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Denial {
+    /// The human said no: typed `deny`, an empty line, closed the input or the dialog.
+    Denied,
+    /// The confirmation code was typed wrong [`MAX_CODE_ATTEMPTS`] times.
+    WrongCode,
+    /// `scull approve` ran without an interactive terminal (FX-MCP-08): a pipe, a script, an
+    /// agent's shell tool.
+    NoTerminal,
+    /// The broker refused the attempt (expired, foreign, unknown or changed plan, already
+    /// approved, ...).
+    Refused(Reason),
+}
+
+impl Denial {
+    /// Stable reason code: `denied`, `wrong_code`, `no_terminal`, or the [`Reason`]'s code.
+    pub fn code(self) -> &'static str {
+        match self {
+            Denial::Denied => "denied",
+            Denial::WrongCode => "wrong_code",
+            Denial::NoTerminal => "no_terminal",
+            Denial::Refused(r) => r.code(),
+        }
+    }
+}
+
+/// Record that an attempt to approve plan `plan_id` through `channel` ended without an
+/// approval ([`EventKind::ApprovalDenied`]): reason, plan ID and hash (when known), channel,
+/// machine and user. Never records the code, and never touches the approval itself.
+pub fn record_denial(
+    store: &mut Store,
+    plan_id: &PlanId,
+    content_hash: Option<&ContentHash>,
+    denial: Denial,
+    channel: HumanChannel,
+    who: &Principal,
+    now: i64,
+) -> Result<(), Refused> {
+    let source = match channel {
+        HumanChannel::Terminal => "cli",
+        HumanChannel::Desktop => "desktop",
+    };
+    store
+        .record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::ApprovalDenied,
+            source: source.into(),
+            plan_id: Some(plan_id.clone()),
+            content_hash: content_hash.cloned(),
+            reason: denial.code().into(),
+            channel: channel_name(channel.method()).into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+        })
+        .map_err(store_err)
+}
+
+/// Record that the MCP server refused an `execute_cleanup` of `plan_id` (when the agent gave
+/// a valid one) with the stable code `reason` ([`EventKind::ExecuteRefused`], source and
+/// channel `mcp`). Refusals by the Executor's own gate are recorded by the Executor.
+pub fn record_execute_refusal(
+    store: &mut Store,
+    plan_id: Option<&PlanId>,
+    content_hash: Option<&ContentHash>,
+    reason: &str,
+    who: &Principal,
+    now: i64,
+) -> Result<(), Refused> {
+    store
+        .record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::ExecuteRefused,
+            source: "mcp".into(),
+            plan_id: plan_id.cloned(),
+            content_hash: content_hash.cloned(),
+            reason: reason.into(),
+            channel: "mcp".into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+        })
+        .map_err(store_err)
+}
+
+/// The content hash of the recorded plan `id`, if there is a valid one (for audit events).
+pub fn recorded_hash(store: &Store, id: &PlanId) -> Option<ContentHash> {
+    store
+        .get_plan(id)
+        .ok()
+        .flatten()
+        .map(|p| p.content_hash().clone())
 }
 
 /// The operations recorded for plan `id` (at most one for an MCP plan: approvals are

@@ -279,6 +279,10 @@ impl Executor {
         if plan.origin() == PlanOrigin::Mcp
             && !operation.as_deref().is_some_and(|op| op.is_for(plan))
         {
+            // Audited where there is a store to record it in (another plan's operation).
+            if let Some(op) = operation.as_deref_mut() {
+                crate::operation::audit_refusal(op.store, plan, "outside_operation");
+            }
             return Err(ScullError::new(
                 ErrorKind::SafetyBlocked,
                 format!(

@@ -57,7 +57,7 @@ pub use audit::{
 };
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
-pub use events::{AlertEvent, Event, EventKind};
+pub use events::{AgentAuditEvent, AlertEvent, Event, EventCount, EventKind};
 pub use export::{EXPORT_TABLES, ExportSink, QuarantineSummary, TableCount};
 pub use history::{
     Footprint, FootprintSample, ItemEvent, ItemEventKind, ItemHistory, LastScan, RegrowthEvent,
