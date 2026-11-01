@@ -14,8 +14,15 @@
 //!   challenge's in constant time ([`approval::approve`]); whatever the webview thinks about the
 //!   code, nothing is approved without that match. A plan never opened in this app can't be
 //!   approved here, and the hash the human reviewed must be the challenge's.
-//! * **Bounded attempts.** [`MAX_CODE_ATTEMPTS`] wrong codes close the request and record a
-//!   denial (`wrong_code`); like a denial, the agent then has to prepare a new plan.
+//! * **One code per opening.** Opening a request again draws a new code and the previous one
+//!   stops working. [`MAX_CODE_ATTEMPTS`] wrong codes close the request and record a denial
+//!   (`wrong_code`); like a denial, the agent then has to prepare a new plan. That limit is
+//!   **UX and audit, not a security control**: the code is on the same screen as the field, so
+//!   anything that can type into this window can also read it (the same-user GUI class, see
+//!   the app crate's docs). What keeps the agent out is that it can't reach this process's
+//!   IPC or memory at all.
+//! * **A denial anywhere wins.** Approving re-checks the recorded denials, so a plan denied in
+//!   `scull approve` (or another window) while this dialog was open can't be approved here.
 //! * **Nothing is executed here.** The desktop only records the human's decision. The agent
 //!   executes an approved plan through `scull mcp serve` and the Executor; this crate graph has
 //!   no `scull-cleaner` (SAFE-10). [`ApprovalDesk::status`] reports what happened from the store.
@@ -505,6 +512,16 @@ impl ApprovalDesk {
             }));
         }
         let (mut store, who) = self.writer(&id)?;
+        let created = entry.challenge.plan().created_unix();
+        if denials(&store, &who, created)?.contains_key(id.as_str()) {
+            opened.remove(id.as_str());
+            return Err(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                format!(
+                    "plan {id} was closed (denied) while it was open here; nothing was approved"
+                ),
+            ));
+        }
         match approval::approve(
             &mut store,
             &entry.challenge,

@@ -7,7 +7,7 @@ import { START_LOCATION, useRoute, useRouter } from 'vue-router';
 import AppSidebar from './components/shell/AppSidebar.vue';
 import AgentRequestNotice from './components/review/AgentRequestNotice.vue';
 import { useBridge } from './bridge';
-import { usePlanBridge } from './bridge/plan';
+import { openRequestRoute, usePlanBridge } from './bridge/plan';
 import { shell } from './state/shell';
 import { core, refresh } from './state/core';
 import { needsOnboarding } from './components/onboarding/model';
@@ -21,10 +21,11 @@ const bridge = useBridge();
 const plans = usePlanBridge();
 const route = useRoute();
 const router = useRouter();
-// `scull://approve/<plan-id>` (Tauri): open Cleanup Review on that agent request. A link only
-// navigates; approving still needs the review and the typed code.
+// `scull://approve/<plan-id>` (Tauri): open Cleanup Review on that agent request, unless one is
+// open already. A link only navigates; approving still needs the review and the typed code.
 const stopLinks = plans.onOpenRequest((planId) => {
-  void router.push({ path: '/cleanup', query: { request: planId } });
+  const to = openRequestRoute(route, planId);
+  if (to) void router.push(to);
 });
 onBeforeUnmount(stopLinks);
 // WCAG 2.4.2 / 2.4.3: each screen has its own title, and after a navigation focus moves to the

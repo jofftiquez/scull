@@ -23,12 +23,32 @@
 //! The approval commands ([`approval_handler`]) wrap [`ApprovalDesk`]: list the agent plans
 //! waiting for the human, open one (the broker's challenge and its confirmation code stay in
 //! this process; the webview gets the code only to display it), approve it with the code the
-//! human typed, deny it, revoke an approval, and report what the agent did with it. They are
-//! invoked by the webview only, from the human's clicks in Cleanup Review: an AI agent talks to
-//! `scull mcp serve`, a different process with no way into this app's IPC, and nothing here is
-//! callable from a remote origin (the window loads only the bundled app, and the capability
-//! grants no remote URL). Approving records the human's decision; it never executes anything:
-//! the agent executes an approved plan through `scull mcp serve` and the Executor (SAFE-10).
+//! human typed, deny it, revoke an approval, and report what the agent did with it. Approving
+//! records the human's decision; it never executes anything: the agent executes an approved
+//! plan through `scull mcp serve` and the Executor (SAFE-10).
+//!
+//! Who can call them:
+//!
+//! * Only the main window's own page. The app manifest (`build.rs`) puts every command under
+//!   the ACL; `capabilities/default.json` grants them to the `main` window and
+//!   `capabilities/menubar.json` grants the menu bar widget everything except the approval
+//!   commands. A page from any other origin is refused (`tests/approval_commands.rs`).
+//! * Not through the web view's debugging: [`sanitize_browser_env`] runs first in [`run`] and
+//!   removes every variable that could turn on remote debugging or an inspector server, or
+//!   inject browser arguments ([`BROWSER_ENV`]: WebView2's `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+//!   and friends, WebKitGTK's `WEBKIT_INSPECTOR_SERVER`, ...), before any web view or thread
+//!   exists; the windows' browser arguments are set explicitly ([`BROWSER_ARGS`]). Release
+//!   builds don't enable Tauri's `devtools` feature, so no inspector is reachable on macOS
+//!   either.
+//! * Not by the agent through MCP: `scull mcp serve` is a different process with no way into
+//!   this app's IPC.
+//!
+//! What remains is the same-user desktop class (PRD §13.4, T-41): a process running as the
+//! user can drive the GUI itself (synthetic input and accessibility APIs, reading the screen to
+//! learn the code), inject code into this process (a debugger, `LD_PRELOAD`, DLL injection) or
+//! set the per-user WebView2 policy in the registry. Like an agent with unrestricted shell
+//! access, it can delete files without scull anyway; scull guarantees only that its own tools
+//! never act without a human's approval in this UI or an interactive terminal.
 //!
 //! `scull://approve/<plan-id>` deep links (the agent tells the user to open one, or an MCP
 //! client shows it) only bring the app forward on Cleanup Review for that plan. A link can't
@@ -50,6 +70,7 @@ use scull_desktop_bridge::{
     ProjectsView, RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView,
     Setup, WorktreesView, now_unix,
 };
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -60,9 +81,53 @@ type Shared<'a> = State<'a, Arc<Session>>;
 /// The approval desk shared by the approval commands.
 type Desk<'a> = State<'a, Arc<ApprovalDesk>>;
 
-/// The plan a `scull://approve/<plan-id>` link asked for and the window hasn't taken yet.
+/// Variables that could turn on a web view's remote debugging or inspector, or inject browser
+/// arguments or another browser build. [`sanitize_browser_env`] removes them at start.
+pub const BROWSER_ENV: &[&str] = &[
+    // WebView2 (Windows).
+    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+    "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
+    "WEBVIEW2_USER_DATA_FOLDER",
+    "WEBVIEW2_RELEASE_CHANNEL_PREFERENCE",
+    "WEBVIEW2_CHANNEL_SEARCH_KIND",
+    "WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER",
+    "WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER",
+    // WebKitGTK (Linux): remote inspector servers.
+    "WEBKIT_INSPECTOR_SERVER",
+    "WEBKIT_INSPECTOR_HTTP_SERVER",
+    "WEBKIT_INSPECTOR_PIPE",
+    // GTK's own interactive inspector.
+    "GTK_DEBUG",
+];
+
+/// The web views' browser arguments, set explicitly so nothing else adds any (Tauri's own
+/// default for WebView2; ignored by the other web views).
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// Remove [`BROWSER_ENV`] from the environment; returns the names that were set. Must run
+/// before any web view or other thread exists: [`run`] calls it first.
+pub fn sanitize_browser_env() -> Vec<String> {
+    scull_platform::startup_env::remove_vars_before_threads(BROWSER_ENV)
+}
+
+/// `scull://approve/<plan-id>` links: the plan the window hasn't taken yet, and the plans that
+/// already brought the window forward (each does once, so repeated links can't keep stealing
+/// focus).
 #[derive(Default)]
-pub struct DeepLinks(Mutex<Option<String>>);
+pub struct DeepLinks {
+    pending: Mutex<Option<String>>,
+    focused: Mutex<HashSet<String>>,
+}
+
+impl DeepLinks {
+    /// Whether a link to `plan` should bring the window forward: only the first one.
+    pub fn should_focus(&self, plan: &str) -> bool {
+        self.focused
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(plan.to_owned())
+    }
+}
 
 /// The event telling the window to open an agent request (payload: the plan ID).
 pub const OPEN_REQUEST_EVENT: &str = "scull://open-request";
@@ -267,7 +332,11 @@ async fn agent_plan_status(desk: Desk<'_>, plan_id: String) -> Result<AgentPlanS
 /// `take_deep_link`: the plan a `scull://approve/<plan-id>` link opened the app with, once.
 #[tauri::command]
 fn take_deep_link(links: State<'_, DeepLinks>) -> Option<String> {
-    links.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    links
+        .pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 /// The plan ID of a `scull://approve/<plan-id>` link; anything else is ignored.
@@ -280,14 +349,18 @@ pub fn approve_link_plan(url: &str) -> Option<String> {
 }
 
 /// Bring the window forward on Cleanup Review for the plan of each approve link in `urls`.
+/// Each plan brings the window forward once; later links to it only tell the window (which
+/// doesn't leave a request the human has open, see `src/App.vue`).
 fn open_links<R: Runtime>(app: &AppHandle<R>, urls: impl IntoIterator<Item = String>) {
+    let mut focus = false;
     for plan in urls.into_iter().filter_map(|u| approve_link_plan(&u)) {
         if let Some(links) = app.try_state::<DeepLinks>() {
-            *links.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(plan.clone());
+            *links.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(plan.clone());
+            focus |= links.should_focus(&plan);
         }
         let _ = app.emit(OPEN_REQUEST_EVENT, plan);
     }
-    if let Some(w) = app.get_webview_window("main") {
+    if focus && let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -328,6 +401,11 @@ where
 
 /// Start the app.
 pub fn run() {
+    // First, before any web view or thread exists (see the crate docs).
+    let cleared = sanitize_browser_env();
+    if !cleared.is_empty() {
+        eprintln!("scull: ignored {cleared:?}: web view debugging can't be turned on from outside");
+    }
     let (session, desk, links) = approval_state(Setup::native());
     let result = tauri::Builder::default()
         // First, so a second launch (a deep link on Windows or Linux) hands its URL to this

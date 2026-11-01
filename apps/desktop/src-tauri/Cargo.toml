@@ -29,6 +29,9 @@ path = "src/main.rs"
 [dependencies]
 scull-desktop-bridge = { path = "../bridge" }
 scull-core = { path = "../../../crates/scull-core" }
+# Only `startup_env` (clearing web view debugging variables at start); never the `delete`
+# feature (SAFE-10, tests/safe10.rs).
+scull-platform = { path = "../../../crates/scull-platform" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # tray-icon: the menu bar / tray widget (P4-UI-01; src/tray.rs).
@@ -48,7 +51,6 @@ tauri = { version = "2", features = ["test"] }
 scull-mcp = { path = "../../../crates/scull-mcp" }
 scull-storage = { path = "../../../crates/scull-storage" }
 scull-engine = { path = "../../../crates/scull-engine" }
-scull-platform = { path = "../../../crates/scull-platform" }
 tempfile = "3"
 
 [build-dependencies]

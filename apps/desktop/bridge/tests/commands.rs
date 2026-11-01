@@ -146,6 +146,74 @@ fn frontend_and_app_name_the_same_commands() {
     assert_eq!(approval_handler, approval);
 }
 
+/// The quoted names in build.rs's `COMMANDS` (the app manifest).
+fn manifest_commands() -> BTreeSet<String> {
+    let build = read("src-tauri/build.rs");
+    let start = build.find("const COMMANDS").expect("COMMANDS in build.rs");
+    let end = start + build[start..].find("];").unwrap();
+    build[start..end]
+        .lines()
+        .filter_map(|l| l.split('"').nth(1).map(str::to_owned))
+        .collect()
+}
+
+/// The `allow-<command>` permissions a capability file grants, as command names.
+fn granted(file: &str) -> BTreeSet<String> {
+    let v: serde_json::Value = serde_json::from_str(&read(file)).unwrap();
+    v["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| {
+            p.as_str()?
+                .strip_prefix("allow-")
+                .map(|c| c.replace('-', "_"))
+        })
+        .collect()
+}
+
+#[test]
+fn approval_commands_are_granted_to_the_main_window_only() {
+    let lib = read("src-tauri/src/lib.rs");
+    let all: BTreeSet<String> = registered(&lib)
+        .into_iter()
+        .map(|c| c.rsplit("::").next().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        manifest_commands(),
+        all,
+        "build.rs app manifest vs registered commands"
+    );
+    let approval = ts_table(&read("src/bridge/tauriPlans.ts"), "APPROVAL_COMMANDS");
+    assert_eq!(
+        granted("src-tauri/capabilities/default.json"),
+        all,
+        "main window: everything"
+    );
+    let menubar = granted("src-tauri/capabilities/menubar.json");
+    assert!(
+        menubar.is_disjoint(&approval),
+        "the menu bar widget must not approve: {menubar:?}"
+    );
+    assert_eq!(
+        &menubar | &approval,
+        all,
+        "menu bar widget: everything else"
+    );
+    let windows = |f: &str| {
+        let v: serde_json::Value = serde_json::from_str(&read(f)).unwrap();
+        v["windows"].clone()
+    };
+    assert_eq!(
+        windows("src-tauri/capabilities/default.json"),
+        serde_json::json!(["main"])
+    );
+    assert_eq!(
+        windows("src-tauri/capabilities/menubar.json"),
+        serde_json::json!(["menubar"])
+    );
+}
+
 #[test]
 fn open_request_event_name_matches() {
     let quoted = |src: &str, needle: &str| {

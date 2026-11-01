@@ -19,7 +19,8 @@
         "height": 900,
         "minWidth": 960,
         "minHeight": 640,
-        "backgroundColor": "#F7F5F2"
+        "backgroundColor": "#F7F5F2",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ],
     "security": {

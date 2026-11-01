@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from './mock';
-import { createUnavailablePlanBridge, planBridgeFor, wantsAgentRequest } from './plan';
+import { createUnavailablePlanBridge, openRequestRoute, planBridgeFor, wantsAgentRequest } from './plan';
 import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from './planMock';
 import { DESIGN_CANDIDATES } from '../components/overview/designScenario';
 import { BridgeError } from './types';
@@ -26,6 +26,13 @@ describe('plan bridge stubs', () => {
     expect(wantsAgentRequest({ location: { search: '', hash: '#/?agent=request' } })).toBe(true);
     expect(wantsAgentRequest({ location: { search: '?agent=request', hash: '#/' } })).toBe(true);
     expect(wantsAgentRequest({ location: { search: '?agent=requests', hash: '' } })).toBe(false);
+  });
+
+  it('a link opens its request, but never pulls the human away from an open one', () => {
+    expect(openRequestRoute({ path: '/', query: {} }, 'plan_01JA')).toEqual({ path: '/cleanup', query: { request: 'plan_01JA' } });
+    expect(openRequestRoute({ path: '/cleanup', query: {} }, 'plan_01JA')).toEqual({ path: '/cleanup', query: { request: 'plan_01JA' } });
+    expect(openRequestRoute({ path: '/cleanup', query: { request: 'plan_01JB' } }, 'plan_01JA')).toBeNull();
+    expect(openRequestRoute({ path: '/cleanup', query: { request: 'plan_01JA' } }, 'plan_01JA')).toBeNull();
   });
 
   it('the unavailable bridge refuses everything (the desktop never deletes itself)', async () => {

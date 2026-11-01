@@ -317,6 +317,56 @@ fn three_wrong_codes_close_the_dialog_and_are_audited() {
 }
 
 #[test]
+fn opening_again_draws_a_new_code_and_the_old_one_stops_working() {
+    let p = mcp_plan();
+    let env = Env::with(std::slice::from_ref(&p));
+    let id = p.id().as_str();
+    let hash = p.content_hash().as_str();
+    let first = env.desk.open(id, None, NOW).unwrap();
+    let second = env.desk.open(id, None, NOW + 1).unwrap();
+    assert_ne!(first.code, second.code);
+    assert_eq!(second.attempts_left, MAX_CODE_ATTEMPTS);
+    let e = env
+        .desk
+        .approve(id, hash, &first.code, NOW + 2)
+        .unwrap_err();
+    assert!(e.message.contains("does not match"), "{}", e.message);
+    assert!(env.store().get_approval(p.id()).unwrap().is_none());
+    env.desk.approve(id, hash, &second.code, NOW + 3).unwrap();
+}
+
+#[test]
+fn a_denial_in_the_terminal_closes_a_dialog_that_is_open_here() {
+    let p = mcp_plan();
+    let env = Env::with(std::slice::from_ref(&p));
+    let id = p.id().as_str();
+    let req = env.desk.open(id, None, NOW).unwrap();
+    // `scull approve <plan>`: the human types `deny` in their terminal meanwhile.
+    approval::record_denial(
+        &mut env.store(),
+        p.id(),
+        Some(p.content_hash()),
+        approval::Denial::Denied,
+        approval::HumanChannel::Terminal,
+        &who(),
+        NOW + 1,
+    )
+    .unwrap();
+    let e = env
+        .desk
+        .approve(id, p.content_hash().as_str(), &req.code, NOW + 2)
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::SafetyBlocked);
+    assert!(e.message.contains("denied"), "{}", e.message);
+    assert!(!env.desk.is_open(id));
+    assert!(env.store().get_approval(p.id()).unwrap().is_none());
+    assert_eq!(
+        env.desk.status(id, NOW + 3).unwrap().state,
+        AgentPlanState::Denied
+    );
+}
+
+#[test]
 fn deny_closes_the_plan_here_and_is_audited() {
     let p = mcp_plan();
     let env = Env::with(std::slice::from_ref(&p));

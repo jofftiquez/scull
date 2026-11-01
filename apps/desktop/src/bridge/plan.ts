@@ -231,6 +231,17 @@ export function planBridgeFor(bridge: ScullBridge): PlanBridge {
   return p;
 }
 
+/** Where a `scull://approve/<plan-id>` link takes the window: Cleanup Review on that request,
+ *  or nowhere while an agent request is already open there (so repeated links can't pull the
+ *  human away from a review; the notification offers the other request). */
+export function openRequestRoute(
+  current: { path: string; query: Record<string, unknown> },
+  planId: string,
+): { path: string; query: { request: string } } | null {
+  if (current.path === '/cleanup' && typeof current.query.request === 'string') return null;
+  return { path: '/cleanup', query: { request: planId } };
+}
+
 export const PLAN_BRIDGE_KEY: InjectionKey<PlanBridge> = Symbol('scull-plan-bridge');
 
 /** The provided plan bridge (tests), else the one that goes with the app's core bridge. */

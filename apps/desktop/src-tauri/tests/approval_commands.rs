@@ -14,9 +14,9 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
 use tauri::ipc::{CallbackFn, InvokeBody};
-use tauri::test::{INVOKE_KEY, MockRuntime, mock_builder, mock_context, noop_assets};
+use tauri::test::{INVOKE_KEY, MockRuntime, mock_builder};
 use tauri::webview::InvokeRequest;
-use tauri::{WebviewWindow, WebviewWindowBuilder};
+use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
 
 fn candidate(n: u128, path: &str) -> Candidate {
     let identity = FileIdentity::new(7, n);
@@ -75,7 +75,10 @@ fn data_with_agent_plan(dir: &Path) -> Plan {
     plan
 }
 
-fn app(dir: &Path) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
+/// The approval commands on Tauri's mock runtime with the app's real configuration and
+/// capabilities (`generate_context!`: the app manifest of build.rs, capabilities/*.json), and a
+/// webview labelled `label`.
+fn app_as(dir: &Path, label: &str) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
     let setup = Setup {
         home: None,
         config_file: None,
@@ -92,12 +95,20 @@ fn app(dir: &Path) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
         .manage(Arc::new(Session::new(setup)))
         .manage(DeepLinks::default())
         .invoke_handler(approval_handler())
-        .build(mock_context(noop_assets()))
+        .build(tauri::generate_context!(test = true))
         .unwrap();
-    let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .unwrap();
+    let webview = match app.get_webview_window(label) {
+        Some(w) => w,
+        None => WebviewWindowBuilder::new(&app, label, Default::default())
+            .build()
+            .unwrap(),
+    };
     (app, webview)
+}
+
+/// The main window.
+fn app(dir: &Path) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
+    app_as(dir, "main")
 }
 
 /// Invoke `cmd` with `args` like the webview does; `Ok(value)` or `Err(error JSON)`.
@@ -257,7 +268,13 @@ fn a_remote_page_cannot_reach_the_approval_commands() {
         for (cmd, args) in [
             ("approval_requests", json!({})),
             ("open_approval_request", json!({"planId": id})),
+            (
+                "approve_agent_plan",
+                json!({"planId": id, "contentHash": plan.content_hash().as_str(), "code": "ABCDEF"}),
+            ),
             ("deny_agent_plan", json!({"planId": id})),
+            ("revoke_agent_approval", json!({"planId": id})),
+            ("agent_plan_status", json!({"planId": id})),
         ] {
             let e = invoke_from(&w, origin, cmd, args).unwrap_err();
             assert!(e.to_string().contains("not allowed"), "{origin} {cmd}: {e}");
@@ -266,6 +283,90 @@ fn a_remote_page_cannot_reach_the_approval_commands() {
     // Nothing was opened or recorded.
     let list = invoke(&w, "approval_requests", json!({})).unwrap();
     assert_eq!(list["requests"][0]["plan_id"], id);
+}
+
+#[test]
+fn the_menu_bar_widget_cannot_reach_the_approval_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = data_with_agent_plan(dir.path());
+    let id = plan.id().as_str();
+    let (_app, widget) = app_as(dir.path(), "menubar");
+    for (cmd, args) in [
+        ("approval_requests", json!({})),
+        ("open_approval_request", json!({"planId": id})),
+        (
+            "approve_agent_plan",
+            json!({"planId": id, "contentHash": plan.content_hash().as_str(), "code": "ABCDEF"}),
+        ),
+        ("deny_agent_plan", json!({"planId": id})),
+        ("revoke_agent_approval", json!({"planId": id})),
+        ("agent_plan_status", json!({"planId": id})),
+        ("take_deep_link", json!({})),
+    ] {
+        let e = invoke(&widget, cmd, args).unwrap_err();
+        assert!(e.to_string().contains("not allowed"), "menubar {cmd}: {e}");
+    }
+    // The same commands work from the main window of the same app.
+    let main = widget.app_handle().get_webview_window("main");
+    let main = match main {
+        Some(w) => w,
+        None => WebviewWindowBuilder::new(widget.app_handle(), "main", Default::default())
+            .build()
+            .unwrap(),
+    };
+    let list = invoke(&main, "approval_requests", json!({})).unwrap();
+    assert_eq!(list["requests"][0]["plan_id"], id);
+}
+
+#[test]
+fn web_view_debugging_variables_are_cleared_first() {
+    // Every variable that can turn on remote debugging, an inspector server or extra browser
+    // arguments (P4-MCP-02 review) is on the list...
+    for name in [
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
+        "WEBVIEW2_USER_DATA_FOLDER",
+        "WEBVIEW2_RELEASE_CHANNEL_PREFERENCE",
+        "WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER",
+        "WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER",
+        "WEBKIT_INSPECTOR_SERVER",
+        "WEBKIT_INSPECTOR_HTTP_SERVER",
+    ] {
+        assert!(scull_desktop::BROWSER_ENV.contains(&name), "{name}");
+    }
+    // ... and `run` clears them before doing anything else (no web view, no thread yet).
+    let src =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+    let body = &src[src.find("pub fn run() {").unwrap()..];
+    let first = body
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("//"))
+        .unwrap();
+    assert_eq!(first, "let cleared = sanitize_browser_env();");
+    // The windows' browser arguments are explicit.
+    let conf =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .unwrap();
+    assert!(conf.contains(&format!(
+        "\"additionalBrowserArgs\": \"{}\"",
+        scull_desktop::BROWSER_ARGS
+    )));
+    let tray =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tray.rs")).unwrap();
+    assert!(tray.contains(".additional_browser_args(crate::BROWSER_ARGS)"));
+}
+
+#[test]
+fn a_plan_brings_the_window_forward_once() {
+    let links = DeepLinks::default();
+    assert!(links.should_focus("plan_01JA"));
+    assert!(
+        !links.should_focus("plan_01JA"),
+        "repeated links don't steal focus again"
+    );
+    assert!(links.should_focus("plan_01JB"));
 }
 
 #[test]

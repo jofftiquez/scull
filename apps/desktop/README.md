@@ -278,11 +278,21 @@ backend: `apps/desktop/bridge/src/approvals.rs`, commands in `src-tauri/src/lib.
 guarantees:
 
 - The broker's challenge (plan as shown, confirmation code) lives in the app's backend memory.
-  The webview receives the code only to display it; the backend compares the typed code (three
-  wrong codes close the request), checks the hash the human reviewed, and records the approval
-  through the desktop channel. The code is never written, logged or sent to the agent.
-- The commands are invoked only by the app's own page (a remote origin is refused,
-  `src-tauri/tests/approval_commands.rs`); the agent talks to a different process.
+  The webview receives the code only to display it; the backend compares the typed code, checks
+  the hash the human reviewed and any denial recorded meanwhile, and records the approval
+  through the desktop channel. Opening a request again draws a new code. The code is never
+  written, logged or sent to the agent. Three wrong codes close the request: that is UX and
+  audit, not a security control (the code is on the same screen).
+- Only the main window's own page can call the approval commands: `build.rs` puts every
+  command under the ACL, `capabilities/default.json` grants them to `main`, and
+  `capabilities/menubar.json` gives the menu bar widget everything else. A remote origin is
+  refused (`src-tauri/tests/approval_commands.rs`, on the app's real capabilities).
+- Web view debugging can't be turned on from outside: `run` first clears every variable that
+  enables remote debugging, an inspector server or extra browser arguments
+  (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBKIT_INSPECTOR_SERVER`, ...; `BROWSER_ENV`), the
+  browser arguments are set explicitly, and no build enables Tauri's `devtools`. What remains is
+  the same-user desktop class (driving the GUI, injecting into the process), out of scope like
+  an agent with unrestricted shell access (PRD §13.4).
 - A link only opens Cleanup Review on the request. On Windows and Linux it starts the app (a
   second window if one is already open; `tauri-plugin-single-instance` is left out because its
   D-Bus crates fail cargo-deny's advisories). Packaging registers the `scull` scheme.
