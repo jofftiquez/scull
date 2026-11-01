@@ -1030,7 +1030,11 @@ fn status(fx: &Fixture, rec: &OpRecord) -> OperationStatus {
 // ---------------------------------------------------------------------------------------------
 
 fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1170,7 +1174,11 @@ fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
 }
 
 fn fx_qc_01_npm_wipe_only_when_requested() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_01_npm_wipe_only_when_requested",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1218,7 +1226,11 @@ fn fx_qc_01_npm_wipe_only_when_requested() {
 // ---------------------------------------------------------------------------------------------
 
 fn fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1295,7 +1307,11 @@ fn fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation() {
 // ---------------------------------------------------------------------------------------------
 
 fn fx_qc_03_tool_in_use_is_skipped_and_reported() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_03_tool_in_use_is_skipped_and_reported",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1340,7 +1356,11 @@ fn fx_qc_03_tool_in_use_is_skipped_and_reported() {
 }
 
 fn fx_qc_03_in_use_at_run_time_is_skipped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_03_in_use_at_run_time_is_skipped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1368,8 +1388,15 @@ fn fx_qc_03_in_use_at_run_time_is_skipped() {
 
 /// A real process with its working directory inside the cache, seen by the native probe.
 fn fx_qc_03_real_process_inside_cache_is_detected() {
-    if !identity_available() || cfg!(windows) {
+    if cfg!(windows) {
         return; // Windows reports open files via Restart Manager; covered by the fake probe.
+    }
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_03_real_process_inside_cache_is_detected",
+        "no file identity on this platform",
+    ) {
+        return;
     }
     let mut fx = Fixture::new().unwrap();
     let npm = npm_cache(&mut fx);
@@ -1418,6 +1445,10 @@ fn fx_qc_04_symlinked_cache_is_skipped() {
     let target = fx.root().join("elsewhere/npm");
     if !fx.symlink("home/.npm", &target).unwrap().is_created() {
         fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        scull_fixtures::skip::skip(
+            "fx_qc_04_symlinked_cache_is_skipped",
+            "symlinks are not permitted here",
+        );
         return;
     }
     fx.checkpoint().unwrap();
@@ -1438,7 +1469,11 @@ fn fx_qc_04_symlinked_cache_is_skipped() {
 }
 
 fn fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1458,6 +1493,10 @@ fn fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped() {
     if !fx.symlink("home/.npm", &moved).unwrap().is_created() {
         fs::rename(&moved, &npm_dir).unwrap();
         check(&fx, &plan, &cands, &[], &[]);
+        scull_fixtures::skip::skip(
+            "fx_qc_04_cache_swapped_for_symlink_after_planning_is_skipped",
+            "symlinks are not permitted here",
+        );
         return;
     }
     let report = run_ok(&fx, &q, &plan);
@@ -1513,7 +1552,11 @@ impl Platform for OtherVolume {
 }
 
 fn qc_05_cache_on_other_volume_is_skipped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "qc_05_cache_on_other_volume_is_skipped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1550,7 +1593,11 @@ fn qc_05_cache_on_other_volume_is_skipped() {
 /// caches are S1: the cache is reported for manual removal and nothing is touched (see the PR
 /// for the proposed decision).
 fn fx_qc_05_uninstalled_tool_cache_is_reported_not_removed() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1598,7 +1645,11 @@ fn confirmed(tools: &[CacheTool]) -> BTreeSet<CacheTool> {
 /// removed without the Bun-specific confirmation; with it, the Executor's walker removes the
 /// folder and nothing else. No process is started.
 fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "d36_orphaned_cache_removed_through_executor_only_after_confirmation",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1728,7 +1779,11 @@ fn d36_orphaned_cache_removed_through_executor_only_after_confirmation() {
 /// swapped for a link to the canary, or whose tool got installed meanwhile is skipped with the
 /// reason and left intact; a cache in use at planning is never offered.
 fn d36_orphaned_cache_rechecked_right_before_removal() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "d36_orphaned_cache_rechecked_right_before_removal",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1873,7 +1928,11 @@ fn hijack_options(fx: &Fixture, search: &[PathBuf]) -> QuickCleanOptions {
 }
 
 fn fx_qc_06_untrusted_npm_binaries_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_06_untrusted_npm_binaries_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1903,7 +1962,11 @@ fn fx_qc_06_untrusted_npm_binaries_never_run() {
 }
 
 fn fx_qc_06_only_untrusted_binaries_means_not_installed() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_06_only_untrusted_binaries_means_not_installed",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1932,7 +1995,11 @@ fn fx_qc_06_only_untrusted_binaries_means_not_installed() {
 /// A symlink in a trusted folder pointing at a project's `node_modules/.bin/npm` is rejected
 /// after resolving it.
 fn fx_qc_06_trusted_symlink_into_node_modules_is_rejected() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_06_trusted_symlink_into_node_modules_is_rejected",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -1970,7 +2037,11 @@ fn fx_qc_06_trusted_symlink_into_node_modules_is_rejected() {
 /// A project `.npmrc` with `cache=<home>` in the user's current directory never applies: the
 /// command runs from a neutral folder and is told the validated location explicitly.
 fn fx_qc_07_project_npmrc_never_applies() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_07_project_npmrc_never_applies",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2033,7 +2104,11 @@ fn fx_qc_07_user_npmrc_cache_at_home_is_refused() {
 // ---------------------------------------------------------------------------------------------
 
 fn fx_qc_08_unticked_tools_are_not_cleaned() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_08_unticked_tools_are_not_cleaned",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2090,7 +2165,11 @@ fn fx_qc_08_unticked_tools_are_not_cleaned() {
 // ---------------------------------------------------------------------------------------------
 
 fn bun_and_yarn_location_variables_target_the_located_cache() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "bun_and_yarn_location_variables_target_the_located_cache",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2155,7 +2234,11 @@ fn bun_and_yarn_location_variables_target_the_located_cache() {
 }
 
 fn yarn_version_must_match_the_cache() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "yarn_version_must_match_the_cache",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2211,7 +2294,11 @@ fn fx_npm_planned(
 }
 
 fn timeout_kills_the_tool() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "timeout_kills_the_tool",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2243,7 +2330,11 @@ fn timeout_kills_the_tool() {
 }
 
 fn output_is_escaped_and_capped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "output_is_escaped_and_capped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2267,7 +2358,11 @@ fn output_is_escaped_and_capped() {
 }
 
 fn failing_tool_reports_its_exit_status() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "failing_tool_reports_its_exit_status",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2326,7 +2421,11 @@ fn d28_s2_cache_gets_no_tool_action() {
 }
 
 fn elevated_process_refuses_unless_allowed() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "elevated_process_refuses_unless_allowed",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2360,7 +2459,11 @@ fn elevated_process_refuses_unless_allowed() {
 }
 
 fn cancelled_before_start_runs_nothing() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "cancelled_before_start_runs_nothing",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2391,7 +2494,11 @@ fn cancelled_before_start_runs_nothing() {
 /// command (another plan item), so it is never started and not audited: the operation's item
 /// gets no outcome and the run is reported `not_approved`.
 fn p2_exec_12_unapproved_command_never_runs() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "p2_exec_12_unapproved_command_never_runs",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2475,7 +2582,11 @@ fn assert_only_node_spawned(spawned: &[Spawn]) {
 /// `node <script> cache verify --cache <dir>`, the audit records that command, and every
 /// invariant holds (I-7: Node running the npm script from the trusted folder).
 fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell",
+        "no file identity on this platform",
+    ) {
         return;
     }
     for style in [fake::ShimStyle::CmdShim, fake::ShimStyle::NodeNpm] {
@@ -2547,7 +2658,11 @@ fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
 /// beside them: Node comes from another trusted folder on the search path. The Yarn version
 /// probe runs through Node too.
 fn p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2654,7 +2769,11 @@ fn assert_shim_never_runs(
 /// `.bat`. Each is skipped as `ShellShimOnly` and nothing starts; with shim resolution off the
 /// tool is simply not installed.
 fn p2_qc_02_untrusted_or_foreign_shims_are_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "p2_qc_02_untrusted_or_foreign_shims_are_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let tools_only = |fx: &Fixture| vec![tools(fx)];
@@ -2740,7 +2859,11 @@ fn p2_qc_02_untrusted_or_foreign_shims_are_never_run() {
 /// `CONDA_PKGS_DIRS`, its only location setting), audited, and only the located folder changes.
 /// The fakes refuse anything but the documented invocation.
 fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "python_caches_pip_uv_conda_exact_argv_env_and_location",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2907,7 +3030,11 @@ fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
 /// `uv cache clean` (the wipe) runs only when the user asks for it; conda has no wipe, so a
 /// requested wipe still runs `conda clean --packages --tarballs --yes`.
 fn uv_wipe_only_when_requested_and_conda_never_wiped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "uv_wipe_only_when_requested_and_conda_never_wiped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -2971,7 +3098,11 @@ fn uv_wipe_only_when_requested_and_conda_never_wiped() {
 /// entry for it, even confirmed and part of the approved plan, is refused before anything is
 /// gathered or removed, and audited as skipped (`d36_excluded`).
 fn d36_conda_pkgs_is_never_orphan_removable() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "d36_conda_pkgs_is_never_orphan_removable",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3041,7 +3172,11 @@ fn d36_conda_pkgs_is_never_orphan_removable() {
 /// audited, and only the located folders change. The fakes refuse anything but the documented
 /// invocation; no real `go` or `dotnet` runs.
 fn go_and_nuget_exact_argv_env_and_location() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "go_and_nuget_exact_argv_env_and_location",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3190,7 +3325,11 @@ fn go_and_nuget_exact_argv_env_and_location() {
 /// A forged orphaned entry for it, confirmed and part of the approved plan, is refused before
 /// anything is gathered or removed.
 fn d36_go_modcache_is_never_orphan_removable() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "d36_go_modcache_is_never_orphan_removable",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3269,7 +3408,11 @@ fn d36_go_modcache_is_never_orphan_removable() {
 /// and a wipe requested for them, or with no binary at all, Quick Clean plans nothing for
 /// them, skips them as `InspectOnly` and never offers them as orphaned.
 fn gradle_and_maven_are_inspect_only_and_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "gradle_and_maven_are_inspect_only_and_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3322,7 +3465,11 @@ fn gradle_and_maven_are_inspect_only_and_never_run() {
 /// fake binaries, so every other run-time check would pass) are refused at run time as
 /// `InspectOnly`, audited as `refused`, and nothing starts or changes.
 fn forged_gradle_and_maven_plan_entries_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "forged_gradle_and_maven_plan_entries_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3506,7 +3653,11 @@ fn locate_macos(fx: &Fixture) -> CacheScan {
 /// every tool asked to wipe, or with no binary at all, Quick Clean plans nothing for them,
 /// skips each as `NotSupportedYet`, never offers one as orphaned (D-36) and starts nothing.
 fn long_tail_tools_are_not_supported_and_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "long_tail_tools_are_not_supported_and_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3563,7 +3714,11 @@ fn long_tail_tools_are_not_supported_and_never_run() {
 /// fake binary, so every other run-time check would pass), is refused at run time as
 /// `NotSupportedYet`, audited as `refused`, and nothing starts or changes.
 fn forged_long_tail_plan_entries_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "forged_long_tail_plan_entries_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     for pair in long_tail(&LONG_TAIL_REFUSED).chunks(2) {
@@ -3674,7 +3829,9 @@ fn long_tail_expected(tool: CacheTool, dir: &Path) -> (Vec<OsString>, Vec<(Strin
         ),
         CacheTool::Conan => {
             let mut storage = OsString::from("core.cache:storage_path=");
-            storage.push(dir);
+            // The located folder as the scanner spells it (Windows: `\` throughout), like the
+            // other path arguments (`path_arg`).
+            storage.push(path_arg(dir));
             let mut args = os(&["cache", "clean", "--source", "--build", "--temp", "-cc"]);
             args.push(storage);
             args.extend(os(&["-cc", "core:non_interactive=True"]));
@@ -3709,7 +3866,11 @@ fn long_tail_expected(tool: CacheTool, dir: &Path) -> (Vec<OsString>, Vec<(Strin
 /// Cypress still runs the prune. Conan keeps its packages, ccache its configuration, Cypress
 /// the binary it runs with.
 fn long_tail_enabled_tools_exact_argv_env_and_location() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "long_tail_enabled_tools_exact_argv_env_and_location",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3825,7 +3986,11 @@ fn long_tail_enabled_tools_exact_argv_env_and_location() {
 /// what this build constructs (Deno pointed at another folder, Cypress asked to `clear`, ccache
 /// without its pinned config path) is refused right before starting it: nothing runs.
 fn long_tail_forged_invocations_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "long_tail_forged_invocations_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3889,7 +4054,11 @@ fn long_tail_forged_invocations_never_run() {
 /// data). With it present the cache is S2 and never planned; when it appears between planning
 /// and the run, the run refuses (`not_scoped`) and starts nothing.
 fn deno_location_data_is_never_cleaned() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "deno_location_data_is_never_cleaned",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3943,7 +4112,11 @@ fn deno_location_data_is_never_cleaned() {
 /// #44: a `.conanrc` in the working folder or any parent outranks `CONAN_HOME`, so one above
 /// the sandbox makes the run refuse Conan (`not_scoped`) without starting it.
 fn conan_conanrc_above_the_sandbox_is_refused() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "conan_conanrc_above_the_sandbox_is_refused",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -3979,7 +4152,11 @@ fn conan_conanrc_above_the_sandbox_is_refused() {
 /// Deno (web storage) and Cypress (installed per project) are not; a forged, confirmed and
 /// approved orphaned entry for one of them is refused (`d36_excluded`) and nothing is removed.
 fn d36_long_tail_only_arduino_is_orphan_removable() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "d36_long_tail_only_arduino_is_orphan_removable",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -4079,7 +4256,11 @@ fn forge_target(t: &mut scull_cleaner::quickclean::PlannedTool, to: &Path, cache
 /// every enabled long-tail tool and every package-manager tool: the location is derived from
 /// the approved item's folder, never taken from the plan. The other folder stays intact.
 fn forged_location_and_env_together_never_run() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "forged_location_and_env_together_never_run",
+        "no file identity on this platform",
+    ) {
         return;
     }
     for cache_too in [false, true] {
@@ -4175,7 +4356,11 @@ fn forged_location_and_env_together_never_run() {
 /// refused (`not_scoped`) and nothing runs; one holding only Deno's entries (folders, SQLite
 /// caches with their journals, `latest.txt`) is planned.
 fn deno_dir_with_foreign_entries_is_refused() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "deno_dir_with_foreign_entries_is_refused",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let base = "home/Library/Caches/deno";
@@ -4223,7 +4408,11 @@ fn deno_dir_with_foreign_entries_is_refused() {
 /// CLIs also `bundles/` and session records), so a folder holding anything but Cypress version
 /// folders is refused (`not_scoped`) and nothing runs.
 fn cypress_with_anything_but_version_folders_is_refused() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "cypress_with_anything_but_version_folders_is_refused",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let base = "home/Library/Caches/Cypress";
@@ -4253,7 +4442,11 @@ fn cypress_with_anything_but_version_folders_is_refused() {
 /// (installed library folders, `.ino` sketches, other entries) is never cleaned with
 /// `arduino-cli cache clean` (`not_scoped`) and never offered or removed as an orphaned cache.
 fn arduino_sketchbook_is_never_cleaned_or_removed() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "arduino_sketchbook_is_never_cleaned_or_removed",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let base = "home/Library/Arduino15/staging";

@@ -29,7 +29,9 @@
 //! both succeed (exactly one update changes the row); a revoked approval is refused here.
 //!
 //! Every refusal to start (or run) an agent plan is audited as an
-//! [`EventKind::ExecuteRefused`] event with source `executor` and a stable reason code
+//! [`EventKind::ExecuteRefused`] event with source `executor` (or the
+//! [`RefusalSource`](crate::RefusalSource) the Executor was given, `cli` for
+//! `scull approve --run`) and a stable reason code
 //! ([`GATE_REASONS`]; PRD §13.3 step 5). Recording it never touches the approval.
 
 use crate::executor::Executor;
@@ -49,8 +51,9 @@ use scull_storage::{
 /// module docs): `lock_not_held`, `operation_mismatch`, `unfinished_operation`,
 /// `targets_touched`, `not_approved`, `not_human`, `approval_mismatch`, `account_unknown`,
 /// `other_account`, `approver_not_recorded`, `channel_mismatch`, `approval_used`,
-/// `approval_revoked`, `approval_expired`, `outside_operation` and `store`.
-pub const GATE_REASONS: [&str; 16] = [
+/// `approval_revoked`, `approval_expired`, `outside_operation`, `store` and
+/// `auto_policy_method_mismatch` (an agent plan presented with the auto-policy method, D-11).
+pub const GATE_REASONS: [&str; 17] = [
     "lock_not_held",
     "operation_mismatch",
     "unfinished_operation",
@@ -67,6 +70,7 @@ pub const GATE_REASONS: [&str; 16] = [
     "approval_expired",
     "outside_operation",
     "store",
+    "auto_policy_method_mismatch",
 ];
 
 /// A refusal and its audited reason code (one of [`GATE_REASONS`]).
@@ -76,20 +80,25 @@ fn store_refusal(e: scull_storage::StoreError) -> Refusal {
     (ScullError::from(e), "store")
 }
 
-/// Audit the gate's refusal of the agent plan `plan` (best effort: the refusal stands even
-/// if it can't be recorded). The user is the account the Executor runs as when the OS can
+/// Audit the gate's refusal of the agent plan `plan`, attributed to `by` (best effort: the
+/// refusal stands even if it can't be recorded). The user is the account the Executor runs as when the OS can
 /// tell, else the plan's.
-pub(crate) fn audit_refusal(store: &mut Store, plan: &Plan, reason: &'static str) {
+pub(crate) fn audit_refusal(
+    store: &mut Store,
+    plan: &Plan,
+    reason: &'static str,
+    by: crate::RefusalSource,
+) {
     let user = scull_platform::current_user().unwrap_or_else(|_| plan.user().to_owned());
     let _ = store.record_agent_event(&AgentAuditEvent {
         event_id: 0,
         at: now_unix(),
         kind: EventKind::ExecuteRefused,
-        source: "executor".into(),
+        source: by.source.into(),
         plan_id: Some(plan.id().clone()),
         content_hash: Some(plan.content_hash().clone()),
         reason: reason.into(),
-        channel: "mcp".into(),
+        channel: by.channel.into(),
         machine_id: plan.machine_id().to_owned(),
         user,
         count: 1,
@@ -121,6 +130,8 @@ pub struct Operation<'s> {
     /// The ID and content hash of that plan ([`Executor::execute_plan`] runs an MCP plan only
     /// inside the operation that consumed its approval).
     pub(crate) plan: (PlanId, ContentHash),
+    /// The plan is an auto-policy plan (D-11): never a Trash fallback ([`Operation::with_trash`]).
+    pub(crate) policy_plan: bool,
 }
 
 impl Operation<'_> {
@@ -147,9 +158,15 @@ impl Operation<'_> {
     /// impossible too, it is blocked. Never deleted as a fallback. Without this call there is
     /// no fallback (such items are blocked). Interfaces pass [`TrashLocations::from_env`];
     /// tests point it inside their fixture.
+    ///
+    /// Ignored for an auto-policy plan ([`PlanOrigin::Policy`], D-11): the OS may empty the
+    /// Trash on its own, which would be a permanent deletion nobody clicked, so an item whose
+    /// quarantine is impossible is blocked (left in place, audited) instead.
     #[must_use]
     pub fn with_trash(mut self, locations: TrashLocations) -> Self {
-        self.trash = Some(locations);
+        if !self.policy_plan {
+            self.trash = Some(locations);
+        }
         self
     }
 
@@ -264,6 +281,10 @@ impl Executor {
     /// this process runs as, it expired or it was already used, and with
     /// [`ErrorKind::PlanTampered`] when it is bound to other content or `start` does not record
     /// this account as the approver and the approval's channel. See the module docs.
+    ///
+    /// An auto-policy plan ([`PlanOrigin::Policy`], D-11) starts only with
+    /// [`ApprovalMethod::AutoPolicy`], and that method only for such a plan; otherwise
+    /// [`ErrorKind::SafetyBlocked`].
     pub fn begin_operation<'s>(
         &self,
         store: &'s mut Store,
@@ -272,7 +293,7 @@ impl Executor {
     ) -> Result<Operation<'s>, ScullError> {
         if let Err((e, reason)) = self.admit(store, plan, start) {
             if plan.origin() == PlanOrigin::Mcp {
-                audit_refusal(store, plan, reason);
+                audit_refusal(store, plan, reason, self.refusal_source());
             }
             return Err(e);
         }
@@ -298,6 +319,7 @@ impl Executor {
             measured: None,
             plan_items: plan.items().to_vec(),
             plan: (plan.id().clone(), plan.content_hash().clone()),
+            policy_plan: plan.origin() == PlanOrigin::Policy,
         })
     }
 
@@ -320,6 +342,24 @@ impl Executor {
                     "the operation does not match the plan",
                 ),
                 "operation_mismatch",
+            ));
+        }
+        // D-11: an auto-policy plan starts only as an auto-policy operation, and no other plan
+        // may claim that (click-less) method.
+        let policy_plan = plan.origin() == PlanOrigin::Policy;
+        if policy_plan != (start.method == ApprovalMethod::AutoPolicy) {
+            return Err((
+                ScullError::new(
+                    ErrorKind::SafetyBlocked,
+                    if policy_plan {
+                        "an auto-policy plan runs only as an auto-policy operation (D-11); \
+                         nothing was changed"
+                    } else {
+                        "only auto-policy plans run without a human confirmation (D-11); \
+                         nothing was changed"
+                    },
+                ),
+                "auto_policy_method_mismatch",
             ));
         }
         let pending = store.unfinished_operations().map_err(store_refusal)?;

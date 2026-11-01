@@ -1,5 +1,5 @@
 //! Executor fixtures on Windows (P2-EXEC-02): the handle-based, no-follow removal walker driven
-//! through [`Executor::delete`]. Every test builds its tree in a `scull-fixtures` temp
+//! through `Executor::delete`. Every test builds its tree in a `scull-fixtures` temp
 //! directory with a canary beside the root and checks the invariants (I-2 canary untouched,
 //! I-3 only the plan item changed). Nothing here touches a path outside its own fixture.
 //!

@@ -4,10 +4,15 @@ Tauri 2 + Vue 3 app. The design reference is `design/html/index.html`. The token
 `design/tokens.json`, and the layout follows D-16…D-21: a full-height left sidebar, ink +
 magenta duotone, no shadows, DM Sans and DM Mono.
 
-**The desktop never deletes (SAFE-10).** The Rust side is a read-only bridge to the scull
-crates. It doesn't depend on `scull-cleaner`, the only code that deletes, and it doesn't enable
-`scull-platform`'s `delete` feature. Its window has no filesystem, shell or process
-permissions. Tests enforce all three (see [Safety checks](#safety-checks)).
+**The desktop deletes only through the core Executor (SAFE-10).** On `phase2` the app cleans
+(P3-EXEC-01): Cleanup Review, Quick Clean and Restore call Tauri commands that run reviewed
+plans through `scull_cleaner::Executor`, the same engine as `scull clean`: the execution lock,
+revalidation of every item right before it is touched, D-28 actions (delete S0 only, quarantine
+or Trash S1/S2, never S3), the refusal to run elevated, and the audit (method `desktop`). Only
+`bridge/src/cleanup.rs` uses `scull-cleaner`, and only through the Executor's API; no desktop
+source calls a filesystem API itself; the commands are granted to the main window only (not the
+menu bar widget) and are never reachable from MCP. Its windows have no filesystem, shell or
+process permissions. Tests enforce all of it (see [Safety checks](#safety-checks)).
 
 ## Layout
 
@@ -251,33 +256,65 @@ roots follow CFG-04: a filesystem root, the home folder or a folder that contain
 ticked by default. Ticking one asks for confirmation first, and only then does the scan send
 `allow_broad_roots`.
 
-## Plan bridge stubs (Cleanup Review, Git Worktrees)
+## Plan bridge (Cleanup Review, Git Worktrees)
 
-Preparing, approving and executing a cleanup plan are **not** core-bridge commands yet:
-execution will go through the core Executor behind a reviewed plan, never through the desktop.
-Until it is wired, the screens talk to a separate `PlanBridge` (`src/bridge/plan.ts`), which
-keeps `ScullBridge` read-only:
+The screens talk to a separate `PlanBridge` (`src/bridge/plan.ts`), which keeps `ScullBridge`
+read-only. The desktop's **own** plans run through the core Executor (P3-EXEC-01, `phase2`;
+`bridge/src/cleanup.rs`); Quick Clean (`quick_clean`) and History's Restore
+(`restore_quarantined`) likewise. In the browser build the mock answers instead and touches
+nothing. **AI agent plans** (MCP, PRD §13.3) are connected to the core's approval broker
+(P4-MCP-02): the human approves, denies or revokes here, and the agent executes an approved
+plan itself through `scull mcp serve`.
 
-| Method | What it will do |
+| Method | What it does |
 |---|---|
-| `preparePlan({items?})` | Build a dry-run plan from the last scan (`PlanPreview`: items as full `Candidate`s, skipped, left-out S3, hash, expiry) |
-| `executePlan({plan_id, hash, items}, {onEvent, signal})` | Execute the selected items of the reviewed plan through the Executor; per-item events, measured result |
-| `approvalRequest(planId)` | An agent's MCP plan waiting for the human (PRD §13.3) and its confirmation code |
-| `approvePlan` / `denyPlan` / `revokeApproval` | Record the human's decision (single use, bound to the hash) |
-| `watchApproval(planId, onEvent)` | Broker events: agent started, per-item outcomes, finished, invalidated (D-34) |
+| `preparePlan({items?})` | `prepare_desktop_plan`: a recorded desktop plan (D-25: 1 h) from the app's last complete scan, with the SAFE-09 watermark taken before that scan; S3 and tool/Git actions left out |
+| `executePlan({plan_id, hash, items}, {onEvent, signal})` | `execute_desktop_plan`: exactly the items the human confirmed, through the core Executor (lock, revalidation, D-28, audit with method `desktop`); refused when elevated |
+| `approvalRequests()` | Agent plans waiting for the human (`approval_requests`): the notification |
+| `approvalRequest(planId)` | Open one (`open_approval_request`): the plan exactly as recorded and a fresh confirmation code **for display** |
+| `approvePlan` / `denyPlan` / `revokeApproval` | Record the human's decision (`approve_agent_plan` with the reviewed hash and the typed code, `deny_agent_plan`, `revoke_agent_approval`) |
+| `watchApproval(planId, onEvent)` | Polls `agent_plan_status`: approved/denied/revoked elsewhere, agent started, per-item outcomes, finished, voided (D-34), expired |
+| `onOpenRequest(onOpen)` | `scull://approve/<plan-id>` links (`take_deep_link`, `scull://open-request`) |
 
-`usePlanBridge()` returns the mock (`src/bridge/planMock.ts`: the design's illustrative plans,
-timers instead of execution, nothing on disk) next to the mock core bridge, and inside Tauri a
-bridge whose every call rejects with `unsupported_platform`, so the screen shows an error rather
-than pretending to clean. The payload types are local and provisional; replace them with
-generated ones when the core exposes plans. In development the mock is also reachable as
-`globalThis.__scullMockPlans` (e.g. `simulateTargetChanged(planId)` for the "plan changed" state).
+Inside Tauri `usePlanBridge()` returns `createTauriPlanBridge` (`src/bridge/tauriPlans.ts`;
+backend: `apps/desktop/bridge/src/approvals.rs`, commands in `src-tauri/src/lib.rs`). What it
+guarantees:
+
+- The broker's challenge (plan as shown, confirmation code) lives in the app's backend memory.
+  The webview receives the code only to display it; the backend compares the typed code, checks
+  the hash the human reviewed and any denial recorded meanwhile, and records the approval
+  through the desktop channel. Opening a request again draws a new code. The code is never
+  written, logged or sent to the agent. Three wrong codes close the request: that is UX and
+  audit, not a security control (the code is on the same screen).
+- Only the main window's own page can call the approval commands: `build.rs` puts every
+  command under the ACL, `capabilities/default.json` grants them to `main`, and
+  `capabilities/menubar.json` gives the menu bar widget everything else. A remote origin is
+  refused (`src-tauri/tests/approval_commands.rs`, on the app's real capabilities).
+- Web view debugging can't be turned on from outside: `run` first clears every variable that
+  enables remote debugging, an inspector server or extra browser arguments
+  (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBKIT_INSPECTOR_SERVER`, ...; `BROWSER_ENV`), the
+  browser arguments are set explicitly, and no build enables Tauri's `devtools`. What remains is
+  the same-user desktop class (driving the GUI, injecting into the process), out of scope like
+  an agent with unrestricted shell access (PRD §13.4).
+- A link only opens Cleanup Review on the request. On Windows and Linux it starts the app (a
+  second window if one is already open; `tauri-plugin-single-instance` is left out because its
+  D-Bus crates fail cargo-deny's advisories). Packaging registers the `scull` scheme.
+- The core's plans don't record which MCP client asked, so the dialog says "the agent" and shows
+  no process line. Items the app's last scan found unchanged show its evidence and flags; the
+  others show only what the plan recorded (flags unknown, never "no").
+
+Next to the mock core bridge, `usePlanBridge()` returns the mock (`src/bridge/planMock.ts`: the
+design's illustrative plans, timers instead of execution, nothing on disk). Its agent request is
+announced to the notification only with `?agent=request` (so the card doesn't cover other
+screens in development and E2E); opening it by ID always works. In development the mock is also
+reachable as `globalThis.__scullMockPlans` (e.g. `simulateTargetChanged(planId)` for the "plan
+changed" state).
 
 Cleanup Review has two modes: `/cleanup` (the user's own plan, design 03) and
-`/cleanup?request=<plan-id>` (agent request, design 12; the OS notification will deep-link here).
-Selection rules (D-28: S0 preselected, S1/S2 opt-in, S2 only quarantine/Trash, S3 never
-selectable) are in `src/components/review/plan.ts`; the approval state machine in
-`src/components/review/approval.ts`. Both are unit-tested.
+`/cleanup?request=<plan-id>` (agent request, design 12; the notification and
+`scull://approve/<plan-id>` open it). Selection rules (D-28: S0 preselected, S1/S2 opt-in, S2
+only quarantine/Trash, S3 never selectable) are in `src/components/review/plan.ts`; the approval
+state machine in `src/components/review/approval.ts`. Both are unit-tested.
 
 Git Worktrees removes a Removable worktree (`git worktree remove`, branch kept) through a
 one-item plan: `preparePlan({items: [candidate]})` then `executePlan`. Verdicts are the core's

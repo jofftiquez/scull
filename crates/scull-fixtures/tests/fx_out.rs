@@ -8,7 +8,7 @@
 //!   scan validates against `schemas/v1/plan.schema.json`.
 //! * **FX-OUT-02**: the documented exit-code table (`docs/user/CLI.md`, CLI-05) is exactly `scull_core::ExitCode`,
 //!   and the binary returns the documented code for each condition: 0, 1, 2, 3, 4, 5, 6 (the
-//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (Unix).
+//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 //!
 //! `scull clean`, `history` and `restore` run on fixture trees only, against items the fixture
 //! created; the audited operation is checked against the disk (I-4).
@@ -33,11 +33,14 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+/// Whether Git is installed; without it the worktree parts of FX-OUT-01/03 are skipped (a
+/// failure in CI, see `scull_fixtures::skip`).
 fn git_available() -> bool {
-    Command::new("git")
+    let ok = Command::new("git")
         .arg("--version")
         .output()
-        .is_ok_and(|o| o.status.success())
+        .is_ok_and(|o| o.status.success());
+    scull_fixtures::skip::require(ok, "fx_out", "git is not installed: worktree parts skipped")
 }
 
 fn check(fx: &Fixture) -> InvariantReport {
@@ -167,6 +170,12 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     schemas.ndjson(&cli, &["rules", "list"], "rules-list");
     schemas.json(&cli, &["rules", "validate"], "rules-validate");
     schemas.ndjson(&cli, &["rules", "validate"], "rules-validate");
+    // `scull rules test` (#60, from main) on the shipped example rule and its cases.
+    let example_rule = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/rules/godot.toml");
+    let example_rule = example_rule.to_str().unwrap();
+    schemas.json(&cli, &["rules", "test", example_rule], "rules-test");
+    schemas.ndjson(&cli, &["rules", "test", example_rule], "rules-test");
     schemas.json(&cli, &["init", "--yes", "--roots", &r], "init");
     schemas.ndjson(&cli, &["init", "--yes", "--force", "--roots", &r], "init");
     // The config file `init` wrote validates against the published config schema.
@@ -618,6 +627,48 @@ fn mcp_cli(roots: &[&Path]) -> Cli {
     cli
 }
 
+/// SAFE-14: an elevated `scull mcp serve` never offers the destructive plan tools, so a test
+/// that needs them can't run as root/administrator (GitHub's Windows runners are elevated).
+/// There it checks that refusal on `m` instead and returns `true` (skip the rest). CI reruns
+/// the test as a standard user (`scripts/ci/run-as-standard-user.ps1`), where
+/// `SCULL_TEST_REQUIRE_NOT_ELEVATED` turns an elevated process into a failure and the `RUN`
+/// marker proves the test ran.
+fn skip_if_elevated(test: &str, m: &mut Mcp) -> bool {
+    let required =
+        std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_some_and(|v| !v.is_empty());
+    if scull_platform::is_elevated().blocks_destructive() {
+        assert!(
+            !required,
+            "{test}: SCULL_TEST_REQUIRE_NOT_ELEVATED is set but this process runs elevated"
+        );
+        let list = m.request("tools/list", json!({}));
+        let tools: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{list}"))
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            !tools.contains(&"prepare_cleanup"),
+            "an elevated scull must not offer prepare_cleanup (SAFE-14): {tools:?}"
+        );
+        if cfg!(unix) {
+            // Linux and macOS CI never run as root: a skip there is a failure (Windows CI runs
+            // this elevated on purpose and once more as a standard user).
+            scull_fixtures::skip::skip(
+                test,
+                "running as root, so scull mcp serves read-only tools",
+            );
+        }
+        eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
+}
+
 /// A running `scull mcp serve` speaking JSON-RPC lines over its stdio.
 struct Mcp {
     child: Child,
@@ -632,8 +683,12 @@ impl Mcp {
 
     /// `scull <args>` (e.g. `mcp serve --allow-destructive`), initialized.
     fn start_with(cli: &Cli, args: &[&str]) -> Self {
-        let mut child = cli
-            .command(args)
+        Self::start_command(cli.command(args))
+    }
+
+    /// `command` (a `scull mcp serve`), initialized.
+    fn start_command(mut command: Command) -> Self {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -685,6 +740,8 @@ impl Mcp {
     /// `tools/call` → the tool's structured result.
     fn tool(&mut self, name: &str, args: Value) -> Value {
         let r = self.request("tools/call", json!({ "name": name, "arguments": args }));
+        // A JSON-RPC error (e.g. a tool this server doesn't offer) has no `result`.
+        assert!(r.get("result").is_some(), "{name}: JSON-RPC error: {r}");
         let result = &r["result"];
         assert_ne!(result["isError"], true, "{name}: {r}");
         if let Some(sc) = result.get("structuredContent") {
@@ -724,7 +781,7 @@ fn expect(
 
 /// FX-OUT-02 (end to end): every documented exit condition returns the documented code,
 /// from the real binary: 0, 1, 2 (usage and config), 3 (an item skipped during `scull clean`),
-/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and, on Unix, 130 (SIGINT).
+/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 #[test]
 fn fx_out_02_binary_returns_the_documented_exit_codes() {
     let fx = tree(false);
@@ -819,6 +876,16 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
             .or_default()
             .push("SIGINT to scull mcp serve (after the MCP handshake)".into());
     }
+    // 130 on Windows: a real console interrupt (Ctrl-Break: Ctrl-C can't be aimed at one
+    // child, see scull_platform::console) to `scull mcp serve`, started with a console and
+    // process group of its own, sent by a helper process (`fx_out_02_ctrl_c_sender`).
+    #[cfg(windows)]
+    {
+        windows_ctrl_c_exits_130(&fx);
+        seen.entry(130)
+            .or_default()
+            .push("console Ctrl-Break to scull mcp serve (after the MCP handshake)".into());
+    }
     println!("--- exit codes observed (docs/user/CLI.md) ---");
     for (n, meaning) in &doc {
         match seen.get(n) {
@@ -831,15 +898,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         .copied()
         .filter(|n| !seen.contains_key(n))
         .collect();
-    let allowed: BTreeSet<i32> = if cfg!(unix) {
-        BTreeSet::new()
-    } else {
-        [130].into()
-    };
-    assert!(
-        unreached.is_subset(&allowed),
-        "codes not exercised: {unreached:?}"
-    );
+    assert!(unreached.is_empty(), "codes not exercised: {unreached:?}");
     check(&fx);
     // I-4 on the partly failed operation, from the CLI's own database.
     let store =
@@ -1002,6 +1061,11 @@ fn fx_out_03_cli_and_mcp_plan_identical_contents() {
     let r = s(fx.root());
 
     let mut m = Mcp::start_with(&cli, &["mcp", "serve", "--allow-destructive"]);
+    if skip_if_elevated("fx_out_03_cli_and_mcp_plan_identical_contents", &mut m) {
+        assert_eq!(m.finish(), Some(0));
+        check(&fx);
+        return;
+    }
     let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));
     let ids: Vec<String> = cands["candidates"]
         .as_array()
@@ -1129,4 +1193,98 @@ fn fx_out_03_cli_and_mcp_give_identical_classifications() {
         .collect();
     assert_eq!(via_mcp_candidates, actionable);
     check(&fx);
+}
+
+/// Environment variable carrying the process ID the Ctrl-C sender targets.
+#[cfg(windows)]
+const CTRL_C_PID_ENV: &str = "SCULL_TEST_CTRL_C_PID";
+
+/// Helper process for [`windows_ctrl_c_exits_130`] (run by it, not directly): delivers a
+/// console interrupt (Ctrl-Break) to the process group in `SCULL_TEST_CTRL_C_PID`, giving up
+/// its own console.
+#[cfg(windows)]
+#[test]
+#[ignore = "helper process for fx_out_02 (run by it, not directly)"]
+fn fx_out_02_ctrl_c_sender() {
+    let Some(pid) = std::env::var(CTRL_C_PID_ENV)
+        .ok()
+        .and_then(|p| p.parse().ok())
+    else {
+        return;
+    };
+    scull_platform::console::send_ctrl_break(pid).expect("send Ctrl-Break");
+}
+
+/// FX-OUT-02 on Windows: `scull mcp serve`, after the MCP handshake, gets a real console
+/// interrupt and exits 130 promptly (CLI-05), with stdin still open. It never changed anything
+/// (the caller checks the invariants). The interrupt is Ctrl-Break, which reaches scull's
+/// Ctrl-C handler (`ctrlc` handles both); `CTRL_C_EVENT` can't be aimed at one process and
+/// stays ignored below a CI job (see `scull_platform::console`).
+#[cfg(windows)]
+fn windows_ctrl_c_exits_130(fx: &Fixture) {
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let mcp = mcp_cli(&[fx.root()]);
+    let mut command = mcp.command(&["mcp", "serve"]);
+    command.creation_flags(scull_platform::console::TARGET_CREATION_FLAGS);
+    let mut m = Mcp::start_command(command);
+    let pid = m.child.id();
+    let send = || {
+        let sender = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fx_out_02_ctrl_c_sender",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CTRL_C_PID_ENV, pid.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            sender.status.success(),
+            "interrupt sender failed: {}\n{}",
+            String::from_utf8_lossy(&sender.stdout),
+            String::from_utf8_lossy(&sender.stderr)
+        );
+    };
+    let exited_within = |m: &mut Mcp, secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            if let Some(status) = m.child.try_wait().unwrap() {
+                return Some(status);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    send();
+    // Prompt: well within a few seconds, while stdin is still open.
+    let Some(status) = exited_within(&mut m, 15) else {
+        // Tell "never received" from "received but stuck": a second interrupt makes scull exit
+        // at once (cancel.rs) if the first one arrived.
+        send();
+        let second = exited_within(&mut m, 10);
+        if second.is_none() {
+            let _ = m.child.kill();
+        }
+        let mut err = String::new();
+        if let Some(mut e) = m.child.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+        }
+        panic!(
+            "scull mcp serve did not exit within 15 s of a console interrupt; after a second \
+             one: {second:?}\nstderr:\n{err}"
+        );
+    };
+    drop(m.child.stdin.take());
+    assert_eq!(
+        status.code(),
+        Some(ExitCode::Cancelled.as_i32()),
+        "{status:?}"
+    );
 }

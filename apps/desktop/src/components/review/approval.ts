@@ -3,6 +3,7 @@
 // clock ticks.
 //
 //   pending ──approve (all reviewed + code)──▶ approved ──agent_started──▶ running ──finished──▶ executed
+//      │ approved_elsewhere ▶ approved (e.g. `scull approve` in a terminal)
 //      │ deny ▶ denied        │ revoke ▶ revoked
 //      │ tick ≥ expiry ▶ expired (pending or approved-but-unused)
 //      └ invalidated ▶ changed (pending or approved: D-34 voids the WHOLE agent plan)
@@ -26,6 +27,8 @@ export interface ApprovalState {
   expiresAt: number;
   now: number;
   approvedAt: number | null;
+  /** Where it was approved, when not in this dialog (`terminal`, ...). */
+  approvedVia: string | null;
   startedAt: number | null;
   closedAt: number | null;
   active: ItemId | null;
@@ -40,6 +43,8 @@ export type ApprovalAction =
   | { type: 'review'; id: ItemId; on: boolean }
   | { type: 'code'; value: string }
   | { type: 'approve'; at: number }
+  /** Approved on another human channel while this dialog was open (no code typed here). */
+  | { type: 'approved_elsewhere'; at: number; channel: string }
   | { type: 'deny'; at: number }
   | { type: 'revoke'; at: number }
   | { type: 'tick'; now: number }
@@ -59,6 +64,7 @@ export function initialApproval(p: { itemIds: ItemId[]; code: string; expiresAt:
     expiresAt: p.expiresAt,
     now: p.now,
     approvedAt: null,
+    approvedVia: null,
     startedAt: null,
     closedAt: p.now >= p.expiresAt ? p.expiresAt : null,
     active: null,
@@ -124,6 +130,9 @@ export function approvalReducer(s: ApprovalState, a: ApprovalAction): ApprovalSt
       if (!pending) return s;
       if (!canApprove({ ...s, now: a.at })) return { ...s, shake: true };
       return { ...s, phase: 'approved', approvedAt: a.at, now: a.at, shake: false };
+    case 'approved_elsewhere':
+      if (!pending) return s;
+      return { ...s, phase: 'approved', approvedAt: a.at, approvedVia: a.channel, now: Math.max(s.now, a.at), shake: false };
     case 'deny':
       if (!pending) return s;
       return { ...s, phase: 'denied', closedAt: a.at, now: a.at };

@@ -36,7 +36,7 @@ use scull_core::{
 };
 use scull_engine::paths::is_within;
 use scull_engine::{CancelToken, Engine, ScanReport, ScanRequest, now_unix};
-use scull_storage::{Approval, Store};
+use scull_storage::{AgentClient, Approval, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -477,9 +477,12 @@ pub(crate) fn call(
     name: &str,
     args: JsonObject,
     cancel: &CancelToken,
+    client: Option<&AgentClient>,
 ) -> Option<Result<Output, ToolError>> {
     let r = match name {
-        "prepare_cleanup" => parse(args).and_then(|a| prepare(ctx, plans, allow, a, cancel)),
+        "prepare_cleanup" => {
+            parse(args).and_then(|a| prepare(ctx, plans, allow, a, cancel, client))
+        }
         "get_cleanup_plan" => parse(args).and_then(|a| get_plan(ctx, plans, a)),
         "get_approval_status" => parse(args).and_then(|a| approval_status(plans, a)),
         "execute_cleanup" => {
@@ -566,9 +569,10 @@ fn plan_output(plan: &Plan, status: ApprovalStatus, r: &Redactor, next_step: Str
 
 fn approve_hint(id: &PlanId) -> String {
     format!(
-        "Ask the user to run `scull approve {id}` in their own terminal (or to review it in the \
-         scull desktop app). No tool can approve it. Then poll get_approval_status and call \
-         execute_cleanup once it is approved, within 15 minutes of preparing it."
+        "Ask the user to run `scull approve {id}` in their own terminal, or to review it in the \
+         scull desktop app (Cleanup Review; the link scull://approve/{id} opens it there). No tool \
+         can approve it, and opening the link approves nothing. Then poll get_approval_status and \
+         call execute_cleanup once it is approved, within 15 minutes of preparing it."
     )
 }
 
@@ -578,6 +582,7 @@ fn prepare(
     allow: &Allowlist,
     a: PrepareArgs,
     cancel: &CancelToken,
+    client: Option<&AgentClient>,
 ) -> Result<Output, ToolError> {
     // #299: the session's rate first (before any scan), then the pending cap.
     if let Err(retry) = plans.admit() {
@@ -665,7 +670,7 @@ fn prepare(
     .map_err(|e| ToolError::new("not_plannable", r.text(&e.message)))?;
     // The cap again, atomically with the insert (another session may have prepared meanwhile).
     let inserted = store
-        .insert_agent_plan(&plan, now, plans.limits.max_pending)
+        .insert_agent_plan(&plan, now, plans.limits.max_pending, client)
         .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
     if !inserted {
         audit_prepare_refusal(plans, Some(&mut store), "too_many_pending_plans");
@@ -712,6 +717,7 @@ fn state_name(s: ApprovalState) -> &'static str {
         ApprovalState::Used => "approval used",
         ApprovalState::Expired => "expired",
         ApprovalState::Revoked => "approval revoked by the user",
+        ApprovalState::Denied => "denied by the user",
     }
 }
 
@@ -728,6 +734,11 @@ fn next_step(id: &PlanId, s: &ApprovalStatus) -> String {
         ApprovalState::Revoked => "The user revoked the approval: this plan will not run. Do \
              not prepare it again unless the user asks."
             .into(),
+        ApprovalState::Denied => format!(
+            "The user denied this plan ({}): it can never be approved or run. Stop polling; \
+             prepare a new plan only if the user still wants a cleanup.",
+            s.denial_reason.as_deref().unwrap_or("denied")
+        ),
     }
 }
 
@@ -967,6 +978,7 @@ fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output,
         (None, ApprovalState::Approved) => "approved",
         (None, ApprovalState::Expired) => "expired",
         (None, ApprovalState::Revoked) => "revoked",
+        (None, ApprovalState::Denied) => "denied",
     };
     let out = CleanupStatusOutput {
         plan_id: id.as_str().to_owned(),

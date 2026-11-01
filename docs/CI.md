@@ -9,6 +9,8 @@ Workflow: `.github/workflows/ci.yml`.
 | `CI ok` | Linux | Passes only if every job above passed. |
 | `cargo-deny` (`policy.yml`) | Linux | Licenses (permissive only, no copyleft), RustSec advisories (same DB as cargo-audit), yanked crates, sources. Config: `deny.toml`. Also weekly. |
 | `platform-boundary` (`policy.yml`) | Linux | `scripts/ci/platform_boundary.py`: no `std::os::unix/windows`, `libc`, `windows-sys`, Apple frameworks or `extern "C"` outside `crates/scull-platform` (PLT-11). Test code and `crates/scull-fixtures` are exempt. Self-tested first. |
+| `desktop-safe10` (`policy.yml`) | Linux | `scripts/ci/desktop_safe10.py` (PRD SAFE-10, P3-EXEC-01), `cargo metadata` only: in the desktop app's workspace only `scull-desktop-bridge` depends on `scull-cleaner`; `scull-mcp` reaches neither the cleaner nor the bridge; no normal or build dependency enables `scull-cleaner`'s `bare-api` feature. Renamed dependencies count by package. Self-tested first. |
+| `desktop app crate` (`desktop-app.yml`) | Linux, PRs touching `apps/desktop/**` or `crates/**` | Clippy and tests of the Tauri app crate (`apps/desktop/src-tauri`, its own workspace) with WebKitGTK installed and the frontend built: the ACL tests on the real capability files (approval and cleanup commands are the main window's only, mock runtime, no display), SAFE-10 on the resolved graph, the tray. |
 | `release-versions` (`policy.yml`) | Linux | `scripts/release/bump_version.py --check`: the workspace, Tauri crate, `tauri.conf.json` and `package.json` versions agree (one tag releases everything); self-tests of the version-bump and changelog scripts. |
 | `release-desktop` (`release-desktop.yml`) | Linux on PRs that touch the bundling; macOS, Windows, Linux on `v1*` tags | Tauri bundles (DMG, MSI/NSIS, deb/rpm/AppImage), signed and notarized when the secrets exist, attached to the tag's release. PRs and manual runs are dry runs. See `docs/RELEASE_v1.md`. |
 
@@ -38,3 +40,11 @@ python3 scripts/ci/platform_boundary.py
 
 The boundary check exempts the item right after a `#[cfg(test)]` attribute (found by brace
 counting), files under `tests/`/`benches/`, `[dev-dependencies]`, and `crates/scull-fixtures`.
+
+## Windows is advisory during the MVP push
+
+Provisional maintainer decision (Nov 1, 2026), revisit before v1.0: the `test (windows-latest)`
+job still runs on every push to `main`/`phase2`, nightly and on demand, but it is
+`continue-on-error`, so a Windows failure does not fail `CI ok` or block merges. Linux and macOS
+remain required. Windows failures are filed as issues and fixed outside the critical path.
+Pull requests continue to run Linux only.

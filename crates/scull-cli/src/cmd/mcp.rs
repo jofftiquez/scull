@@ -91,6 +91,7 @@ fn destructive(
     let runner = ExecutorRunner {
         quarantine: exec::quarantine_settings(&loaded.config.quarantine),
         trash: exec::trash_locations(),
+        caller: super::mcp_runner::RunCaller::Agent,
     };
     let server = server.with_plan_tools(
         true,
@@ -253,7 +254,7 @@ pub(crate) fn mark_disclosed(state: &Path) {
 }
 
 /// `scan.roots`, canonical, without broad roots (CFG-04).
-fn allowlisted_roots(loaded: &pipeline::Loaded, ui: &Ui) -> Vec<PathBuf> {
+pub(crate) fn allowlisted_roots(loaded: &pipeline::Loaded, ui: &Ui) -> Vec<PathBuf> {
     let home = loaded
         .home
         .as_deref()

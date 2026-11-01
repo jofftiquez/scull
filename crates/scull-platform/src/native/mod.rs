@@ -110,6 +110,19 @@ pub(crate) fn owner_only_exposures(path: &Path) -> io::Result<Vec<Exposure>> {
     os::owner_only_exposures(path)
 }
 
+/// Whether `path` has an extended ACL permission bits don't show (macOS); see
+/// [`crate::has_extended_acl`].
+#[cfg(unix)]
+pub(crate) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    os::has_extended_acl(path)
+}
+
+/// Windows: every grant is in the DACL, which [`owner_only_exposures`] already reads.
+#[cfg(windows)]
+pub(crate) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    std::fs::symlink_metadata(path).map(|_| false)
+}
+
 /// Whether this process is elevated (root / elevated administrator token).
 pub(crate) fn elevation() -> crate::Elevation {
     os::elevation()

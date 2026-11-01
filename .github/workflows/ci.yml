@@ -34,14 +34,17 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    # D-10 / PLT-07…11: macOS, Linux and Windows are first-class. To keep pull requests fast,
-    # PRs run Linux only; every push to main/phase2, the nightly schedule and manual runs test
-    # all three OSs, so a platform regression shows up on the branch within one merge.
+    # D-10 / PLT-07…11: macOS, Linux and Windows are supported. PRs run Linux only; every push to
+    # main/phase2, the nightly schedule and manual runs test all three OSs. During the MVP push
+    # (provisional maintainer decision, see docs/CI.md) Windows is ADVISORY: its job runs and
+    # reports, but a Windows failure does not fail the workflow or block merges; failures are
+    # filed as issues. Linux and macOS remain required.
     strategy:
       fail-fast: false
       matrix:
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - name: Enable long paths and keep LF on Windows
@@ -55,6 +58,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/phase2' || github.event_name == 'pull_request' }}
+      - name: Test prerequisites (macOS)
+        # tmux drives a real terminal for the `scull approve --run` tests; a fixture's missing
+        # prerequisite fails in CI (scull_fixtures::skip, #113), so install it.
+        if: runner.os == 'macOS'
+        run: command -v tmux >/dev/null || brew install tmux
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
@@ -66,6 +74,18 @@ jobs:
           SCULL_FIXTURES_ALLOW_SUDO: ${{ runner.os == 'Linux' && '1' || '' }}
           SCULL_FIXTURES_REQUIRE_PRIVILEGED: ${{ runner.os == 'Linux' && '1' || '' }}
         run: cargo test --workspace --locked --no-fail-fast
+      # The runners are elevated: scull refuses destructive MCP tools and `scull approve` there
+      # (SAFE-14), so those tests skip themselves, and `clean`/`restore` tests add
+      # `--allow-root`. Run them again as a standard user, where they must take the normal
+      # user's path (a skip or an elevated process is a failure, #65).
+      - name: Elevation-gated tests as a standard user (Windows)
+        # Runs even when `test` failed elsewhere: its coverage is independent.
+        if: runner.os == 'Windows' && !cancelled()
+        shell: pwsh
+        run: >-
+          ./scripts/ci/run-as-standard-user.ps1
+          -Tests scull-cli/mcp_approval,scull-cli/clean,scull-cli/clean_caches,scull-cli/history_restore,scull-fixtures/fx_out
+          -MustRun agent_plan_runs_only_after_the_human_approves,approve_prompt_shows_the_plan_and_needs_the_shown_code,approve_without_a_terminal_creates_no_machine_id,revoke_through_the_cli_stops_the_agent,clean,clean_caches,history_restore,fx_out,fx_out_03_cli_and_mcp_plan_identical_contents
       - name: doc
         if: runner.os == 'Linux'
         env:

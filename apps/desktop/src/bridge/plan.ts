@@ -1,13 +1,16 @@
-// Plan bridge STUBS: the calls the Cleanup Review and Git Worktrees screens need to prepare,
-// approve and execute a cleanup plan. They do NOT exist in the core bridge yet.
+// Plan bridge: the calls the Cleanup Review and Git Worktrees screens need to prepare, approve
+// and execute a cleanup plan.
 //
-// SAFE-10: the desktop never deletes. Execution will go through the core Executor behind a
-// reviewed plan (`scull_cleaner::Executor`, Phase 2), reached over a Tauri command that the
-// core bridge does not have yet. Until then:
+// SAFE-10: the desktop never deletes. Its own plans (`preparePlan` / `executePlan`) will run
+// through the core Executor behind a reviewed plan (`scull_cleaner::Executor`, Phase 2), over a
+// Tauri command the core bridge does not have yet. AI agent plans (MCP, PRD §13.3) are
+// connected: inside Tauri `createTauriPlanBridge` (./tauriPlans.ts) lists, opens, approves,
+// denies and revokes them through the core's approval broker (P4-MCP-02) and reports what the
+// agent did; the agent executes an approved plan itself, never the desktop.
 //   - in a plain browser (mock bridge) `createMockPlanBridge` answers with illustrative data
 //     and simulated progress, touching nothing;
-//   - inside Tauri `createUnavailablePlanBridge` rejects every call with `unsupported_platform`
-//     so the screens show their error state instead of pretending to clean.
+//   - `createUnavailablePlanBridge` rejects every call with `unsupported_platform` so a screen
+//     shows its error state instead of pretending to clean.
 //
 // The payload types below are LOCAL and provisional: they mirror the core's plan model (PRD
 // §10.2, §10.4, §13.3) and reuse the generated `Candidate` for every preview field. When the
@@ -20,25 +23,27 @@ import type { Candidate, ItemId, ScullBridge, Tier } from './types';
 import { BridgeError } from './types';
 import { useBridge } from './index';
 import { createMockPlanBridge } from './planMock';
+import { createTauriPlanBridge } from './tauriPlans';
 
 /** Who prepared a plan. Desktop plans are the user's own; MCP plans come from an agent. */
 export type PlanSource =
   | { kind: 'desktop' }
   | {
       kind: 'mcp';
-      /** Client name as reported by the MCP client (not verified). */
-      client: string;
+      /** Client name as reported by the MCP client (not verified). Absent when the plan doesn't
+       *  record it (the core's plans don't yet). */
+      client?: string;
       /** Two letters for the avatar. */
-      initials: string;
+      initials?: string;
       /** MCP tool that prepared the plan. */
       tool: string;
-      /** `scull mcp serve` process. */
-      pid: number;
-      /** Command that started the server, and where. */
-      command: string;
-      cwd: string;
-      /** The agent's free-text note, shown as-is (escaped by Vue). */
-      note: string;
+      /** `scull mcp serve` process, when recorded. */
+      pid?: number;
+      /** Command that started the server, and where, when recorded. */
+      command?: string;
+      cwd?: string;
+      /** The agent's free-text note, shown as-is (escaped by Vue), when there is one. */
+      note?: string;
     };
 
 /** One plan item: a full candidate (every SAFE-01 preview field) plus display hints. */
@@ -50,6 +55,9 @@ export interface PlanItem {
   members?: number;
   /** Extra context for the sub-line, e.g. "regrew 4× this month". */
   note?: string;
+  /** Agent plans: `false` when this app's last scan didn't find the item unchanged, so only
+   *  what the plan recorded is known (no evidence; flags unknown). */
+  from_last_scan?: boolean;
 }
 
 /** An item dropped when the plan was re-checked (in use, changed since scan). */
@@ -82,8 +90,21 @@ export interface PlanPreview {
 /** An agent's request waiting for the human (PRD §13.3). */
 export interface ApprovalRequest {
   plan: PlanPreview;
-  /** Short code the human types to approve. Shown only here; the agent never sees it. */
+  /** Short code the human types to approve. Shown only here, for display: the core keeps the
+   *  challenge and checks the typed code; the agent never sees it. */
   code: string;
+}
+
+/** An agent plan waiting for the human (the pending-requests notice). */
+export interface AgentRequestSummary {
+  plan_id: string;
+  hash: string;
+  created_at: string;
+  expires_at: string;
+  item_count: number;
+  reclaimable_bytes: number;
+  /** Client name as reported by the MCP client, when recorded. */
+  client?: string;
 }
 
 export type ItemOutcomeKind = 'deleted' | 'quarantined' | 'trashed' | 'removed' | 'skipped';
@@ -115,6 +136,13 @@ export type ExecutionEvent =
 
 /** Events about an agent plan after it was shown (from the core's approval broker). */
 export type ApprovalEvent =
+  /** Approved elsewhere (e.g. `scull approve` in a terminal) while the dialog was open. */
+  | { kind: 'approved'; at: string; channel: string }
+  /** Denied elsewhere, or closed after too many wrong codes. */
+  | { kind: 'denied'; at: string }
+  /** The approval was revoked elsewhere (e.g. `scull approve --revoke`). */
+  | { kind: 'revoked'; at: string }
+  | { kind: 'expired'; at: string }
   | { kind: 'agent_started'; at: string }
   | { kind: 'item_started'; item_id: ItemId }
   | { kind: 'item_finished'; outcome: ItemOutcome }
@@ -128,13 +156,16 @@ export interface ExecuteOptions {
 }
 
 export interface PlanBridge {
-  readonly kind: 'mock' | 'unavailable';
+  readonly kind: 'mock' | 'tauri' | 'unavailable';
   /** Build a desktop plan from the last scan, or from just `items` of it (the Overview basket);
    *  S3 items are never planned. Dry run: nothing changes. */
   preparePlan(req: { items?: ItemId[] }): Promise<PlanPreview>;
   /** Execute the selected items of a reviewed plan through the core Executor. */
   executePlan(req: { plan_id: string; hash: string; items: ItemId[] }, opts?: ExecuteOptions): Promise<ExecutionResult>;
-  /** The agent request for a plan ID (MCP), or null when there is none. */
+  /** AI agent plans waiting for the human, newest first. */
+  approvalRequests(): Promise<AgentRequestSummary[]>;
+  /** Open the agent request for a plan ID (MCP), or null when there is none. Each call starts
+   *  a fresh challenge (a new code). */
   approvalRequest(planId: string): Promise<ApprovalRequest | null>;
   /** Record the human's approval (single use, bound to the hash). */
   approvePlan(req: { plan_id: string; hash: string; code: string }): Promise<{ approved_at: string }>;
@@ -143,6 +174,9 @@ export interface PlanBridge {
   revokeApproval(req: { plan_id: string }): Promise<{ revoked_at: string }>;
   /** Subscribe to broker events for a plan. Returns the unsubscribe function. */
   watchApproval(planId: string, onEvent: (e: ApprovalEvent) => void): () => void;
+  /** `scull://approve/<plan-id>` links (Tauri): `onOpen` gets the plan ID of the link the app
+   *  was opened with, and of each later one. Returns the unsubscribe function. */
+  onOpenRequest(onOpen: (planId: string) => void): () => void;
 }
 
 /** Inside Tauri: the core has no plan commands yet, so every call fails clearly. */
@@ -157,21 +191,35 @@ export function createUnavailablePlanBridge(): PlanBridge {
     kind: 'unavailable',
     preparePlan: async () => no(),
     executePlan: async () => no(),
+    approvalRequests: async () => [],
     approvalRequest: async () => no(),
     approvePlan: async () => no(),
     denyPlan: async () => no(),
     revokeApproval: async () => no(),
     watchApproval: () => () => undefined,
+    onOpenRequest: () => () => undefined,
   };
 }
 
 const forBridge = new WeakMap<ScullBridge, PlanBridge>();
 
-/** The plan bridge that goes with a core bridge (mock with mock, unavailable with Tauri). */
+/** Whether the page asked the mock to announce its agent request (`?agent=request`: the
+ *  notification, design 12b; development and E2E). */
+export function wantsAgentRequest(w: unknown = globalThis): boolean {
+  const loc = (w as { location?: { search?: string; hash?: string } } | undefined)?.location;
+  if (!loc) return false;
+  const q = `${loc.search ?? ''}&${(loc.hash ?? '').split('?')[1] ?? ''}`;
+  return /(^|[?&])agent=request(&|$)/.test(q);
+}
+
+/** The plan bridge that goes with a core bridge (mock with mock, Tauri with Tauri). */
 export function planBridgeFor(bridge: ScullBridge): PlanBridge {
   let p = forBridge.get(bridge);
   if (!p) {
-    p = bridge.kind === 'mock' ? createMockPlanBridge({ latencyMs: 120 }) : createUnavailablePlanBridge();
+    p =
+      bridge.kind === 'mock'
+        ? createMockPlanBridge({ latencyMs: 120, announceAgentRequest: wantsAgentRequest() })
+        : createTauriPlanBridge();
     forBridge.set(bridge, p);
     // Development and E2E builds only (`VITE_SCULL_E2E=1`, apps/desktop/e2e/run.sh): lets
     // screenshot scripts and E2E tests drive the mock (e.g. a target changing). A normal
@@ -181,6 +229,17 @@ export function planBridgeFor(bridge: ScullBridge): PlanBridge {
     }
   }
   return p;
+}
+
+/** Where a `scull://approve/<plan-id>` link takes the window: Cleanup Review on that request,
+ *  or nowhere while an agent request is already open there (so repeated links can't pull the
+ *  human away from a review; the notification offers the other request). */
+export function openRequestRoute(
+  current: { path: string; query: Record<string, unknown> },
+  planId: string,
+): { path: string; query: { request: string } } | null {
+  if (current.path === '/cleanup' && typeof current.query.request === 'string') return null;
+  return { path: '/cleanup', query: { request: planId } };
 }
 
 export const PLAN_BRIDGE_KEY: InjectionKey<PlanBridge> = Symbol('scull-plan-bridge');

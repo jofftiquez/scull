@@ -5,13 +5,16 @@ This page covers macOS, Linux and Windows.
 
 > **Status: alpha.** Expect rough edges and report them as issues.
 >
-> * The first alpha, `0.1.0-alpha.1`, was **inspect-only**: it scans and explains, and every
->   cleanup command exits with "not implemented yet".
+> * The first alpha, `0.1.0-alpha.1`, is **inspect-only**: it is tagged from `main` before
+>   cleanup landed, and every cleanup command in it exits with "not implemented yet".
 > * Cleanup (plans, quarantine, restore, audit) ships with the MVP release, built from this
 >   code once its release gates pass. The [CLI reference](CLI.md) and
 >   [safety model](SAFETY.md) describe it.
-> * Builds are **unsigned**. Code signing, notarization, Homebrew, Scoop, winget and MSI
->   packages come later.
+> * No release has been published from this repository yet. Until the first one, build from
+>   source (below).
+> * Signing and notarization run only when the signing keys are configured, so builds may be
+>   unsigned. Homebrew and Scoop packages are published for stable versions only, not for
+>   alphas. There is no winget or MSI package yet.
 
 ## What you download
 
@@ -33,25 +36,17 @@ Each release on the GitHub **Releases** page has:
 The archive holds one binary: `scull` (`scull.exe` on Windows). There is no self-updater:
 scull never contacts the network on its own.
 
-## The repository is private (for now)
+## Downloads
 
-While the repository is private, GitHub requires you to sign in to download release files.
-A plain `curl` of a release URL fails. Use one of these:
+The repository is public, so release files download without signing in: from the release
+page, with `curl`, or with the installer scripts. With the GitHub CLI:
 
-* **GitHub CLI** (simplest). After `gh auth login`:
+```sh
+gh release download <version> --repo jofftiquez/scull \
+  --pattern 'scull-cli-x86_64-unknown-linux-gnu.tar.gz*' --pattern sha256.sum
+```
 
-  ```sh
-  gh release download v0.1.0-alpha.1 --repo jofftiquez/scull \
-    --pattern 'scull-cli-x86_64-unknown-linux-gnu.tar.gz*' --pattern sha256.sum
-  ```
-
-  Swap in the archive name for your platform from the table above.
-
-* **The installer script with a token.** Set `SCULL_CLI_GITHUB_TOKEN` to a token with read
-  access to the repository before you run the installer. The installer sends it only to
-  GitHub.
-
-Once the repository is public, these steps are no longer needed.
+Swap in the archive name for your platform from the table above.
 
 ## Verify the checksum
 

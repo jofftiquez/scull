@@ -62,12 +62,15 @@ pub mod activity;
 pub mod ancestry;
 pub mod app_dirs;
 pub mod cloud;
+#[cfg(all(windows, feature = "test-support"))]
+pub mod console;
 pub mod docker;
 pub mod elevation;
 mod error;
 #[cfg(feature = "delete")]
 pub mod exec_lock;
 pub mod identity;
+pub mod interrupt;
 mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]
@@ -75,6 +78,7 @@ pub mod quarantine;
 #[cfg(feature = "delete")]
 pub mod remove;
 pub mod scheduler;
+pub mod startup_env;
 #[cfg(feature = "delete")]
 pub mod trash;
 mod types;
@@ -92,7 +96,8 @@ pub use error::{ErrorKind, Operation, PlatformError};
 pub use identity::{MACHINE_ID_FILE, current_user, existing_machine_id, machine_id};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{
-    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, open_file_no_follow,
+    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, has_extended_acl,
+    open_file_no_follow,
 };
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 pub use volumes::{
@@ -152,7 +157,20 @@ pub trait Platform: Send + Sync {
     /// sizes and times), but possibly faster. On Unix the entry is stat'ed relative to its
     /// listed directory (`fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)`), so the kernel doesn't
     /// resolve the whole path again for every entry, and a parent swapped for a link after the
-    /// listing can't redirect the call. The default is [`Platform::metadata`] of the path.
+    /// listing can't redirect the call. On Windows a plain file or directory is queried by name
+    /// without opening it (`NtQueryInformationByName(FileStatInformation)`), with the identity
+    /// from the listing (`FileIdExtdDirectoryInfo`) and only if the answer has the listed file
+    /// ID; reparse points, compressed and sparse files, and anything else are opened as by
+    /// [`Platform::metadata`]. On macOS the listing itself (`getattrlistbulk`) supplies the
+    /// metadata of a regular file with one link that is neither compressed nor dataless, as it
+    /// was when the listing read it (checked against `fstatat` once per listing); everything
+    /// else is stat'ed as above. The default is [`Platform::metadata`] of the path.
+    ///
+    /// **Scan only.** The result may describe the entry as it was listed, so an entry removed
+    /// or replaced since can still be reported. Never use it to decide whether something may
+    /// be changed: revalidation, the executor, quarantine/restore and purges re-check with
+    /// [`Platform::metadata`] or handle-based checks. `scripts/ci/platform_boundary.py` fails
+    /// on calls outside `scull-scanner`.
     fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
         self.metadata(&entry.path)
     }

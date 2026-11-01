@@ -97,6 +97,13 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
     // The same directory, opened once more for `fstatat` of its entries ([`entry_metadata`]).
     // The listing owns it; entries hold it weakly, so it lives exactly as long as the listing.
     let stat_dir = checked.identity.and_then(|id| open_for_stat(path, id));
+    // macOS: names, kinds and plain files' metadata in batches (#91).
+    #[cfg(target_os = "macos")]
+    if let Some((d, id)) = stat_dir.as_ref().zip(checked.identity)
+        && let Some(it) = bulk::list(path, Arc::clone(d), id)
+    {
+        return Ok(it);
+    }
     let at = stat_dir
         .as_ref()
         .zip(checked.identity)
@@ -121,6 +128,8 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
             kind,
             reparse_tag: None,
             at: at.clone(),
+            #[cfg(target_os = "macos")]
+            listed: None,
         })
     })))
 }
@@ -142,8 +151,13 @@ fn open_for_stat(path: &Path, expect: FileIdentity) -> Option<Arc<fs::File>> {
 
 /// A listed entry's metadata: `fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)` relative to its
 /// listed directory while the listing is alive, else `lstat` of its path. Both give the same
-/// values ([`convert_stat`] mirrors [`convert`]).
+/// values ([`convert_stat`] mirrors [`convert`]). On macOS a plain file's metadata may come
+/// from the listing itself ([`bulk`]), as it was when the listing read it.
 pub(super) fn entry_metadata(entry: &DirEntry) -> io::Result<Metadata> {
+    #[cfg(target_os = "macos")]
+    if let Some(md) = &entry.listed {
+        return Ok(md.clone());
+    }
     match entry.at.as_ref().and_then(|a| a.dir.upgrade()) {
         Some(dir) => fstatat_nofollow(&dir, &entry.file_name).map(|st| convert_stat(&st)),
         None => metadata(&entry.path),
@@ -178,8 +192,27 @@ fn fstatat_nofollow(dir: &fs::File, name: &std::ffi::OsStr) -> io::Result<libc::
 /// `fstatat` result equals the `lstat` one field for field.
 #[allow(clippy::unnecessary_cast)] // field widths differ between Linux and macOS
 fn convert_stat(st: &libc::stat) -> Metadata {
-    let fmt = st.st_mode & libc::S_IFMT;
-    let kind = if fmt == libc::S_IFLNK {
+    Metadata {
+        kind: kind_of_mode(st.st_mode),
+        identity: Some(FileIdentity::new(
+            st.st_dev as u64,
+            u128::from(st.st_ino as u64),
+        )),
+        logical_size: st.st_size as u64,
+        allocated_size: Some((st.st_blocks as u64).saturating_mul(ST_BLOCK_UNIT)),
+        nlink: Some(st.st_nlink as u64),
+        mtime_unix: Some(st.st_mtime as i64),
+        readonly: (st.st_mode as u32) & 0o222 == 0,
+        file_attributes: None,
+        reparse_tag: None,
+        bsd_flags: stat_bsd_flags(st),
+    }
+}
+
+/// The entry kind encoded in a `st_mode`.
+fn kind_of_mode(mode: libc::mode_t) -> EntryKind {
+    let fmt = mode & libc::S_IFMT;
+    if fmt == libc::S_IFLNK {
         EntryKind::Symlink
     } else if fmt == libc::S_IFDIR {
         EntryKind::Dir
@@ -195,21 +228,6 @@ fn convert_stat(st: &libc::stat) -> Metadata {
         EntryKind::CharDevice
     } else {
         EntryKind::Other
-    };
-    Metadata {
-        kind,
-        identity: Some(FileIdentity::new(
-            st.st_dev as u64,
-            u128::from(st.st_ino as u64),
-        )),
-        logical_size: st.st_size as u64,
-        allocated_size: Some((st.st_blocks as u64).saturating_mul(ST_BLOCK_UNIT)),
-        nlink: Some(st.st_nlink as u64),
-        mtime_unix: Some(st.st_mtime as i64),
-        readonly: (st.st_mode as u32) & 0o222 == 0,
-        file_attributes: None,
-        reparse_tag: None,
-        bsd_flags: stat_bsd_flags(st),
     }
 }
 
@@ -294,6 +312,12 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<(fs::File, Option<F
 /// directories are opened (checked with `lstat` first, SAFE-18), and the opened descriptor
 /// must be the entry that was checked (same device and inode), so a swap in between is an
 /// error. Permissions are only ever narrowed. Needs read permission on the entry.
+///
+/// An entry that is already owner-only is **not opened**: closing any descriptor of a file
+/// releases every POSIX record lock this process holds on it (`fcntl` semantics), and SQLite
+/// keeps its database and `-shm` locks that way. `scull-storage` restricts those files while
+/// its own connection may be open, and a lost `-shm` lock lets another process reset the
+/// shared memory under that connection (which then dies of `SIGBUS`).
 pub(super) fn restrict_owner_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let checked = fs::symlink_metadata(path)?;
@@ -305,6 +329,9 @@ pub(super) fn restrict_owner_only(path: &Path) -> io::Result<()> {
                 "refusing to restrict a {found}: only real files and directories are restricted"
             ),
         ));
+    }
+    if checked.mode() & 0o7777 & !0o700 == 0 {
+        return Ok(());
     }
     let file = fs::OpenOptions::new()
         .read(true)
@@ -340,6 +367,19 @@ pub(super) fn owner_only_exposures(path: &Path) -> io::Result<Vec<crate::Exposur
     Ok(exposures)
 }
 
+/// Whether `path` carries an extended ACL that permission bits don't show: macOS ACLs. On Linux
+/// a POSIX ACL's mask is reflected in the group bits, which [`owner_only_exposures`] checks.
+#[cfg(target_os = "macos")]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    macos::has_extended_acl(path)
+}
+
+/// See the macOS version.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    fs::symlink_metadata(path).map(|_| false)
+}
+
 /// Known folders are a Windows concept.
 pub(super) fn known_folder(_source: crate::DirSource) -> Option<std::path::PathBuf> {
     None
@@ -363,6 +403,8 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub(super) use linux::{free_space, volume_of, volumes};
 
+#[cfg(target_os = "macos")]
+mod bulk;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

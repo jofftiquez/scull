@@ -6,10 +6,13 @@
 //                                 DB manifest (not the UI) decides what is restored.
 //
 // The desktop never moves files itself (SAFE-10). In a plain browser the mock only animates (it
-// touches nothing); inside Tauri the pending implementation rejects with a BridgeError until a
-// core `restore` command exists. This stays out of `ScullBridge`, whose read-only surface and
-// tests are unchanged.
-import { BridgeError, type HistoryItem, type HistoryOperation, type ScullBridge } from '../../bridge';
+// touches nothing); inside Tauri `restore_quarantined` restores through the core Executor under
+// the execution lock (P3-EXEC-01; main window only), audited with the desktop channel. This stays
+// out of `ScullBridge`, whose read-only surface and tests are unchanged.
+import { BridgeError, toBridgeError, type HistoryItem, type HistoryOperation, type ScullBridge } from '../../bridge';
+import type { DesktopRestore } from '../../bridge/generated';
+import { realTransport, type TauriTransport } from '../../bridge/tauri';
+import { CLEANUP_COMMANDS } from '../../bridge/tauriPlans';
 
 /** Where an item went back to. */
 export interface RestoreResult {
@@ -20,7 +23,7 @@ export interface RestoreResult {
 }
 
 export interface HistoryActions {
-  readonly kind: 'mock' | 'pending';
+  readonly kind: 'mock' | 'pending' | 'tauri';
   restoreQuarantined(op: HistoryOperation, item: HistoryItem): Promise<RestoreResult>;
 }
 
@@ -78,10 +81,28 @@ export function createPendingHistoryActions(): HistoryActions {
   };
 }
 
+/** Inside Tauri: the core restores it (the manifest of record decides; never overwrites). */
+export function createTauriHistoryActions(t: TauriTransport = realTransport): HistoryActions {
+  return {
+    kind: 'tauri',
+    async restoreQuarantined(op, item) {
+      try {
+        const r = await t.invoke<DesktopRestore>(CLEANUP_COMMANDS.restore, {
+          operationId: op.operation_id,
+          itemId: item.item_id,
+        });
+        return { restored_to: r.restored_to, sibling: r.sibling };
+      } catch (e) {
+        throw toBridgeError(e);
+      }
+    },
+  };
+}
+
 export function historyActionsFor(bridge: ScullBridge): HistoryActions {
   // The mock's machine already has something at ~/code/proto/Library again, so restoring it
   // shows the sibling restore (`Library.scull-restored-1`).
   return bridge.kind === 'mock'
     ? createMockHistoryActions({ occupied: ['/Users/ada/code/proto/Library'] })
-    : createPendingHistoryActions();
+    : createTauriHistoryActions();
 }

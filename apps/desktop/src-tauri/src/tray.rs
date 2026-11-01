@@ -197,6 +197,7 @@ fn create_widget(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
+        .additional_browser_args(crate::BROWSER_ARGS)
         .build()?;
     let handle = w.clone();
     let app = app.clone();

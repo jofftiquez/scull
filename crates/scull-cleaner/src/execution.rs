@@ -229,7 +229,8 @@ impl Executor {
     /// A plan prepared by the MCP server ([`PlanOrigin::Mcp`]) is refused
     /// ([`ErrorKind::SafetyBlocked`]) unless `operation` is the one
     /// [`Executor::begin_operation`] started for it, which consumed its human approval
-    /// (MCP-04).
+    /// (MCP-04). An auto-policy plan ([`PlanOrigin::Policy`], D-11) likewise runs only inside
+    /// the operation started for it, and holds only S0 quarantines.
     ///
     /// With an `operation` ([`Executor::begin_operation`]), every mutating step is announced
     /// first in the operation's write-ahead journal and closed after it (SAFE-19, see
@@ -281,13 +282,33 @@ impl Executor {
         {
             // Audited where there is a store to record it in (another plan's operation).
             if let Some(op) = operation.as_deref_mut() {
-                crate::operation::audit_refusal(op.store, plan, "outside_operation");
+                crate::operation::audit_refusal(
+                    op.store,
+                    plan,
+                    "outside_operation",
+                    self.refusal_source(),
+                );
             }
             return Err(ScullError::new(
                 ErrorKind::SafetyBlocked,
                 format!(
                     "plan {} was prepared by an AI agent: it runs only inside the operation that \
                      consumed its human approval (MCP-04); nothing was changed",
+                    plan.id()
+                ),
+            ));
+        }
+        // D-11: an auto-policy plan runs only inside its own recorded operation (audit,
+        // journal, quarantine manifest). `Plan::verify` above already refused any item that is
+        // not an S0 quarantine.
+        if plan.origin() == PlanOrigin::Policy
+            && !operation.as_deref().is_some_and(|op| op.is_for(plan))
+        {
+            return Err(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                format!(
+                    "auto-policy plan {} runs only inside its own recorded operation (D-11); \
+                     nothing was changed",
                     plan.id()
                 ),
             ));

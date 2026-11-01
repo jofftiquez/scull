@@ -1481,6 +1481,7 @@ dependencies = [
  "scull-platform",
  "scull-proactive",
  "scull-safety",
+ "scull-storage",
  "serde",
  "serde_json",
  "tempfile",
@@ -1494,6 +1495,7 @@ version = "0.0.0"
 dependencies = [
  "getrandom 0.3.4",
  "schemars",
+ "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",
@@ -1561,19 +1563,24 @@ name = "scull-desktop-bridge"
 version = "0.0.0"
 dependencies = [
  "jsonschema",
+ "proc-macro2",
+ "quote",
  "schemars",
+ "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",
  "scull-fixtures",
  "scull-git",
  "scull-insights",
+ "scull-mcp",
  "scull-platform",
  "scull-proactive",
  "scull-safety",
  "scull-storage",
  "serde",
  "serde_json",
+ "syn 2.0.119",
  "tempfile",
 ]
 

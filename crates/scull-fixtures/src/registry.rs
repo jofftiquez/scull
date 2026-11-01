@@ -277,17 +277,11 @@ const CLI_CLEAN_CACHES: &str = "crates/scull-cli/tests/clean_caches/main.rs";
 const CLI_DOCTOR_REPORT: &str = "crates/scull-cli/tests/doctor_report.rs";
 const ENGINE_ROOTS: &str = "crates/scull-engine/tests/roots.rs";
 
-/// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
-/// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
+/// Phase 2 fixtures whose macOS and Windows runs are still unproven: a test of theirs is
+/// `#[ignore]`d in CI (it needs a second account or the reference corpus). The others were
+/// cleared with the 3-OS run 41349623187 (#113), where a runtime skip fails CI.
 const PHASE2_PENDING: &str = "MW";
 
-/// Windows-only fixtures written while the Windows CI was unavailable: type-checked and
-/// clippy-clean for `x86_64-pc-windows-gnu`, never run on Windows yet.
-const WINDOWS_PENDING: &str = "W";
-
-/// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
-/// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
-const MACOS_PENDING: &str = "M";
 const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
@@ -814,8 +808,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-02",
         Gate::Mvp,
@@ -857,8 +850,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_03_candidate_behind_an_escaping_link_is_never_reached",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-04",
         Gate::Mvp,
@@ -869,7 +861,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 E2E_FS_NIGHTLY,
                 "fx_fs_04_mount_inside_candidate_is_s3_and_mounted_content_untouched",
             ),
-            t(EXEC_UNIX, "fx_fs_04_mount_inside_candidate_is_never_crossed"),
+            t(
+                EXEC_UNIX,
+                "fx_fs_04_mount_inside_candidate_is_never_crossed",
+            ),
         ]),
     ),
     fx(
@@ -886,17 +881,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_WIN,
                 "fx_fs_05_hardlink_to_canary_link_removed_canary_intact",
             ),
-            t(
-                E2E_FS,
-                "fx_fs_05_hardlink_to_canary_bytes_attributed_once",
-            ),
+            t(E2E_FS, "fx_fs_05_hardlink_to_canary_bytes_attributed_once"),
             t(
                 HARDLINKS,
                 "fx_fs_05_link_to_canary_is_shared_and_counted_once",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-06",
         Gate::Mvp,
@@ -926,8 +917,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_07_read_only_entries_inside_candidate_permissions_untouched",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-08",
         Gate::Mvp,
@@ -951,8 +941,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_08_unreadable_directory_is_reported_and_scan_continues",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-09",
         Gate::Mvp,
@@ -1002,17 +991,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_UNIX,
                 "fx_fs_12_very_deep_tree_beyond_path_max_is_removed",
             ),
-            t(
-                EXEC_WIN,
-                "fx_fs_12_very_deep_tree_is_removed",
-            ),
+            t(EXEC_WIN, "fx_fs_12_very_deep_tree_is_removed"),
             t(
                 E2E_FS,
                 "fx_fs_12_long_path_candidate_is_scanned_and_classified",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-13",
         Gate::Mvp,
@@ -1082,11 +1067,16 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 REVAL,
                 "fx_race_01_candidate_replaced_by_symlink_skipped_canary_intact",
             ),
-            t(EXEC_UNIX, "fx_race_01_candidate_replaced_by_symlink_is_refused"),
-            t(EXEC_WIN, "fx_race_01_candidate_replaced_by_junction_is_refused"),
+            t(
+                EXEC_UNIX,
+                "fx_race_01_candidate_replaced_by_symlink_is_refused",
+            ),
+            t(
+                EXEC_WIN,
+                "fx_race_01_candidate_replaced_by_junction_is_refused",
+            ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-02",
         Gate::Mvp,
@@ -1105,8 +1095,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 EXEC_UNIX,
                 "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
             ),
-            t(EXEC_UNIX, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
-            t(EXEC_UNIX, "fx_race_02_directory_moved_out_during_walk_aborts"),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_nested_folder_swapped_mid_walk_aborts",
+            ),
+            t(
+                EXEC_UNIX,
+                "fx_race_02_directory_moved_out_during_walk_aborts",
+            ),
             t(
                 EXEC_UNIX,
                 "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
@@ -1128,7 +1124,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_02_subfolder_replaced_by_other_directory_aborts_on_identity",
             ),
             t(EXEC_WIN, "fx_race_02_nested_folder_swapped_mid_walk_aborts"),
-            t(EXEC_WIN, "fx_race_02_entry_kind_changed_since_listing_aborts"),
+            t(
+                EXEC_WIN,
+                "fx_race_02_entry_kind_changed_since_listing_aborts",
+            ),
             t(
                 EXEC_WIN,
                 "fx_race_02_held_directory_cannot_be_moved_out_during_walk",
@@ -1138,8 +1137,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-03",
         Gate::Mvp,
@@ -1149,8 +1147,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_race_03_new_untracked_file_in_worktree_raises_tier_item_skipped",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-04",
         Gate::Mvp,
@@ -1160,8 +1157,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_race_04_build_started_after_scan_item_skipped_in_use",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-05",
         Gate::Mvp,
@@ -1181,54 +1177,40 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_05_plan_invalidated_when_another_operation_touched_its_targets",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
+    // FX-RACE-06/07: green on macOS and Windows in run 41326764895 (journal fixtures only, on a
+    // verification branch while FX-WIN-03 hung the full Windows run) and on Linux in PR CI.
     fx(
         "FX-RACE-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "cancel mid-execution, partial audit and a completing rerun are covered through the journal on Unix; the journal fixtures need quarantine moves, which Windows does not have yet",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
+        )]),
+    ),
     fx(
         "FX-RACE-07",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "a process killed during a quarantine move is reconciled by the journal on Unix; Windows has no quarantine moves yet, so there is nothing to kill there",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_07_killed_during_quarantine_move_journal_reconciles",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_07_killed_during_quarantine_move_journal_reconciles",
+        )]),
+    ),
     // §3.5 Executor, plans, quarantine, restore (FX-EXEC)
     fx(
         "FX-EXEC-01",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                E2E_EXEC,
-                "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
-            ),
-        ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported",
+        )]),
+    ),
     fx(
         "FX-EXEC-02",
         Gate::Mvp,
@@ -1266,36 +1248,30 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                RESTORE,
-                "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            RESTORE,
+            "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
+        )]),
     ),
     fx(
         "FX-EXEC-05",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                RESTORE,
-                "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            RESTORE,
+            "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
+        )]),
     ),
     fx(
         "FX-EXEC-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(
-                QUAR,
-                "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
-            ),
-        ]),
+        Status::Implemented(&[t(
+            QUAR,
+            "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
+        )]),
     ),
     fx(
         "FX-EXEC-07",
@@ -1306,16 +1282,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_07_plan_file_edited_to_add_a_path_rejected_exit_4",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-08",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[t(E2E_EXEC, "fx_exec_08_expired_plan_rejected_exit_4")]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-09",
         Gate::Mvp,
@@ -1325,8 +1299,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_09_plan_from_another_machine_or_user_rejected_exit_4",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-10",
         Gate::Mvp,
@@ -1336,30 +1309,34 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_exec_10_item_became_s3_since_planning_is_skipped_with_reason",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-11",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[
-            t(CLI_CLEAN, "fx_exec_11_irreversible_s1_needs_allow_permanent"),
+            t(
+                CLI_CLEAN,
+                "fx_exec_11_irreversible_s1_needs_allow_permanent",
+            ),
             // The typed count on a terminal (script(1), Linux only).
-            t(CLI_CLEAN, "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count"),
+            t(
+                CLI_CLEAN,
+                "fx_exec_11_terminal_prompts_confirm_decline_and_typed_count",
+            ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-12",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Implemented(&[
-            t(CLI_CLEAN, "fx_exec_12_elevated_run_refused_without_allow_root"),
-        ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+        Status::Implemented(&[t(
+            CLI_CLEAN,
+            "fx_exec_12_elevated_run_refused_without_allow_root",
+        )]),
+    ),
     fx(
         "FX-EXEC-13",
         Gate::Mvp,
@@ -1376,38 +1353,32 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(AUDIT, "fx_exec_13_audit_is_append_only_at_the_sql_level"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-EXEC-14",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 68,
-            reason: "one of five items failing on permission denied (exit 3, four complete, failure explained in the report and the audit) is end-to-end on Unix; the Windows variant needs a deny-delete ACL injection",
-            partial: &[t(
-                E2E_EXEC,
-                "fx_exec_14_one_of_five_fails_exit_3_others_complete",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_14_one_of_five_fails_exit_3_others_complete",
+        )]),
+    ),
     fx("FX-EXEC-15", Gate::V1x, "MLW", Mode::Ci, Status::Deferred),
     fx(
         "FX-EXEC-16",
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 71,
-            reason: "the owner-only quarantine folder is checked on Unix in CI; reading it as another test user needs the nightly job, and Windows quarantine is not implemented yet",
-            partial: &[t(QUAR, "fx_exec_16_quarantine_folder_is_owner_only")],
-        },
+        Status::Implemented(&[
+            t(
+                QUAR,
+                "fx_exec_16_another_account_cannot_read_the_quarantine",
+            ),
+            t(QUAR, "fx_exec_16_quarantine_folder_is_owner_only"),
+        ]),
     )
-    .pending_ci("M")
-    .missing_os("W"),
+    .pending_ci(PHASE2_PENDING),
     // §3.6 Physical reclaim accuracy (FX-PHY)
     fx(
         "FX-PHY-01",
@@ -1433,8 +1404,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_phy_01_hardlinks_predict_zero_and_measured_zero_agrees",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-PHY-02",
         Gate::Mvp,
@@ -1445,35 +1415,48 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 E2E_PHY,
                 "fx_phy_02_apfs_clone_low_confidence_measured_and_explained",
             ),
-            t(MEASURE_UNIT, "fx_phy_02_apfs_clone_low_confidence_explained"),
+            t(
+                MEASURE_UNIT,
+                "fx_phy_02_apfs_clone_low_confidence_explained",
+            ),
         ]),
-    )
-    .pending_ci("M"),
+    ),
     fx("FX-PHY-03", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
-    fx("FX-PHY-04", Gate::V1_0, "L", Mode::Nightly, Status::Deferred),
+    fx(
+        "FX-PHY-04",
+        Gate::V1_0,
+        "L",
+        Mode::Nightly,
+        Status::Deferred,
+    ),
     fx(
         "FX-PHY-05",
         Gate::Mvp,
         "MW",
         Mode::Ci,
         Status::Implemented(&[
-            t(E2E_PHY, "fx_phy_05_ntfs_compressed_file_uses_allocated_size"),
-            t(E2E_PHY, "fx_phy_05_apfs_compressed_file_uses_allocated_size"),
+            t(
+                E2E_PHY,
+                "fx_phy_05_ntfs_compressed_file_uses_allocated_size",
+            ),
+            t(
+                E2E_PHY,
+                "fx_phy_05_apfs_compressed_file_uses_allocated_size",
+            ),
             t(MEASURE_UNIT, "fx_phy_05_compression_uses_allocated_bytes"),
         ]),
-    )
-    .pending_ci("MW"),
+    ),
     fx(
         "FX-PHY-06",
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "a reference corpus of realistic projects measured against predictions (G3) is slow and belongs in the nightly job, which doesn't exist yet",
-            partial: &[],
-        },
-    ),
+        Status::Implemented(&[t(
+            E2E_PHY,
+            "fx_phy_06_reference_corpus_median_prediction_error_within_10_percent",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
     fx(
         "FX-PHY-07",
         Gate::Mvp,
@@ -1486,8 +1469,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_phy_07_trash_and_quarantine_are_moved_not_freed",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.7 Quick Clean: package caches (FX-QC)
     fx(
         "FX-QC-01",
@@ -1507,8 +1489,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_01_default_layout_macos"),
             t(CACHES, "fx_qc_01_default_layout_windows"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-02",
         Gate::Mvp,
@@ -1521,8 +1502,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(CACHES, "fx_qc_02_pnpm_store_prune_only_with_shared_bytes"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-03",
         Gate::Mvp,
@@ -1534,8 +1514,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(QC, "fx_qc_03_real_process_inside_cache_is_detected"),
             t(CACHES, "fx_qc_03_tool_running_is_skipped"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-04",
         Gate::Mvp,
@@ -1551,8 +1530,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_04_folder_above_cache_symlinked_elsewhere"),
             t(CACHES, "fx_qc_04_cache_junction_to_unexpected_location"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-05",
         Gate::Mvp,
@@ -1561,12 +1539,20 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         // D-36 (provisional, #30): an orphaned cache is removed through the Executor only
         // with fresh evidence and a per-tool confirmation; unconfirmed, it is only reported.
         Status::Implemented(&[
-            t(CLI_CLEAN_CACHES, "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool"),
-            t(CLI_CLEAN_CACHES, "fx_qc_05_remove_orphaned_flag_through_the_binary"),
-            t(QC, "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed"),
+            t(
+                CLI_CLEAN_CACHES,
+                "fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool",
+            ),
+            t(
+                CLI_CLEAN_CACHES,
+                "fx_qc_05_remove_orphaned_flag_through_the_binary",
+            ),
+            t(
+                QC,
+                "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
+            ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-06",
         Gate::Mvp,
@@ -1578,8 +1564,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(QC, "fx_qc_06_only_untrusted_binaries_means_not_installed"),
             t(QC, "fx_qc_06_trusted_symlink_into_node_modules_is_rejected"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-07",
         Gate::Mvp,
@@ -1592,16 +1577,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_07_env_redirects_to_home_or_root_are_refused"),
             t(CACHES, "fx_qc_07_project_npmrc_is_never_read"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-08",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[t(QC, "fx_qc_08_unticked_tools_are_not_cleaned")]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.8 Configuration and rules (FX-CFG)
     fx(
         "FX-CFG-01",
@@ -1666,7 +1649,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Mode::Ci,
         Status::Implemented(&[
             t(RULES, "fx_cfg_06_command_fields_are_rejected_at_load"),
-            t(RULES, "fx_cfg_06_command_fields_rejected_anywhere_in_the_file"),
+            t(
+                RULES,
+                "fx_cfg_06_command_fields_rejected_anywhere_in_the_file",
+            ),
         ]),
     ),
     // §3.10 Windows-specific (FX-WIN)
@@ -1690,8 +1676,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_01_junction_detected_and_not_followed"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-02",
         Gate::Mvp,
@@ -1705,8 +1690,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(EXEC_WIN, "fx_win_02_symlink_item_removes_only_the_link"),
             t(PLAT_WIN, "fx_win_02_symlinks_detected_and_not_followed"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-03",
         Gate::Mvp,
@@ -1716,8 +1700,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             EXEC_WIN,
             "fx_win_03_file_held_open_by_another_process_is_skipped_and_named",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-04",
         Gate::Mvp,
@@ -1730,8 +1713,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_04_long_paths"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-05",
         Gate::Mvp,
@@ -1749,8 +1731,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_REMOVE_WIN, "fx_win_05_short_names_resolve_by_identity"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-06",
         Gate::Mvp,
@@ -1764,8 +1745,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_win_06_recycle_bin_record_v2_round_trips",
             ),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx("FX-WIN-07", Gate::V1_0, "W", Mode::Manual, Status::Deferred),
     fx(
         "FX-WIN-08",
@@ -1776,9 +1756,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_WIN,
             "fx_win_08_scan_completes_with_defender_on_and_timing_is_recorded",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
-    fx("FX-WIN-09", Gate::V1_0, "W", Mode::Nightly, Status::Deferred),
+    ),
+    fx(
+        "FX-WIN-09",
+        Gate::V1_0,
+        "W",
+        Mode::Nightly,
+        Status::Deferred,
+    ),
     fx(
         "FX-WIN-10",
         Gate::Mvp,
@@ -1791,8 +1776,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_10_reserved_names_are_files"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-11",
         Gate::Mvp,
@@ -1805,8 +1789,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(EXEC_WIN, "fx_win_11_read_only_single_file_item_is_kept"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-12",
         Gate::Mvp,
@@ -1816,8 +1799,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_WIN,
             "fx_win_12_database_in_local_app_data_with_owner_only_acl",
         )]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     // §3.11 macOS-specific (FX-MAC)
     fx(
         "FX-MAC-01",
@@ -1833,7 +1815,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         "M",
         Mode::Ci,
         Status::Implemented(&[
-            t(ENGINE_ROOTS, "fx_mac_03_firmlinked_root_is_not_counted_twice"),
+            t(
+                ENGINE_ROOTS,
+                "fx_mac_03_firmlinked_root_is_not_counted_twice",
+            ),
             t(
                 ENGINE_ROOTS,
                 "fx_mac_03_root_nested_through_an_alias_is_not_counted_twice",
@@ -1843,8 +1828,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_mac_03_system_volumes_data_alias_is_not_counted_twice",
             ),
         ]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
     fx(
         "FX-MAC-04",
         Gate::Mvp,
@@ -1854,8 +1838,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_MAC,
             "fx_mac_04_bundles_are_folders_and_not_candidates_unless_a_rule_matches",
         )]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
     fx(
         "FX-MAC-05",
         Gate::Mvp,
@@ -1869,8 +1852,9 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(TRASH, "fx_mac_05_external_volume_uses_its_trashes"),
             t(TRASH, "fx_mac_05_missing_trashes_is_created"),
         ]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
+    // Verified on macOS: the hdiutil disk-image test passed on macos-latest (scull-archive#250,
+    // run 41336894966); the trash.rs tests run in the 3-OS CI on every push to phase2.
     fx("FX-MAC-06", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
     // §3.12 Linux-specific (FX-LNX)
     fx(
@@ -1901,18 +1885,15 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_lnx_02_trash_on_a_real_second_volume_uses_its_topdir",
             ),
             t(
-                    TRASH,
-                    "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
-                ),
-                t(
-                    TRASH,
-                    "fx_lnx_02_shared_sticky_trash_uses_uid_subdirectory",
-                ),
-                t(TRASH, "fx_lnx_02_unsafe_shared_trash_is_skipped"),
-                t(
-                    TRASH,
-                    "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
-                ),
+                TRASH,
+                "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
+            ),
+            t(TRASH, "fx_lnx_02_shared_sticky_trash_uses_uid_subdirectory"),
+            t(TRASH, "fx_lnx_02_unsafe_shared_trash_is_skipped"),
+            t(
+                TRASH,
+                "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
+            ),
         ]),
     ),
     fx(
@@ -2012,8 +1993,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_data_03_database_wal_shm_are_0600_and_new_dir_is_0700",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-04",
         Gate::Mvp,
@@ -2023,8 +2003,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             CLI_DATA,
             "fx_data_04_purge_all_removes_exactly_sculls_files",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-05",
         Gate::Mvp,
@@ -2062,8 +2041,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(STORE_DATA, "fx_data_06_damaged_pages_are_detected"),
             t(STORE_DATA, "fx_data_06_restore_refuses_a_bad_backup"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-07",
         Gate::Mvp,
@@ -2087,8 +2065,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_data_07_doctor_report_preview_then_consent_to_write",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.14 Output contracts (FX-OUT)
     fx(
         "FX-OUT-01",
@@ -2109,42 +2086,36 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-OUT-02",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 251,
-            reason: "the binary returns every documented code (0, 1, 2, 3, 4, 5, 6, and 130 on \
-                     Unix, also for Ctrl-C before the MCP handshake); 130 is not exercised on \
-                     Windows (no console Ctrl-C injection in the test)",
-            partial: &[
-                t(
-                    E2E_OUT,
-                    "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
-                ),
-                t(
-                    E2E_OUT,
-                    "fx_out_02_binary_returns_the_documented_exit_codes",
-                ),
-            ],
-        },
-    )
-    .pending_ci(PHASE2_PENDING),
+        Status::Implemented(&[
+            t(
+                E2E_OUT,
+                "fx_out_02_prd_exit_code_table_is_exactly_the_exit_code_enum",
+            ),
+            t(
+                E2E_OUT,
+                "fx_out_02_binary_returns_the_documented_exit_codes",
+            ),
+        ]),
+    ),
     fx(
         "FX-OUT-03",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[
-            t(E2E_OUT, "fx_out_03_cli_and_mcp_give_identical_classifications"),
+            t(
+                E2E_OUT,
+                "fx_out_03_cli_and_mcp_give_identical_classifications",
+            ),
             t(E2E_OUT, "fx_out_03_cli_and_mcp_plan_identical_contents"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
 ];
 
 /// The registered fixture with this ID.

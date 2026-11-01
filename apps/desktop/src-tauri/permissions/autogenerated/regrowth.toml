@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-regrowth"
+description = "Enables the regrowth command without any pre-configured scope."
+commands.allow = ["regrowth"]
+
+[[permission]]
+identifier = "deny-regrowth"
+description = "Denies the regrowth command without any pre-configured scope."
+commands.deny = ["regrowth"]

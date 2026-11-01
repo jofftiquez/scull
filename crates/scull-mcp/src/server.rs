@@ -73,6 +73,10 @@ pub struct ScullMcp {
     plans: Option<Arc<PlanTools>>,
     /// Limits on `prepare_cleanup` (`mcp.max_pending_plans`, `mcp.prepare_per_minute`).
     plan_limits: PlanLimits,
+    /// The plan tools for in-process callers (`scull ask`, AI-05), when enabled
+    /// ([`ScullMcp::with_in_process_plan_tools`]): prepare and read-only views, never
+    /// execution. Separate from [`ScullMcp::plans`]: the MCP surface is unchanged.
+    pub(crate) in_process_plans: Option<(Arc<PlanTools>, Option<scull_storage::AgentClient>)>,
 }
 
 impl ScullMcp {
@@ -116,6 +120,7 @@ impl ScullMcp {
             destructive_config,
             plans: None,
             plan_limits,
+            in_process_plans: None,
         })
     }
 
@@ -163,6 +168,17 @@ impl ScullMcp {
                 limits,
             )));
         }
+        if let Some((p, client)) = self.in_process_plans.take() {
+            self.in_process_plans = Some((
+                Arc::new(PlanTools::new(
+                    p.runner.clone(),
+                    p.principal.clone(),
+                    p.data_dir.clone(),
+                    limits,
+                )),
+                client,
+            ));
+        }
         self
     }
 
@@ -179,6 +195,16 @@ impl ScullMcp {
     /// The handlers' shared state (for in-process calls, [`crate::local`]).
     pub(crate) fn ctx(&self) -> &Ctx {
         &self.ctx
+    }
+
+    /// `mcp.destructive` from the user config file this server was built with.
+    pub(crate) fn destructive_config(&self) -> bool {
+        self.destructive_config
+    }
+
+    /// The configured `prepare_cleanup` limits.
+    pub(crate) fn plan_limits(&self) -> PlanLimits {
+        self.plan_limits
     }
 
     /// The configured allowlist (before narrowing to client roots).
@@ -306,6 +332,11 @@ impl ServerHandler for ScullMcp {
         }
         let plans_enabled = self.plans.is_some();
         let allow = self.effective_allowlist(&context).await;
+        // The client's own `clientInfo` from `initialize` (#78): recorded with agent plans as
+        // a claim for the human to see, sanitized; never trusted for anything.
+        let client = context.peer.peer_info().and_then(|i| {
+            scull_storage::AgentClient::new(&i.client_info.name, Some(&i.client_info.version))
+        });
         let args = request.arguments.unwrap_or_default();
         let cancel = CancelToken::new();
         let watcher = {
@@ -325,7 +356,7 @@ impl ServerHandler for ScullMcp {
         let joined = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let out = match &plans {
-                Some(p) => plan_tools::call(&ctx, p, &allow, &name, args, &cancel),
+                Some(p) => plan_tools::call(&ctx, p, &allow, &name, args, &cancel, client.as_ref()),
                 None => tools::call(&ctx, &allow, &name, args, &cancel),
             };
             if plans_enabled && name == "get_status" {

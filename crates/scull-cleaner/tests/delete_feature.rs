@@ -127,6 +127,8 @@ fn interface_crates_do_not_enable_the_delete_feature() {
 /// executes approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01), and
 /// `scull headroom` (creates and releases scull's own reserve file, PRO-06).
 const CLI_CLEANER_MODULES: &[&str] = &[
+    // Opt-in auto-policies (D-11): S0 quarantines only, through `Executor::execute_plan`.
+    "cmd/auto_policy.rs",
     "cmd/data.rs",
     "cmd/headroom.rs",
     "cmd/clean.rs",

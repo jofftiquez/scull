@@ -1,4 +1,5 @@
-//! Executing approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01): the
+//! Executing approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01) and
+//! `scull approve <plan-id> --run`: the
 //! [`scull_mcp::CleanupRunner`] backed by `scull-cleaner`'s Executor. `scull-mcp` never
 //! depends on the cleaner (SAFE-10); the CLI binary wires the two together.
 //!
@@ -19,12 +20,19 @@
 
 use super::exec;
 use scull_cleaner::trash::TrashLocations;
-use scull_cleaner::{ItemOutcome, PlanContext, QuarantineSettings, RemoveOutcome, Revalidation};
-use scull_core::ScullError;
+use scull_cleaner::{
+    ItemOutcome, PlanContext, QuarantineSettings, RefusalSource, RemoveOutcome, Revalidation,
+};
+use scull_core::{OperationId, ScullError};
 use scull_engine::now_unix;
 use scull_mcp::{CleanupRunner, RunItem, RunRequest, RunSummary};
 use scull_storage::{OperationEnd, OperationStart};
 use std::io::Write;
+
+/// Debug builds only: set to make a run fail after its items were handled, before the
+/// operation's audit is finished (tests of what `scull approve --run` reports then).
+#[cfg(debug_assertions)]
+pub const TEST_FAIL_FINISH_ENV: &str = "SCULL_TEST_FAIL_FINISH";
 
 /// The Executor-backed runner.
 #[derive(Debug, Clone)]
@@ -33,15 +41,63 @@ pub struct ExecutorRunner {
     pub quarantine: QuarantineSettings,
     /// The Trash fallback (the sandbox's under the test harness).
     pub trash: TrashLocations,
+    /// Who asked for the run: the agent through `scull mcp serve`, or the human through
+    /// `scull approve --run` (decides how refusals are attributed in the audit).
+    pub caller: RunCaller,
+}
+
+/// Who asked an [`ExecutorRunner`] to run an agent plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunCaller {
+    /// The agent's `execute_cleanup` (`scull mcp serve`): a refusal to take the lock is an
+    /// audited `execute_refused` by `mcp`; the Executor's gate records as `executor`.
+    Agent,
+    /// The human's `scull approve --run`: the command records its own outcome; the
+    /// Executor's gate records as `cli` through the `terminal` channel.
+    HumanRun,
+}
+
+/// An [`ExecutorRunner::run_tracked`] that failed: the error, and the operation it had
+/// started, if it got that far (then items may have been handled before it stopped).
+#[derive(Debug)]
+pub struct RunFailure {
+    /// What went wrong.
+    pub error: ScullError,
+    /// The operation this run started (its approval consumed), if any.
+    pub operation_id: Option<OperationId>,
 }
 
 impl CleanupRunner for ExecutorRunner {
     fn run(&self, req: RunRequest<'_>) -> Result<RunSummary, ScullError> {
+        self.run_tracked(req).map_err(|f| f.error)
+    }
+}
+
+impl ExecutorRunner {
+    /// [`CleanupRunner::run`], telling a failure before the operation started (nothing was
+    /// handled, the approval not consumed by this run) from one after.
+    pub fn run_tracked(&self, req: RunRequest<'_>) -> Result<RunSummary, RunFailure> {
+        let mut started: Option<OperationId> = None;
+        self.run_inner(req, &mut started)
+            .map_err(|error| RunFailure {
+                error,
+                operation_id: started,
+            })
+    }
+
+    fn run_inner(
+        &self,
+        req: RunRequest<'_>,
+        started: &mut Option<OperationId>,
+    ) -> Result<RunSummary, ScullError> {
         exec::check_not_elevated(exec::elevation(), false, "execute_cleanup")?;
         let executor = match exec::lock() {
             Ok(e) => e,
             Err(e) => {
                 // Audited (PRD §13.3 step 5); the approval is not spent.
+                if self.caller == RunCaller::HumanRun {
+                    return Err(e);
+                }
                 let _ = scull_mcp::approval::record_execute_refusal(
                     req.store,
                     Some(req.plan.id()),
@@ -52,6 +108,13 @@ impl CleanupRunner for ExecutorRunner {
                 );
                 return Err(e);
             }
+        };
+        let executor = match self.caller {
+            RunCaller::Agent => executor,
+            RunCaller::HumanRun => executor.with_refusal_source(RefusalSource {
+                source: "cli",
+                channel: "terminal",
+            }),
         };
         let recovered = executor.recover(req.store, now_unix())?;
         for op in &recovered.operations {
@@ -81,6 +144,7 @@ impl CleanupRunner for ExecutorRunner {
             )?
             .with_quarantine(self.quarantine.clone())
             .with_trash(self.trash.clone());
+        *started = Some(operation_id.clone());
         let revalidation = Revalidation::new(req.engine, req.roots);
         let ctx = PlanContext {
             now_unix: now_unix(),
@@ -95,6 +159,15 @@ impl CleanupRunner for ExecutorRunner {
                     return Err(e);
                 }
             };
+        // Tests only (debug builds): fail as if the operation's audit could not be finished,
+        // after the items were handled (an error after the operation started).
+        #[cfg(debug_assertions)]
+        if std::env::var_os(TEST_FAIL_FINISH_ENV).is_some_and(|v| !v.is_empty()) {
+            return Err(ScullError::new(
+                scull_core::ErrorKind::Io,
+                "the operation's audit could not be finished (test hook)",
+            ));
+        }
         op.finish(
             if report.cancelled {
                 OperationEnd::Cancelled

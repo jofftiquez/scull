@@ -16,8 +16,9 @@
 //! an elevated shell).
 //!
 //! The scheduled command is `scull check --quiet --no-progress`: read-only apart from scull's
-//! own history and its ready-to-review plan. It never deletes anything (unattended cleanup is
-//! a separate, later opt-in, D-11).
+//! own history and its ready-to-review plan. It never deletes anything. Only if the user
+//! enabled an auto-policy in their config file (D-11, off by default) does it move idle S0
+//! build outputs into quarantine, restorable with `scull restore`.
 
 use scull_platform::scheduler::Scheduler;
 use std::path::{Path, PathBuf};

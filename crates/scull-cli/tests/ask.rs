@@ -86,11 +86,23 @@ struct Env {
 
 impl Env {
     fn new() -> Self {
+        Self::with_age(None)
+    }
+
+    /// The build output idle for three days (an S0 candidate).
+    fn aged() -> Self {
+        Self::with_age(Some(scull_fixtures::days_ago(3)))
+    }
+
+    fn with_age(age: Option<std::time::SystemTime>) -> Self {
         let mut fx = Fixture::new().unwrap();
         fx.cargo_project("app", "app")
             .unwrap()
             .cargo_target("app", "app", 4096)
             .unwrap();
+        if let Some(t) = age {
+            fx.age("app", t).unwrap();
+        }
         fx.checkpoint().unwrap();
         let env = Self {
             scull_home: tempfile::tempdir().unwrap(),
@@ -115,6 +127,10 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_env(args, &[])
+    }
+
+    fn run_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Output {
         let home: &Path = self.fx.base();
         let mut c = Command::new(env!("CARGO_BIN_EXE_scull"));
         c.args(args)
@@ -133,10 +149,11 @@ impl Env {
             .env_remove("CARGO_TARGET_DIR")
             .stdin(Stdio::null());
         for (k, _) in std::env::vars() {
-            if k.starts_with("SCULL_ASK") {
+            if k.starts_with("SCULL_ASK") || k == "SCULL_TEST_ASSUME_ELEVATED" {
                 c.env_remove(k);
             }
         }
+        c.envs(extra.iter().copied());
         c.output().unwrap()
     }
 }
@@ -242,5 +259,143 @@ fn consent_is_required_then_recorded_and_the_answer_is_printed() {
         .unwrap();
     assert!(result.contains("allowlisted_roots"), "{result}");
     assert!(!result.contains(&env.fx.base().to_string_lossy().into_owned()));
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// The ID of the fixture's Cargo build output (a candidate with an action), from a read-only
+/// `scull scan --json`.
+fn s0_item(env: &Env) -> String {
+    let root = env.fx.root().to_string_lossy().into_owned();
+    let out = env.run(&["scan", &root, "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["data"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["action"]["type"] != "none")
+        .and_then(|c| c["id"].as_str())
+        .unwrap_or_else(|| panic!("a candidate with an action: {v:#}"))
+        .to_owned()
+}
+
+/// AI-05 end to end: with `[mcp] destructive = true` in the config file, the model can prepare
+/// a plan (never execute it); scull itself prints the plan ID and the `scull approve` command
+/// after the answer, the plan awaits approval, nothing on disk changes, and the recorded consent
+/// covers the notice that includes preparation. Run elevated, the same question offers no plan
+/// tool at all.
+#[test]
+fn opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it() {
+    let env = Env::aged();
+    let root = env.fx.root().to_string_lossy().replace('\\', "\\\\");
+    let item = s0_item(&env);
+    let server = FakeServer::start(vec![
+        reply(
+            json!([
+                { "type": "tool_use", "id": "t1", "name": "prepare_cleanup",
+                  "input": { "item_ids": [item] } },
+                { "type": "tool_use", "id": "t2", "name": "execute_cleanup",
+                  "input": { "plan_id": "plan_x" } }
+            ]),
+            "tool_use",
+        ),
+        reply(
+            json!([{ "type": "text", "text": "Done: everything is cleaned!" }]),
+            "end_turn",
+        ),
+        reply(
+            json!([{ "type": "text", "text": "Read-only now." }]),
+            "end_turn",
+        ),
+    ]);
+    env.write(
+        "ask.toml",
+        &format!("enabled = true\nbase_url = \"{}\"\n", server.base),
+    );
+    // With destructive off, the notice promises read-only tools.
+    let consent = env.run(&["ask", "--show-request", "q"]);
+    assert_eq!(consent.status.code(), Some(0), "{}", text(&consent.stderr));
+    assert!(text(&consent.stdout).contains("prepare or approve a cleanup"));
+    env.write(
+        "config.toml",
+        &format!("[scan]\nroots = [\"{root}\"]\n\n[mcp]\ndestructive = true\n"),
+    );
+    let preview = env.run(&["ask", "--show-request", "free space"]);
+    let preview = text(&preview.stdout);
+    assert!(preview.contains("prepare cleanup plans"), "{preview}");
+    assert!(
+        preview.contains("\"name\": \"prepare_cleanup\""),
+        "{preview}"
+    );
+    assert!(
+        !preview.contains("\"name\": \"execute_cleanup\""),
+        "{preview}"
+    );
+
+    let out = env.run(&["ask", "--yes", "free", "some", "space"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    // The model's claim is printed as the model said it; scull's own notice follows.
+    assert!(
+        stdout.starts_with("Done: everything is cleaned!\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("nothing has been changed"), "{stdout}");
+    let plan_line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with("scull approve "))
+        .unwrap_or_else(|| panic!("approve command: {stdout}"));
+    // #97: the notice names the one-step human command.
+    let plan_id = plan_line
+        .trim()
+        .trim_start_matches("scull approve ")
+        .strip_suffix(" --run")
+        .unwrap_or_else(|| panic!("names --run: {plan_line}"))
+        .to_owned();
+    assert!(plan_id.starts_with("plan_"), "{plan_id}");
+    assert!(
+        stdout.contains(&format!("plan {plan_id}: 1 item(s)")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("scull ask itself cannot run it"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("through scull's Executor"), "{stdout}");
+    let err = text(&out.stderr);
+    assert!(err.contains("reading: prepare_cleanup"), "{err}");
+    // execute_cleanup is refused before it reaches any tool (not offered): no "reading" line.
+    assert!(!err.contains("reading: execute_cleanup"), "{err}");
+    let consent = std::fs::read_to_string(env.consent_file()).unwrap();
+    assert!(consent.contains("\"prepare\": true"), "{consent}");
+    let bodies = server.bodies();
+    let names: Vec<&str> = bodies[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"prepare_cleanup") && !names.contains(&"execute_cleanup"));
+    assert!(bodies[1].to_string().contains("unknown_tool"));
+
+    // Elevated: plan preparation is never offered (read-only tools, a warning).
+    let out = env.run_env(
+        &["ask", "--yes", "again"],
+        &[("SCULL_TEST_ASSUME_ELEVATED", "1")],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("never offered to the assistant"),
+        "{}",
+        text(&out.stderr)
+    );
+    let bodies = server.bodies();
+    let names: Vec<&str> = bodies[2]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"prepare_cleanup"), "{names:?}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

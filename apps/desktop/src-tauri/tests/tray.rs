@@ -1,4 +1,4 @@
-//! The menu bar widget's wiring (P4-UI-01): the capability covers both windows, the main
+//! The menu bar widget's wiring (P4-UI-01): the capabilities cover both windows, the main
 //! window's label is the one the tray shows, and the widget page is part of the frontend build.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,15 +12,24 @@ fn read(rel: &str) -> String {
 
 #[test]
 fn capability_covers_the_main_window_and_the_widget_only() {
-    let v: serde_json::Value = serde_json::from_str(&read("capabilities/default.json")).unwrap();
-    let windows: Vec<&str> = v["windows"]
-        .as_array()
+    // One capability per window (P4-MCP-02: the approval commands are the main window's only;
+    // bridge/tests/commands.rs checks the grants), together covering exactly the two windows.
+    let windows_of = |file: &str| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(&read(file)).unwrap();
+        assert_eq!(v["permissions"][0], "core:default", "{file}");
+        v["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(windows_of("capabilities/default.json"), [MAIN_LABEL]);
+    assert_eq!(windows_of("capabilities/menubar.json"), [WIDGET_LABEL]);
+    let files = std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities"))
         .unwrap()
-        .iter()
-        .map(|w| w.as_str().unwrap())
-        .collect();
-    assert_eq!(windows, [MAIN_LABEL, WIDGET_LABEL]);
-    assert_eq!(v["permissions"], serde_json::json!(["core:default"]));
+        .count();
+    assert_eq!(files, 2, "no other capability");
 }
 
 #[test]

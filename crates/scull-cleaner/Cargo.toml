@@ -34,7 +34,16 @@ scull-detectors.workspace = true
 scull-scanner.workspace = true
 tempfile = "3"
 
+[features]
+# The Executor's bare per-item calls (`delete`, `delete_observed`, `trash`, `trash_checked`):
+# no operation, journal, audit, revalidation or watermark. For this crate's and the fixtures'
+# tests only; without it they are crate-private, so a frontend can reach deletion only through
+# `execute_plan` and the operations (SAFE-10, #111 review). No frontend enables it.
+bare-api = []
+
 [dev-dependencies]
+# This crate's own integration tests exercise the bare calls.
+scull-cleaner = { path = ".", features = ["bare-api"] }
 scull-fixtures.workspace = true
 scull-git.workspace = true
 serde_json.workspace = true

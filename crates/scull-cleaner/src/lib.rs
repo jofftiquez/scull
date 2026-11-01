@@ -89,6 +89,20 @@
 //!
 //! * the Windows quarantine/restore moves (#71/#72) and the CLI tests that execute them are
 //!   implemented but have not run on Windows CI yet.
+/// An Executor method that is `pub` only with the `bare-api` feature (tests), else
+/// crate-private: the bare per-item calls that skip the operation, journal and audit.
+macro_rules! bare_api {
+    ($(#[$m:meta])* fn $name:ident $($rest:tt)*) => {
+        #[cfg(feature = "bare-api")]
+        $(#[$m])*
+        pub fn $name $($rest)*
+        #[cfg(not(feature = "bare-api"))]
+        #[allow(dead_code)]
+        $(#[$m])*
+        pub(crate) fn $name $($rest)*
+    };
+}
+
 mod execution;
 mod executor;
 pub mod headroom;
@@ -107,8 +121,8 @@ pub mod trash;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{
-    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, TOOL_NATIVE_UNSUPPORTED,
-    is_docker_command, is_quick_clean_tool,
+    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, RefusalSource,
+    TOOL_NATIVE_UNSUPPORTED, is_docker_command, is_quick_clean_tool,
 };
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
@@ -120,7 +134,7 @@ pub use quarantine::{
 };
 pub use recover::{RecoveredItem, RecoveredOperation, Recovery, RecoveryReport};
 pub use restore::{RESTORED_SUFFIX, RestoreOutcome, RestoreReport};
-pub use revalidate::{Revalidated, Revalidation, Skip};
+pub use revalidate::{Condition, Revalidated, Revalidation, Skip};
 pub use scull_platform::quarantine::QUARANTINE_DIR_NAME;
 pub use scull_platform::remove::{
     AbortReason, Anomaly, RemoveOutcome, RemoveReport, RemovedCounts, SkipReason, SkippedEntry,

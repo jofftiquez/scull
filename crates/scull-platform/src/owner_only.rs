@@ -259,3 +259,17 @@ pub fn ensure_owner_only(path: &Path) -> Result<()> {
         ))
     }
 }
+
+/// Whether `path` (not followed) carries an extended ACL its permission bits don't show:
+/// macOS ACLs (`chmod +a`, `ls -le`), of any kind, allow or deny. `false` on Linux (a POSIX
+/// ACL's mask shows in the group bits, see [`ensure_owner_only`]) and on Windows (the DACL is
+/// what [`ensure_owner_only`] reads). For callers that must be sure no other account can write
+/// an entry (the auto-policy config check, P5-PRO-02) and so treat any such ACL as a grant.
+///
+/// # Errors
+///
+/// [`Operation::CheckPermissions`] with the I/O error (e.g. the path does not exist).
+pub fn has_extended_acl(path: &Path) -> Result<bool> {
+    native::has_extended_acl(path)
+        .map_err(|e| PlatformError::from_io(Operation::CheckPermissions, path, e))
+}

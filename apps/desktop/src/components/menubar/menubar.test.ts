@@ -6,7 +6,6 @@ import MenuBarWidget from '../../screens/MenuBar/MenuBarWidget.vue';
 import { BRIDGE_KEY, type DesktopStatus, type ScullBridge } from '../../bridge';
 import { createMockBridge, MOCK_DATA, MOCK_DRIVES } from '../../bridge/mock';
 import { createTauriWindowCommands, NAVIGATE_EVENT, WINDOW_COMMANDS, type TauriTransport } from '../../bridge/tauri';
-import { QUICK_CLEAN_UNAVAILABLE } from '../overview/quickClean';
 import { designMenuBarBridge, wantsDesign } from './designScenario';
 import { steadyForecast } from '../../bridge/forecastMock';
 import {
@@ -220,19 +219,16 @@ describe('the widget', () => {
     wrapper.unmount();
   });
 
-  it('inside Tauri Quick Clean is refused and nothing changes (the desktop never deletes)', async () => {
+  it('inside Tauri the widget never cleans: Quick Clean opens the main window to confirm there', async () => {
     const tauriLike: ScullBridge = { ...createMockBridge(), kind: 'tauri' };
     const caches = vi.spyOn(tauriLike, 'caches');
-    const { wrapper } = mountWidget(tauriLike);
+    const { wrapper, win } = mountWidget(tauriLike);
     await vi.waitFor(() => expect(wrapper.find('[data-testid="quick-clean"]').exists()).toBe(true));
     expect(caches).toHaveBeenCalled();
     await wrapper.get('[data-testid="quick-clean"]').trigger('click');
-    await vi.waitFor(() => expect(wrapper.get('main').attributes('data-phase')).toBe('unavailable'));
-    expect(text(wrapper, 'refused')).toBe(QUICK_CLEAN_UNAVAILABLE);
-    expect(text(wrapper, 'free')).toBe('41.2 GiB');
-    expect(text(wrapper, 'quick-clean')).toBe('OK');
-    await wrapper.get('[data-testid="quick-clean"]').trigger('click');
+    expect(win.opened).toEqual(['/']);
     expect(wrapper.get('main').attributes('data-phase')).toBe('idle');
+    expect(text(wrapper, 'free')).toBe('41.2 GiB');
     wrapper.unmount();
   });
 

@@ -257,10 +257,46 @@ impl Env {
 /// `SCULL_TEST_ASSUME_ELEVATED` through [`Env::cmd`], which never adds the flag.
 fn allow_root_if_elevated<'a>(args: &[&'a str]) -> Vec<&'a str> {
     let mut all = args.to_vec();
-    if args.first() == Some(&"clean") && scull_platform::is_elevated().blocks_destructive() {
+    if args.first() == Some(&"clean") && needs_allow_root() {
         all.push("--allow-root");
     }
     all
+}
+
+/// Set by CI's standard-user run on Windows (`scripts/ci/run-as-standard-user.ps1`, #65): the
+/// test process must then be non-elevated, so `--allow-root` is never added and the refusal
+/// paths of a normal user run for real; an elevated process fails instead of quietly passing
+/// the flag.
+fn needs_allow_root() -> bool {
+    let elevated = scull_platform::is_elevated().blocks_destructive();
+    if std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_some_and(|v| !v.is_empty()) {
+        assert!(
+            !elevated,
+            "SCULL_TEST_REQUIRE_NOT_ELEVATED is set but this process runs elevated"
+        );
+        static MARK: std::sync::Once = std::sync::Once::new();
+        MARK.call_once(|| {
+            eprintln!(
+                "RUN {}: not elevated, no --allow-root (standard user)",
+                env!("CARGO_CRATE_NAME")
+            );
+        });
+    }
+    elevated
+}
+
+/// `path` without Windows' verbatim prefix (`\\?\C:\...` → `C:\...`), so a canonicalized
+/// path and one scull reports compare equal whichever spelling each side used (it depends on
+/// whether the temp folder had 8.3 short names to expand, #65). Unchanged elsewhere.
+fn plain(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
 }
 
 fn stderr(o: &Output) -> String {
@@ -336,9 +372,9 @@ fn preview_lists_tools_commands_and_note() {
     );
     every_tool_accounted_for(&v);
     for t in d["tools"].as_array().unwrap() {
-        let bin = Path::new(t["binary"].as_str().unwrap());
+        let bin = plain(Path::new(t["binary"].as_str().unwrap()));
         assert!(
-            bin.starts_with(std::fs::canonicalize(env.tools()).unwrap()),
+            bin.starts_with(plain(&std::fs::canonicalize(env.tools()).unwrap())),
             "{t:#}"
         );
         assert!(
@@ -461,7 +497,7 @@ fn confirm_prunes_with_trusted_tools_in_private_sandbox() {
         assert_eq!(c.argv[..2], ["cache".to_owned(), "verify".to_owned()]);
         assert_eq!(c.argv[2], "--cache");
         assert!(
-            c.cwd.starts_with(&sandbox_base),
+            plain(&c.cwd).starts_with(plain(&sandbox_base)),
             "sandbox under scull's state: {:?}",
             c.cwd
         );
@@ -1018,6 +1054,10 @@ fn fx_qc_05_remove_orphaned_flag_through_the_binary() {
                 serde_json::json!(["pnpm"]),
                 "{v:#}"
             );
+            // Not a skip: both outcomes are asserted. Where whether the store is in use can't
+            // be observed (Linux and macOS CI: "could not check whether it is in use"), it is
+            // S2 and must stay unremovable; the removal itself is covered with an injected
+            // idle probe (fx_qc_05_orphaned_caches_removed_only_per_confirmed_tool).
             println!(
                 "NOTE: the pnpm store is not removable here (activity not observable): {}",
                 tool(&v, "skipped", "pnpm").unwrap()

@@ -1,4 +1,4 @@
-//! Trash fallback fixtures (P2-EXEC-07): [`Executor::trash`] moves one verified item into a
+//! Trash fallback fixtures (P2-EXEC-07): `Executor::trash` moves one verified item into a
 //! trash directory on its own volume. Every test injects the trash locations
 //! ([`TrashLocations`]) into its own `scull-fixtures` temp tree, so the user's real Trash is
 //! never touched, keeps a canary beside the root and checks the invariants (I-1..I-8 run; I-2
