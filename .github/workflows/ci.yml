@@ -76,7 +76,7 @@ jobs:
         run: >-
           ./scripts/ci/run-as-standard-user.ps1
           -Tests scull-cli/mcp_approval,scull-cli/clean,scull-cli/clean_caches,scull-cli/history_restore,scull-fixtures/fx_out
-          -MustRun agent_plan_runs_only_after_the_human_approves,approve_prompt_shows_the_plan_and_needs_the_shown_code,approve_without_a_terminal_creates_no_machine_id,clean,clean_caches,history_restore,fx_out
+          -MustRun agent_plan_runs_only_after_the_human_approves,approve_prompt_shows_the_plan_and_needs_the_shown_code,approve_without_a_terminal_creates_no_machine_id,revoke_through_the_cli_stops_the_agent,clean,clean_caches,history_restore,fx_out
       - name: doc
         if: runner.os == 'Linux'
         env:
