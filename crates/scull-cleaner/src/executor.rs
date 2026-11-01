@@ -48,6 +48,28 @@ pub struct DeleteReport {
 pub struct Executor {
     lock: Option<ExecutionLock>,
     hook: Option<StepHook>,
+    refusals: RefusalSource,
+}
+
+/// Who an agent plan's refused start is attributed to in the audit (`source`, `channel` of
+/// the [`scull_storage::AgentAuditEvent`]). The default is the Executor's own gate on behalf
+/// of the MCP server (`executor`, `mcp`); `scull approve --run` runs agent plans for the human
+/// in their terminal and records `cli`, `terminal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefusalSource {
+    /// What recorded it (`executor`, `cli`, ...): a stable code.
+    pub source: &'static str,
+    /// The channel the run came through (`mcp`, `terminal`, ...): a stable code.
+    pub channel: &'static str,
+}
+
+impl Default for RefusalSource {
+    fn default() -> Self {
+        Self {
+            source: "executor",
+            channel: "mcp",
+        }
+    }
 }
 
 impl std::fmt::Debug for Executor {
@@ -55,6 +77,7 @@ impl std::fmt::Debug for Executor {
         f.debug_struct("Executor")
             .field("lock", &self.lock)
             .field("step_hook", &self.hook.is_some())
+            .field("refusals", &self.refusals)
             .finish()
     }
 }
@@ -74,7 +97,20 @@ impl Executor {
         Ok(Self {
             lock: Some(ExecutionLock::acquire(opts)?),
             hook: None,
+            refusals: RefusalSource::default(),
         })
+    }
+
+    /// Attribute refused starts of agent plans to `source` (see [`RefusalSource`]).
+    #[must_use]
+    pub fn with_refusal_source(mut self, source: RefusalSource) -> Self {
+        self.refusals = source;
+        self
+    }
+
+    /// Who refused starts of agent plans are attributed to.
+    pub(crate) fn refusal_source(&self) -> RefusalSource {
+        self.refusals
     }
 
     /// Calls `hook` at every [`StepPoint`](crate::StepPoint) of plan execution (journal

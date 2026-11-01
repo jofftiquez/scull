@@ -248,27 +248,43 @@ fn ctrl_c_exits_130_before_and_after_initialize() {
 
     for handshake in [false, true] {
         let mut s = Session::start(env.command(fx.base(), &[]));
+        let mut stderr = BufReader::new(s.child.stderr.take().unwrap());
+        let mut err = String::new();
         if handshake {
             s.initialize();
         } else {
-            // Wait until the server is up (the disclosure is on stderr before it serves);
-            // a fixed pause keeps the test simple and the handler installed long before.
-            std::thread::sleep(Duration::from_millis(700));
+            // The first run of this SCULL_HOME prints the privacy notice before it serves, and
+            // after the Ctrl-C handler is installed (`commands::run` installs it first): once a
+            // line is on stderr, the signal is handled, not fatal. No fixed pause (#75).
+            assert!(stderr.read_line(&mut err).unwrap() > 0, "privacy notice");
         }
         let pid = s.child.id().to_string();
         let k = Command::new("kill").args(["-INT", &pid]).status().unwrap();
         assert!(k.success(), "kill -INT {pid}");
         let sent = Instant::now();
-        // stdin stays open: the server must stop on the signal, not on EOF.
-        let status = s.child.wait().unwrap();
+        // stdin stays open: the server must stop on the signal, not on EOF. `Child::wait`
+        // closes the child's stdin before waiting, so the handle is kept out of `child` until
+        // the server has exited (#75: with stdin closed, EOF raced the signal and could end the
+        // session cleanly, exit 0, before the Ctrl-C handler thread had set the flag). A
+        // server that ignores the signal is killed after 10 s and fails the test instead of
+        // hanging it.
+        let stdin = s.child.stdin.take();
+        let mut child = s.child;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let status = child.wait();
+            let _ = tx.send(());
+            status
+        });
+        if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+            let _ = Command::new("kill").args(["-KILL", &pid]).status();
+            let _ = waiter.join();
+            panic!("handshake={handshake}: still running 10 s after Ctrl-C with stdin open");
+        }
+        let status = waiter.join().unwrap().unwrap();
         let elapsed = sent.elapsed();
-        let mut err = String::new();
-        s.child
-            .stderr
-            .take()
-            .unwrap()
-            .read_to_string(&mut err)
-            .unwrap();
+        drop(stdin);
+        stderr.read_to_string(&mut err).unwrap();
         assert_eq!(status.code(), Some(130), "handshake={handshake}: {err}");
         assert!(
             err.contains("cancelled by user"),
@@ -282,7 +298,6 @@ fn ctrl_c_exits_130_before_and_after_initialize() {
             elapsed < Duration::from_secs(10),
             "handshake={handshake}: stopped promptly, took {elapsed:?}"
         );
-        drop(s.child.stdin.take());
     }
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

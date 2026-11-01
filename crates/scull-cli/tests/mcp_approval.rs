@@ -1161,16 +1161,18 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
 // ---------------------------------------------------------------------------------------------
 
 /// Whether the `--run` tests can drive a real terminal: they need tmux (its server is not a
-/// child of the test, so the approval isn't refused as agent- or PTY-driven). Required on CI,
-/// where a silent skip would hide the tests; skipped locally without it.
+/// child of the test, so the approval isn't refused as agent- or PTY-driven). **Required on
+/// Linux CI** (ubuntu runners ship tmux), where a silent skip would hide the tests. macOS CI
+/// doesn't install tmux, so there these cases skip with a message (the `script`-based PTY
+/// refusal still runs); skipped locally without tmux too.
 #[cfg(unix)]
 fn have_tmux(test: &str) -> bool {
     if Command::new("tmux").arg("-V").output().is_ok() {
         return true;
     }
     assert!(
-        std::env::var_os("CI").is_none(),
-        "{test}: tmux is required on CI"
+        !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+        "{test}: tmux is required on Linux CI"
     );
     eprintln!("SKIP {test}: tmux is not installed");
     false
@@ -1658,4 +1660,48 @@ fn approve_run_racing_the_agent_executes_once() {
     );
     println!("{report}");
     report.assert_ok();
+}
+
+/// A `--run` that started the operation and then failed (here the test hook fails it after
+/// the items were handled, as a full disk could while finishing the audit) says what
+/// happened: it ran here, how many items were handled, and the operation to review; it never
+/// blames the agent or claims nothing was run. Audited as `failed_partway`. Debug builds only
+/// (the hook is compiled out of release builds).
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn approve_run_that_fails_part_way_reports_it_truthfully() {
+    if skip_if_elevated("approve_run_that_fails_part_way_reports_it_truthfully")
+        || !have_tmux("approve_run_that_fails_part_way_reports_it_truthfully")
+    {
+        return;
+    }
+    let env = Env::new(true);
+    let (s, _, id) = prepare_app_target(&env);
+    s.finish();
+    let t = Tmux::start(
+        &env,
+        &approve_run_line(&env, &id, "SCULL_TEST_FAIL_FINISH=1"),
+    );
+    let code = t.code();
+    t.send(&code);
+    let (done, exit) = t.finish();
+    println!("{}", done.trim_end());
+    assert_ne!(exit, 0, "{done}");
+    assert!(done.contains("started here as operation"), "{done}");
+    assert!(done.contains("1 item(s) were handled"), "{done}");
+    assert!(!done.contains("Nothing was run"), "{done}");
+    assert!(!done.contains("execute_cleanup first"), "{done}");
+    assert!(!env.fx.root().join("app/target").exists(), "it did run");
+    let store = env.store();
+    let ops = store.operations(0).unwrap();
+    assert_eq!(ops.len(), 1);
+    assert!(done.contains(ops[0].operation_id.as_str()), "{done}");
+    assert_eq!(
+        audited(&env, "approve_run"),
+        ["approve_run/cli/failed_partway"]
+    );
+    assert!(store.get_approval(&id).unwrap().unwrap().used_at.is_some());
+    env.fx
+        .check_invariants(&InvariantInputs::new().allow("app/target"))
+        .assert_ok();
 }

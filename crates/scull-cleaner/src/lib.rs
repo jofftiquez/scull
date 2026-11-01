@@ -107,8 +107,8 @@ pub mod trash;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{
-    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, TOOL_NATIVE_UNSUPPORTED,
-    is_docker_command, is_quick_clean_tool,
+    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, RefusalSource,
+    TOOL_NATIVE_UNSUPPORTED, is_docker_command, is_quick_clean_tool,
 };
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
