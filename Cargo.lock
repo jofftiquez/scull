@@ -1563,6 +1563,7 @@ version = "0.0.0"
 dependencies = [
  "jsonschema",
  "schemars",
+ "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",

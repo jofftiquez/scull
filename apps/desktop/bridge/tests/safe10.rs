@@ -1,5 +1,9 @@
-//! SAFE-10: the desktop has no filesystem-mutation path. Deletion happens only in
-//! `scull-cleaner`'s Executor, so neither the bridge nor the Tauri app crate may reach it.
+//! SAFE-10 as the PRD states it: deletion is only possible through the core `Executor` API, and
+//! the desktop has no direct filesystem-deletion code path. Since P3-EXEC-01 the desktop runs
+//! cleanups: only the bridge depends on `scull-cleaner`, only `src/cleanup.rs` uses it, and
+//! that module reaches deletion only through the Executor's API (an allowlist of calls); no
+//! desktop source calls a filesystem-mutation API itself. The MCP server never reaches the
+//! cleaner.
 //!
 //! Runs in the main workspace on every OS without building Tauri: it reads manifests and
 //! sources only (no network, no build). `apps/desktop/src-tauri/tests/safe10.rs` adds the
@@ -155,40 +159,53 @@ fn reachable(start: &Path) -> (Vec<String>, Vec<String>) {
     (seen, delete)
 }
 
-#[test]
-fn bridge_never_reaches_the_cleaner() {
-    let (seen, delete) = reachable(&desktop().join("bridge"));
-    assert!(seen.iter().any(|c| c == "scull-platform"), "{seen:?}");
-    assert!(
-        !seen.iter().any(|c| c == "scull-cleaner"),
-        "the desktop bridge reaches scull-cleaner: {seen:?}"
-    );
-    assert!(
-        delete.is_empty(),
-        "enables scull-platform/delete: {delete:?}"
-    );
+/// Direct `scull-*` dependencies of the manifest in `dir`.
+fn direct_deps(dir: &Path) -> Vec<String> {
+    read_manifest(dir, &workspace_paths())
+        .deps
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect()
 }
 
+/// PRD SAFE-10: deletion only through the core Executor. The bridge reaches `scull-cleaner`
+/// (P3-EXEC-01) and never enables `scull-platform`'s `delete` feature itself; the Tauri app
+/// crate reaches the cleaner only through the bridge.
 #[test]
-fn app_crate_never_reaches_the_cleaner() {
-    let app = desktop().join("src-tauri");
-    let (seen, delete) = reachable(&app);
+fn only_the_bridge_reaches_the_cleaner() {
+    let bridge = direct_deps(&desktop().join("bridge"));
+    assert!(bridge.iter().any(|d| d == "scull-cleaner"), "{bridge:?}");
+    let ws = workspace_paths();
     assert!(
-        seen.iter().any(|c| c == "scull-desktop-bridge"),
-        "src-tauri should go through the bridge: {seen:?}"
+        !read_manifest(&desktop().join("bridge"), &ws).enables_delete,
+        "the bridge enables scull-platform/delete itself"
+    );
+    let app = direct_deps(&desktop().join("src-tauri"));
+    assert!(app.iter().any(|d| d == "scull-desktop-bridge"), "{app:?}");
+    assert!(
+        !app.iter().any(|d| d == "scull-cleaner"),
+        "the app crate depends on scull-cleaner directly: {app:?}"
     );
     assert!(
-        !seen.iter().any(|c| c == "scull-cleaner"),
-        "the desktop app reaches scull-cleaner: {seen:?}"
+        !read_manifest(&desktop().join("src-tauri"), &ws).enables_delete,
+        "the app crate enables scull-platform/delete"
     );
+    // The MCP server never reaches the cleaner (nor the desktop bridge).
+    let (seen, delete) = reachable(&repo_root().join("crates/scull-mcp"));
     assert!(
-        delete.is_empty(),
-        "enables scull-platform/delete: {delete:?}"
+        !seen
+            .iter()
+            .any(|c| c == "scull-cleaner" || c == "scull-desktop-bridge"),
+        "{seen:?}"
     );
+    assert!(delete.is_empty(), "{delete:?}");
 }
 
-/// Filesystem-mutation APIs that must not appear in desktop sources. The history database is
-/// written by scull-storage (through the engine), never by desktop code.
+/// The one desktop module allowed to use `scull_cleaner` (P3-EXEC-01).
+const CLEANUP_MODULE: &str = "bridge/src/cleanup.rs";
+
+/// Filesystem-mutation APIs that must not appear in desktop sources outside the Executor
+/// module. The history database is written by scull-storage, never by desktop code.
 const MUTATION_APIS: &[&str] = &[
     "scull_cleaner",
     "remove_file",
@@ -205,6 +222,45 @@ const MUTATION_APIS: &[&str] = &[
     "trash::",
 ];
 
+/// What even the Executor module may not do itself: every deletion or move goes through the
+/// Executor's own API.
+const DIRECT_DELETION: &[&str] = &[
+    "remove_file",
+    "remove_dir",
+    "fs::rename",
+    "fs::write",
+    "fs::copy",
+    "set_permissions",
+    "File::create",
+    "OpenOptions",
+    "hard_link",
+    "symlink",
+    "scull_platform::remove",
+    "scull_platform::trash",
+    "scull_platform::quarantine",
+    ".delete(",
+    "delete_observed",
+    "remove_orphaned",
+    "purge",
+];
+
+/// The Executor / Quick Clean calls the module may make.
+const EXECUTOR_CALLS: &[&str] = &[
+    "acquire",
+    "recover",
+    "begin_operation",
+    "execute_plan",
+    "restore",
+    "plan",
+    "run",
+    "with_quarantine",
+    "with_trash",
+    "with_elevation",
+    "finish",
+    "finish_measured",
+    "audit_plan",
+];
+
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -219,6 +275,12 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The code of `f` before its unit tests (they may build temp trees).
+fn code_of(f: &Path) -> String {
+    let text = std::fs::read_to_string(f).unwrap();
+    text.split("#[cfg(test)]").next().unwrap_or("").to_owned()
+}
+
 #[test]
 fn desktop_sources_have_no_filesystem_mutation() {
     let mut files = Vec::new();
@@ -231,14 +293,46 @@ fn desktop_sources_have_no_filesystem_mutation() {
         }
     }
     assert!(files.len() >= 3, "found {files:?}");
-    for f in files {
-        let text = std::fs::read_to_string(&f).unwrap();
-        // Skip unit tests (they may build temp trees); everything before `#[cfg(test)]`.
-        let code = text.split("#[cfg(test)]").next().unwrap_or("");
+    let cleanup = desktop().join(CLEANUP_MODULE);
+    for f in files.iter().filter(|f| **f != cleanup) {
+        let code = code_of(f);
         for api in MUTATION_APIS {
             assert!(!code.contains(api), "{} uses {api}", f.display());
         }
     }
+}
+
+#[test]
+fn the_cleanup_module_deletes_only_through_the_executor() {
+    let code = code_of(&desktop().join(CLEANUP_MODULE));
+    for api in DIRECT_DELETION {
+        assert!(!code.contains(api), "{CLEANUP_MODULE} uses {api}");
+    }
+    // Methods called on the Executor and Quick Clean handles.
+    for handle in ["executor.", "qc.", "Executor::"] {
+        for (i, _) in code.match_indices(handle) {
+            let rest = &code[i + handle.len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            assert!(
+                EXECUTOR_CALLS.contains(&name.as_str()),
+                "{CLEANUP_MODULE} calls {handle}{name}"
+            );
+        }
+    }
+    // The only directory it creates is Quick Clean's private sandbox, owner-only, in scull's
+    // own data directory.
+    assert_eq!(
+        code.matches("create_dir").count(),
+        1,
+        "one create_dir_owner_only"
+    );
+    assert!(code.contains("scull_platform::create_dir_owner_only(&dir)"));
+    // Every operation it starts is recorded as the human's desktop confirmation.
+    assert!(code.contains("method: ApprovalMethod::Desktop"));
+    assert!(!code.contains("ApprovalMethod::Cli"));
 }
 
 #[test]

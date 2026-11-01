@@ -103,6 +103,22 @@ pub struct Session {
     /// overtake the `scan` call it cancels (both are async commands).
     early_cancels: Mutex<Vec<(String, Instant)>>,
     last_scan: Mutex<Option<Arc<ScanReport>>>,
+    /// What a desktop plan needs from the last scan besides its candidates (P3-EXEC-01).
+    last_scan_basis: Mutex<Option<ScanBasis>>,
+    /// A caller-supplied in-use source instead of [`Setup::in_use`] (tests).
+    in_use_source: Option<InUseSource>,
+}
+
+/// The last scan's roots, configuration and SAFE-09 watermark, for planning from it.
+#[derive(Debug, Clone)]
+pub(crate) struct ScanBasis {
+    /// The scan's (canonical) roots.
+    pub(crate) roots: Vec<PathBuf>,
+    /// The configuration it ran with.
+    pub(crate) config: Config,
+    /// `Store::operations_watermark`, read **before** the scan started (`None` when it could
+    /// not be read: a plan made from this scan is then refused).
+    pub(crate) watermark: Option<u64>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -129,7 +145,17 @@ impl Session {
             ops: Mutex::new(HashMap::new()),
             early_cancels: Mutex::new(Vec::new()),
             last_scan: Mutex::new(None),
+            last_scan_basis: Mutex::new(None),
+            in_use_source: None,
         }
+    }
+
+    /// Use `source` to tell whether candidates are in use, for every scan and revalidation of
+    /// this session (tests: a fixed answer instead of the OS's process list).
+    #[must_use]
+    pub fn with_in_use_source(mut self, source: InUseSource) -> Self {
+        self.in_use_source = Some(source);
+        self
     }
 
     /// The setup in use.
@@ -247,7 +273,9 @@ impl Session {
             // (the report's `history` field says what happened).
             cfg.store = open_history(data).ok();
         }
-        if self.setup.in_use {
+        if let Some(src) = &self.in_use_source {
+            cfg.in_use = src.clone();
+        } else if self.setup.in_use {
             cfg.in_use = InUseSource::Native(GapPolicy::default());
         }
         if self.setup.detect_synced_roots {
@@ -314,6 +342,14 @@ impl Session {
         let roots = self.roots(&config, params)?;
         let (token, _guard) = self.register(op)?;
         let history = self.setup.record_history && params.record_history.unwrap_or(true);
+        // SAFE-09: the last recorded operation before the scan starts; any operation recorded
+        // after it may have touched what the scan observes and invalidates a plan made from it.
+        let watermark = self.operations_watermark();
+        let basis = ScanBasis {
+            roots: roots.clone(),
+            config: config.clone(),
+            watermark,
+        };
         let engine = self.engine(config, &roots, history)?;
         let req = ScanRequest::full().history(history);
         let report = engine.scan(&roots, &req, &token, throttled(op.clone(), emit))?;
@@ -321,8 +357,40 @@ impl Session {
         let mut last = lock(&self.last_scan);
         if !report.cancelled || last.is_none() {
             *last = Some(Arc::new(report.clone()));
+            *lock(&self.last_scan_basis) = Some(basis);
         }
         Ok(report)
+    }
+
+    /// The SAFE-09 watermark now: 0 without a database (no operation was ever recorded);
+    /// `None` when the database exists but can't be read.
+    pub(crate) fn operations_watermark(&self) -> Option<u64> {
+        let Some(data) = &self.setup.data_dir else {
+            return Some(0);
+        };
+        let db = history_db_path(data);
+        if !db.is_file() {
+            return Some(0);
+        }
+        scull_storage::Store::open_read_only(&db, &scull_storage::StoreOptions::default())
+            .and_then(|s| s.operations_watermark())
+            .ok()
+    }
+
+    /// The last complete scan with its roots, configuration and watermark.
+    pub(crate) fn last_scan_basis(&self) -> Option<(Arc<ScanReport>, ScanBasis)> {
+        let scan = self.last_scan()?;
+        let basis = lock(&self.last_scan_basis).clone()?;
+        Some((scan, basis))
+    }
+
+    /// An engine for executing or revalidating under `roots` (no history recording).
+    pub(crate) fn engine_for(
+        &self,
+        config: Config,
+        roots: &[PathBuf],
+    ) -> Result<Engine, ScullError> {
+        self.engine(config, roots, false)
     }
 
     /// The last complete scan of this session (or the last cancelled one, before any complete

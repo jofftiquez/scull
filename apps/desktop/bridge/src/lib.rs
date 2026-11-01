@@ -48,6 +48,7 @@
 //! plan and a human approval, never through the desktop bridge.
 
 pub mod approvals;
+pub mod cleanup;
 pub mod db;
 pub mod drives;
 pub mod forecasts;
