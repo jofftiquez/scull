@@ -45,9 +45,21 @@ icacls $outDir /grant "${user}:(OI)(CI)F" /T /C /Q | Out-Null
 $log = Join-Path $outDir 'test.log'
 $rc = Join-Path $outDir 'exit.txt'
 Remove-Item -Force -ErrorAction SilentlyContinue $log, $rc
+# The child inherits this (the runner account's) environment, whose temp and profile folders
+# the standard user can't write: point them at folders of its own.
+$home_ = Join-Path $outDir 'home'
+$temp = Join-Path $outDir 'temp'
+foreach ($d in @($home_, $temp, "$home_\AppData\Local", "$home_\AppData\Roaming")) {
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+}
 
-# cmd sets the variable, runs the tests one at a time, and records output and exit code.
-$cmdLine = "set SCULL_TEST_REQUIRE_NOT_ELEVATED=1&& set RUST_BACKTRACE=short&& " +
+# cmd sets the variables, runs the tests one at a time, and records output and exit code.
+$sets = @(
+    'SCULL_TEST_REQUIRE_NOT_ELEVATED=1', 'RUST_BACKTRACE=short',
+    "TEMP=$temp", "TMP=$temp", "USERPROFILE=$home_", "HOME=$home_",
+    "LOCALAPPDATA=$home_\AppData\Local", "APPDATA=$home_\AppData\Roaming"
+) | ForEach-Object { "set `"$_`"&& " }
+$cmdLine = ($sets -join '') +
     "`"$exe`" --test-threads=1 --nocapture > `"$log`" 2>&1 & call echo %^ERRORLEVEL% > `"$rc`""
 $cred = [pscredential]::new($user, (ConvertTo-SecureString $password -AsPlainText -Force))
 $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', $cmdLine `
