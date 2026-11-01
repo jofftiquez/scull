@@ -38,9 +38,31 @@
 //!
 //! [`read_dir`] checks the kind with attribute-only access, then opens the directory with a
 //! no-follow handle, re-checks on that handle that it is a real directory (not a reparse
-//! point), and enumerates *that handle* with `FileFullDirectoryInfo`. Entry kinds come from
-//! the listing itself (attributes, and the reparse tag the filesystem reports in `EaSize`
-//! for reparse points), so entries are never opened.
+//! point), and enumerates *that handle* with `FileIdExtdDirectoryInfo` (attributes, reparse
+//! tag and the 128-bit file ID of every entry), or `FileFullDirectoryInfo` where the
+//! filesystem doesn't support it (FAT, some network shares; the reparse tag is then in
+//! `EaSize`). Entry kinds come from the listing itself, so entries are never opened.
+//!
+//! # Listed entries (#71, FX-FS-15)
+//!
+//! Opening every entry (`CreateFileW` + four queries + `CloseHandle`) dominated large scans,
+//! more so with real-time antivirus. [`entry_metadata`] instead asks the filesystem by name,
+//! without a handle: `NtQueryInformationByName(FileStatInformation)` (Windows 10 1709+) gives
+//! attributes, sizes, mtime and the link count in one call. The listing's directory entry
+//! alone is not enough: it has no link count, and NTFS keeps sizes and times per name, so
+//! another name of a hard-linked file can show stale values. The answer is used only when:
+//!
+//! * the listing gave the entry's file ID and the directory's volume serial (the identity,
+//!   128-bit as on ReFS, is the listing's), and the by-name answer has the same file ID (low
+//!   64 bits): an entry replaced after the listing, or a name resolved elsewhere, falls back;
+//! * neither the listing nor the answer marks it as a reparse point, a device, or a compressed
+//!   or sparse file (their on-disk size needs `FileCompressionInfo`), and both agree on
+//!   whether it is a directory.
+//!
+//! Everything else, and every failure of the by-name query, falls back to [`metadata`]: an
+//! attribute-only, no-follow open as before. So the result is always what [`metadata`] gives
+//! (`tests/entry_metadata.rs`); in particular the link count is never left unknown on the
+//! fast path.
 
 #![allow(unsafe_code)]
 
@@ -72,20 +94,29 @@ use std::mem::{MaybeUninit, offset_of, size_of};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_STAT_INFORMATION, FileStatInformation, NtQueryInformationByName,
+};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, ERROR_SHARING_VIOLATION, HANDLE,
-    INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_INVALID_LEVEL,
+    ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION,
+    HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, UNICODE_STRING,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_DEVICE,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_ATTRIBUTE_SPARSE_FILE, FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO, FILE_COMPRESSION_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FULL_DIR_INFO, FILE_ID_INFO,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo, FileBasicInfo, FileCompressionInfo,
-    FileFullDirectoryInfo, FileFullDirectoryRestartInfo, FileIdInfo, FileStandardInfo,
-    GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING, SYNCHRONIZE,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FULL_DIR_INFO,
+    FILE_ID_EXTD_DIR_INFO, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileAttributeTagInfo, FileBasicInfo, FileCompressionInfo, FileFullDirectoryInfo,
+    FileFullDirectoryRestartInfo, FileIdExtdDirectoryInfo, FileIdExtdDirectoryRestartInfo,
+    FileIdInfo, FileStandardInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    OPEN_EXISTING, SYNCHRONIZE,
 };
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::SystemServices::{
     IO_REPARSE_TAG_AF_UNIX, IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK,
 };
@@ -275,6 +306,12 @@ fn filetime_to_unix(ticks: i64) -> Option<i64> {
     (ticks != 0).then(|| ticks.div_euclid(FILETIME_TICKS_PER_SEC) - FILETIME_TO_UNIX_SECS)
 }
 
+/// Volume serial + 128-bit file ID; `None` for an ID of 0 or all ones (see [`identity`]).
+fn identity_of(volume: u64, file_id: [u8; 16]) -> Option<FileIdentity> {
+    let file = u128::from_le_bytes(file_id);
+    (file != 0 && file != u128::MAX).then(|| FileIdentity::new(volume, file))
+}
+
 /// Volume serial number + file ID. An ID of 0 or all ones is a filesystem saying "no stable
 /// ID", so it is reported as unknown rather than as a (colliding) identity.
 fn identity(handle: &Handle) -> Option<FileIdentity> {
@@ -368,9 +405,109 @@ pub(super) fn metadata(path: &Path) -> io::Result<Metadata> {
     metadata_wide(path, &verbatim(path)?)
 }
 
-/// A listed entry's metadata: by its path (see [`metadata`]).
+/// Attributes that send an entry to the handle-based [`metadata`] (see the module docs).
+const NEEDS_HANDLE: u32 = FILE_ATTRIBUTE_REPARSE_POINT
+    | FILE_ATTRIBUTE_DEVICE
+    | FILE_ATTRIBUTE_COMPRESSED
+    | FILE_ATTRIBUTE_SPARSE_FILE;
+
+/// Cleared when this Windows doesn't know `FileStatInformation` (before 10 1709).
+static BY_NAME: AtomicBool = AtomicBool::new(true);
+/// Listed entries answered by name, without a handle (tests).
+static BY_NAME_HITS: AtomicU64 = AtomicU64::new(0);
+
+/// How many listed entries [`entry_metadata`] answered by name, without opening them (tests).
+#[cfg(test)]
+fn by_name_hits() -> u64 {
+    BY_NAME_HITS.load(Ordering::Relaxed)
+}
+
+/// A listed entry's metadata: by name without a handle when the listing allows it (see the
+/// module docs), else [`metadata`] of its path.
 pub(super) fn entry_metadata(entry: &DirEntry) -> io::Result<Metadata> {
+    if let Some(listed) = entry.listed
+        && listed.attributes & NEEDS_HANDLE == 0
+        && BY_NAME.load(Ordering::Relaxed)
+        && let Some(md) = stat_by_name(&entry.path, &listed)
+    {
+        BY_NAME_HITS.fetch_add(1, Ordering::Relaxed);
+        return Ok(md);
+    }
     metadata(&entry.path)
+}
+
+/// `STATUS_INVALID_INFO_CLASS` / `STATUS_NOT_IMPLEMENTED`: this Windows lacks the class.
+const STATUS_INVALID_INFO_CLASS: NTSTATUS = 0xC000_0003_u32 as NTSTATUS;
+const STATUS_NOT_IMPLEMENTED: NTSTATUS = 0xC000_0002_u32 as NTSTATUS;
+/// `OBJ_CASE_INSENSITIVE`: Win32 name semantics.
+const OBJ_CASE_INSENSITIVE: u32 = 0x40;
+
+/// `FileStatInformation` of `path` by name, accepted only if it is the listed file and needs
+/// no handle (see the module docs); `None` sends the entry to [`metadata`].
+fn stat_by_name(path: &Path, listed: &crate::types::Listed) -> Option<Metadata> {
+    // `\\?\C:\…` (verbatim, NUL-terminated) is the NT path `\??\C:\…`.
+    let mut wide = verbatim(path).ok()?;
+    wide.pop(); // the NUL
+    if wide.get(..4) != Some(&[SEP, SEP, u16::from(b'?'), SEP]) {
+        return None;
+    }
+    wide[1] = u16::from(b'?');
+    let bytes = u16::try_from(wide.len() * 2).ok()?;
+    let name = UNICODE_STRING {
+        Length: bytes,
+        MaximumLength: bytes,
+        Buffer: wide.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: ptr::null_mut(),
+        ObjectName: &name,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        SecurityDescriptor: ptr::null(),
+        SecurityQualityOfService: ptr::null(),
+    };
+    let mut io_status = MaybeUninit::<IO_STATUS_BLOCK>::zeroed();
+    let mut st = MaybeUninit::<FILE_STAT_INFORMATION>::zeroed();
+    // SAFETY: `attributes` and the UNICODE_STRING it points to (and `wide`, its buffer) live
+    // until the call returns; `io_status` and `st` are writable, aligned and of the sizes
+    // passed. The call queries by name: it creates, opens or changes nothing visible.
+    let status = unsafe {
+        NtQueryInformationByName(
+            &attributes,
+            io_status.as_mut_ptr(),
+            st.as_mut_ptr().cast(),
+            size_of::<FILE_STAT_INFORMATION>() as u32,
+            FileStatInformation,
+        )
+    };
+    if status < 0 {
+        if status == STATUS_INVALID_INFO_CLASS || status == STATUS_NOT_IMPLEMENTED {
+            BY_NAME.store(false, Ordering::Relaxed);
+        }
+        return None;
+    }
+    // SAFETY: zero-initialized and filled by the successful call; FILE_STAT_INFORMATION holds
+    // only integers, so every bit pattern is valid.
+    let st = unsafe { st.assume_init() };
+    let same_file = st.FileId as u64 == listed.file_id_low;
+    let plain = st.FileAttributes & NEEDS_HANDLE == 0;
+    let same_kind = (st.FileAttributes ^ listed.attributes) & FILE_ATTRIBUTE_DIRECTORY == 0;
+    if !(same_file && plain && same_kind) {
+        return None;
+    }
+    let attrs = st.FileAttributes;
+    Some(Metadata {
+        kind: kind_from(attrs, None),
+        identity: listed.identity,
+        logical_size: u64::try_from(st.EndOfFile).unwrap_or(0),
+        allocated_size: u64::try_from(st.AllocationSize).ok(),
+        nlink: (st.NumberOfLinks > 0).then(|| u64::from(st.NumberOfLinks)),
+        mtime_unix: filetime_to_unix(st.LastWriteTime),
+        readonly: attrs & FILE_ATTRIBUTE_READONLY != 0,
+        file_attributes: Some(attrs),
+        reparse_tag: None,
+        bsd_flags: None,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -411,6 +548,12 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
         ));
     }
 
+    // The volume serial that identities of listed entries are built with (as `metadata` does
+    // with `FileIdInfo`); without it entries are stat'ed through a handle.
+    let volume = query::<FILE_ID_INFO>(&handle)
+        .ok()
+        .map(|i| i.VolumeSerialNumber);
+
     Ok(Box::new(WinReadDir {
         handle,
         dir: path.to_path_buf(),
@@ -418,10 +561,13 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
         next: None,
         restart: true,
         done: false,
+        extd: true,
+        volume,
     }))
 }
 
-/// Enumeration buffer. `FILE_FULL_DIR_INFO` records are 8-byte aligned.
+/// Enumeration buffer. `FILE_ID_EXTD_DIR_INFO` / `FILE_FULL_DIR_INFO` records are 8-byte
+/// aligned.
 #[repr(C, align(8))]
 struct DirBuf([u8; DIR_BUF_LEN]);
 
@@ -434,6 +580,10 @@ struct WinReadDir {
     /// The next fill is the first one (restarts the scan).
     restart: bool,
     done: bool,
+    /// Enumerating with `FileIdExtdDirectoryInfo` (else `FileFullDirectoryInfo`).
+    extd: bool,
+    /// The directory's volume serial (`FileIdInfo`), for the identity of listed entries.
+    volume: Option<u64>,
 }
 
 impl WinReadDir {
@@ -441,10 +591,11 @@ impl WinReadDir {
     fn fill(&mut self) -> io::Result<bool> {
         let first = self.restart;
         self.restart = false;
-        let class = if first {
-            FileFullDirectoryRestartInfo
-        } else {
-            FileFullDirectoryInfo
+        let class = match (self.extd, first) {
+            (true, true) => FileIdExtdDirectoryRestartInfo,
+            (true, false) => FileIdExtdDirectoryInfo,
+            (false, true) => FileFullDirectoryRestartInfo,
+            (false, false) => FileFullDirectoryInfo,
         };
         // SAFETY: `self.buf` is an owned, 8-byte-aligned, writable buffer of exactly
         // DIR_BUF_LEN bytes that outlives the call; `self.handle` is an open directory handle
@@ -461,7 +612,19 @@ impl WinReadDir {
             return Ok(true);
         }
         let err = io::Error::last_os_error();
+        let unsupported = [
+            ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_LEVEL,
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_FUNCTION,
+        ];
         match err.raw_os_error() {
+            // This filesystem has no FileIdExtdDirectoryInfo: list it the classic way.
+            Some(code) if first && self.extd && unsupported.iter().any(|&c| code == c as i32) => {
+                self.extd = false;
+                self.restart = true;
+                self.fill()
+            }
             Some(code) if code == ERROR_NO_MORE_FILES as i32 => Ok(false),
             // A first query that matches nothing (an empty volume root has no `.`/`..`).
             Some(code) if first && code == ERROR_FILE_NOT_FOUND as i32 => Ok(false),
@@ -470,14 +633,23 @@ impl WinReadDir {
     }
 
     fn entry(&self, record: Record) -> DirEntry {
-        let reparse_tag = (record.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-            .then_some(record.ea_size_or_tag);
+        let reparse_tag =
+            (record.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(record.reparse_tag);
+        let listed = match (self.volume, record.file_id) {
+            (Some(volume), Some(id)) => Some(crate::types::Listed {
+                identity: identity_of(volume, id),
+                file_id_low: u64::from_le_bytes(id[..8].try_into().unwrap_or([0; 8])),
+                attributes: record.attributes,
+            }),
+            _ => None,
+        };
         DirEntry {
             path: self.dir.join(&record.name),
             kind: kind_from(record.attributes, reparse_tag),
             file_name: record.name,
             reparse_tag,
             at: None,
+            listed,
         }
     }
 }
@@ -505,7 +677,7 @@ impl Iterator for WinReadDir {
                 }
                 continue;
             };
-            match parse_record(&self.buf.0, offset) {
+            match parse_record(&self.buf.0, offset, self.extd) {
                 Ok(record) => {
                     self.next = (record.next_entry_offset != 0)
                         .then(|| offset + record.next_entry_offset as usize);
@@ -527,12 +699,16 @@ impl Iterator for WinReadDir {
     }
 }
 
-/// The fields of one `FILE_FULL_DIR_INFO` record that a listing needs.
+/// The fields of one `FILE_ID_EXTD_DIR_INFO` / `FILE_FULL_DIR_INFO` record that a listing
+/// needs.
 struct Record {
     next_entry_offset: u32,
     attributes: u32,
-    /// `EaSize`; holds the reparse tag when the entry is a reparse point ([MS-FSCC] 2.4.14).
-    ea_size_or_tag: u32,
+    /// The reparse tag when the entry is a reparse point: `ReparsePointTag`, or `EaSize` in a
+    /// `FILE_FULL_DIR_INFO` record ([MS-FSCC] 2.4.14).
+    reparse_tag: u32,
+    /// The 128-bit file ID (`FILE_ID_EXTD_DIR_INFO` only).
+    file_id: Option<[u8; 16]>,
     name: OsString,
 }
 
@@ -552,14 +728,34 @@ fn read_u32(bytes: &[u8], at: usize) -> io::Result<u32> {
     Ok(u32::from_le_bytes(b))
 }
 
-/// Decodes the record at `offset` with bounds-checked byte reads (no pointer casts).
-fn parse_record(buf: &[u8], offset: usize) -> io::Result<Record> {
+/// Decodes the record at `offset` (`FILE_ID_EXTD_DIR_INFO` when `extd`, else
+/// `FILE_FULL_DIR_INFO`) with bounds-checked byte reads (no pointer casts).
+fn parse_record(buf: &[u8], offset: usize, extd: bool) -> io::Result<Record> {
     let rec = buf.get(offset..).ok_or_else(malformed)?;
-    let next_entry_offset = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, NextEntryOffset))?;
-    let attributes = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?;
-    let name_len = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, FileNameLength))? as usize;
-    let ea_size_or_tag = read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, EaSize))?;
-    let name_at = offset_of!(FILE_FULL_DIR_INFO, FileName);
+    let (next_entry_offset, attributes, name_len, reparse_tag, file_id, name_at) = if extd {
+        let id_at = offset_of!(FILE_ID_EXTD_DIR_INFO, FileId);
+        let id: [u8; 16] = rec
+            .get(id_at..id_at + 16)
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(malformed)?;
+        (
+            read_u32(rec, offset_of!(FILE_ID_EXTD_DIR_INFO, NextEntryOffset))?,
+            read_u32(rec, offset_of!(FILE_ID_EXTD_DIR_INFO, FileAttributes))?,
+            read_u32(rec, offset_of!(FILE_ID_EXTD_DIR_INFO, FileNameLength))? as usize,
+            read_u32(rec, offset_of!(FILE_ID_EXTD_DIR_INFO, ReparsePointTag))?,
+            Some(id),
+            offset_of!(FILE_ID_EXTD_DIR_INFO, FileName),
+        )
+    } else {
+        (
+            read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, NextEntryOffset))?,
+            read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?,
+            read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, FileNameLength))? as usize,
+            read_u32(rec, offset_of!(FILE_FULL_DIR_INFO, EaSize))?,
+            None,
+            offset_of!(FILE_FULL_DIR_INFO, FileName),
+        )
+    };
     let name_end = name_at.checked_add(name_len).ok_or_else(malformed)?;
     // The next record must start after this one's name, which also guarantees progress.
     if !name_len.is_multiple_of(2)
@@ -576,7 +772,8 @@ fn parse_record(buf: &[u8], offset: usize) -> io::Result<Record> {
     Ok(Record {
         next_entry_offset,
         attributes,
-        ea_size_or_tag,
+        reparse_tag,
+        file_id,
         name: OsString::from_wide(&units),
     })
 }
@@ -814,16 +1011,94 @@ mod tests {
         buf[offset_of!(FILE_FULL_DIR_INFO, FileNameLength)] = 4;
         buf[name_at] = b'a';
         buf[name_at + 2] = b'b';
-        let rec = parse_record(&buf, 0).ok();
+        let rec = parse_record(&buf, 0, false).ok();
         assert_eq!(rec.map(|r| r.name), Some(OsString::from("ab")));
         // Name runs past the buffer.
         buf[offset_of!(FILE_FULL_DIR_INFO, FileNameLength)] = 6;
-        assert!(parse_record(&buf, 0).is_err());
+        assert!(parse_record(&buf, 0, false).is_err());
         // Next record would overlap this one.
         buf[offset_of!(FILE_FULL_DIR_INFO, FileNameLength)] = 4;
         buf[0] = 8;
-        assert!(parse_record(&buf, 0).is_err());
-        assert!(parse_record(&buf, buf.len() + 1).is_err());
+        assert!(parse_record(&buf, 0, false).is_err());
+        assert!(parse_record(&buf, buf.len() + 1, false).is_err());
+    }
+
+    #[test]
+    fn parse_record_reads_the_file_id_and_reparse_tag_of_an_extended_record() {
+        let name_at = offset_of!(FILE_ID_EXTD_DIR_INFO, FileName);
+        let mut buf = vec![0u8; name_at + 2];
+        buf[offset_of!(FILE_ID_EXTD_DIR_INFO, FileNameLength)] = 2;
+        buf[offset_of!(FILE_ID_EXTD_DIR_INFO, FileAttributes)] = 0x10; // directory
+        let tag_at = offset_of!(FILE_ID_EXTD_DIR_INFO, ReparsePointTag);
+        buf[tag_at..tag_at + 4].copy_from_slice(&IO_REPARSE_TAG_SYMLINK.to_le_bytes());
+        let id_at = offset_of!(FILE_ID_EXTD_DIR_INFO, FileId);
+        for (i, b) in buf[id_at..id_at + 16].iter_mut().enumerate() {
+            *b = i as u8 + 1;
+        }
+        buf[name_at] = b'z';
+        let rec = parse_record(&buf, 0, true).unwrap();
+        assert_eq!(rec.name, OsString::from("z"));
+        assert_eq!(rec.attributes, 0x10);
+        assert_eq!(rec.reparse_tag, IO_REPARSE_TAG_SYMLINK);
+        let id = rec.file_id.unwrap();
+        assert_eq!(id[0], 1);
+        assert_eq!(id[15], 16);
+        assert!(parse_record(&buf[..name_at], 0, true).is_err());
+    }
+
+    /// #71: listed entries are answered by name, without a handle, with exactly what the
+    /// handle-based `metadata` gives (including a hard link's count).
+    #[test]
+    fn listed_entries_are_stated_by_name_like_metadata() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let d = tmp.path();
+        std::fs::write(d.join("a.txt"), b"hello")?;
+        std::fs::write(d.join("big.bin"), vec![1u8; 200_000])?;
+        std::fs::create_dir(d.join("sub"))?;
+        std::fs::hard_link(d.join("a.txt"), d.join("link.txt"))?;
+        let before = by_name_hits();
+        let mut n = 0;
+        for e in read_dir(d)? {
+            let e = e?;
+            assert!(
+                e.listed.is_some(),
+                "{}: NTFS lists file IDs",
+                e.path.display()
+            );
+            let fast = entry_metadata(&e)?;
+            assert_eq!(fast, metadata(&e.path)?, "{}", e.path.display());
+            if e.file_name == "link.txt" {
+                assert_eq!(fast.nlink, Some(2));
+            }
+            n += 1;
+        }
+        assert_eq!(n, 4);
+        assert!(by_name_hits() >= before + 4, "answered by name");
+        Ok(())
+    }
+
+    /// An entry replaced after the listing is not answered by name (its file ID changed): the
+    /// result is the new file's, from a handle, never a mix.
+    #[test]
+    fn an_entry_replaced_after_the_listing_falls_back_to_a_handle() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let f = tmp.path().join("f.txt");
+        std::fs::write(&f, b"old")?;
+        let entry = read_dir(tmp.path())?.next().ok_or("no entry")??;
+        let listed = entry.listed.ok_or("no listing data")?;
+        std::fs::remove_file(&f)?;
+        std::fs::write(&f, b"replaced!")?;
+        let md = entry_metadata(&entry)?;
+        assert_eq!(md, metadata(&f)?);
+        assert_ne!(md.identity, listed.identity);
+        assert_eq!(md.logical_size, 9);
+        // Gone entirely: not found, like `metadata`.
+        std::fs::remove_file(&f)?;
+        assert_eq!(
+            entry_metadata(&entry).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        Ok(())
     }
 
     /// Skips a test whose OS feature is unavailable, except on CI (`CI` is set), where the
