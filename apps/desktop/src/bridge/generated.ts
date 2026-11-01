@@ -775,6 +775,21 @@ export type Observed2 =
       status: "unknown";
     };
 /**
+ * A duration: a whole number followed by s, m, h, d or w (e.g. "24h").
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DurationSpec".
+ */
+export type DurationSpec = string;
+/**
+ * What an auto-policy may clean. Deliberately small: there is no kind for S1–S3 items,
+ * package caches, worktrees or Docker data (D-11).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoKind".
+ */
+export type AutoKind = "build_outputs";
+/**
  * When to use color in terminal output.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -788,13 +803,6 @@ export type ColorChoice = "auto" | "always" | "never";
  * via the `definition` "SizeUnits".
  */
 export type SizeUnits = "binary" | "decimal";
-/**
- * A duration: a whole number followed by s, m, h, d or w (e.g. "24h").
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DurationSpec".
- */
-export type DurationSpec = string;
 /**
  * State of the user config file.
  *
@@ -2534,6 +2542,7 @@ export interface SettingsView {
  * via the `definition` "Config".
  */
 export interface Config {
+  auto?: AutoConfig;
   forge?: ForgeConfig;
   mcp?: McpConfig;
   output?: OutputConfig;
@@ -2541,6 +2550,59 @@ export interface Config {
   quarantine?: QuarantineConfig;
   rules?: RulesConfig;
   scan?: ScanConfig;
+}
+/**
+ * `[auto]` in the user config file: opt-in unattended auto-policies (PRO-10, D-11), read from
+ * that file only and off unless a policy says `enabled = true`. Only S0 build outputs, only
+ * into quarantine, within the caps below.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoConfig".
+ */
+export interface AutoConfig {
+  /**
+   * At most this many GiB within any 24 hours, across all policies and runs.
+   */
+  max_gib_per_day?: number;
+  /**
+   * At most this many GiB per run, across all policies.
+   */
+  max_gib_per_run?: number;
+  /**
+   * At most this many items per run, across all policies.
+   */
+  max_items_per_run?: number;
+  /**
+   * Kill switch: `true` stops every policy.
+   */
+  paused?: boolean;
+  /**
+   * The policies, each off unless it says `enabled = true`.
+   */
+  policy?: AutoPolicy[];
+}
+/**
+ * One auto-policy (`[[auto.policy]]`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoPolicy".
+ */
+export interface AutoPolicy {
+  /**
+   * Off unless `true`.
+   */
+  enabled?: boolean;
+  every: DurationSpec;
+  idle: DurationSpec;
+  kind: AutoKind;
+  /**
+   * A unique name (letters, digits, `.`, `_`, `-`; at most 64 characters).
+   */
+  name: string;
+  /**
+   * Only items inside one of these folders (`~` allowed). Empty: anywhere in `scan.roots`.
+   */
+  under?: string[];
 }
 /**
  * Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).

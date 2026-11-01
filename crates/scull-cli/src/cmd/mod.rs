@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod approve;
 pub mod ask;
+pub mod auto_policy;
 pub mod caches;
 pub mod check;
 pub mod clean;

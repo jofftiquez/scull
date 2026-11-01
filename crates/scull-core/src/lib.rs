@@ -36,8 +36,8 @@ pub use id::{FileIdentity, ItemId, OperationId, PlanId, RuleRef, ScanId};
 pub use path::FsPath;
 pub use plan::{
     CLI_PLAN_TTL_SECS, ContentHash, DESKTOP_PLAN_TTL_SECS, DropReason, MAX_CLOCK_SKEW_SECS,
-    MCP_PLAN_TTL_SECS, NarrowResult, PLAN_SCHEMA_VERSION, Plan, PlanItem, PlanOrigin, PlanParams,
-    action_allowed_for, narrow,
+    MCP_PLAN_TTL_SECS, NarrowResult, PLAN_SCHEMA_VERSION, POLICY_PLAN_TTL_SECS, Plan, PlanItem,
+    PlanOrigin, PlanParams, action_allowed_for, narrow,
 };
 pub use sizes::{Confidence, Reclaimable, SizeKind, Sizes};
 pub use tier::{Tier, TierBreakdown};

@@ -528,6 +528,7 @@ fn origin_label(o: PlanOrigin) -> &'static str {
         PlanOrigin::Cli => "CLI",
         PlanOrigin::Desktop => "Desktop",
         PlanOrigin::Mcp => "MCP agent",
+        PlanOrigin::Policy => "Auto-policy",
     }
 }
 

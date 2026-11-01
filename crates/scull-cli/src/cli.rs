@@ -348,6 +348,11 @@ pub struct CheckArgs {
     /// it holds S0 items only (D-28). The plan is never executed by `check`.
     #[arg(long)]
     pub include_s1: bool,
+
+    /// Kill switch for this run: run no auto-policy, even one enabled in the config file
+    /// (PRO-10, D-11). Auto-policies are off unless enabled there.
+    #[arg(long)]
+    pub no_auto_policies: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.

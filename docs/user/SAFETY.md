@@ -199,6 +199,53 @@ again, so they get their own path, `scull clean caches`:
   the same not-undoable note and every check repeated right before; otherwise it is left in
   place for you to remove.
 
+## Auto-policies: opt-in, S0 only, quarantine only
+
+By default scull never cleans anything without your click. You can opt in to **auto-policies**
+in your config file: rules the scheduled `scull check` follows on its own, such as "move build
+outputs of projects idle for more than 60 days into quarantine, at most once a week":
+
+```toml
+[[auto.policy]]
+name = "old-build-outputs"
+enabled = true            # nothing runs without this line
+kind = "build_outputs"    # the only kind: S0 build outputs and dependency folders of projects
+idle = "60d"              # at least 7d
+every = "7d"              # at least 24h
+under = ["~/Projects"]    # optional
+```
+
+What keeps them safe:
+
+* **Only S0, only quarantine.** A policy only ever picks S0 build outputs (`target/`,
+  `node_modules/`, ...) that are idle, not in use, not links, not cloud placeholders and on the
+  scanned drive, whose project has had no changes (sources, manifests, Git) within the idle
+  window, and that you haven't restored from quarantine within it. It never deletes them: it
+  moves them into quarantine, so `scull restore <operation>` brings them back for 7 days.
+  Where quarantine is impossible, the item is left in place. It is **never** moved to the
+  Trash, because the system may empty the Trash by itself. It never touches S1–S3 items,
+  package caches, worktrees or Docker data.
+* **Your config file only.** Policies are read only from the user config file. The file and
+  its folder must be writable by you alone: not by your group or others (`chmod go-w`), and on
+  macOS with no extended ACL (`chmod -N`). The quarantine location comes from that file's
+  `[quarantine]` too. No command-line flag, environment variable, MCP tool, AI agent or
+  repository file can enable one, and the variables that would widen the scan
+  (`SCULL_ROOTS`, `SCULL_ACTIVITY_WINDOW`, `SCULL_RULES`) stop the policies instead.
+* **A dry run first.** The first time, a policy only reports what it would move. The same
+  happens after every edit of the policy, the caps, `scan.roots` or the enabled rules. It
+  acts at the earliest one interval later.
+* **Caps.** At most 50 items and 20 GiB per run and 50 GiB per day (counted on the space the
+  items take on disk), unless you set `max_items_per_run`, `max_gib_per_run` and
+  `max_gib_per_day` under `[auto]`. An item whose size is unknown is not taken.
+* **The same checks as a cleanup you confirm.** Each run is a plan and an operation in the
+  audit log (`scull history` shows "auto_policy"), taken under the one-cleanup-at-a-time lock,
+  with every item checked again right before it moves, including that it still qualifies for
+  the policy. Every run (and dry run) leaves a digest in `scull check`'s report.
+* **Kill switches.** Any of these stops every policy: `paused = true` under `[auto]`, a file
+  named `auto-policies.off` in scull's config folder, the environment variable
+  `SCULL_NO_AUTO_POLICIES=1`, or `scull check --no-auto-policies`. Policies never run as root
+  or Administrator.
+
 ## One cleanup at a time
 
 Only one cleanup runs per user account at any moment, whether from the CLI, the desktop app

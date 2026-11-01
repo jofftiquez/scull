@@ -49,8 +49,9 @@ use scull_storage::{
 /// module docs): `lock_not_held`, `operation_mismatch`, `unfinished_operation`,
 /// `targets_touched`, `not_approved`, `not_human`, `approval_mismatch`, `account_unknown`,
 /// `other_account`, `approver_not_recorded`, `channel_mismatch`, `approval_used`,
-/// `approval_revoked`, `approval_expired`, `outside_operation` and `store`.
-pub const GATE_REASONS: [&str; 16] = [
+/// `approval_revoked`, `approval_expired`, `outside_operation`, `store` and
+/// `auto_policy_method_mismatch` (an agent plan presented with the auto-policy method, D-11).
+pub const GATE_REASONS: [&str; 17] = [
     "lock_not_held",
     "operation_mismatch",
     "unfinished_operation",
@@ -67,6 +68,7 @@ pub const GATE_REASONS: [&str; 16] = [
     "approval_expired",
     "outside_operation",
     "store",
+    "auto_policy_method_mismatch",
 ];
 
 /// A refusal and its audited reason code (one of [`GATE_REASONS`]).
@@ -121,6 +123,8 @@ pub struct Operation<'s> {
     /// The ID and content hash of that plan ([`Executor::execute_plan`] runs an MCP plan only
     /// inside the operation that consumed its approval).
     pub(crate) plan: (PlanId, ContentHash),
+    /// The plan is an auto-policy plan (D-11): never a Trash fallback ([`Operation::with_trash`]).
+    pub(crate) policy_plan: bool,
 }
 
 impl Operation<'_> {
@@ -147,9 +151,15 @@ impl Operation<'_> {
     /// impossible too, it is blocked. Never deleted as a fallback. Without this call there is
     /// no fallback (such items are blocked). Interfaces pass [`TrashLocations::from_env`];
     /// tests point it inside their fixture.
+    ///
+    /// Ignored for an auto-policy plan ([`PlanOrigin::Policy`], D-11): the OS may empty the
+    /// Trash on its own, which would be a permanent deletion nobody clicked, so an item whose
+    /// quarantine is impossible is blocked (left in place, audited) instead.
     #[must_use]
     pub fn with_trash(mut self, locations: TrashLocations) -> Self {
-        self.trash = Some(locations);
+        if !self.policy_plan {
+            self.trash = Some(locations);
+        }
         self
     }
 
@@ -264,6 +274,10 @@ impl Executor {
     /// this process runs as, it expired or it was already used, and with
     /// [`ErrorKind::PlanTampered`] when it is bound to other content or `start` does not record
     /// this account as the approver and the approval's channel. See the module docs.
+    ///
+    /// An auto-policy plan ([`PlanOrigin::Policy`], D-11) starts only with
+    /// [`ApprovalMethod::AutoPolicy`], and that method only for such a plan; otherwise
+    /// [`ErrorKind::SafetyBlocked`].
     pub fn begin_operation<'s>(
         &self,
         store: &'s mut Store,
@@ -298,6 +312,7 @@ impl Executor {
             measured: None,
             plan_items: plan.items().to_vec(),
             plan: (plan.id().clone(), plan.content_hash().clone()),
+            policy_plan: plan.origin() == PlanOrigin::Policy,
         })
     }
 
@@ -320,6 +335,24 @@ impl Executor {
                     "the operation does not match the plan",
                 ),
                 "operation_mismatch",
+            ));
+        }
+        // D-11: an auto-policy plan starts only as an auto-policy operation, and no other plan
+        // may claim that (click-less) method.
+        let policy_plan = plan.origin() == PlanOrigin::Policy;
+        if policy_plan != (start.method == ApprovalMethod::AutoPolicy) {
+            return Err((
+                ScullError::new(
+                    ErrorKind::SafetyBlocked,
+                    if policy_plan {
+                        "an auto-policy plan runs only as an auto-policy operation (D-11); \
+                         nothing was changed"
+                    } else {
+                        "only auto-policy plans run without a human confirmation (D-11); \
+                         nothing was changed"
+                    },
+                ),
+                "auto_policy_method_mismatch",
             ));
         }
         let pending = store.unfinished_operations().map_err(store_refusal)?;

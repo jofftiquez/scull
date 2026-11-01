@@ -1,7 +1,8 @@
 //! Config layers (CLI, environment, user file), the merge (CFG-02) and value origins.
 
 use super::{
-    ColorChoice, Config, DurationSpec, FIELDS, ProactiveLayer, QUARANTINE_BASE_ENV, SizeUnits,
+    AutoLayer, ColorChoice, Config, DurationSpec, FIELDS, ProactiveLayer, QUARANTINE_BASE_ENV,
+    SizeUnits,
 };
 use crate::error::{ErrorKind, ScullError};
 use crate::tier::Tier;
@@ -56,6 +57,13 @@ use std::path::PathBuf;
 ///
 /// [quarantine.bases]       # optional, per volume
 /// "/Volumes/Data" = "/Volumes/Data/me/.q"
+///
+/// [[auto.policy]]           # opt-in unattended cleanup of S0 items; see `AutoConfig`
+/// name = "old-build-outputs"
+/// enabled = true
+/// kind = "build_outputs"
+/// idle = "60d"
+/// every = "7d"
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +89,9 @@ pub struct ConfigLayer {
     /// Where quarantined items are kept.
     #[serde(default, skip_serializing_if = "QuarantineLayer::is_empty")]
     pub quarantine: QuarantineLayer,
+    /// Unattended auto-policies (honored from the user config file only, D-11).
+    #[serde(default, skip_serializing_if = "AutoLayer::is_empty")]
+    pub auto: AutoLayer,
 }
 
 /// `[scan]` in a [`ConfigLayer`]. See [`super::ScanConfig`] for the meaning of each field.
@@ -564,9 +575,10 @@ impl ResolvedConfig {
 /// Merge the trusted layers over the built-in defaults (CFG-02): `cli` > `env` > `user` >
 /// [`Config::default`]. See the [module docs](super) for which fields are additive.
 ///
-/// `mcp.destructive` is taken from `user` only; values in `cli` or `env` are ignored, so
-/// destructive MCP tools always need an explicit line in the config file. The agent limits
-/// `mcp.max_pending_plans` and `mcp.prepare_per_minute` are file-only too.
+/// `mcp.destructive` and `[auto]` are taken from `user` only; values in `cli` or `env` are
+/// ignored, so destructive MCP tools and unattended auto-policies always need explicit lines
+/// in the config file. The agent limits `mcp.max_pending_plans` and `mcp.prepare_per_minute`
+/// are file-only too.
 pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> ResolvedConfig {
     let env_origin = |field: &str| Origin::Env {
         var: env
@@ -661,6 +673,21 @@ pub fn resolve(cli: &ConfigLayer, env: &EnvLayer, user: &ConfigLayer) -> Resolve
     if let Some(v) = user.mcp.prepare_per_minute {
         config.mcp.prepare_per_minute = v;
         origins.insert("mcp.prepare_per_minute".into(), vec![Origin::UserConfig]);
+    }
+
+    // File-only: unattended auto-policies (D-11). Never from a flag or an environment variable.
+    config.auto = user.auto.resolve();
+    let auto = &user.auto;
+    for (key, set) in [
+        ("auto.paused", auto.paused.is_some()),
+        ("auto.max_items_per_run", auto.max_items_per_run.is_some()),
+        ("auto.max_gib_per_run", auto.max_gib_per_run.is_some()),
+        ("auto.max_gib_per_day", auto.max_gib_per_day.is_some()),
+        ("auto.policy", auto.policy.is_some()),
+    ] {
+        if set {
+            origins.insert(key.into(), vec![Origin::UserConfig]);
+        }
     }
 
     // Additive protection fields.

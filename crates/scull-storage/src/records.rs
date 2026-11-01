@@ -119,15 +119,20 @@ pub enum ApprovalMethod {
     /// A CLI run the user started themselves and confirmed up front with `--confirm`, without
     /// a prompt (non-interactive, CLI-03).
     CliFlag,
+    /// No human click: an opt-in auto-policy the user enabled in their config file, run by the
+    /// scheduled `scull check` (PRO-10, D-11). Only for auto-policy plans
+    /// (`scull_core::PlanOrigin::Policy`); never a human approval of anything else.
+    AutoPolicy,
 }
 
 impl ApprovalMethod {
     /// Every method, in declaration order.
-    pub const ALL: [ApprovalMethod; 4] = [
+    pub const ALL: [ApprovalMethod; 5] = [
         ApprovalMethod::CliTty,
         ApprovalMethod::CliInteractive,
         ApprovalMethod::Desktop,
         ApprovalMethod::CliFlag,
+        ApprovalMethod::AutoPolicy,
     ];
 
     /// Stable string stored in the database.
@@ -137,6 +142,7 @@ impl ApprovalMethod {
             ApprovalMethod::CliInteractive => "cli_interactive",
             ApprovalMethod::Desktop => "desktop",
             ApprovalMethod::CliFlag => "cli_flag",
+            ApprovalMethod::AutoPolicy => "auto_policy",
         }
     }
 

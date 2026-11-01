@@ -1027,7 +1027,7 @@ These commands are built; `scull <command> --help` describes their options:
 |---|---|
 | `scull approve [PLAN_ID]`, `scull approve --revoke PLAN_ID` | Approve a plan an AI agent prepared, or revoke an approval, in your own terminal (interactive only; see above) |
 | `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
-| `scull check` | Light scan, forecast and alerts, for the OS scheduler |
+| `scull check [--no-auto-policies]` | Light scan, forecast and alerts, for the OS scheduler; runs opt-in auto-policies (see below) |
 | `scull schedule enable\|disable\|status` | Register periodic checks |
 | `scull insights [export]` | Local trends and insights |
 | `scull insights purge [--older-than WHEN] [--confirm]` | Forget recorded trends: history rows only (free-space and footprint samples, item and regrowth events, items that are gone) in scull's own database. Live items, scans, plans, operations, audit and every file are kept. Asks you to type `purge` on a terminal; `--confirm` is required otherwise. Each purge is recorded as an `insights_purged` event. |
@@ -1073,7 +1073,27 @@ base = "~/.scull-q"                      # for items on the drive holding this f
 
 [quarantine.bases]                       # optional, per drive: longest matching prefix wins
 "/Volumes/Data" = "/Volumes/Data/me/.scull-q"
+
+[auto]                                   # opt-in auto-policies; off unless a policy is enabled
+paused = false                           # kill switch
+max_items_per_run = 50
+max_gib_per_run = 20
+max_gib_per_day = 50
+
+[[auto.policy]]
+name = "old-build-outputs"
+enabled = true
+kind = "build_outputs"                   # S0 build outputs of idle projects, quarantined
+idle = "60d"
+every = "7d"
 ```
+
+`[auto]` is read only from this file, never from a flag or variable, and only when the file
+and its folder are writable by you alone. `scull check` then moves the idle S0 build outputs
+a policy picks into quarantine (never deletes them), after a dry run the first time, within
+the caps. `SCULL_NO_AUTO_POLICIES=1`, `--no-auto-policies` or a file named
+`auto-policies.off` in the config folder stops every policy. See
+[SAFETY.md](SAFETY.md#auto-policies-opt-in-s0-only-quarantine-only).
 
 Without `[quarantine]`, scull picks the quarantine folder itself: the shallowest folder you
 own above the item, on its drive (usually your home folder). A configured base holds
