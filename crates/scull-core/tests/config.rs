@@ -574,6 +574,7 @@ fn precedence_table_every_field_every_layer() {
     let mut covered: Vec<&str> = table.iter().map(|t| t.0).collect();
     covered.extend(ADDITIVE_FIELDS);
     covered.push("mcp.destructive");
+    covered.extend(["mcp.max_pending_plans", "mcp.prepare_per_minute"]);
     // Alert policies are user-file settings (no environment variables or flags).
     covered.extend(FIELDS.iter().filter(|f| f.starts_with("proactive.")));
     covered.push("quarantine.bases");
@@ -642,6 +643,35 @@ fn mcp_destructive_only_from_user_config_file() {
     let r = resolve(&full_cli(), &full_env(), &user); // CLI says false: ignored
     assert!(r.config.mcp.destructive);
     assert_eq!(r.origin("mcp.destructive"), &[Origin::UserConfig]);
+}
+
+/// #299: the agent limits are file-only too: an agent that sets its MCP server's environment
+/// or flags can't raise them.
+#[test]
+fn mcp_agent_limits_only_from_user_config_file() {
+    use scull_core::config::{DEFAULT_MCP_MAX_PENDING_PLANS, DEFAULT_MCP_PREPARE_PER_MINUTE};
+    let mut cli = ConfigLayer::default();
+    cli.mcp.max_pending_plans = Some(1000);
+    cli.mcp.prepare_per_minute = Some(1000);
+    let mut env = EnvLayer::default();
+    env.layer.mcp.max_pending_plans = Some(999);
+    env.layer.mcp.prepare_per_minute = Some(999);
+    let r = resolve(&cli, &env, &ConfigLayer::default());
+    assert_eq!(
+        r.config.mcp.max_pending_plans,
+        DEFAULT_MCP_MAX_PENDING_PLANS
+    );
+    assert_eq!(
+        r.config.mcp.prepare_per_minute,
+        DEFAULT_MCP_PREPARE_PER_MINUTE
+    );
+    assert_eq!(r.origin("mcp.max_pending_plans"), &[Origin::Default]);
+    let user =
+        ConfigLayer::from_toml("[mcp]\nmax_pending_plans = 2\nprepare_per_minute = 3\n").unwrap();
+    let r = resolve(&cli, &env, &user);
+    assert_eq!(r.config.mcp.max_pending_plans, 2);
+    assert_eq!(r.config.mcp.prepare_per_minute, 3);
+    assert_eq!(r.origin("mcp.prepare_per_minute"), &[Origin::UserConfig]);
 }
 
 #[test]

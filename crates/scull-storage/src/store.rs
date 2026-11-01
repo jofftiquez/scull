@@ -281,52 +281,38 @@ impl Store {
     /// covers. Re-inserting the identical plan is a no-op; a *different* plan under an existing
     /// ID is rejected as tampering (plan substitution, §13.4).
     pub fn insert_plan(&mut self, plan: &Plan) -> Result<()> {
-        let canonical = plan.canonical_json().map_err(core_err)?;
-        if plan.compute_hash().map_err(core_err)? != *plan.content_hash() {
+        let row = PlanRow::of(plan)?;
+        self.write(|tx| row.insert(tx, plan))
+    }
+
+    /// Agent (MCP) plans of `machine_id` and `user` still awaiting an approval at `now`:
+    /// unexpired, without any approval record, and not denied by the human (#299: an
+    /// `approval_denied` entry with reason `denied` or `wrong_code` from `scull approve` or
+    /// the desktop dialog; a refused attempt such as `no_terminal` does not count as one).
+    pub fn pending_agent_plans(&self, machine_id: &str, user: &str, now: i64) -> Result<u64> {
+        self.read(|conn| pending_agent_plans(conn, machine_id, user, now))
+    }
+
+    /// Record the agent plan `plan` (origin `mcp`) only if its machine and user have fewer
+    /// than `max_pending` plans awaiting approval at `now` ([`Store::pending_agent_plans`]):
+    /// the count and the insert are one transaction, so concurrent sessions can't exceed the
+    /// cap (#299). Returns `false`, recording nothing, when the cap is reached. Otherwise as
+    /// [`Store::insert_plan`].
+    pub fn insert_agent_plan(&mut self, plan: &Plan, now: i64, max_pending: u32) -> Result<bool> {
+        if plan.origin() != PlanOrigin::Mcp {
             return Err(StoreError::rejected(
-                ErrorKind::PlanTampered,
-                "plan content does not match its hash",
+                ErrorKind::Usage,
+                "insert_agent_plan records agent (MCP) plans only",
             ));
         }
-        let reclaimable = plan
-            .items()
-            .iter()
-            .fold(0u64, |a, i| a.saturating_add(i.reclaimable_bytes));
+        let row = PlanRow::of(plan)?;
         self.write(|tx| {
-            let existing: Option<String> = tx
-                .query_row(
-                    "SELECT content_hash FROM plans WHERE plan_id = ?1",
-                    [plan.id().as_str()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match existing {
-                Some(h) if h == plan.content_hash().as_str() => return Ok(()),
-                Some(_) => {
-                    return Err(StoreError::rejected(
-                        ErrorKind::PlanTampered,
-                        format!("a different plan is already recorded as {}", plan.id()),
-                    ));
-                }
-                None => {}
+            let pending = pending_agent_plans(tx, plan.machine_id(), plan.user(), now)?;
+            if pending >= u64::from(max_pending) {
+                return Ok(false);
             }
-            tx.execute(
-                "INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, \
-                 expires_at, item_count, reclaimable_bytes, canonical_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    plan.id().as_str(),
-                    plan.content_hash().as_str(),
-                    serde_name(&plan.origin())?,
-                    plan.scan_id().as_str(),
-                    plan.created_unix(),
-                    plan.expires_unix(),
-                    int(plan.items().len() as u64)?,
-                    int(reclaimable)?,
-                    canonical,
-                ],
-            )?;
-            Ok(())
+            row.insert(tx, plan)?;
+            Ok(true)
         })
     }
 
@@ -499,7 +485,8 @@ impl Store {
     }
 
     /// Plans made by `origin` that are still awaiting an approval at `now`: unexpired
-    /// (`now < expires_at`) and without any approval record. Newest first, at most `limit`.
+    /// (`now < expires_at`), without any approval record, and not denied by the human (as in
+    /// [`Store::pending_agent_plans`]). Newest first, at most `limit`.
     /// Used to list what a human can approve (`scull approve`, the desktop dialog; §13.3).
     pub fn plans_awaiting_approval(
         &self,
@@ -512,6 +499,10 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT plan_id FROM plans p WHERE p.origin = ?1 AND ?2 < p.expires_at \
                  AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.plan_id = p.plan_id) \
+                 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'approval_denied' \
+                     AND e.source IN ('cli', 'desktop') \
+                     AND json_extract(e.payload_json, '$.plan_id') = p.plan_id \
+                     AND json_extract(e.payload_json, '$.reason') IN ('denied', 'wrong_code')) \
                  ORDER BY p.created_at DESC, p.plan_id DESC LIMIT ?3",
             )?;
             let rows = stmt.query_map(params![origin, now, limit], |r| r.get::<_, String>(0))?;
@@ -572,6 +563,90 @@ impl Store {
     pub(crate) fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         f(&self.conn).map_err(|e| classify(&self.path, e))
     }
+}
+
+/// What [`Store::insert_plan`] writes, computed and checked before the transaction.
+struct PlanRow {
+    canonical: String,
+    reclaimable: u64,
+}
+
+impl PlanRow {
+    fn of(plan: &Plan) -> Result<Self> {
+        let canonical = plan.canonical_json().map_err(core_err)?;
+        if plan.compute_hash().map_err(core_err)? != *plan.content_hash() {
+            return Err(StoreError::rejected(
+                ErrorKind::PlanTampered,
+                "plan content does not match its hash",
+            ));
+        }
+        let reclaimable = plan
+            .items()
+            .iter()
+            .fold(0u64, |a, i| a.saturating_add(i.reclaimable_bytes));
+        Ok(Self {
+            canonical,
+            reclaimable,
+        })
+    }
+
+    /// Insert `plan` (idempotent for the same content; a different plan under its ID is
+    /// [`ErrorKind::PlanTampered`]).
+    fn insert(&self, tx: &rusqlite::Transaction<'_>, plan: &Plan) -> Result<()> {
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT content_hash FROM plans WHERE plan_id = ?1",
+                [plan.id().as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(h) if h == plan.content_hash().as_str() => return Ok(()),
+            Some(_) => {
+                return Err(StoreError::rejected(
+                    ErrorKind::PlanTampered,
+                    format!("a different plan is already recorded as {}", plan.id()),
+                ));
+            }
+            None => {}
+        }
+        tx.execute(
+            "INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, \
+             expires_at, item_count, reclaimable_bytes, canonical_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                plan.id().as_str(),
+                plan.content_hash().as_str(),
+                serde_name(&plan.origin())?,
+                plan.scan_id().as_str(),
+                plan.created_unix(),
+                plan.expires_unix(),
+                int(plan.items().len() as u64)?,
+                int(self.reclaimable)?,
+                self.canonical,
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+/// See [`Store::pending_agent_plans`]. Machine and user come from the plan's canonical JSON
+/// (the record verified against its hash on every read).
+fn pending_agent_plans(conn: &Connection, machine_id: &str, user: &str, now: i64) -> Result<u64> {
+    let origin = serde_name(&PlanOrigin::Mcp)?;
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM plans p WHERE p.origin = ?1 AND ?2 < p.expires_at \
+         AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.plan_id = p.plan_id) \
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'approval_denied' \
+             AND e.source IN ('cli', 'desktop') \
+             AND json_extract(e.payload_json, '$.plan_id') = p.plan_id \
+             AND json_extract(e.payload_json, '$.reason') IN ('denied', 'wrong_code')) \
+         AND json_extract(p.canonical_json, '$.machine_id') = ?3 \
+         AND json_extract(p.canonical_json, '$.user') = ?4",
+        params![origin, now, machine_id, user],
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
 }
 
 /// Mark a running scan finished and insert its rollups (inside the caller's transaction).

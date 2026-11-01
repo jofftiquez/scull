@@ -26,8 +26,8 @@ use scull_engine::{Engine, EngineConfig, FixedInUse, InUseSource, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs, NodeLock, days_ago};
 use scull_mcp::approval::{self, ApprovalState, ConfirmationCode, HumanChannel, Principal, Reason};
 use scull_mcp::{
-    CleanupRunner, PLAN_TOOL_NAMES, RunItem, RunRequest, RunSummary, ScullMcp, ServerOptions,
-    TOOL_NAMES,
+    CleanupRunner, PLAN_TOOL_NAMES, PlanLimits, RunItem, RunRequest, RunSummary, ScullMcp,
+    ServerOptions, TOOL_NAMES,
 };
 use scull_storage::{ApprovalMethod, NewApproval, Store};
 use serde_json::{Map, Value, json};
@@ -152,6 +152,12 @@ impl Env {
         )
         .unwrap()
         .with_plan_tools(launch_flag, self.runner.clone(), who())
+        // Generous #299 limits: these tests prepare many plans; the limits have their own.
+        .with_plan_limits(PlanLimits {
+            max_pending: 50,
+            per_window: 1000,
+            window: std::time::Duration::from_secs(60),
+        })
     }
 
     fn store(&self) -> Store {
@@ -1361,6 +1367,238 @@ async fn revoke_racing_consumption_has_exactly_one_winner() {
         revocations, revoked_wins,
         "one audit per successful revocation"
     );
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+fn prepare_refusals(env: &Env) -> Vec<String> {
+    env.store()
+        .agent_events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind.as_str() == "prepare_refused")
+        .map(|e| {
+            assert_eq!((e.source.as_str(), e.channel.as_str()), ("mcp", "mcp"));
+            assert_eq!(e.plan_id, None);
+            format!("{} x{}", e.reason, e.count)
+        })
+        .collect()
+}
+
+/// #299: `prepare_cleanup` is rate-limited per session. Calls beyond the budget are refused
+/// (`rate_limited`) before any scan, nothing is recorded for them, and the refusals of one
+/// window are audited once (a looping agent can't flood the audit). Another session has its
+/// own budget, and the budget refills after the window.
+#[tokio::test(flavor = "multi_thread")]
+async fn prepare_is_rate_limited_per_session_and_audited_once_per_window() {
+    let env = Env::new();
+    let limits = PlanLimits {
+        max_pending: 50,
+        per_window: 2,
+        window: std::time::Duration::from_secs(3),
+    };
+    let client = connect(env.server(true, true).with_plan_limits(limits)).await;
+    let item = candidate(&client, "app/target").await["id"].clone();
+    let args = json!({ "item_ids": [item] });
+    let started = std::time::Instant::now();
+    for _ in 0..2 {
+        ok(
+            "prepare",
+            &call(&client, "prepare_cleanup", args.clone()).await,
+        );
+    }
+    for _ in 0..4 {
+        let r = call(&client, "prepare_cleanup", args.clone()).await;
+        assert_eq!(error_code(&r), "rate_limited");
+        assert!(text_of(&r).contains("try again"), "{}", text_of(&r));
+    }
+    assert!(
+        started.elapsed() < limits.window,
+        "the test outran its window"
+    );
+    assert_eq!(
+        prepare_refusals(&env),
+        ["rate_limited x4"],
+        "one row, counted"
+    );
+    // Another session (another server process) has its own budget.
+    let other = connect(env.server(true, true).with_plan_limits(limits)).await;
+    ok(
+        "prepare",
+        &call(&other, "prepare_cleanup", args.clone()).await,
+    );
+    other.cancel().await.unwrap();
+    // After the window the budget refills.
+    tokio::time::sleep(limits.window).await;
+    ok(
+        "prepare",
+        &call(&client, "prepare_cleanup", args.clone()).await,
+    );
+    let r = call(&client, "prepare_cleanup", args.clone()).await;
+    ok("prepare", &r);
+    let r = call(&client, "prepare_cleanup", args).await;
+    assert_eq!(error_code(&r), "rate_limited");
+    assert_eq!(prepare_refusals(&env), ["rate_limited x5"]);
+    let store = env.store();
+    let pending = store
+        .pending_agent_plans(MACHINE, USER, now_unix())
+        .unwrap();
+    assert_eq!(pending, 5, "only admitted calls recorded plans");
+    assert_eq!(env.calls(), 0);
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// #299: at most `max_pending` agent plans await approval per machine and user. One more is
+/// refused (`too_many_pending_plans`, audited, nothing recorded); approving one frees a
+/// slot; another user's cap is separate. Refusals never create or spend an approval.
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_agent_plans_are_capped_per_user() {
+    let env = Env::new();
+    let limits = PlanLimits {
+        max_pending: 2,
+        per_window: 100,
+        window: std::time::Duration::from_secs(60),
+    };
+    let client = connect(env.server(true, true).with_plan_limits(limits)).await;
+    let a = id_of(&prepare(&client, &["app/target"]).await);
+    let b = id_of(&prepare(&client, &["web/node_modules"]).await);
+    let item = candidate(&client, "app/target").await["id"].clone();
+    let r = call(
+        &client,
+        "prepare_cleanup",
+        json!({ "item_ids": [item.clone()] }),
+    )
+    .await;
+    assert_eq!(error_code(&r), "too_many_pending_plans");
+    assert!(text_of(&r).contains("scull approve"), "{}", text_of(&r));
+    let mut store = env.store();
+    assert_eq!(
+        store
+            .pending_agent_plans(MACHINE, USER, now_unix())
+            .unwrap(),
+        2
+    );
+    assert!(store.get_approval(&a).unwrap().is_none());
+    assert!(store.get_approval(&b).unwrap().is_none());
+    assert_eq!(prepare_refusals(&env), ["too_many_pending_plans x1"]);
+
+    // Another user on this machine has a cap of their own.
+    let mallory = Principal {
+        machine_id: MACHINE.into(),
+        user: "mallory".into(),
+    };
+    let theirs = connect(
+        env.server(true, false)
+            .with_plan_tools(true, env.runner.clone(), mallory)
+            .with_plan_limits(limits),
+    )
+    .await;
+    ok(
+        "prepare",
+        &call(
+            &theirs,
+            "prepare_cleanup",
+            json!({ "item_ids": [item.clone()] }),
+        )
+        .await,
+    );
+    theirs.cancel().await.unwrap();
+
+    // Approving one frees a slot.
+    human_approves(&mut store, &a);
+    ok(
+        "prepare",
+        &call(
+            &client,
+            "prepare_cleanup",
+            json!({ "item_ids": [item.clone()] }),
+        )
+        .await,
+    );
+    let r = call(&client, "prepare_cleanup", json!({ "item_ids": [item] })).await;
+    assert_eq!(error_code(&r), "too_many_pending_plans");
+    assert_eq!(prepare_refusals(&env), ["too_many_pending_plans x2"]);
+    assert_eq!(env.calls(), 0);
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// #299: the limits come from `[mcp]` (0 counts as 1) and default to 5 pending plans and
+/// 6 calls per minute.
+#[test]
+fn plan_limits_come_from_the_config() {
+    let d = PlanLimits::default();
+    assert_eq!(
+        (d.max_pending, d.per_window, d.window.as_secs()),
+        (5, 6, 60)
+    );
+    let l = PlanLimits::from_config(&McpConfig {
+        max_pending_plans: 0,
+        prepare_per_minute: 0,
+        ..McpConfig::default()
+    });
+    assert_eq!((l.max_pending, l.per_window), (1, 1));
+}
+
+/// #299 review: when the human denies a plan (`deny`, or too many wrong codes) it stops
+/// counting toward `max_pending_plans` and leaves the approval list; an agent's refused
+/// no-terminal attempt does not free a slot.
+#[tokio::test(flavor = "multi_thread")]
+async fn denied_plans_free_their_pending_slot() {
+    let env = Env::new();
+    let limits = PlanLimits {
+        max_pending: 2,
+        per_window: 100,
+        window: std::time::Duration::from_secs(60),
+    };
+    let client = connect(env.server(true, true).with_plan_limits(limits)).await;
+    let a = id_of(&prepare(&client, &["app/target"]).await);
+    let b = id_of(&prepare(&client, &["web/node_modules"]).await);
+    let item = candidate(&client, "app/target").await["id"].clone();
+    let again = json!({ "item_ids": [item] });
+    let mut store = env.store();
+    let deny = |store: &mut Store, id: &PlanId, d: approval::Denial| {
+        let hash = approval::recorded_hash(store, id);
+        approval::record_denial(
+            store,
+            id,
+            hash.as_ref(),
+            d,
+            HumanChannel::Terminal,
+            &who(),
+            now_unix(),
+        )
+        .unwrap();
+    };
+    deny(&mut store, &b, approval::Denial::NoTerminal);
+    let r = call(&client, "prepare_cleanup", again.clone()).await;
+    assert_eq!(
+        error_code(&r),
+        "too_many_pending_plans",
+        "no_terminal frees nothing"
+    );
+    deny(&mut store, &a, approval::Denial::Denied);
+    let listed: Vec<String> = approval::awaiting(&store, &who(), now_unix())
+        .unwrap()
+        .into_iter()
+        .map(|p| p.plan_id)
+        .collect();
+    assert_eq!(
+        listed,
+        [b.as_str().to_owned()],
+        "the denied plan left the list"
+    );
+    let c = id_of(&ok(
+        "prepare",
+        &call(&client, "prepare_cleanup", again.clone()).await,
+    ));
+    let r = call(&client, "prepare_cleanup", again.clone()).await;
+    assert_eq!(error_code(&r), "too_many_pending_plans");
+    deny(&mut store, &c, approval::Denial::WrongCode);
+    ok("prepare", &call(&client, "prepare_cleanup", again).await);
+    assert!(store.get_approval(&a).unwrap().is_none());
+    assert_eq!(env.calls(), 0);
     client.cancel().await.unwrap();
     env.invariants(&[]);
 }

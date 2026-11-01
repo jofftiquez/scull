@@ -14,6 +14,14 @@
 //! CLI implements with `scull-cleaner`'s Executor (this crate never depends on it, SAFE-10):
 //! the Executor consumes the approval atomically, revalidates every item right before acting
 //! (SAFE-05), journals and audits the operation.
+//!
+//! `prepare_cleanup` is limited (#299, [`PlanLimits`]): at most `mcp.max_pending_plans`
+//! agent plans may await approval per machine and user (`too_many_pending_plans`; counted
+//! and recorded in one transaction, so concurrent sessions can't exceed it), and at most
+//! `mcp.prepare_per_minute` calls per minute per session (`rate_limited`). Both limits are
+//! read from the user config file only. Refusals are audited (`prepare_refused`); repeats
+//! fold into one row per minute with a count (`Store::record_agent_event`, shared with every
+//! other refusal), so a looping agent can't flood the audit either.
 
 use crate::allowlist::Allowlist;
 use crate::approval::{self, ApprovalState, ApprovalStatus, Principal, Reason, Refused};
@@ -30,9 +38,10 @@ use scull_engine::paths::is_within;
 use scull_engine::{CancelToken, Engine, ScanReport, ScanRequest, now_unix};
 use scull_storage::{Approval, Store};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The plan and execute tools, in listing order (after the read-only ones).
 pub const PLAN_TOOL_NAMES: [&str; 5] = [
@@ -113,11 +122,121 @@ pub struct RunItem {
     pub reason: Option<String>,
 }
 
-/// The enabled plan tools: the runner, who we act for, and where the database is.
+/// Limits on `prepare_cleanup` (#299). See the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanLimits {
+    /// Most agent plans awaiting approval (unexpired, unapproved) per machine and user.
+    pub max_pending: u32,
+    /// Most `prepare_cleanup` calls per `window` in one session (one server process).
+    pub per_window: u32,
+    /// The rate window: one minute (tests shorten it).
+    pub window: Duration,
+}
+
+impl PlanLimits {
+    /// `mcp.max_pending_plans` and `mcp.prepare_per_minute` (a `0` counts as `1`), per minute.
+    pub fn from_config(mcp: &scull_core::config::McpConfig) -> Self {
+        Self {
+            max_pending: mcp.max_pending_plans.max(1),
+            per_window: mcp.prepare_per_minute.max(1),
+            window: Duration::from_secs(60),
+        }
+    }
+}
+
+impl Default for PlanLimits {
+    fn default() -> Self {
+        Self::from_config(&scull_core::config::McpConfig::default())
+    }
+}
+
+/// The session's `prepare_cleanup` calls in the current window.
+#[derive(Debug, Default)]
+struct Rate {
+    admitted: VecDeque<Instant>,
+}
+
+/// The enabled plan tools: the runner, who we act for, where the database is, the limits.
 pub(crate) struct PlanTools {
     pub(crate) runner: Arc<dyn CleanupRunner>,
     pub(crate) principal: Principal,
     pub(crate) data_dir: PathBuf,
+    limits: PlanLimits,
+    rate: Mutex<Rate>,
+}
+
+impl PlanTools {
+    pub(crate) fn new(
+        runner: Arc<dyn CleanupRunner>,
+        principal: Principal,
+        data_dir: PathBuf,
+        limits: PlanLimits,
+    ) -> Self {
+        Self {
+            runner,
+            principal,
+            data_dir,
+            limits,
+            rate: Mutex::new(Rate::default()),
+        }
+    }
+
+    /// Admit one `prepare_cleanup` call, or refuse it with the seconds until the next one is
+    /// admitted.
+    fn admit(&self) -> Result<(), u64> {
+        let now = Instant::now();
+        let window = self.limits.window;
+        let mut rate = self.rate.lock().unwrap_or_else(|e| e.into_inner());
+        while rate
+            .admitted
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= window)
+        {
+            rate.admitted.pop_front();
+        }
+        if rate.admitted.len() < self.limits.per_window as usize {
+            rate.admitted.push_back(now);
+            return Ok(());
+        }
+        let retry = rate
+            .admitted
+            .front()
+            .map_or(window, |t| window.saturating_sub(now.duration_since(*t)));
+        Err(retry.as_secs().max(1))
+    }
+}
+
+/// Record a refused `prepare_cleanup` (best effort, like [`audit_refusal`]).
+fn audit_prepare_refusal(plans: &PlanTools, store: Option<&mut Store>, code: &str) {
+    let recorded = match store {
+        Some(s) => {
+            approval::record_prepare_refusal(s, code, &plans.principal, now_unix()).map_err(refused)
+        }
+        None => open_store(plans).and_then(|mut s| {
+            approval::record_prepare_refusal(&mut s, code, &plans.principal, now_unix())
+                .map_err(refused)
+        }),
+    };
+    if let Err(e) = recorded {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "scull: could not record a refused prepare_cleanup in the audit log: {}",
+            e.message
+        );
+    }
+}
+
+fn too_many_pending(plans: &PlanTools) -> ToolError {
+    ToolError::new(
+        "too_many_pending_plans",
+        format!(
+            "{} agent plan(s) already await the user's approval (the limit, \
+             mcp.max_pending_plans). Nothing was prepared. Ask the user to review them with \
+             `scull approve`, or wait until they expire (15 minutes after each was prepared).",
+            plans.limits.max_pending
+        ),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -460,6 +579,34 @@ fn prepare(
     a: PrepareArgs,
     cancel: &CancelToken,
 ) -> Result<Output, ToolError> {
+    // #299: the session's rate first (before any scan), then the pending cap.
+    if let Err(retry) = plans.admit() {
+        // Repeats fold into one audit row per minute (Store::record_agent_event).
+        audit_prepare_refusal(plans, None, "rate_limited");
+        return Err(ToolError::new(
+            "rate_limited",
+            format!(
+                "prepare_cleanup is limited to {} call(s) per {} s in a session \
+                 (mcp.prepare_per_minute); try again in {retry} s. Nothing was prepared.",
+                plans.limits.per_window,
+                plans.limits.window.as_secs().max(1)
+            ),
+        ));
+    }
+    {
+        let mut store = open_store(plans)?;
+        let pending = store
+            .pending_agent_plans(
+                &plans.principal.machine_id,
+                &plans.principal.user,
+                now_unix(),
+            )
+            .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
+        if pending >= u64::from(plans.limits.max_pending) {
+            audit_prepare_refusal(plans, Some(&mut store), "too_many_pending_plans");
+            return Err(too_many_pending(plans));
+        }
+    }
     if a.item_ids.is_empty() || a.item_ids.len() > MAX_PLAN_ITEMS {
         return Err(ToolError::new(
             "invalid_arguments",
@@ -510,9 +657,14 @@ fn prepare(
     )
     .map_err(|e| ToolError::new("not_plannable", r.text(&e.message)))?;
     let mut store = open_store(plans)?;
-    store
-        .insert_plan(&plan)
+    // The cap again, atomically with the insert (another session may have prepared meanwhile).
+    let inserted = store
+        .insert_agent_plan(&plan, now, plans.limits.max_pending)
         .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
+    if !inserted {
+        audit_prepare_refusal(plans, Some(&mut store), "too_many_pending_plans");
+        return Err(too_many_pending(plans));
+    }
     let status = approval::status(&store, plan.id(), &plans.principal, now).map_err(refused)?;
     let out = plan_output(&plan, status, r, approve_hint(plan.id()));
     let summary = format!(

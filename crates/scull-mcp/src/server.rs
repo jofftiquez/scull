@@ -3,7 +3,9 @@
 use crate::allowlist::{Allowlist, path_from_file_uri};
 use crate::approval::Principal;
 use crate::local::LocalResult;
-use crate::plan_tools::{self, CleanupRunner, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanTools};
+use crate::plan_tools::{
+    self, CleanupRunner, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanLimits, PlanTools,
+};
 use crate::redact::{NameSalt, Redactor};
 use crate::tools::{self, Ctx, ToolError};
 use rmcp::model::{
@@ -69,6 +71,8 @@ pub struct ScullMcp {
     destructive_config: bool,
     /// The plan and execute tools, when enabled ([`ScullMcp::with_plan_tools`]).
     plans: Option<Arc<PlanTools>>,
+    /// Limits on `prepare_cleanup` (`mcp.max_pending_plans`, `mcp.prepare_per_minute`).
+    plan_limits: PlanLimits,
 }
 
 impl ScullMcp {
@@ -83,6 +87,7 @@ impl ScullMcp {
         }
         let allowlist = Allowlist::new(&opts.roots, opts.home.as_deref());
         let destructive_config = opts.mcp.destructive;
+        let plan_limits = PlanLimits::from_config(&opts.mcp);
         let salt = opts
             .mcp
             .hash_names
@@ -110,6 +115,7 @@ impl ScullMcp {
             heavy: Arc::new(Semaphore::new(1)),
             destructive_config,
             plans: None,
+            plan_limits,
         })
     }
 
@@ -135,11 +141,28 @@ impl ScullMcp {
         let mut tools = self.tools.as_ref().clone();
         tools.extend(plan_tools::definitions());
         self.tools = Arc::new(tools);
-        self.plans = Some(Arc::new(PlanTools {
+        self.plans = Some(Arc::new(PlanTools::new(
             runner,
             principal,
             data_dir,
-        }));
+            self.plan_limits,
+        )));
+        self
+    }
+
+    /// Use these `prepare_cleanup` limits instead of the configured ones (#299; tests use a
+    /// short window). The rate budget of this session starts afresh.
+    #[must_use]
+    pub fn with_plan_limits(mut self, limits: PlanLimits) -> Self {
+        self.plan_limits = limits;
+        if let Some(p) = self.plans.take() {
+            self.plans = Some(Arc::new(PlanTools::new(
+                p.runner.clone(),
+                p.principal.clone(),
+                p.data_dir.clone(),
+                limits,
+            )));
+        }
         self
     }
 

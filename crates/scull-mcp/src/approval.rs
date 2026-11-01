@@ -1107,6 +1107,31 @@ pub fn record_execute_refusal(
         .map_err(store_err)
 }
 
+/// Record that the MCP server refused a `prepare_cleanup` with the stable code `reason`
+/// (`rate_limited`, `too_many_pending_plans`; [`EventKind::PrepareRefused`], no plan).
+pub fn record_prepare_refusal(
+    store: &mut Store,
+    reason: &str,
+    who: &Principal,
+    now: i64,
+) -> Result<(), Refused> {
+    store
+        .record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::PrepareRefused,
+            source: "mcp".into(),
+            plan_id: None,
+            content_hash: None,
+            reason: reason.into(),
+            channel: "mcp".into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            count: 1,
+        })
+        .map_err(store_err)
+}
+
 /// The content hash of the recorded plan `id`, if there is a valid one (for audit events).
 pub fn recorded_hash(store: &Store, id: &PlanId) -> Option<ContentHash> {
     store
