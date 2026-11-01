@@ -2,8 +2,8 @@
 
 use scull_core::{Category, Evidence, Tier};
 use scull_detectors::rules::{
-    BUNDLED_RULE_FILES, EvidenceKind, MarkerOutcome, Platform, RuleErrorKind, RuleSet, RuleSource,
-    SCHEMA_VERSION, Strategy, Surroundings, parse_rules,
+    BUNDLED_RULE_FILES, EvidenceKind, MarkerOutcome, PROTECTED_FOLDER_NAMES, Platform,
+    RuleErrorKind, RuleSet, RuleSource, SCHEMA_VERSION, Strategy, Surroundings, parse_rules,
 };
 use std::path::Path;
 
@@ -244,6 +244,97 @@ fn user_rule_cannot_use_tool_native() {
     assert_eq!(
         user(&text).unwrap_err(),
         RuleErrorKind::ToolNativeNotAllowed
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// P6-COM-01: community rules never claim people's work folders and only apply inside projects.
+
+#[test]
+fn community_rules_cannot_claim_user_work_folders() {
+    for name in [
+        "src",
+        "Source",
+        "Documents",
+        "Desktop",
+        ".ssh",
+        ".git",
+        "Library",
+        "Assets",
+        "data",
+        "Downloads",
+        "OneDrive",
+        "notes",
+    ] {
+        let text = BASE.replace("names = [\"build\"]", &format!("names = [\"{name}\"]"));
+        let err = user(&text).unwrap_err();
+        assert!(
+            matches!(err, RuleErrorKind::UserWorkFolder { .. }),
+            "{name}: {err:?}"
+        );
+        // Bundled rules are reviewed in-tree and keep their own folders (Unity `Library/`).
+        if name != ".ssh" && name != ".git" {
+            let _ = bundled(&text);
+        }
+    }
+    // A pattern that merely *can* match a protected name is rejected too.
+    for pattern in ["S{rc,ource}", "Doc*", "?ata"] {
+        let text = BASE.replace("names = [\"build\"]", &format!("names = [\"{pattern}\"]"));
+        assert!(
+            matches!(
+                user(&text).unwrap_err(),
+                RuleErrorKind::UserWorkFolder { .. }
+            ),
+            "{pattern}"
+        );
+    }
+    // Every protected name is lowercase so the case-insensitive match covers all spellings.
+    for n in PROTECTED_FOLDER_NAMES {
+        assert_eq!(*n, n.to_lowercase(), "{n}");
+    }
+}
+
+#[test]
+fn community_rules_need_specific_names() {
+    for pattern in ["*", "?*", "{a,b}*", "x*"] {
+        let text = BASE.replace("names = [\"build\"]", &format!("names = [\"{pattern}\"]"));
+        assert!(
+            matches!(user(&text).unwrap_err(), RuleErrorKind::WildcardName { .. }),
+            "{pattern}"
+        );
+    }
+    // Two literal characters are enough (`.gd*`), and bundled rules are not capped.
+    let ok = BASE.replace("names = [\"build\"]", "names = [\"bu*\"]");
+    assert!(user(&ok).is_ok());
+}
+
+#[test]
+fn community_rules_need_a_project_marker_beside_or_above() {
+    // Only a marker inside the candidate: not gated on a project.
+    let inside = BASE.replace("all = [\"../project.test\"]", "all = [\"build.stamp\"]");
+    assert_eq!(user(&inside).unwrap_err(), RuleErrorKind::NoProjectMarker);
+    assert!(
+        bundled(&inside).is_ok(),
+        "bundled self-identifying folders stay allowed"
+    );
+    // `any` alternatives must all be outside, or one could pass with an inside marker only.
+    let mixed = BASE.replace(
+        "all = [\"../project.test\"]",
+        "any = [\"../project.test\", \"build.stamp\"]",
+    );
+    assert_eq!(user(&mixed).unwrap_err(), RuleErrorKind::NoProjectMarker);
+    let any_outside = BASE.replace(
+        "all = [\"../project.test\"]",
+        "any = [\"../project.test\", \"../../project.test\"]",
+    );
+    assert!(user(&any_outside).is_ok());
+    let both = BASE.replace(
+        "all = [\"../project.test\"]",
+        "all = [\"../project.test\", \"build.stamp\"]",
+    );
+    assert!(
+        user(&both).is_ok(),
+        "an inside marker on top of a project marker is fine"
     );
 }
 

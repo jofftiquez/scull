@@ -414,6 +414,11 @@ pub(super) fn metadata(path: &Path) -> io::Result<Metadata> {
     metadata_wide(path, &verbatim(path)?)
 }
 
+/// A listed entry's metadata: by its path (see [`metadata`]).
+pub(super) fn entry_metadata(entry: &DirEntry) -> io::Result<Metadata> {
+    metadata(&entry.path)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Directory listing
 // ---------------------------------------------------------------------------------------------
@@ -518,6 +523,7 @@ impl WinReadDir {
             kind: kind_from(record.attributes, reparse_tag),
             file_name: record.name,
             reparse_tag,
+            at: None,
         }
     }
 }

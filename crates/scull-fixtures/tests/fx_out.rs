@@ -167,6 +167,12 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     schemas.ndjson(&cli, &["rules", "list"], "rules-list");
     schemas.json(&cli, &["rules", "validate"], "rules-validate");
     schemas.ndjson(&cli, &["rules", "validate"], "rules-validate");
+    // `scull rules test` (#60, from main) on the shipped example rule and its cases.
+    let example_rule = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/rules/godot.toml");
+    let example_rule = example_rule.to_str().unwrap();
+    schemas.json(&cli, &["rules", "test", example_rule], "rules-test");
+    schemas.ndjson(&cli, &["rules", "test", example_rule], "rules-test");
     schemas.json(&cli, &["init", "--yes", "--roots", &r], "init");
     schemas.ndjson(&cli, &["init", "--yes", "--force", "--roots", &r], "init");
     // The config file `init` wrote validates against the published config schema.
@@ -1002,6 +1008,25 @@ fn fx_out_03_cli_and_mcp_plan_identical_contents() {
     let r = s(fx.root());
 
     let mut m = Mcp::start_with(&cli, &["mcp", "serve", "--allow-destructive"]);
+    if scull_platform::is_elevated().blocks_destructive() {
+        // SAFE-14: elevated (GitHub's Windows runners), the server never offers the plan tools,
+        // so there is no MCP plan to compare; the non-elevated Windows run is #65.
+        let tools = m.request("tools/list", json!({}));
+        let names: Vec<&str> = tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"prepare_cleanup"), "{names:?}");
+        assert_eq!(m.finish(), Some(0));
+        eprintln!(
+            "SKIP fx_out_03_cli_and_mcp_plan_identical_contents: running elevated, so scull mcp \
+             serves read-only tools (SAFE-14)"
+        );
+        check(&fx);
+        return;
+    }
     let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));
     let ids: Vec<String> = cands["candidates"]
         .as_array()

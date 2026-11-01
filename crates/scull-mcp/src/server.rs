@@ -306,6 +306,11 @@ impl ServerHandler for ScullMcp {
         }
         let plans_enabled = self.plans.is_some();
         let allow = self.effective_allowlist(&context).await;
+        // The client's own `clientInfo` from `initialize` (#78): recorded with agent plans as
+        // a claim for the human to see, sanitized; never trusted for anything.
+        let client = context.peer.peer_info().and_then(|i| {
+            scull_storage::AgentClient::new(&i.client_info.name, Some(&i.client_info.version))
+        });
         let args = request.arguments.unwrap_or_default();
         let cancel = CancelToken::new();
         let watcher = {
@@ -325,7 +330,7 @@ impl ServerHandler for ScullMcp {
         let joined = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let out = match &plans {
-                Some(p) => plan_tools::call(&ctx, p, &allow, &name, args, &cancel),
+                Some(p) => plan_tools::call(&ctx, p, &allow, &name, args, &cancel, client.as_ref()),
                 None => tools::call(&ctx, &allow, &name, args, &cancel),
             };
             if plans_enabled && name == "get_status" {

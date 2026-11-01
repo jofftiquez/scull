@@ -28,7 +28,8 @@ scoop = load("scoop")
 LINUX = "x86_64-unknown-linux-gnu"
 WINDOWS = "x86_64-pc-windows-msvc"
 # Crates only the tests use: never in the shipped binary's SBOM.
-DEV_ONLY = {"proptest", "jsonschema", "scull-fixtures", "scull-desktop-bridge"}
+# jsonschema is a normal dependency of scull-cli since `scull scan --ssh` validates remote output (#26).
+DEV_ONLY = {"proptest", "scull-fixtures", "scull-desktop-bridge"}
 
 
 class Sbom(unittest.TestCase):

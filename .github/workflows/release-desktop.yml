@@ -1,0 +1,280 @@
+name: Release desktop
+
+# P4-REL-01: the desktop app's installers for v1.0 and later. One tag releases the CLI, MCP and
+# desktop: release.yml (dist) creates the GitHub release for the CLI; this workflow builds the
+# Tauri bundles for the same tag and attaches them to that release.
+#
+# * Tags `v1*`..`v9*` only (v1.0.0, v1.0.0-rc.1, ...): the CLI alphas (v0.x) never build the
+#   desktop.
+# * Pull requests that touch the bundling inputs build the Linux bundles as a dry run.
+# * Manual dry run (Actions -> Release desktop -> Run workflow): builds unsigned-or-signed
+#   bundles (whatever the secrets allow) and keeps them as workflow artifacts. Nothing is
+#   attached to a release, no tag is created.
+# * Signing, each skipped with a notice when its secrets are absent (the same secrets as the CLI
+#   pipeline, RELEASING.md "Signing"):
+#   - macOS: Developer ID (CODESIGN_CERTIFICATE / _PASSWORD / CODESIGN_IDENTITY) and
+#     notarization + stapling by the Tauri bundler (APPLE_API_KEY / _KEY_ID / _ISSUER);
+#   - Windows: Authenticode through SSL.com eSigner for scull.exe and both installers
+#     (SSLDOTCOM_*), via Tauri's `bundle.windows.signCommand` and
+#     apps/desktop/scripts/sign-windows.ps1;
+#   - Linux: unsigned (.deb, .rpm, .AppImage), covered by checksums and attestations.
+# * No auto-updater: PLT-05 makes desktop updates opt-in and check-only, and needs an updater
+#   signing key the maintainer has not created yet (docs/RELEASE_v1.md).
+on:
+  push:
+    tags: ["v[1-9]*"]
+  # Dry run of the Linux bundles when the bundling inputs change (nothing is published).
+  pull_request:
+    paths:
+      - ".github/workflows/release-desktop.yml"
+      - "apps/desktop/src-tauri/**"
+      - "apps/desktop/scripts/sign-windows.ps1"
+      - "scripts/release/**"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Which bundles to build in the dry run"
+        type: choice
+        options: [linux, all]
+        default: linux
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      tag: ${{ steps.m.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: m
+        env:
+          EVENT: ${{ github.event_name }}
+          TARGETS: ${{ inputs.targets }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          all='[
+            {"name":"linux-x86_64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu"},
+            {"name":"macos-arm64","os":"macos-14","target":"aarch64-apple-darwin"},
+            {"name":"macos-x86_64","os":"macos-14","target":"x86_64-apple-darwin"},
+            {"name":"windows-x86_64","os":"windows-2022","target":"x86_64-pc-windows-msvc"}
+          ]'
+          if [ "$EVENT" = "push" ]; then
+            python3 scripts/release/bump_version.py --check --tag "$REF_NAME"
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/release/bump_version.py --check
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$EVENT" != "push" ] && [ "$TARGETS" != "all" ]; then
+            matrix=$(jq -c '[.[] | select(.name == "linux-x86_64")]' <<< "$all")
+          else
+            matrix=$(jq -c '.' <<< "$all")
+          fi
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+      CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+      CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+      SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+      SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+      SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+      SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+      # Optional pin of SSL.com's CodeSignTool download (repository variable).
+      CODESIGNTOOL_SHA256: ${{ vars.CODESIGNTOOL_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Rust toolchain (rust-toolchain.toml) and target
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+      - name: Linux build dependencies (WebKitGTK)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - name: Code signing setup
+        id: sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          all() { for v in "$@"; do [ -n "${!v:-}" ] || return 1; done; }
+          echo "macos=false" >> "$GITHUB_OUTPUT"
+          echo "notarize=false" >> "$GITHUB_OUTPUT"
+          echo "windows=false" >> "$GITHUB_OUTPUT"
+          case "$RUNNER_OS" in
+            macOS)
+              if all CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD CODESIGN_IDENTITY; then
+                # The Tauri bundler imports the certificate and signs the .app with the hardened runtime.
+                {
+                  echo "APPLE_CERTIFICATE=$CODESIGN_CERTIFICATE"
+                  echo "APPLE_CERTIFICATE_PASSWORD=$CODESIGN_CERTIFICATE_PASSWORD"
+                  echo "APPLE_SIGNING_IDENTITY=$CODESIGN_IDENTITY"
+                } >> "$GITHUB_ENV"
+                echo "macos=true" >> "$GITHUB_OUTPUT"
+                if all APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER_ID; then
+                  key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+                  printf '%s' "$APPLE_API_KEY_P8" > "$key"
+                  chmod 600 "$key"
+                  {
+                    echo "APPLE_API_KEY=$APPLE_API_KEY_ID"
+                    echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_ID"
+                    echo "APPLE_API_KEY_PATH=$key"
+                  } >> "$GITHUB_ENV"
+                  echo "notarize=true" >> "$GITHUB_OUTPUT"
+                  echo "::notice title=macOS::Developer ID signing and notarization are on."
+                else
+                  echo "::notice title=macOS notarization skipped::APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER are not all set; the app is signed but NOT notarized."
+                fi
+              else
+                echo "::notice title=macOS signing skipped::CODESIGN_* secrets are not set; the app and DMG are NOT signed or notarized."
+              fi
+              ;;
+            Windows)
+              if all SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET; then
+                script="$GITHUB_WORKSPACE/apps/desktop/scripts/sign-windows.ps1"
+                jq -n --arg s "$(cygpath -w "$script")" \
+                  '{bundle: {windows: {signCommand: {cmd: "pwsh", args: ["-NoProfile", "-NonInteractive", "-File", $s, "%1"]}}}}' \
+                  > "$RUNNER_TEMP/tauri.sign.json"
+                echo "TAURI_SIGN_CONFIG=$(cygpath -w "$RUNNER_TEMP/tauri.sign.json")" >> "$GITHUB_ENV"
+                echo "windows=true" >> "$GITHUB_OUTPUT"
+                echo "::notice title=Windows::Authenticode signing (SSL.com eSigner) is on."
+              else
+                echo "::notice title=Windows signing skipped::SSLDOTCOM_* secrets are not set; scull.exe and the installers are NOT signed."
+              fi
+              ;;
+            *)
+              echo "Linux bundles are not signed (checksums and build-provenance attestations cover them)."
+              ;;
+          esac
+      - name: Build the bundles
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          args=(build --target "${{ matrix.target }}")
+          if [ -n "${TAURI_SIGN_CONFIG:-}" ]; then args+=(--config "$TAURI_SIGN_CONFIG"); fi
+          pnpm tauri "${args[@]}"
+      - name: Collect bundles and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p out
+          shopt -s nullglob
+          for f in "$src"/dmg/*.dmg "$src"/msi/*.msi "$src"/nsis/*.exe "$src"/deb/*.deb "$src"/rpm/*.rpm "$src"/appimage/*.AppImage; do
+            cp "$f" out/
+          done
+          if [ -d "$src/macos" ]; then
+            # The .app as a tarball too (what Homebrew casks and scripted installs use).
+            (cd "$src/macos" && tar czf "$GITHUB_WORKSPACE/out/scull_${{ matrix.name }}.app.tar.gz" ./*.app)
+          fi
+          ls -l out
+          [ -n "$(ls out)" ] || { echo "no bundles were produced"; exit 1; }
+          cd out
+          for f in *; do
+            if command -v sha256sum >/dev/null; then sha256sum "$f" > "$f.sha256"; else shasum -a 256 "$f" > "$f.sha256"; fi
+          done
+      - name: macOS signature, notarization and Gatekeeper check
+        if: steps.sign.outputs.macos == 'true'
+        run: |
+          set -euo pipefail
+          app=$(ls -d apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app | head -1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Authority|Timestamp|TeamIdentifier)'
+          if [ "${{ steps.sign.outputs.notarize }}" = "true" ]; then
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+          fi
+      - name: Windows Authenticode check
+        if: steps.sign.outputs.windows == 'true'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem out -Include *.msi, *.exe -Recurse
+          $files += Get-ChildItem "apps/desktop/src-tauri/target/${{ matrix.target }}/release/scull-desktop.exe" -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate) { throw "$($f.Name) is not validly signed and timestamped" }
+          }
+      - name: Build-provenance attestation
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "out/*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: out/*
+          retention-days: 7
+
+  publish:
+    name: attach to the release
+    if: github.event_name == 'push'
+    needs: [plan, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: out
+          merge-multiple: true
+      - name: Wait for the release dist creates, then attach the desktop bundles
+        run: |
+          set -euo pipefail
+          # release.yml (dist) creates the GitHub release once the CLI builds pass; wait for it
+          # rather than creating a second one.
+          for i in $(seq 1 80); do
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 && break
+            [ "$i" -eq 80 ] && { echo "::error::release $TAG did not appear (did release.yml fail?)"; exit 1; }
+            sleep 60
+          done
+          (cd out && cat ./*.sha256 > desktop-sha256.sum)
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" out/* --clobber
+          echo "::notice title=Desktop bundles attached::$(ls out | wc -l) files to $TAG"

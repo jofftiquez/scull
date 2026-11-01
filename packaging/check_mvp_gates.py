@@ -129,6 +129,10 @@ def run_group(package: str, target: list[str], fns: list[str], nightly: bool) ->
     env = dict(os.environ)
     if nightly:
         env.setdefault("SCULL_FIXTURES_REQUIRE_PRIVILEGED", "1")
+        if platform.system() == "Darwin":
+            # FX-EXEC-16 reads the fixture as `nobody`: macOS's per-user $TMPDIR (0700) can't
+            # be traversed by another account; /tmp can (as in nightly-fixtures.yml).
+            env["TMPDIR"] = "/tmp"
     p = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
     out = p.stdout + p.stderr
     return parse_results(out, fns, p.returncode), out

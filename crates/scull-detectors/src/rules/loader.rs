@@ -15,6 +15,85 @@ use std::collections::BTreeSet;
 /// The rule file schema version this build understands.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Folder names that hold people's work, configuration or secrets. A non-bundled (user or
+/// community) rule whose `match.names` matches any of them, case-insensitively, is rejected
+/// ([`RuleErrorKind::UserWorkFolder`], P6-COM-01): whatever markers sit around it, such a
+/// folder is never a community rule's artifact.
+pub const PROTECTED_FOLDER_NAMES: &[&str] = &[
+    // Source and project content.
+    "src",
+    "source",
+    "sources",
+    "lib",
+    "libs",
+    "app",
+    "apps",
+    "include",
+    "test",
+    "tests",
+    "spec",
+    "docs",
+    "doc",
+    "examples",
+    "scripts",
+    "assets",
+    "content",
+    "config",
+    "configs",
+    "data",
+    "datasets",
+    "notebooks",
+    "models",
+    "migrations",
+    "public",
+    "static",
+    "resources",
+    "packages",
+    "modules",
+    "plugins",
+    "projects",
+    "workspace",
+    "work",
+    "code",
+    "repos",
+    // Version control and settings.
+    ".git",
+    ".hg",
+    ".svn",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".config",
+    ".local",
+    ".vscode",
+    ".idea",
+    // Personal folders (all three OSs).
+    "home",
+    "users",
+    "desktop",
+    "documents",
+    "downloads",
+    "pictures",
+    "photos",
+    "music",
+    "movies",
+    "videos",
+    "library",
+    "applications",
+    "appdata",
+    "dropbox",
+    "onedrive",
+    "icloud drive",
+    "google drive",
+    "backup",
+    "backups",
+    "archive",
+    "archives",
+    "notes",
+];
+
 /// Bundled rule files, compiled in (CLS-05: no network fetch). Each entry is
 /// `(origin, contents)`; the origin is the path under the repository root.
 pub const BUNDLED_RULE_FILES: &[(&str, &str)] = &[
@@ -383,6 +462,9 @@ fn validate(r: RawRule, origin: &str, source: RuleSource) -> Result<Rule, RuleEr
     }
     let names = parse_patterns(&r.matching.names).map_err(&fail)?;
     unique("match.names", &r.matching.names).map_err(&fail)?;
+    if source == RuleSource::User {
+        community_names(&names).map_err(&fail)?;
+    }
 
     // Markers (CLS-03).
     let markers_all = parse_entries(&r.markers.all).map_err(&fail)?;
@@ -400,6 +482,16 @@ fn validate(r: RawRule, origin: &str, source: RuleSource) -> Result<Rule, RuleEr
     }
     for m in markers_all.iter().chain(&markers_any) {
         check_marker_proves_something(m, &names).map_err(&fail)?;
+    }
+    // Community rules only apply inside a recognizable project: a required marker beside or
+    // above the candidate (every `markers.any` alternative must be, too, or one could pass
+    // with a marker inside only).
+    if source == RuleSource::User {
+        let outside_all = markers_all.iter().any(|m| m.up() >= 1);
+        let outside_any = !markers_any.is_empty() && markers_any.iter().all(|m| m.up() >= 1);
+        if !outside_all && !outside_any {
+            return Err(fail(RuleErrorKind::NoProjectMarker));
+        }
     }
 
     let lockfiles = parse_entries(&r.lockfiles.any).map_err(&fail)?;
@@ -488,6 +580,54 @@ fn validate(r: RawRule, origin: &str, source: RuleSource) -> Result<Rule, RuleEr
 }
 
 /// `ecosystem.name` segments: lowercase ASCII letters, digits, `-`, `_`; at least two segments.
+/// P6-COM-01 guardrails on a non-bundled rule's candidate names: at least two literal
+/// characters per pattern, and no match for a [`PROTECTED_FOLDER_NAMES`] entry.
+fn community_names(names: &[NamePattern]) -> Result<(), RuleErrorKind> {
+    for p in names {
+        let literal = min_literal_chars(p.as_str());
+        if literal < 2 {
+            return Err(RuleErrorKind::WildcardName {
+                pattern: p.as_str().to_owned(),
+            });
+        }
+        if let Some(name) = PROTECTED_FOLDER_NAMES
+            .iter()
+            .find(|n| p.matches_ignore_case(n))
+        {
+            return Err(RuleErrorKind::UserWorkFolder {
+                pattern: p.as_str().to_owned(),
+                name: (*name).to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The fewest literal (non-wildcard) characters any name matched by `pattern` must contain:
+/// characters outside `{...}` groups that are not `*`/`?`, plus the shortest alternative of
+/// each group.
+fn min_literal_chars(pattern: &str) -> usize {
+    let mut total = 0;
+    let mut rest = pattern;
+    while let Some(open) = rest.find('{') {
+        total += rest[..open]
+            .chars()
+            .filter(|c| !matches!(c, '*' | '?'))
+            .count();
+        let Some(close) = rest[open..].find('}') else {
+            break;
+        };
+        let group = &rest[open + 1..open + close];
+        total += group
+            .split(',')
+            .map(|a| a.chars().count())
+            .min()
+            .unwrap_or(0);
+        rest = &rest[open + close + 1..];
+    }
+    total + rest.chars().filter(|c| !matches!(c, '*' | '?')).count()
+}
+
 fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 {
         return Err("must be 1–64 characters".into());
