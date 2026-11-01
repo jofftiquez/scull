@@ -1,6 +1,10 @@
 <script setup lang="ts">
 // Cleanup Review, the user's own plan (design 03 / 03b): review → running → done.
 //
+// The plan covers the items marked on the Overview ("Add to cleanup", basket.ts) when there are
+// any, else the whole last scan. Either way the core decides what is in it: S3 items are never
+// planned, and items that changed since the scan are skipped.
+//
 // Nothing changes until the user confirms. Confirming calls the plan bridge's `executePlan`
 // STUB (src/bridge/plan.ts): in the browser the mock simulates it; inside Tauri it rejects,
 // because the desktop never deletes and the core Executor is not connected yet (SAFE-10).
@@ -17,6 +21,7 @@ import SuccessMark from '../../components/review/SuccessMark.vue';
 import TierBadge from '../../components/review/TierBadge.vue';
 import ReviewHeader from './ReviewHeader.vue';
 import { downloadJson } from '../../components/review/download';
+import { basketPlanRequest, cleanupBasket, removeFromCleanup } from '../../components/overview/basket';
 import {
   confirmLabel,
   displayPath,
@@ -43,6 +48,8 @@ const active = ref<ItemId | null>(null);
 const gone = ref<Set<ItemId>>(new Set());
 const result = ref<ExecutionResult | null>(null);
 const error = ref('');
+/** How many Overview-marked items the plan was asked for (0: planned from the whole last scan). */
+const marked = ref(0);
 /** The selection as it was when cleaning started (totals stay put while rows sweep out). */
 const chosen = ref<ItemId[]>([]);
 const timers: ReturnType<typeof setTimeout>[] = [];
@@ -55,8 +62,10 @@ async function load() {
   gone.value = new Set();
   result.value = null;
   active.value = null;
+  const req = basketPlanRequest();
+  marked.value = req.items?.length ?? 0;
   try {
-    const p = await plans.preparePlan({});
+    const p = await plans.preparePlan(req);
     plan.value = p;
     sel.value = initialSelection(p.items);
     phase.value = 'review';
@@ -88,12 +97,16 @@ const progress = computed(() => {
 const visibleItems = computed(() => items.value.filter((i) => !gone.value.has(i.candidate.id)));
 const activeItem = computed(() => items.value.find((i) => i.candidate.id === active.value));
 
+const source = computed(() =>
+  marked.value ? `from ${marked.value} ${marked.value === 1 ? 'item' : 'items'} marked on the Overview` : 'from the last scan',
+);
 const subline = computed(() => {
   const p = plan.value;
-  if (!p) return 'preparing a plan from the last scan · nothing changes until you confirm';
+  if (!p) return `preparing a plan ${source.value} · nothing changes until you confirm`;
   const now = Date.now();
   return [
     `plan ${shortId(p.plan_id)}`,
+    source.value,
     `created ${duration(now - Date.parse(p.created_at))} ago`,
     `expires in ${duration(Date.parse(p.expires_at) - now)}`,
     done.value ? 'cleaned' : 'nothing changes until you confirm',
@@ -144,6 +157,8 @@ async function start() {
       },
     );
     result.value = r;
+    // Cleaned items leave the Overview basket; skipped ones stay marked.
+    removeFromCleanup(r.items.filter((o) => o.outcome !== 'skipped').map((o) => o.item_id));
     timers.push(setTimeout(() => (phase.value = 'done'), 420));
   } catch (e) {
     error.value = toBridgeError(e).message;
@@ -176,6 +191,12 @@ const quarantined = computed(() => result.value?.items.filter((o) => o.outcome =
 function exportPlan() {
   const p = plan.value;
   if (p) downloadJson(`scull-plan-${p.plan_id}.json`, { ...p, selected: [...sel.value] });
+}
+
+/** Drop the Overview marks and plan from the whole last scan instead. */
+async function planFromScan() {
+  cleanupBasket.clear();
+  await load();
 }
 
 async function doRescan() {
@@ -237,6 +258,9 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
     >
       <h2 class="m-0 text-h3 font-semibold">No plan to review</h2>
       <p class="m-0 text-label text-text-strong-muted">{{ error }}</p>
+      <div v-if="marked">
+        <button type="button" :class="btn" data-testid="plan-from-scan" @click="planFromScan">Plan from the whole scan instead</button>
+      </div>
     </section>
 
     <template v-if="plan">

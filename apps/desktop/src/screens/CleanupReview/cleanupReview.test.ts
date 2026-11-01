@@ -4,7 +4,9 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { BRIDGE_KEY } from '../../bridge';
 import { createMockBridge } from '../../bridge/mock';
 import { createUnavailablePlanBridge, PLAN_BRIDGE_KEY, type PlanBridge } from '../../bridge/plan';
-import { createMockPlanBridge, MOCK_AGENT_PLAN_ID } from '../../bridge/planMock';
+import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from '../../bridge/planMock';
+import { cleanupBasket } from '../../components/overview/basket';
+import { DESIGN_CANDIDATES } from '../../components/overview/designScenario';
 import { routes } from '../../navigation';
 import CleanupReviewScreen from './CleanupReviewScreen.vue';
 
@@ -28,6 +30,7 @@ async function settle() {
 
 afterEach(() => {
   vi.useRealTimers();
+  cleanupBasket.clear();
   document.body.innerHTML = '';
 });
 
@@ -89,6 +92,73 @@ describe('Cleanup Review (desktop plan)', () => {
     const w = await mountAt('/cleanup', createUnavailablePlanBridge());
     expect(w.get('[role="alert"]').text()).toContain('not connected to the core yet');
     expect(w.find('[data-testid="confirm"]').exists()).toBe(false);
+  });
+});
+
+describe('Cleanup Review (plan from the Overview basket)', () => {
+  const rowIds = (w: Awaited<ReturnType<typeof mountAt>>) => w.findAll('[aria-label="Plan items"] [data-item]').map((r) => r.attributes('data-item'));
+
+  it('with an empty basket it plans from the whole last scan', async () => {
+    const plans = createMockPlanBridge();
+    const prepare = vi.spyOn(plans, 'preparePlan');
+    const w = await mountAt('/cleanup', plans);
+    expect(prepare).toHaveBeenCalledWith({});
+    expect(w.get('[data-testid="plan-line"]').text()).toContain('from the last scan');
+  });
+
+  it('with marked items it asks for exactly those and reviews only them', async () => {
+    registerScanCandidates(DESIGN_CANDIDATES);
+    for (const id of ['design-nm', 'design-target', 'design-npm']) cleanupBasket.add(id);
+    const plans = createMockPlanBridge();
+    const prepare = vi.spyOn(plans, 'preparePlan');
+    const w = await mountAt('/cleanup', plans);
+    expect(prepare).toHaveBeenCalledWith({ items: ['design-nm', 'design-target', 'design-npm'] });
+    expect(rowIds(w)).toEqual(['design-nm', 'design-target', 'design-npm']);
+    expect(w.get('[data-testid="plan-line"]').text()).toContain('from 3 items marked on the Overview');
+    // S0 preselected, the S1 cache offered unticked; no scan-wide extras.
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 2 items');
+    expect(w.text()).not.toContain('Protected · never offered');
+    expect(w.text()).not.toContain('Skipped at re-check');
+  });
+
+  it('an S3 ID in the request is left out, never selectable', async () => {
+    registerScanCandidates(DESIGN_CANDIDATES);
+    // The basket refuses S3 at add time; even if one got in, the plan never offers it.
+    cleanupBasket.add('design-target');
+    cleanupBasket.add('design-src');
+    const w = await mountAt('/cleanup');
+    expect(rowIds(w)).toEqual(['design-target']);
+    expect(w.text()).toContain('Protected · never offered');
+    expect(w.find('input[aria-label="Include ~/code"]').exists()).toBe(false);
+  });
+
+  it('cleaned items leave the basket', async () => {
+    registerScanCandidates(DESIGN_CANDIDATES);
+    for (const id of ['design-target', 'design-npm']) cleanupBasket.add(id);
+    const plans = createMockPlanBridge({ stepMs: 0 });
+    const exec = vi.spyOn(plans, 'executePlan');
+    const w = await mountAt('/cleanup', plans);
+    await w.get('[data-testid="confirm"]').trigger('click');
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.find('[data-testid="done"]').exists()).toBe(true);
+    }, { timeout: 10000, interval: 25 });
+    expect(exec.mock.calls[0]![0].items).toEqual(['design-target']);
+    // Only what was cleaned is unmarked; the unticked cache stays in the basket.
+    expect([...cleanupBasket]).toEqual(['design-npm']);
+  });
+
+  it('a stale basket says so and can fall back to the whole scan', async () => {
+    cleanupBasket.add('gone-since-the-scan');
+    const plans = createMockPlanBridge();
+    const prepare = vi.spyOn(plans, 'preparePlan');
+    const w = await mountAt('/cleanup', plans);
+    expect(w.get('[role="alert"]').text()).toContain('none of these items are in the last scan');
+    await w.get('[data-testid="plan-from-scan"]').trigger('click');
+    await settle();
+    expect(prepare).toHaveBeenLastCalledWith({});
+    expect(cleanupBasket.size).toBe(0);
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 4 items');
   });
 });
 
