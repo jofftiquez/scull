@@ -11,7 +11,8 @@
 #   common name for a folder of scripts.
 #
 # Unity and Unreal projects carry generated project files too; their folders belong to the game
-# engine rules, so `bin/` and `obj/` there are left alone (FX-CLS-14).
+# engine rules (`unity.toml`: `unity.obj`; Unreal writes no `bin/` or `obj/`), so the .NET rules
+# leave `bin/` and `obj/` there alone (FX-CLS-14).
 
 schema_version = 1
 
