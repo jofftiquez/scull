@@ -166,6 +166,30 @@ describe('overview screen', () => {
     w.unmount();
   });
 
+  it('never offers an idle Rescan while mount is still deciding to run the first scan', async () => {
+    const mock = createMockBridge();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const status = mock.status.bind(mock);
+    const bridge: ScullBridge = {
+      ...mock,
+      status: async () => {
+        await gate;
+        return status();
+      },
+    };
+    const w = await mountOverview(designScenarioBridge(bridge, 0));
+    const rescan = w.get('[data-testid="rescan"]');
+    expect(core.scanning).toBe(false);
+    expect(core.report).toBeNull();
+    expect(rescan.text()).not.toBe('Rescan');
+    expect(rescan.attributes('disabled')).toBeDefined();
+    release();
+    await scanned(w);
+    expect(rescan.attributes('disabled')).toBeUndefined();
+    w.unmount();
+  });
+
   it('uses the design scenario only with the mock bridge and ?scenario=design', () => {
     const mock = createMockBridge();
     expect(overviewBridge(mock, false)).toBe(mock);
