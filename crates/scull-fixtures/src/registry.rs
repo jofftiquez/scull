@@ -285,9 +285,6 @@ const PHASE2_PENDING: &str = "MW";
 /// clippy-clean for `x86_64-pc-windows-gnu`, never run on Windows yet.
 const WINDOWS_PENDING: &str = "W";
 
-/// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
-/// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
-const MACOS_PENDING: &str = "M";
 const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
