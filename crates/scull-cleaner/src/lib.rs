@@ -96,7 +96,9 @@ mod revalidate;
 pub mod trash;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
-pub use executor::{DeleteReport, DeleteTarget, Executor};
+pub use executor::{
+    DeleteReport, DeleteTarget, Executor, TOOL_NATIVE_UNSUPPORTED, is_quick_clean_tool,
+};
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
 pub use operation::Operation;

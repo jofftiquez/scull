@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "HistoryRead": {
+      "description": "Whether the history database answered.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "The database answered (the series may still be empty).",
+          "type": "string"
+        },
+        {
+          "const": "no_database",
+          "description": "No database yet (nothing was ever recorded, or history is off).",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "The database can't be read right now (`detail` says why).",
+          "type": "string"
+        }
+      ]
+    },
+    "RegrowthEventView": {
+      "additionalProperties": false,
+      "description": "An artifact that came back after it had gone (INS-03).",
+      "properties": {
+        "artifact": {
+          "description": "Artifact type, e.g. \"npm dependencies\".",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/Category",
+          "description": "Its category."
+        },
+        "disappeared_at": {
+          "description": "When it was marked gone.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Path (the same for the item that went and the one that came back)."
+        },
+        "previous_last_seen_at": {
+          "description": "Last sighting of the item that went (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "reappeared_at": {
+          "description": "When it was seen again.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "same_item": {
+          "description": "The same object came back (e.g. restored), not a rebuild.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "category",
+        "path",
+        "artifact",
+        "previous_last_seen_at",
+        "disappeared_at",
+        "reappeared_at",
+        "same_item"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/regrowth.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`regrowth`: every regrowth event in the window, oldest first.",
+  "properties": {
+    "detail": {
+      "description": "Why it didn't, when it didn't.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "events": {
+      "description": "Events, oldest first.",
+      "items": {
+        "$ref": "#/$defs/RegrowthEventView"
+      },
+      "type": "array"
+    },
+    "since": {
+      "description": "Start of the window (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/HistoryRead",
+      "description": "Whether the database answered."
+    }
+  },
+  "required": [
+    "state",
+    "since",
+    "events"
+  ],
+  "title": "RegrowthHistory",
+  "type": "object"
+}

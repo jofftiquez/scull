@@ -40,7 +40,7 @@ Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
       │  scanner   detectors     git        safety      storage      platform
       │
       └──► scull-cleaner  (Executor, the ONLY deleter; Phase 2; only the CLI links it)
-              │  safety · storage · platform
+              │  engine (read-only re-derivation for revalidation) · safety · storage · platform
 
   Everything depends on scull-core (types, no I/O). Only scull-platform calls OS APIs.
   scull-mcp and the desktop never depend on scull-cleaner (SAFE-10).

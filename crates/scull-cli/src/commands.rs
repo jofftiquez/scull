@@ -6,8 +6,8 @@
 
 use crate::cancel;
 use crate::cli::{
-    AgentAction, CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction,
-    RulesAction, ScheduleAction, WorktreesAction,
+    CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
+    WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -42,7 +42,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Worktrees {
             action: Some(WorktreesAction::Register { .. }),
             ..
-        } => planned("worktrees register", 111),
+        } => None,
         Command::Clean(args) => match args.action {
             None => None,
             Some(CleanAction::Caches(_)) => None,
@@ -53,19 +53,14 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
-        Command::Check => planned("check", 114),
-        Command::Insights { action } => match action {
-            None => planned("insights", 116),
-            Some(InsightsAction::Export) => planned("insights export", 116),
-            Some(InsightsAction::Purge) => planned("insights purge", 116),
-        },
-        Command::Agent {
-            action: AgentAction::Install { .. },
-        } => planned("agent install", 110),
-        Command::Schedule { action } => match action {
-            ScheduleAction::Enable => planned("schedule enable", 114),
-            ScheduleAction::Disable => planned("schedule disable", 114),
-        },
+        Command::Check(_) => None,
+        Command::Insights {
+            action: Some(InsightsAction::Purge { .. }),
+            ..
+        } => Some(crate::cmd::insights::PURGE),
+        Command::Insights { .. } => None,
+        Command::Agent { .. } => None,
+        Command::Schedule { .. } => None,
         Command::Data { .. } => None,
         Command::Doctor => None,
         Command::Mcp {
@@ -121,6 +116,10 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             action: Some(WorktreesAction::Inspect { path }),
             ..
         } => crate::cmd::worktrees::inspect(path, ui)?,
+        Command::Worktrees {
+            action: Some(WorktreesAction::Register { path, ttl }),
+            ..
+        } => crate::cmd::worktrees::register(path, ttl, ui)?,
         Command::Caches => crate::cmd::caches::run(ui)?,
         Command::History(args) => crate::cmd::history::run(args, ui)?,
         Command::Restore(args) => crate::cmd::restore::run_restore(args, ui)?,
@@ -135,6 +134,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
@@ -169,6 +169,11 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
                 include_quarantine: *include_quarantine,
             };
             crate::cmd::data::run_purge(ui, &opts, *confirm)?;
+        }
+        Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
+        Command::Insights { since, action } => {
+            crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
         _ => {}
     }
@@ -210,19 +215,13 @@ mod tests {
     #[test]
     fn every_planned_command_names_its_issue() {
         let table: &[(&[&str], &str, Option<u32>)] = &[
-            (
-                &["worktrees", "register", ".", "--ttl", "7d"],
-                "worktrees register",
-                Some(111),
-            ),
             (&["approve", "plan-1"], "approve", Some(108)),
-            (&["check"], "check", Some(114)),
-            (&["insights"], "insights", Some(116)),
-            (&["insights", "export"], "insights export", Some(116)),
-            (&["insights", "purge"], "insights purge", Some(116)),
-            (&["agent", "install", "codex"], "agent install", Some(110)),
-            (&["schedule", "enable"], "schedule enable", Some(114)),
-            (&["schedule", "disable"], "schedule disable", Some(114)),
+            (&["insights", "purge"], "insights purge", Some(266)),
+            (
+                &["insights", "purge", "--older-than", "90d", "--confirm"],
+                "insights purge",
+                Some(266),
+            ),
         ];
         for (args, name, issue) in table {
             assert_eq!(
@@ -242,6 +241,7 @@ mod tests {
             &["projects", "inspect", "."],
             &["worktrees"],
             &["worktrees", "inspect", "."],
+            &["worktrees", "register", ".", "--ttl", "7d"],
             &["caches"],
             &["data", "show"],
             &["data", "export"],
@@ -255,6 +255,9 @@ mod tests {
             &["restore", "op_1"],
             &["clean", "--purge-quarantine"],
             &["clean", "caches", "--confirm", "--wipe"],
+            &["schedule", "enable"],
+            &["schedule", "disable"],
+            &["schedule", "status"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }
@@ -264,6 +267,15 @@ mod tests {
         assert_eq!(planned_of(&["init", "--yes"]), None);
         assert_eq!(planned_of(&["rules", "validate", "x.toml"]), None);
         assert_eq!(planned_of(&["mcp", "serve"]), None);
+        assert_eq!(planned_of(&["agent", "install", "codex"]), None);
+        assert_eq!(planned_of(&["agent", "uninstall", "cursor"]), None);
+        for insights in [
+            &["insights"][..],
+            &["insights", "--since", "7d"],
+            &["insights", "export", "--format", "csv"],
+        ] {
+            assert_eq!(planned_of(insights), None, "{insights:?}");
+        }
     }
 
     #[test]

@@ -27,8 +27,10 @@ scull-storage.workspace = true
 scull-cleaner.workspace = true
 scull-mcp.workspace = true
 scull-engine.workspace = true
+scull-proactive.workspace = true
+scull-insights.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 schemars.workspace = true
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
 clap_complete = "4.6"
@@ -36,10 +38,13 @@ ctrlc = "3.5"
 unicode-width = "0.2"
 
 toml = "1"
+# Format-preserving edits of client TOML configs (`scull agent install codex`).
+toml_edit = "0.25"
 
 [dev-dependencies]
 proptest.workspace = true
 scull-fixtures.workspace = true
+scull-insights = { workspace = true, features = ["fixtures"] }
 jsonschema = { version = "0.60", default-features = false }
 # Tests only: seed quarantine manifest rows (no public writer before #71) and a newer schema.
 rusqlite = { version = "0.41.1", features = ["bundled"] }

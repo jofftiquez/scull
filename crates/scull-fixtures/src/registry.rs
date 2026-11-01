@@ -211,6 +211,8 @@ const fn t(file: &'static str, test_fn: &'static str) -> TestRef {
 const E2E_CLS: &str = "crates/scull-fixtures/tests/fx_cls.rs";
 const RUST_DET: &str = "crates/scull-detectors/tests/rust_detector.rs";
 const NODE_DET: &str = "crates/scull-detectors/tests/node_detector.rs";
+const PY_DET: &str = "crates/scull-detectors/tests/python_detector.rs";
+const ML_DET: &str = "crates/scull-detectors/tests/ml_detector.rs";
 const RUBRIC: &str = "crates/scull-safety/src/rubric.rs";
 const ACTIVITY: &str = "crates/scull-safety/tests/activity.rs";
 const CORE_CFG: &str = "crates/scull-core/tests/config.rs";
@@ -405,7 +407,17 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ],
         },
     ),
-    fx("FX-CLS-07", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-07",
+        Gate::V1_0,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(PY_DET, "fx_cls_07_venv_with_uv_lock_is_s1"),
+            t(PY_DET, "fx_cls_07_venv_without_lockfile_is_s2"),
+            t(PY_DET, "fx_cls_07_every_lockfile_kind_makes_s1"),
+        ]),
+    ),
     fx(
         "FX-CLS-08",
         Gate::Mvp,
@@ -483,7 +495,19 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
         ]),
     ),
-    fx("FX-CLS-13", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-13",
+        Gate::V1_0,
+        "MLW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                ML_DET,
+                "fx_cls_13_hf_models_s1_datasets_without_recorded_source_s2",
+            ),
+            t(ML_DET, "fx_cls_13_ollama_models_s1_with_ollama_rm"),
+        ]),
+    ),
     fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
     // §3.2 Git worktrees (FX-GIT)
     fx(

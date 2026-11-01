@@ -128,7 +128,13 @@ impl Cli {
         c.args(args);
         // Temp dirs are tmpfs on some machines; the D-22 volume policy is tested in
         // scull-platform.
-        if matches!(args.first(), Some(&("scan" | "projects" | "worktrees"))) {
+        // (`worktrees register` takes a worktree, not roots.)
+        let roots = match args {
+            ["scan" | "projects", ..] | ["worktrees"] => true,
+            ["worktrees", sub, ..] => *sub != "register",
+            _ => false,
+        };
+        if roots {
             c.arg("--allow-network-roots");
         }
         for (k, _) in std::env::vars_os() {
@@ -138,6 +144,8 @@ impl Cli {
                 c.env_remove(k);
             }
         }
+        // Agent clients' own config overrides would point outside the fixture home.
+        c.env_remove("CODEX_HOME").env_remove("CLAUDE_CONFIG_DIR");
         c.env("TERM", "dumb")
             .env("NO_COLOR", "1")
             .env("SCULL_HOME", self.scull_home.path())

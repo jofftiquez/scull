@@ -1,0 +1,146 @@
+{
+  "cancelled": false,
+  "candidates": [
+    {
+      "action": {
+        "type": "none"
+      },
+      "artifact": "npm cache",
+      "category": "package_cache",
+      "evidence": [
+        {
+          "artifact": "npm cache",
+          "kind": "known_artifact"
+        },
+        {
+          "kind": "note",
+          "text": "location from the tool's default location"
+        },
+        {
+          "kind": "marker",
+          "path": "/Users/ada/.npm/_cacache/content-v2"
+        },
+        {
+          "kind": "marker",
+          "path": "/Users/ada/.npm/_cacache/index-v5"
+        },
+        {
+          "kind": "note",
+          "text": "cleaned with `npm cache verify` (removes unused entries); full wipe alternative: `npm cache clean --force`"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": false,
+        "symlink": null
+      },
+      "id": "76f0edfda2bb14f9cde8cc0559aa7748",
+      "identity": {
+        "file": "6c85d8",
+        "volume": 2049
+      },
+      "path": "/Users/ada/.npm/_cacache",
+      "project": null,
+      "reasons": [
+        {
+          "code": "signal_unavailable",
+          "message": "could not check whether it is in use; not treated as idle",
+          "tier": "S2"
+        },
+        {
+          "code": "package_cache",
+          "message": "package-manager cache: re-downloadable, cleaned with `npm cache verify`. Not undoable. Packages re-download on next install; offline installs may fail until then.",
+          "tier": "S1"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": "Not undoable. Packages re-download on next install; offline installs may fail until then."
+      },
+      "rule": {
+        "id": "npm.cache",
+        "version": 1
+      },
+      "sizes": {
+        "allocated": 69632,
+        "logical": 65548,
+        "reclaimable": {
+          "bytes": 69632,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S2"
+    }
+  ],
+  "issues": [],
+  "measured_at": 1793467668,
+  "refused": [],
+  "signals_unavailable": [
+    {
+      "affected": 1,
+      "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+      "signal": "in_use"
+    }
+  ],
+  "totals": {
+    "allocated": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 69632,
+      "s3": 0
+    },
+    "count": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 1,
+      "s3": 0
+    },
+    "logical": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 65548,
+      "s3": 0
+    },
+    "reclaimable": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 69632,
+      "s3": 0
+    },
+    "worktrees": {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "count": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      }
+    }
+  }
+}

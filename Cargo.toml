@@ -1,7 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
-# apps/desktop/src-tauri joins the workspace in P3-APP-01.
+members = ["crates/*", "apps/desktop/bridge"]
+# The desktop's Rust logic (scull-desktop-bridge) is a member, so it is built and tested here on
+# every OS. The Tauri app crate (apps/desktop/src-tauri) is its own workspace: on Linux it links
+# WebKitGTK, which this workspace's builds must not need (see apps/desktop/README.md).
 
 [workspace.package]
 version = "0.0.0"
@@ -24,6 +26,8 @@ scull-storage = { path = "crates/scull-storage" }
 scull-mcp = { path = "crates/scull-mcp" }
 scull-fixtures = { path = "crates/scull-fixtures" }
 scull-engine = { path = "crates/scull-engine" }
+scull-proactive = { path = "crates/scull-proactive" }
+scull-insights = { path = "crates/scull-insights" }
 
 # third-party (licenses checked by cargo-deny, P1-CI-02)
 serde = { version = "1.0.229", features = ["derive"] }

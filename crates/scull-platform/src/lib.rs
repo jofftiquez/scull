@@ -70,6 +70,7 @@ pub mod owner_only;
 pub mod quarantine;
 #[cfg(feature = "delete")]
 pub mod remove;
+pub mod scheduler;
 #[cfg(feature = "delete")]
 pub mod trash;
 mod types;

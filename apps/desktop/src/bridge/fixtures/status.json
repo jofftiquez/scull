@@ -1,0 +1,24 @@
+{
+  "detail": null,
+  "last_scan": {
+    "age_secs": 240,
+    "candidates": 5,
+    "finished_at": 1793467667,
+    "reclaimable_bytes": 229376,
+    "roots": 1,
+    "safe_reclaimable_bytes": 0,
+    "scan_id": "scan_6ae62513d61229931118927e",
+    "started_at": 1793467667,
+    "status": "completed"
+  },
+  "now": 1793467907,
+  "state": "ok",
+  "volumes": [
+    {
+      "free_bytes": 85271654400,
+      "sampled_at": 1793467667,
+      "total_bytes": 726958051328,
+      "volume_id": "/"
+    }
+  ]
+}

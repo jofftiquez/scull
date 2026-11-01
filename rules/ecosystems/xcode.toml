@@ -1,0 +1,116 @@
+# Xcode rules (macOS only). Format: rules/README.md.
+#
+# Rust detectors in `scull_detectors::xcode` add to these rules, never loosen them:
+# * every rule: the folder must sit where Xcode keeps it (checked by parent folder name), so a
+#   look-alike elsewhere is never a candidate;
+# * `xcode.derived-data`: the project hash must be Xcode's 28 lowercase letters; the project is
+#   read from `info.plist` (`WorkspacePath`, as data) and a note says when it no longer exists;
+#   Swift package checkouts inside (`SourcePackages/`) make it costly to recreate (S1);
+# * `xcode.simulators`: cleaned only with `xcrun simctl delete unavailable` (chosen in Rust,
+#   CLS-04), which removes the simulators whose runtime is gone and keeps the rest.
+#
+# Archives are signed release builds with the debug symbols needed to symbolicate crash
+# reports from that release: S2 (quarantined, restorable), never deleted outright.
+
+schema_version = 1
+
+[[rule]]
+id = "xcode.derived-data"
+version = 1
+artifact = "Xcode DerivedData (per project)"
+ecosystem = "xcode"
+category = "project_artifact"
+platforms = ["macos"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# `<Project>-<28 lowercase letters>`, as Xcode names each project's folder.
+names = ["*-????????????????????????????"]
+
+[rule.markers]
+all = ["info.plist"]
+any = ["Build", "Index.noindex", "Logs", "SourcePackages"]
+
+[rule.activity]
+processes = ["Xcode", "xcodebuild", "SourceKitService", "swift-frontend"]
+
+[rule.regeneration]
+instructions = "Xcode rebuilds it on the next build and re-indexes the project (the first build and indexing are slower)."
+network = false
+long_build = false
+
+[[rule]]
+id = "xcode.device-support"
+version = 1
+artifact = "Xcode device support files"
+ecosystem = "xcode"
+category = "other"
+platforms = ["macos"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# One folder per OS version and build: `17.0 (21A329)`, `iPhone15,2 17.0 (21A329)`.
+names = ["* (*)"]
+
+[rule.markers]
+all = ["Symbols"]
+
+[rule.activity]
+processes = ["Xcode", "lldb", "debugserver"]
+
+[rule.regeneration]
+instructions = "Xcode copies the symbols from a device running that OS version again when it is next connected (this takes several minutes)."
+network = false
+long_build = true
+
+[[rule]]
+id = "xcode.archive"
+version = 1
+artifact = "Xcode archive"
+ecosystem = "xcode"
+category = "other"
+platforms = ["macos"]
+base_tier = "S2"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["*.xcarchive"]
+
+[rule.markers]
+all = ["Info.plist", "Products"]
+
+[rule.activity]
+processes = ["Xcode", "xcodebuild"]
+
+[rule.regeneration]
+instructions = "An archive is a signed build with its debug symbols (dSYMs), needed to symbolicate crash reports from that release; it can only be rebuilt from the same sources with the same signing identity."
+network = false
+long_build = true
+
+[[rule]]
+id = "xcode.simulators"
+version = 1
+artifact = "iOS simulator devices (unavailable ones)"
+ecosystem = "xcode"
+category = "other"
+platforms = ["macos"]
+base_tier = "S1"
+strategy = "tool_native"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Devices"]
+
+[rule.markers]
+all = ["device_set.plist"]
+
+[rule.activity]
+processes = ["Simulator", "simctl", "launchd_sim", "Xcode"]
+
+[rule.regeneration]
+instructions = "Unavailable simulators can't be booted (their runtime is no longer installed); create new ones in Xcode (Window > Devices and Simulators)."

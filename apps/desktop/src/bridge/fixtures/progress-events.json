@@ -1,0 +1,38 @@
+[
+  {
+    "allocated_bytes": 598016,
+    "current": null,
+    "entries": 125,
+    "op_id": "scan-1",
+    "phase": "scanning",
+    "root": "/Users/ada/code",
+    "what": null
+  },
+  {
+    "allocated_bytes": null,
+    "current": null,
+    "entries": null,
+    "op_id": "scan-1",
+    "phase": "analyzing",
+    "root": null,
+    "what": "shared Cargo target directories"
+  },
+  {
+    "allocated_bytes": null,
+    "current": null,
+    "entries": null,
+    "op_id": "scan-1",
+    "phase": "analyzing",
+    "root": null,
+    "what": "classifying"
+  },
+  {
+    "allocated_bytes": null,
+    "current": null,
+    "entries": null,
+    "op_id": "scan-1",
+    "phase": "analyzing",
+    "root": null,
+    "what": "Git worktrees"
+  }
+]

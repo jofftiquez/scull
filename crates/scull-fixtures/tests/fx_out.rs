@@ -206,6 +206,10 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         let wt = s(&fx.root().join("repo-wt"));
         schemas.json(&cli, &["worktrees", "inspect", &wt], "worktree");
         schemas.ndjson(&cli, &["worktrees", "inspect", &wt], "worktree");
+        // `worktrees register` (main, #271): recorded in scull's own data folder only.
+        let reg = ["worktrees", "register", wt.as_str(), "--ttl", "7d"];
+        schemas.json(&cli, &reg, "worktree-registration");
+        schemas.ndjson(&cli, &reg, "worktree-registration");
     }
     schemas.json(&cli, &["caches"], "caches");
     schemas.ndjson(&cli, &["caches"], "caches");
@@ -273,6 +277,22 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         "data-purge",
     );
 
+    // Phase 4 read-only commands from main: forecast check and insights (exit 0 whether or not
+    // an alert fired; both only read history and the volumes' free space).
+    schemas.json(&cli, &["check"], "check");
+    schemas.json(&cli, &["insights"], "insights");
+    // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
+    // config and writes nothing.
+    schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
+    // `schedule` (main, #281) without registering anything: `enable --dry-run` shows the unit
+    // files and commands for the fixture home and stops; `status` with nothing registered runs
+    // no tool.
+    let dry = schemas.json(&cli, &["schedule", "enable", "--dry-run"], "schedule");
+    assert_eq!(dry["data"]["dry_run"], true, "{dry:#}");
+    assert_eq!(dry["data"]["applied"], false, "{dry:#}");
+    let status = schemas.json(&cli, &["schedule", "status"], "schedule");
+    assert_eq!(status["data"]["registered"], false, "{status:#}");
+
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
     clean_history_restore_outputs(&schemas, &cli);
 
@@ -293,7 +313,7 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     let mut unused = Vec::new();
     for e in std::fs::read_dir(workspace().join("crates/scull-cli/schemas")).unwrap() {
         let name = e.unwrap().file_name().to_string_lossy().into_owned();
-        let needs_git = name.starts_with("worktree.");
+        let needs_git = name.starts_with("worktree.") || name.starts_with("worktree-registration.");
         if !used.contains(&name) && !(needs_git && !with_git) {
             unused.push(name);
         }
@@ -816,7 +836,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         &mut seen,
         &schemas,
         &cli,
-        &["check", "--json"],
+        &["approve", "p", "--json"],
         ExitCode::General,
         Some("unsupported_platform"),
     );

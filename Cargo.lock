@@ -1280,8 +1280,10 @@ dependencies = [
  "scull-engine",
  "scull-fixtures",
  "scull-git",
+ "scull-insights",
  "scull-mcp",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-scanner",
  "scull-storage",
@@ -1289,6 +1291,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "toml_edit",
  "unicode-width",
 ]
 
@@ -1303,6 +1306,25 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "scull-desktop-bridge"
+version = "0.0.0"
+dependencies = [
+ "jsonschema",
+ "schemars",
+ "scull-core",
+ "scull-detectors",
+ "scull-engine",
+ "scull-fixtures",
+ "scull-git",
+ "scull-platform",
+ "scull-safety",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1373,6 +1395,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "scull-insights"
+version = "0.0.0"
+dependencies = [
+ "schemars",
+ "scull-core",
+ "scull-insights",
+ "scull-proactive",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "scull-mcp"
 version = "0.0.0"
 dependencies = [
@@ -1386,6 +1422,7 @@ dependencies = [
  "scull-fixtures",
  "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-scanner",
  "scull-storage",
@@ -1408,6 +1445,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys",
+]
+
+[[package]]
+name = "scull-proactive"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+ "schemars",
+ "scull-core",
+ "scull-platform",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1734,6 +1785,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

@@ -1,0 +1,121 @@
+# Java / Kotlin (JVM) rules. Format: rules/README.md.
+# The Gradle caches (`~/.gradle/caches`) and the Maven local repository (`~/.m2/repository`) are
+# package caches located by Rust code in `scull_detectors::caches` (rule IDs `gradle.caches`,
+# `maven.repository`), not rules (CLS-02). Both are inspect-only: neither tool has a command that
+# cleans them (see `scull_detectors::jvm`).
+#
+# A build folder is only a candidate with the build file beside it AND entries only the build
+# tool writes inside it (CLS-03): a `build/` or `target/` next to a build file but holding
+# anything else is left alone. `./gradlew clean` and `mvn clean` delete these folders whole, so
+# the tools treat them as their own.
+
+schema_version = 1
+
+[[rule]]
+id = "gradle.build"
+version = 1
+artifact = "Gradle build output"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["build"]
+
+[rule.markers]
+# A Gradle build script beside it, and what Gradle tasks write inside (`tmp/` task folders,
+# compiled `classes/`, `libs/` jars, Kotlin and Android Gradle Plugin outputs, reports).
+all = [
+  "../{build.gradle,build.gradle.kts}",
+  "{tmp,classes,libs,kotlin,intermediates,generated,reports,test-results,outputs}",
+]
+
+[rule.exclude]
+# Another build system beside it may write `build/` too: ownership is ambiguous, leave it alone
+# (FX-CLS-10: a CMake `build/` is never a Gradle candidate).
+markers = [
+  "../{CMakeLists.txt,meson.build,package.json,setup.py,pyproject.toml,Makefile}",
+]
+within = ["node_modules"]
+
+[rule.activity]
+# The Gradle daemon and the Kotlin compile daemon run as `java`.
+processes = ["gradle", "gradlew", "java"]
+
+[rule.regeneration]
+instructions = "Run `./gradlew build` (or `gradle build`) in the project to rebuild."
+# Rebuilt from the project's sources (dependencies come from the Gradle cache).
+network = false
+long_build = false
+
+[[rule]]
+id = "gradle.project-cache"
+version = 1
+artifact = "Gradle project cache"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".gradle"]
+
+[rule.markers]
+# A Gradle build beside it, and Gradle's per-project state inside.
+all = [
+  "../{settings.gradle,settings.gradle.kts,build.gradle,build.gradle.kts}",
+  "{buildOutputCleanup,vcs-1,file-system.probe,checksums,configuration-cache}",
+]
+
+[rule.exclude]
+# The Gradle user home (`~/.gradle`: caches, wrapper distributions, daemon logs) is never a
+# project cache, even with a build script beside it.
+markers = ["{caches,wrapper,daemon,native,jdks}"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["gradle", "gradlew", "java"]
+
+[rule.regeneration]
+instructions = "Gradle recreates it on the next build (the first build is slower: no configuration cache or file hashes yet)."
+network = false
+long_build = false
+
+[[rule]]
+id = "maven.target"
+version = 1
+artifact = "Maven build output"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["target"]
+
+[rule.markers]
+# The POM beside it, and what Maven plugins write inside.
+all = [
+  "../pom.xml",
+  "{classes,test-classes,maven-status,maven-archiver,generated-sources,surefire-reports}",
+]
+
+[rule.exclude]
+# Cargo, sbt and Leiningen also write `target/`: ownership is ambiguous (mirrors `rust.target`).
+markers = ["../{Cargo.toml,build.sbt,project.clj}"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["mvn", "mvnd", "java"]
+
+[rule.regeneration]
+instructions = "Run `mvn package` (or `mvn install`) in the project to rebuild."
+network = false
+long_build = false

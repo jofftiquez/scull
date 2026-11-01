@@ -1,0 +1,897 @@
+{
+  "cancelled": false,
+  "candidates": [
+    {
+      "action": {
+        "type": "none"
+      },
+      "artifact": "Cargo build output",
+      "category": "project_artifact",
+      "evidence": [
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/api/Cargo.toml"
+        },
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/api/target/CACHEDIR.TAG"
+        },
+        {
+          "kind": "lockfile",
+          "path": "/Users/ada/code/api/Cargo.lock"
+        },
+        {
+          "artifact": "Cargo build output",
+          "kind": "known_artifact"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": false,
+        "symlink": null
+      },
+      "id": "ae808c1cdd5ac09ca1eb1a68e9d8c381",
+      "identity": {
+        "file": "6c8b41",
+        "volume": 2049
+      },
+      "path": "/Users/ada/code/api/target",
+      "project": {
+        "ecosystem": "rust",
+        "name": "api",
+        "root": "/Users/ada/code/api"
+      },
+      "reasons": [
+        {
+          "code": "signal_unavailable",
+          "message": "could not check whether it is in use; not treated as idle",
+          "tier": "S2"
+        },
+        {
+          "code": "recent_activity",
+          "message": "modified within the activity window",
+          "tier": "S3"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": "Run `cargo build` in the project to rebuild."
+      },
+      "rule": {
+        "id": "rust.target",
+        "version": 2
+      },
+      "sizes": {
+        "allocated": 102400,
+        "logical": 82181,
+        "reclaimable": {
+          "bytes": 102400,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S3"
+    },
+    {
+      "action": {
+        "type": "none"
+      },
+      "artifact": "Cargo build output",
+      "category": "project_artifact",
+      "evidence": [
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/app/Cargo.toml"
+        },
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/app/target/CACHEDIR.TAG"
+        },
+        {
+          "kind": "lockfile",
+          "path": "/Users/ada/code/app/Cargo.lock"
+        },
+        {
+          "artifact": "Cargo build output",
+          "kind": "known_artifact"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": false,
+        "symlink": null
+      },
+      "id": "f898f4a2784a7870d73b6f7562b2683d",
+      "identity": {
+        "file": "6c8994",
+        "volume": 2049
+      },
+      "path": "/Users/ada/code/app/target",
+      "project": {
+        "ecosystem": "rust",
+        "name": "app",
+        "root": "/Users/ada/code/app"
+      },
+      "reasons": [
+        {
+          "code": "signal_unavailable",
+          "message": "could not check whether it is in use; not treated as idle",
+          "tier": "S2"
+        },
+        {
+          "code": "recent_activity",
+          "message": "modified within the activity window",
+          "tier": "S3"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": "Run `cargo build` in the project to rebuild."
+      },
+      "rule": {
+        "id": "rust.target",
+        "version": 2
+      },
+      "sizes": {
+        "allocated": 53248,
+        "logical": 33029,
+        "reclaimable": {
+          "bytes": 53248,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S3"
+    },
+    {
+      "action": {
+        "type": "none"
+      },
+      "artifact": "Cargo build output",
+      "category": "project_artifact",
+      "evidence": [
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/vault/Cargo.toml"
+        },
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/vault/target/CACHEDIR.TAG"
+        },
+        {
+          "kind": "lockfile",
+          "path": "/Users/ada/code/vault/Cargo.lock"
+        },
+        {
+          "artifact": "Cargo build output",
+          "kind": "known_artifact"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        },
+        {
+          "kind": "protect_marker",
+          "path": "/Users/ada/code/vault/.scull-protect"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": false,
+        "symlink": null
+      },
+      "id": "ead1ef9e6adf2515e015c1380e7af969",
+      "identity": {
+        "file": "6c8680",
+        "volume": 2049
+      },
+      "path": "/Users/ada/code/vault/target",
+      "project": {
+        "ecosystem": "rust",
+        "name": "vault",
+        "root": "/Users/ada/code/vault"
+      },
+      "reasons": [
+        {
+          "code": "protect_marker",
+          "message": "covered by a .scull-protect marker",
+          "tier": "S3"
+        },
+        {
+          "code": "signal_unavailable",
+          "message": "could not check whether it is in use; not treated as idle",
+          "tier": "S2"
+        },
+        {
+          "code": "recent_activity",
+          "message": "modified within the activity window",
+          "tier": "S3"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": "Run `cargo build` in the project to rebuild."
+      },
+      "rule": {
+        "id": "rust.target",
+        "version": 2
+      },
+      "sizes": {
+        "allocated": 45056,
+        "logical": 24837,
+        "reclaimable": {
+          "bytes": 45056,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S3"
+    },
+    {
+      "action": {
+        "type": "quarantine"
+      },
+      "artifact": "Git worktree (agent-1)",
+      "category": "worktree",
+      "evidence": [
+        {
+          "kind": "signal_unavailable",
+          "reason": "in-use detection unavailable; re-checked before execution",
+          "signal": "in use"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": null,
+        "symlink": null
+      },
+      "id": "2ddac7be4af44614fe2386a73265bc79",
+      "identity": {
+        "file": "6c84cf",
+        "volume": 2049
+      },
+      "path": "/Users/ada/code/app-agent-1",
+      "project": {
+        "ecosystem": "git",
+        "name": "app",
+        "root": "/Users/ada/code/app"
+      },
+      "reasons": [
+        {
+          "code": "signal_unavailable",
+          "message": "in use unknown (in-use detection unavailable; re-checked before execution): assumed the protective answer",
+          "tier": "S2"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": null
+      },
+      "rule": {
+        "id": "git.worktree",
+        "version": 1
+      },
+      "sizes": {
+        "allocated": 28672,
+        "logical": 8528,
+        "reclaimable": {
+          "bytes": 28672,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S2"
+    },
+    {
+      "action": {
+        "type": "none"
+      },
+      "artifact": "Installed npm dependencies",
+      "category": "project_artifact",
+      "evidence": [
+        {
+          "kind": "marker",
+          "path": "/Users/ada/code/web/package.json"
+        },
+        {
+          "kind": "lockfile",
+          "path": "/Users/ada/code/web/package-lock.json"
+        },
+        {
+          "artifact": "Installed npm dependencies",
+          "kind": "known_artifact"
+        },
+        {
+          "kind": "last_modified",
+          "newest_unix": 1793467666,
+          "sampled": false
+        },
+        {
+          "kind": "signal_unavailable",
+          "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+          "signal": "in_use"
+        }
+      ],
+      "flags": {
+        "active": null,
+        "cloud_placeholder": false,
+        "cross_mount": false,
+        "hardlinked": false,
+        "symlink": null
+      },
+      "id": "0b92668afd0dc5842e0240b50b8af7d3",
+      "identity": {
+        "file": "6c8669",
+        "volume": 2049
+      },
+      "path": "/Users/ada/code/web/node_modules",
+      "project": {
+        "ecosystem": "node",
+        "name": "web",
+        "root": "/Users/ada/code/web"
+      },
+      "reasons": [
+        {
+          "code": "signal_unavailable",
+          "message": "could not check whether it is in use; not treated as idle",
+          "tier": "S2"
+        },
+        {
+          "code": "recent_activity",
+          "message": "modified within the activity window",
+          "tier": "S3"
+        }
+      ],
+      "regeneration": {
+        "cost": {
+          "type": "unknown"
+        },
+        "instructions": "Reinstall with your package manager (`npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable`, `bun install --frozen-lockfile`)."
+      },
+      "rule": {
+        "id": "node.node-modules",
+        "version": 2
+      },
+      "sizes": {
+        "allocated": 28672,
+        "logical": 12444,
+        "reclaimable": {
+          "bytes": 28672,
+          "confidence": "high",
+          "shared_bytes": 0
+        }
+      },
+      "tier": "S3"
+    }
+  ],
+  "config_warnings": [],
+  "entries_scanned": 125,
+  "finished_at": 1793467667,
+  "history": {
+    "disappeared": 0,
+    "new_items": 5,
+    "state": "recorded"
+  },
+  "issues": [],
+  "issues_truncated": 0,
+  "projects": [
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 102400
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "api",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 102400
+      },
+      "root": "/Users/ada/code/api",
+      "total_allocated": 122880
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 53248
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": "/Users/ada/code/app",
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "app",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 53248
+      },
+      "root": "/Users/ada/code/app",
+      "total_allocated": 335872
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "badge": null,
+      "candidates": 0,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": "/Users/ada/code/app-agent-1",
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "app-agent-1",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 0
+      },
+      "root": "/Users/ada/code/app-agent-1",
+      "total_allocated": 28672
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 45056
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "rust"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "Cargo.toml"
+      ],
+      "name": "vault",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 45056
+      },
+      "root": "/Users/ada/code/vault",
+      "total_allocated": 65536
+    },
+    {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 28672
+      },
+      "badge": "S3",
+      "candidates": 1,
+      "ecosystems": [
+        "node"
+      ],
+      "git_worktree": null,
+      "markers": [
+        "package.json"
+      ],
+      "name": "web",
+      "newest_mtime": 1793467666,
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 0,
+        "s3": 28672
+      },
+      "root": "/Users/ada/code/web",
+      "total_allocated": 40960
+    }
+  ],
+  "roots": [
+    "/Users/ada/code"
+  ],
+  "scan_id": "scan_6ae62513d61229931118927e",
+  "signals_unavailable": [
+    {
+      "affected": 5,
+      "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+      "signal": "in_use"
+    },
+    {
+      "affected": 1,
+      "reason": "in-use detection unavailable; re-checked before execution",
+      "signal": "in use"
+    }
+  ],
+  "started_at": 1793467667,
+  "totals": {
+    "allocated": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 0,
+      "s3": 229376
+    },
+    "count": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 0,
+      "s3": 4
+    },
+    "logical": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 0,
+      "s3": 152491
+    },
+    "reclaimable": {
+      "s0": 0,
+      "s1": 0,
+      "s2": 0,
+      "s3": 229376
+    },
+    "worktrees": {
+      "allocated": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 28672,
+        "s3": 0
+      },
+      "count": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 1,
+        "s3": 0
+      },
+      "reclaimable": {
+        "s0": 0,
+        "s1": 0,
+        "s2": 28672,
+        "s3": 0
+      }
+    }
+  },
+  "worktree_problems": [],
+  "worktrees": [
+    {
+      "allocated": 335872,
+      "candidate": null,
+      "common_dir": "/Users/ada/code/app/.git",
+      "decision": {
+        "action": {
+          "type": "none"
+        },
+        "artifact_cleanup": "allowed",
+        "artifacts": [],
+        "evidence": [
+          {
+            "kind": "signal_unavailable",
+            "reason": "in-use detection unavailable; re-checked before execution",
+            "signal": "in use"
+          },
+          {
+            "kind": "last_modified",
+            "newest_unix": 1793467666,
+            "sampled": false
+          },
+          {
+            "kind": "signal_unavailable",
+            "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+            "signal": "in_use"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "protected_root",
+            "message": "main working tree of the repository: only linked worktrees are removable",
+            "tier": "S3"
+          },
+          {
+            "code": "signal_unavailable",
+            "message": "in use unknown (in-use detection unavailable; re-checked before execution): assumed the protective answer",
+            "tier": "S2"
+          }
+        ],
+        "tier": "S3",
+        "unique_ignored": []
+      },
+      "inside_roots": true,
+      "kind": "main",
+      "path": "/Users/ada/code/app",
+      "state": {
+        "activity": {
+          "status": "known",
+          "value": {
+            "complete": true,
+            "entries_sampled": 76,
+            "newest_path": null,
+            "newest_unix": 1793467666
+          }
+        },
+        "git_dir": "/Users/ada/code/app/.git",
+        "head": {
+          "status": "known",
+          "value": {
+            "kind": "branch",
+            "name": "refs/heads/main",
+            "oid": "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+          }
+        },
+        "head_reachability": {
+          "status": "known",
+          "value": {
+            "kind": "reachable_from",
+            "refs": [
+              "refs/heads/main"
+            ],
+            "total": 1
+          }
+        },
+        "ignored": {
+          "status": "known",
+          "value": {
+            "paths": [
+              "target/"
+            ],
+            "total": 1,
+            "truncated": false
+          }
+        },
+        "kind": "main",
+        "lock": {
+          "state": "unlocked"
+        },
+        "merge": {
+          "method": "unknown",
+          "reason": "no default branch ref found (remote HEAD, main or master)"
+        },
+        "missing": false,
+        "name": null,
+        "path": "/Users/ada/code/app",
+        "repo": {
+          "bare": false,
+          "common_dir": "/Users/ada/code/app/.git",
+          "main_worktree": "/Users/ada/code/app"
+        },
+        "submodules": {
+          "status": "known",
+          "value": []
+        },
+        "tracked_changes": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "unpushed": {
+          "status": "known",
+          "value": {
+            "count": 1,
+            "oids": [
+              "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+            ],
+            "truncated": false
+          }
+        },
+        "untracked": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "upstream": {
+          "status": "known",
+          "value": null
+        }
+      }
+    },
+    {
+      "allocated": 28672,
+      "candidate": "2ddac7be4af44614fe2386a73265bc79",
+      "common_dir": "/Users/ada/code/app/.git",
+      "decision": {
+        "action": {
+          "type": "quarantine"
+        },
+        "artifact_cleanup": "allowed",
+        "artifacts": [],
+        "evidence": [
+          {
+            "kind": "signal_unavailable",
+            "reason": "in-use detection unavailable; re-checked before execution",
+            "signal": "in use"
+          },
+          {
+            "kind": "last_modified",
+            "newest_unix": 1793467666,
+            "sampled": false
+          },
+          {
+            "kind": "signal_unavailable",
+            "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+            "signal": "in_use"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "signal_unavailable",
+            "message": "in use unknown (in-use detection unavailable; re-checked before execution): assumed the protective answer",
+            "tier": "S2"
+          }
+        ],
+        "tier": "S2",
+        "unique_ignored": []
+      },
+      "inside_roots": true,
+      "kind": "linked",
+      "path": "/Users/ada/code/app-agent-1",
+      "state": {
+        "activity": {
+          "status": "known",
+          "value": {
+            "complete": true,
+            "entries_sampled": 6,
+            "newest_path": null,
+            "newest_unix": 1793467666
+          }
+        },
+        "git_dir": "/Users/ada/code/app/.git/worktrees/app-agent-1",
+        "head": {
+          "status": "known",
+          "value": {
+            "kind": "branch",
+            "name": "refs/heads/agent-1",
+            "oid": "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+          }
+        },
+        "head_reachability": {
+          "status": "known",
+          "value": {
+            "kind": "reachable_from",
+            "refs": [
+              "refs/heads/agent-1"
+            ],
+            "total": 1
+          }
+        },
+        "ignored": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "kind": "linked",
+        "lock": {
+          "state": "unlocked"
+        },
+        "merge": {
+          "default_ref": "refs/heads/main",
+          "method": "ancestor_of_default"
+        },
+        "missing": false,
+        "name": "app-agent-1",
+        "path": "/Users/ada/code/app-agent-1",
+        "repo": {
+          "bare": false,
+          "common_dir": "/Users/ada/code/app/.git",
+          "main_worktree": "/Users/ada/code/app"
+        },
+        "submodules": {
+          "status": "known",
+          "value": []
+        },
+        "tracked_changes": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "unpushed": {
+          "status": "known",
+          "value": {
+            "count": 1,
+            "oids": [
+              "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+            ],
+            "truncated": false
+          }
+        },
+        "untracked": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "upstream": {
+          "status": "known",
+          "value": null
+        }
+      }
+    }
+  ]
+}

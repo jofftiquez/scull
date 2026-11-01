@@ -574,6 +574,8 @@ fn precedence_table_every_field_every_layer() {
     let mut covered: Vec<&str> = table.iter().map(|t| t.0).collect();
     covered.extend(ADDITIVE_FIELDS);
     covered.push("mcp.destructive");
+    // Alert policies are user-file settings (no environment variables or flags).
+    covered.extend(FIELDS.iter().filter(|f| f.starts_with("proactive.")));
     covered.push("quarantine.bases");
     covered.sort();
     let mut all = FIELDS.to_vec();

@@ -41,6 +41,7 @@
 
 mod duration;
 mod layer;
+mod proactive;
 mod repo;
 mod roots;
 
@@ -48,6 +49,11 @@ pub use duration::DurationSpec;
 pub use layer::{
     ConfigLayer, ENV_VARS, EnvLayer, EnvVar, ForgeLayer, McpLayer, Origin, OutputLayer,
     QuarantineLayer, ResolvedConfig, RulesLayer, ScanLayer, resolve,
+};
+pub use proactive::{
+    Budget, DEFAULT_ALERT_DAYS, DEFAULT_RESERVE_GIB, DEFAULT_SPIKE_GIB, DEFAULT_SPIKE_MIN_GIB,
+    DEFAULT_SPIKE_PERCENT, DEFAULT_SPIKE_WINDOW, DEFAULT_STALE_BUILD, DEFAULT_STALE_CACHE,
+    DEFAULT_STALE_WORKTREE, ProactiveConfig, ProactiveLayer,
 };
 pub use repo::{
     ConfigWarning, ConfigWarningCode, REPO_CONFIG_FILE, REPO_PROTECT_MARKER, RepoPolicy,
@@ -69,7 +75,7 @@ pub const DEFAULT_MCP_MAX_RESULTS: u32 = 1000;
 
 /// Every effective config field, as the dotted key used in TOML, [`ResolvedConfig::origins`]
 /// and `scull config show`.
-pub const FIELDS: [&str; 18] = [
+pub const FIELDS: [&str; 28] = [
     "scan.roots",
     "scan.exclude",
     "scan.protect",
@@ -86,6 +92,16 @@ pub const FIELDS: [&str; 18] = [
     "forge.enabled",
     "output.color",
     "output.units",
+    "proactive.reserve_gib",
+    "proactive.alert_days",
+    "proactive.stale_worktree",
+    "proactive.stale_build",
+    "proactive.stale_cache",
+    "proactive.spike_gib",
+    "proactive.spike_window",
+    "proactive.spike_percent",
+    "proactive.spike_min_gib",
+    "proactive.budgets",
     "quarantine.base",
     "quarantine.bases",
 ];
@@ -117,6 +133,8 @@ pub struct Config {
     pub forge: ForgeConfig,
     /// Terminal output.
     pub output: OutputConfig,
+    /// Alert policies for proactive protection (PRD §16).
+    pub proactive: ProactiveConfig,
     /// Where quarantined items are kept.
     pub quarantine: QuarantineConfig,
 }
@@ -312,6 +330,11 @@ impl Config {
             *e = (*e).max(*t);
         }
         s.min_tier = min;
+        for b in &mut c.proactive.budgets {
+            if let Some(p) = &b.path {
+                b.path = Some(expand_home(p, home));
+            }
+        }
         let q = &mut c.quarantine;
         q.base = q.base.as_ref().map(|p| expand_home(p, home));
         q.bases = q

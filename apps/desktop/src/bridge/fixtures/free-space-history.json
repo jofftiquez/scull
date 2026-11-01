@@ -1,0 +1,194 @@
+{
+  "detail": null,
+  "samples": [
+    {
+      "free_bytes": 103079215104,
+      "sampled_at": 1790856000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 100405597962,
+      "sampled_at": 1790942400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 97731980820,
+      "sampled_at": 1791028800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 95058363679,
+      "sampled_at": 1791115200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 92384746537,
+      "sampled_at": 1791201600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 89711129395,
+      "sampled_at": 1791288000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 87037512253,
+      "sampled_at": 1791374400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 84363895112,
+      "sampled_at": 1791460800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 105312598098,
+      "sampled_at": 1791547200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 102638980956,
+      "sampled_at": 1791633600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 99965363814,
+      "sampled_at": 1791720000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 97291746673,
+      "sampled_at": 1791806400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 94618129531,
+      "sampled_at": 1791892800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 91944512389,
+      "sampled_at": 1791979200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 89270895247,
+      "sampled_at": 1792065600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 86597278106,
+      "sampled_at": 1792152000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 83923660964,
+      "sampled_at": 1792238400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 81250043822,
+      "sampled_at": 1792324800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 78576426680,
+      "sampled_at": 1792411200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 85566485955,
+      "sampled_at": 1792497600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 81808389571,
+      "sampled_at": 1792584000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 78050293187,
+      "sampled_at": 1792670400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 74292196803,
+      "sampled_at": 1792756800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 70534100419,
+      "sampled_at": 1792843200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 66776004035,
+      "sampled_at": 1792929600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 63017907651,
+      "sampled_at": 1793016000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 59259811267,
+      "sampled_at": 1793102400,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 55501714883,
+      "sampled_at": 1793188800,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 51743618499,
+      "sampled_at": 1793275200,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 47985522115,
+      "sampled_at": 1793361600,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    },
+    {
+      "free_bytes": 44227425731,
+      "sampled_at": 1793448000,
+      "total_bytes": 530428461056,
+      "volume_id": "/"
+    }
+  ],
+  "since": 1790856000,
+  "state": "ok",
+  "volume_id": "/"
+}
