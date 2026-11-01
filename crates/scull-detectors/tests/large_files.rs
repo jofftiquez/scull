@@ -50,6 +50,7 @@ fn plan_params() -> PlanParams {
         machine_id: "machine-a".into(),
         user: "me".into(),
         origin: PlanOrigin::Cli,
+        operations_watermark: None,
     }
 }
 

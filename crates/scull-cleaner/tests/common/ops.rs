@@ -10,8 +10,11 @@ use scull_core::{OperationId, Plan};
 use scull_engine::{CancelToken, PlatformOwnerOnly, now_unix};
 use scull_fixtures::{Fixture, NodeLock};
 use scull_storage::{ApprovalMethod, OperationEnd, OperationStart, Store};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 /// * `web/node_modules`: npm project without a lockfile → S2, quarantine;
 /// * `app/target`: Cargo build output touched within the activity window (FX-CLS-09 bumps it
@@ -114,6 +117,24 @@ pub fn op_dir(fx: &Fixture, op: &str) -> PathBuf {
         .join(OperationId::from_suffix(op).unwrap().as_str())
 }
 
+#[cfg(unix)]
 pub fn mode(p: &Path) -> u32 {
     std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777
+}
+
+/// `p` in one spelling for comparisons across OSs: canonical (long names, not 8.3 aliases; the
+/// OS's separators), without Windows' verbatim prefix. For a path that doesn't exist, its
+/// parent is canonicalized and the last component appended.
+pub fn canon(p: &std::path::Path) -> PathBuf {
+    let c = std::fs::canonicalize(p).unwrap_or_else(|_| {
+        let parent = p.parent().expect("a parent");
+        std::fs::canonicalize(parent)
+            .unwrap_or_else(|_| canon(parent))
+            .join(p.file_name().expect("a name"))
+    });
+    let s = c.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => c,
+    }
 }

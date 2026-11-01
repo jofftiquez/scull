@@ -133,9 +133,26 @@ pub(crate) fn test_sandbox() -> Option<PathBuf> {
 
 /// Under the test sandbox, why `path` may not be used (it is outside the sandbox, or the
 /// sandbox is not an absolute path). `None` outside the harness or when `path` is inside.
+///
+/// Containment is judged on canonical spellings (links resolved; on Windows an 8.3 short name
+/// such as `RUNNER~1` spelled out in full), so the same folder written two ways is inside and
+/// a link out of the sandbox is not. A path that doesn't exist is resolved through its nearest
+/// existing ancestor.
+///
+/// A `..` component in either path is refused outright: in a part that doesn't exist yet it
+/// would be kept lexically by the canonical form and could climb out of the sandbox.
 pub(crate) fn outside_test_sandbox(path: &Path) -> Option<String> {
-    let sandbox = test_sandbox()?;
-    if sandbox.is_absolute() && path.is_absolute() && path.starts_with(&sandbox) {
+    outside_sandbox(path, &test_sandbox()?)
+}
+
+/// [`outside_test_sandbox`] for a given sandbox.
+fn outside_sandbox(path: &Path, sandbox: &Path) -> Option<String> {
+    if sandbox.is_absolute()
+        && path.is_absolute()
+        && !has_parent_dir(path)
+        && !has_parent_dir(sandbox)
+        && scull_engine::paths::canon(path).starts_with(scull_engine::paths::canon(sandbox))
+    {
         return None;
     }
     Some(format!(
@@ -144,6 +161,12 @@ pub(crate) fn outside_test_sandbox(path: &Path) -> Option<String> {
         path.display(),
         sandbox.display()
     ))
+}
+
+/// Whether `p` has a `..` component.
+fn has_parent_dir(p: &Path) -> bool {
+    p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 /// One operation's quarantine folder on one volume.
@@ -245,7 +268,19 @@ fn prepare_configured_base(
     if !base.is_absolute() {
         return impossible("is not an absolute path".into());
     }
-    if let Some(item) = plan_paths.iter().find(|p| base.starts_with(p)) {
+    // A `..` in a part that doesn't exist yet is kept lexically by the canonical form, so it
+    // could hide that the base is inside an item (`/p/missing/../item/q`): never accepted.
+    if has_parent_dir(base) {
+        return impossible("contains a `..` component".into());
+    }
+    // Inside an item however either is spelled: lexically, or canonically (links resolved; on
+    // Windows `RUNNER~1` and `runneradmin` are the same folder, and so are `/` and `\`),
+    // case-folded where the OS folds case. Refusing on any match errs toward "impossible".
+    let canonical_base = scull_engine::paths::canon(base);
+    if let Some(item) = plan_paths.iter().find(|p| {
+        scull_engine::paths::is_within(base, p)
+            || scull_engine::paths::is_within(&canonical_base, &scull_engine::paths::canon(p))
+    }) {
         return impossible(format!(
             "is inside {}, an item being cleaned",
             item.display()
@@ -276,6 +311,20 @@ fn prepare_configured_base(
         Ok(m) if m.kind.is_link() => return impossible("is a link, never followed".into()),
         Ok(m) => return impossible(format!("is a {}, not a directory", m.kind)),
         Err(e) => return impossible(format!("can't be read: {e}")),
+    }
+    // Now that it exists, its real path, with nothing kept lexically, must still be outside
+    // every item.
+    let Some(real_base) = scull_engine::paths::canon_exact(base) else {
+        return impossible("can't be resolved to its real path".into());
+    };
+    if let Some(item) = plan_paths
+        .iter()
+        .find(|p| scull_engine::paths::is_within(&real_base, &scull_engine::paths::canon(p)))
+    {
+        return impossible(format!(
+            "is inside {}, an item being cleaned",
+            item.display()
+        ));
     }
     // Created now or earlier: still the item's volume (a mount may sit at the base itself).
     match Native.metadata(base).ok().and_then(|m| m.identity) {
@@ -758,5 +807,75 @@ fn purge_one(entry: &QuarantineEntry) -> PurgeOutcome {
             PurgeOutcome::AlreadyGone
         }
         Err(e) => kept(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layout of the `..` cases: `root/app/target` is the item being cleaned.
+    fn layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = scull_engine::paths::canon(tmp.path());
+        let item = root.join("app").join("target");
+        std::fs::create_dir_all(&item).expect("item");
+        (tmp, root, item)
+    }
+
+    /// `/p/x_missing/../item/q`: the canonical form keeps the missing part lexically, which
+    /// hid that the base is inside the item. Refused for its `..`; nothing is created.
+    #[test]
+    fn a_configured_base_with_dot_dot_is_refused() {
+        let (_tmp, root, item) = layout();
+        let base = root
+            .join("x_missing")
+            .join("..")
+            .join("app")
+            .join("target")
+            .join("q");
+        let parent = item.parent().expect("parent").to_path_buf();
+        match prepare_configured_base(&base, &parent, std::slice::from_ref(&item)) {
+            Err(QuarantineRefusal::Impossible(why)) => assert!(why.contains("`..`"), "{why}"),
+            other => panic!("expected impossible, got {other:?}"),
+        }
+        assert!(!root.join("x_missing").exists());
+        assert!(!item.join("q").exists());
+    }
+
+    /// A base inside the item without `..` is refused too, and one beside it is accepted.
+    #[test]
+    fn a_configured_base_inside_an_item_is_refused_and_beside_it_accepted() {
+        let (_tmp, root, item) = layout();
+        let parent = item.parent().expect("parent").to_path_buf();
+        let inside = item.join("q");
+        assert!(matches!(
+            prepare_configured_base(&inside, &parent, std::slice::from_ref(&item)),
+            Err(QuarantineRefusal::Impossible(_))
+        ));
+        assert!(!inside.exists());
+        let beside = root.join("q");
+        assert!(prepare_configured_base(&beside, &parent, std::slice::from_ref(&item)).is_ok());
+        assert!(beside.is_dir());
+    }
+
+    #[test]
+    fn the_sandbox_guard_refuses_dot_dot_and_paths_outside() {
+        let (_tmp, root, _item) = layout();
+        let sandbox = root.join("app");
+        assert!(outside_sandbox(&sandbox.join("target"), &sandbox).is_none());
+        assert!(outside_sandbox(&sandbox.join("new").join("q"), &sandbox).is_none());
+        // Climbs out through a part that doesn't exist.
+        let escape = sandbox
+            .join("missing")
+            .join("..")
+            .join("..")
+            .join("elsewhere");
+        assert!(outside_sandbox(&escape, &sandbox).is_some());
+        // Even one that would land back inside.
+        let back = sandbox.join("missing").join("..").join("target");
+        assert!(outside_sandbox(&back, &sandbox).is_some());
+        assert!(outside_sandbox(&root, &sandbox).is_some());
+        assert!(outside_sandbox(&sandbox, &sandbox.join("..").join("app")).is_some());
     }
 }

@@ -43,7 +43,8 @@ pub const TOOLS: [&str; 19] = [
     "dotnet",
     "gradle",
     "mvn",
-    // Long-tail tools (P5-DET-05), never run on this branch: a fake records any start.
+    // Long-tail tools (P5-DET-05): ccache, conan, arduino-cli, deno and cypress run (#44);
+    // pod, playwright and puppeteer are never started (a fake records any start).
     "ccache",
     "conan",
     "arduino-cli",
@@ -322,38 +323,93 @@ fn fake_main(dir: &Path, tool: &str, args: Vec<String>, script: Option<&str>) ->
         {
             env("NUGET_PACKAGES").map(|c| (c, true))
         }
-        // `gradle` and `mvn` have no cleanup invocation: a call is recorded, then refused.
+        // ccache --clear: CCACHE_DIR, with the config path pinned (keeps ccache.conf).
+        ("ccache", []) if args == ["--clear"] && get_env("CCACHE_CONFIGPATH").is_some() => {
+            env("CCACHE_DIR").map(|c| (c, true))
+        }
+        // conan cache clean: temporary folders only (a prune here), in the storage folder named
+        // by `-cc core.cache:storage_path=`, which must be CONAN_HOME/p.
+        ("conan", ["cache", "clean"])
+            if ["--source", "--build", "--temp", "core:non_interactive=True"]
+                .iter()
+                .all(|f| args.iter().any(|a| a == f)) =>
+        {
+            let storage = args
+                .iter()
+                .find_map(|a| a.strip_prefix("core.cache:storage_path="))
+                .map(PathBuf::from);
+            match (storage, env("CONAN_HOME")) {
+                (Some(s), Some(h)) if s == h.join("p") => Some((s, false)),
+                _ => None,
+            }
+        }
+        ("arduino-cli", ["cache", "clean"]) => {
+            env("ARDUINO_DIRECTORIES_DOWNLOADS").map(|c| (c, true))
+        }
+        ("deno", ["clean"]) => env("DENO_DIR").map(|c| (c, true)),
+        ("cypress", ["cache", "prune"]) => env("CYPRESS_CACHE_FOLDER").map(|c| (c, false)),
+        // `gradle`, `mvn`, `pod`, `playwright` and `puppeteer` have no invocation scull runs:
+        // a call is recorded, then refused.
         _ => None,
     };
     let Some((target, wipe)) = job else {
         eprintln!("fake {tool}: unsupported invocation {args:?}");
         return 64;
     };
-    if !target.join(GUARD).is_file() {
+    if !has_guard(&target) {
         eprintln!("fake {tool}: {} is not a fake cache", target.display());
         return 65;
     }
-    clean(&target, wipe);
+    clean(
+        &target,
+        wipe,
+        if tool == "ccache" {
+            &["ccache.conf"]
+        } else {
+            &[]
+        },
+    );
     println!("fake {tool}: cleaned {}", target.display());
     get("exit").and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
-/// Prune: remove files named `unused*`; wipe: remove every entry but the guard. Never follows
+/// Whether `dir` holds a guard file (a name starting with [`GUARD`]) directly or one folder
+/// down: caches whose layout scull checks entry by entry (Deno, Cypress, Arduino) keep it
+/// inside an allowed folder, e.g. `gen/FAKE_CACHE` or `packages/FAKE_CACHE.zip`.
+fn has_guard(dir: &Path) -> bool {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        let is_guard = |n: &std::ffi::OsStr| n.to_string_lossy().starts_with(GUARD);
+        match e.file_type() {
+            Ok(ft) if ft.is_file() => is_guard(&e.file_name()),
+            Ok(ft) if ft.is_dir() => fs::read_dir(e.path()).is_ok_and(|inner| {
+                inner
+                    .flatten()
+                    .any(|i| i.file_type().is_ok_and(|t| t.is_file()) && is_guard(&i.file_name()))
+            }),
+            _ => false,
+        }
+    })
+}
+
+/// Prune: remove files named `unused*`; wipe: remove every file but guards (names starting with
+/// [`GUARD`]) and `keep` (ccache's configuration), then the folders left empty. Never follows
 /// links (they are removed as entries).
-fn clean(dir: &Path, wipe: bool) {
+fn clean(dir: &Path, wipe: bool, keep: &[&str]) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
         let Ok(ft) = e.file_type() else { continue };
-        if name == GUARD {
+        if name.starts_with(GUARD) || keep.contains(&name.as_str()) {
             continue;
         }
         if ft.is_dir() {
+            clean(&p, wipe, &[]);
             if wipe {
-                let _ = fs::remove_dir_all(&p);
-            } else {
-                clean(&p, false);
+                let _ = fs::remove_dir(&p); // only if left empty
             }
         } else if wipe || name.starts_with("unused") {
             let _ = fs::remove_file(&p);

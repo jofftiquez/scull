@@ -39,6 +39,18 @@
           "$ref": "#/$defs/FileIdentity",
           "description": "Its no-follow identity when created."
         },
+        "marker": {
+          "description": "The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.",
+          "type": "string"
+        },
+        "mtime_unix": {
+          "description": "Its modification time when created (Unix seconds), when the OS reports one.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "relative": {
           "description": "The reserve, relative to the data directory (always [`reserve_relative`]).",
           "type": "string"
@@ -67,7 +79,8 @@
         "size_bytes",
         "allocated_bytes",
         "volume_id",
-        "created_at"
+        "created_at",
+        "marker"
       ],
       "type": "object"
     },

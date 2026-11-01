@@ -213,6 +213,7 @@ fn plan_run_check(fx: &Fixture, q: &QuickClean) -> (QuickCleanReport, InvariantR
                 machine_id: "fx-machine".into(),
                 user: "tester".into(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: None,
             },
         )
         .unwrap();

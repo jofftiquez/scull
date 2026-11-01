@@ -549,6 +549,7 @@ fn fx_lnx_06_btrfs_subvolume_inside_candidate_is_a_mount_boundary() {
             machine_id: exec::engine::MACHINE.into(),
             user: exec::engine::USER.into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         vec![PlanItem::from_candidate(plain).unwrap()],
     )

@@ -232,6 +232,11 @@ pub struct PlanParams {
     pub user: String,
     /// Which surface created the plan.
     pub origin: PlanOrigin,
+    /// SAFE-09: `scull_storage::Store::operations_watermark`, read **before** the scan the
+    /// items come from started: every operation recorded after it invalidates the plan.
+    /// Required for a plan built from a scan; `None` only for a plan that comes from no scan,
+    /// which then falls back to its creation time (operations started at or after it).
+    pub operations_watermark: Option<u64>,
 }
 
 /// An immutable cleanup plan (PRD §10.4, SAFE-11).
@@ -270,6 +275,7 @@ pub struct PlanParams {
 ///     machine_id: "machine-a".into(),
 ///     user: "me".into(),
 ///     origin: PlanOrigin::Cli,
+///     operations_watermark: Some(0),
 /// };
 /// let plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();
 /// assert!(plan.verify(1_800_000_060, "machine-a", "me").is_ok());
@@ -293,6 +299,12 @@ pub struct Plan {
     machine_id: String,
     user: String,
     origin: PlanOrigin,
+    /// SAFE-09: the position of the last recorded operation in scull's database when the scan
+    /// the items came from started (operations are append-only, so positions only grow). An
+    /// operation recorded after this position touched the targets after the scan saw them and
+    /// invalidates the plan. Absent in plans that predate it; those use the creation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operations_watermark: Option<u64>,
     items: Vec<PlanItem>,
     content_hash: ContentHash,
 }
@@ -345,11 +357,19 @@ impl Plan {
             machine_id: params.machine_id,
             user: params.user,
             origin: params.origin,
+            operations_watermark: params.operations_watermark,
             items,
             content_hash: ContentHash("0".repeat(ContentHash::HEX_LEN)),
         };
         plan.content_hash = plan.compute_hash()?;
         Ok(plan)
+    }
+
+    /// SAFE-09: the last recorded operation's position in scull's database when the scan the
+    /// items came from started. Every operation recorded after it invalidates the plan. `None`
+    /// for plans without one: then operations started at or after [`Plan::created_unix`] do.
+    pub fn operations_watermark(&self) -> Option<u64> {
+        self.operations_watermark
     }
 
     /// Schema version the plan was written with.
@@ -799,6 +819,7 @@ mod tests {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin,
+            operations_watermark: None,
         }
     }
 

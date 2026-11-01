@@ -102,7 +102,7 @@ pub fn parse_tool(s: &str) -> Result<Untick, String> {
         // Inspect-only (never run); accepted so every reported name round-trips.
         "gradle" => vec![CacheTool::Gradle],
         "maven" => vec![CacheTool::Maven],
-        // Long-tail tool caches (P5-DET-05): shown, never run in this build.
+        // Long-tail tool caches (P5-DET-05); ccache, conan, arduino, deno and cypress run (#44).
         "ccache" => vec![CacheTool::Ccache],
         "conan" => vec![CacheTool::Conan],
         "vcpkg" => vec![CacheTool::Vcpkg],
@@ -368,6 +368,7 @@ fn skip_code(r: &SkipReason) -> &'static str {
         SkipReason::NotOrphanRemovable(_) => "d36_excluded",
         SkipReason::InspectOnly => "inspect_only",
         SkipReason::NotSupportedYet => "not_supported_yet",
+        SkipReason::NotScoped(_) => "not_scoped",
     }
 }
 
@@ -574,6 +575,14 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
         ));
     };
     let env = CacheEnv::new(home, os, |k| std::env::var(k).ok());
+    // SAFE-09: before the caches are measured and located, the last recorded operation; any
+    // later one invalidates the plan of record. Read only when something may run (a preview
+    // never creates the database).
+    let watermark = if wants_run {
+        Some(exec::open_store()?.operations_watermark()?)
+    } else {
+        None
+    };
     let engine = pipeline::engine(&loaded, &[], false, ui)?;
     let bridge = CancelBridge::start();
     let caches = engine.caches(
@@ -689,6 +698,7 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
             machine_id: who.machine_id.clone(),
             user: who.user.clone(),
             origin: PlanOrigin::Cli,
+            operations_watermark: watermark,
         },
     )?;
     store.insert_plan(&audit_plan)?;

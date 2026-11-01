@@ -561,9 +561,9 @@ until then." One confirmation covers all tools; no elevated confirmation is need
 |---|---|
 | `--confirm` | Run the commands without asking |
 | `--dry-run` | Only show what would run; never ask |
-| `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune (npm, uv). pnpm and conda are never wiped. |
-| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`, `pip`, `uv`, `conda`, `go`, `go-build`, `go-mod`, `nuget`) |
-| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several. Never offered for conda's `pkgs/` or the Go module cache. |
+| `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune (npm, uv). pnpm, conda and Cypress are never wiped. |
+| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`, `pip`, `uv`, `conda`, `go`, `go-build`, `go-mod`, `nuget`, `ccache`, `conan`, `arduino`, `deno`, `cypress`) |
+| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several. Never offered for conda's `pkgs/`, the Go module cache, ccache, Conan, Deno or Cypress. |
 | `--allow-root` | Allow running as root or Administrator |
 
 Before each tool runs, scull checks again that its cache is the same folder, not a link, on
@@ -581,11 +581,22 @@ Not run (1):
   npm           /home/me/.npm/_cacache: classified S2: tool commands are allowed at S0/S1 only
 ```
 
-`scull caches` also lists newer tool caches (ccache, Conan, Arduino, CocoaPods, Deno,
-Playwright, Cypress, Puppeteer, and inspect-only ones such as vcpkg, SwiftPM, Coursier, Zig,
-Electron, Homebrew and the Nix store). Quick Clean doesn't run their commands in this build
-yet: they are listed under "Not run" with the reason `not_supported_yet` and are never offered
-as orphaned caches.
+Quick Clean also runs five newer tool caches, each pointed at exactly the folder scull found:
+
+| Tool | Command | Notes |
+|---|---|---|
+| ccache | `ccache --clear` | Keeps `ccache.conf`. No config file is read during the run, so remote storage is never touched. |
+| Conan 2 | `conan cache clean --source --build --temp` | Temporary folders only: packages and the download cache stay. Skipped (`not_scoped`) if a `.conanrc` above scull's working folder would redirect Conan. |
+| Arduino CLI | `arduino-cli cache clean` | The download cache (`staging/`). Skipped (`not_scoped`) unless it holds only downloaded archives in `packages/` and `libraries/` (never a sketchbook). |
+| Deno | `deno clean` | Removes the whole Deno cache folder. Skipped (`not_scoped`) if it holds anything that isn't Deno's own cache: `location_data/` (web storage of Deno programs), REPL history, an installed `bin/`, other files. |
+| Cypress | `cypress cache prune` | Keeps the binary of the Cypress version that runs it. Skipped (`not_scoped`) if the folder holds anything but Cypress version folders (such as session records or `bundles/`, which older Cypress versions also delete); `--wipe` still prunes. |
+
+The other newer tool caches `scull caches` lists (CocoaPods, Playwright, Puppeteer, and
+inspect-only ones such as vcpkg, SwiftPM, Coursier, Zig, Electron, Homebrew and the Nix store)
+are listed under "Not run" with the reason `not_supported_yet` and are never offered as orphaned
+caches: `pod cache clean --all` and `playwright uninstall --all` can't be limited to the folder
+scull found, and `puppeteer browsers clear` always asks for confirmation. Of the five, only the
+Arduino download cache can be offered as an orphaned cache.
 
 A cache whose tool is no longer installed can't be cleaned with the tool's command. If it is
 still a recognized package cache in its usual place, not a link, on the expected drive and not
@@ -958,8 +969,10 @@ room again.
   when free space is already below your forecast reserve (`[proactive] reserve_gib`, 10 GiB by
   default), or would drop below it.
 * **`release`** deletes the reserve and frees its space. scull deletes only the exact file it
-  created: `headroom.json` records the file's identity and size, and anything else at that path
-  is refused and left alone. Links are never followed. The deletion uses the same safe removal
+  created. At creation it writes 32 random bytes at the start of the file. `headroom.json`
+  records them along with the file's identity, size and modification time. Before deleting,
+  scull reads those first bytes back without following links. Anything that doesn't match is
+  refused and left alone, even a file the OS gave the same identity. Links are never followed. The deletion uses the same safe removal
   path as every cleanup.
 * **`status`** says whether there is a reserve, how big it is, and whether it can be released.
   `scull status` mentions a ready reserve too, and the desktop shows it in Settings.

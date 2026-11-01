@@ -273,17 +273,43 @@ fn fx_mcp_07_binary_needs_both_flag_and_config() {
 
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let names = s.tools();
-    for t in scull_mcp::PLAN_TOOL_NAMES {
-        assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+    if elevated_here() {
+        // SAFE-14: an elevated server never offers destructive tools, flag and config or not.
+        assert_eq!(names, scull_mcp::TOOL_NAMES, "read-only when elevated");
+        let err = s.finish();
+        assert!(err.contains("root/administrator"), "{err}");
+    } else {
+        for t in scull_mcp::PLAN_TOOL_NAMES {
+            assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+        }
+        let err = s.finish();
+        assert!(err.contains("scull approve"), "{err}");
     }
-    let err = s.finish();
-    assert!(err.contains("scull approve"), "{err}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// Whether this test process runs elevated (GitHub's Windows runners do): scull's MCP server
+/// then never offers destructive tools (SAFE-14), so the approval flow can't be exercised.
+fn elevated_here() -> bool {
+    scull_platform::is_elevated().blocks_destructive()
+}
+
+/// The approval-flow tests need the plan tools; elevated, the server stays read-only (checked
+/// in `fx_mcp_07_binary_needs_both_flag_and_config`), so they only say so and stop.
+fn skip_if_elevated(test: &str) -> bool {
+    if elevated_here() {
+        eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
+        return true;
+    }
+    false
 }
 
 /// The whole flow through the binary, with the adversarial steps an agent could try.
 #[test]
 fn agent_plan_runs_only_after_the_human_approves() {
+    if skip_if_elevated("agent_plan_runs_only_after_the_human_approves") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -465,6 +491,9 @@ fn agent_plan_runs_only_after_the_human_approves() {
 /// plan afterwards. Denials are audited with the plan's hash, never the code.
 #[test]
 fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
+    if skip_if_elevated("approve_prompt_shows_the_plan_and_needs_the_shown_code") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -689,6 +718,9 @@ fn approve_in_a_real_pseudo_terminal() {
 /// recorded at all.
 #[test]
 fn approve_without_a_terminal_creates_no_machine_id() {
+    if skip_if_elevated("approve_without_a_terminal_creates_no_machine_id") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -792,6 +824,9 @@ fn history_lists_a_bounded_number_of_agent_events() {
 /// changes, and `scull history` shows the revocation and the refusal.
 #[test]
 fn revoke_through_the_cli_stops_the_agent() {
+    if skip_if_elevated("revoke_through_the_cli_stops_the_agent") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -939,15 +974,17 @@ fn under_script(program: &std::path::Path, cmd: &str) -> Option<Command> {
         return None;
     }
     let mut c = Command::new(program);
+    // `; exit $?` keeps `program` alive as script's parent: a shell given a single command
+    // with `-c` may exec it in place (bash does), and `program` would leave the parent chain.
     if cfg!(target_os = "macos") {
         c.args([
             "-c",
-            &format!("script -q /dev/null sh -c {}", shell_quote(cmd)),
+            &format!("script -q /dev/null sh -c {}; exit $?", shell_quote(cmd)),
         ]);
     } else {
         c.args([
             "-c",
-            &format!("script -q -e -c {} /dev/null", shell_quote(cmd)),
+            &format!("script -q -e -c {} /dev/null; exit $?", shell_quote(cmd)),
         ]);
     }
     Some(c)
@@ -1089,7 +1126,13 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
     let fake = env.fx.base().join("bin");
     std::fs::create_dir_all(&fake).unwrap();
     let claude = fake.join("claude");
-    std::fs::copy("/bin/sh", &claude).unwrap();
+    // A shell that stays the process it was started as: macOS's `/bin/sh` is a launcher that
+    // re-executes the real shell, so a copy named `claude` would vanish from the parent chain.
+    let shell = ["/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .unwrap();
+    std::fs::copy(shell, &claude).unwrap();
     let Some(c) = under_script(&claude, &cmd) else {
         eprintln!("skipped: no script(1)");
         env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
