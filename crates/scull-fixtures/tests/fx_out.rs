@@ -198,6 +198,10 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     schemas.ndjson(&cli, &["check"], "check");
     schemas.json(&cli, &["insights"], "insights");
     schemas.ndjson(&cli, &["insights"], "insights");
+    // `insights purge` (#31): forgets the history recorded in the temp `SCULL_HOME` only.
+    let purged = schemas.json(&cli, &["insights", "purge", "--confirm"], "insights-purge");
+    assert_eq!(purged["data"]["database_found"], true, "{purged:#}");
+    schemas.ndjson(&cli, &["insights", "purge", "--confirm"], "insights-purge");
     // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
     // config and writes nothing.
     schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
@@ -750,14 +754,6 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         &["scan", &missing, "--json"],
         ExitCode::General,
         Some("not_found"),
-    );
-    expect(
-        &mut seen,
-        &schemas,
-        &cli,
-        &["insights", "purge", "--json"],
-        ExitCode::General,
-        Some("unsupported_platform"),
     );
     // 2: usage and configuration errors.
     expect(

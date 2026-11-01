@@ -1016,7 +1016,8 @@ These commands are built; `scull <command> --help` describes their options:
 | `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
 | `scull check` | Light scan, forecast and alerts, for the OS scheduler |
 | `scull schedule enable\|disable\|status` | Register periodic checks |
-| `scull insights [export]` | Local trends and insights (`insights purge` is refused in this build) |
+| `scull insights [export]` | Local trends and insights |
+| `scull insights purge [--older-than WHEN] [--confirm]` | Forget recorded trends: history rows only (free-space and footprint samples, item and regrowth events, items that are gone) in scull's own database. Live items, scans, plans, operations, audit and every file are kept. Asks you to type `purge` on a terminal; `--confirm` is required otherwise. Each purge is recorded as an `insights_purged` event. |
 | `scull agent install\|uninstall CLIENT` | Write MCP config for an AI client, with your consent |
 | `scull doctor --report` | A shareable, redacted diagnostic report, shown as a preview first |
 
@@ -1129,4 +1130,5 @@ Every `--json`/`--ndjson` document has a published JSON Schema (draft 2020-12):
 | `scull/doctor-report@1` | `doctor --report` |
 | `scull/worktree-registration@1` | `worktrees register` |
 | `scull/check@1`, `scull/schedule@1`, `scull/insights@1`, `scull/agent@1` | `check`, `schedule`, `insights`, `agent` |
+| `scull/insights-purge@1` | `insights purge` |
 | `scull/error@1` | any error in JSON mode (stderr) |
