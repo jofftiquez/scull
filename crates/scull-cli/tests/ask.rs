@@ -345,9 +345,12 @@ fn opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it() {
         .lines()
         .find(|l| l.trim_start().starts_with("scull approve "))
         .unwrap_or_else(|| panic!("approve command: {stdout}"));
+    // #97: the notice names the one-step human command.
     let plan_id = plan_line
         .trim()
         .trim_start_matches("scull approve ")
+        .strip_suffix(" --run")
+        .unwrap_or_else(|| panic!("names --run: {plan_line}"))
         .to_owned();
     assert!(plan_id.starts_with("plan_"), "{plan_id}");
     assert!(
@@ -355,10 +358,10 @@ fn opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("scull ask cannot run this plan"),
+        stdout.contains("scull ask itself cannot run it"),
         "{stdout}"
     );
-    assert!(stdout.contains("destructive mode can run it"), "{stdout}");
+    assert!(stdout.contains("through scull's Executor"), "{stdout}");
     let err = text(&out.stderr);
     assert!(err.contains("reading: prepare_cleanup"), "{err}");
     // execute_cleanup is refused before it reaches any tool (not offered): no "reading" line.

@@ -91,7 +91,7 @@ fn destructive(
     let runner = ExecutorRunner {
         quarantine: exec::quarantine_settings(&loaded.config.quarantine),
         trash: exec::trash_locations(),
-        audit_lock_refusal: true,
+        caller: super::mcp_runner::RunCaller::Agent,
     };
     let server = server.with_plan_tools(
         true,

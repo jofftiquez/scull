@@ -16,7 +16,7 @@
 //!   (`prepare_cleanup` and the read-only plan views; never approval or execution). Each plan
 //!   is an agent plan from client `scull ask`, limited by `mcp.max_pending_plans` and
 //!   `mcp.prepare_per_minute`. After the answer, scull itself (not the model) prints every
-//!   prepared plan's ID and the `scull approve <plan-id>` command, and that nothing changed.
+//!   prepared plan's ID and the `scull approve <plan-id> --run` command, and that nothing changed.
 //!   The consent notice says so, and read-only consent doesn't cover it.
 
 use super::mcp::build_server;
@@ -64,8 +64,9 @@ a cleanup. Paths are redacted as configured in [mcp] (redact_home, hash_names).
 
 With `[mcp] destructive = true` in config.toml (and scull not running elevated), the model may
 also prepare a cleanup plan when you ask it to free space. Preparing changes nothing: scull
-prints the plan ID afterwards, and the plan runs only after you review and approve it yourself
-with `scull approve <plan-id>`. Limits: [mcp] max_pending_plans, prepare_per_minute.";
+prints the plan ID afterwards, and the plan runs only after you review, approve and run it
+yourself with `scull approve <plan-id> --run`. Limits: [mcp] max_pending_plans,
+prepare_per_minute.";
 
 /// `scull ask`.
 pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
@@ -228,7 +229,7 @@ pub fn prepared_notice(plans: &[PreparedPlan]) -> String {
     );
     for p in plans {
         out.push_str(&format!(
-            "  plan {}: {} item(s), {} reclaimable\n    scull approve {}\n",
+            "  plan {}: {} item(s), {} reclaimable\n    scull approve {} --run\n",
             escape_for_terminal(&p.plan_id),
             p.item_count,
             format_bytes(p.reclaimable_bytes),
@@ -236,10 +237,11 @@ pub fn prepared_notice(plans: &[PreparedPlan]) -> String {
         ));
     }
     out.push_str(
-        "Run that in your own terminal (or review the plan in the scull desktop app); it expires \
-         15 minutes after it was prepared. scull ask cannot run this plan: after you approve it, \
-         an AI agent connected to `scull mcp serve` in destructive mode can run it, or use the \
-         follow-up command once it exists.\n",
+        "Run that in your own terminal: it shows the whole plan, asks you to type a code, re-checks \
+         every item and runs the plan through scull's Executor (anything changed since it was \
+         prepared voids it). The plan expires 15 minutes after it was prepared. scull ask itself \
+         cannot run it. Without --run, `scull approve` (or the desktop app) only approves it, for \
+         an AI agent connected to `scull mcp serve` in destructive mode to run.\n",
     );
     out
 }

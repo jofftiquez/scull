@@ -29,7 +29,9 @@
 //! both succeed (exactly one update changes the row); a revoked approval is refused here.
 //!
 //! Every refusal to start (or run) an agent plan is audited as an
-//! [`EventKind::ExecuteRefused`] event with source `executor` and a stable reason code
+//! [`EventKind::ExecuteRefused`] event with source `executor` (or the
+//! [`RefusalSource`](crate::RefusalSource) the Executor was given, `cli` for
+//! `scull approve --run`) and a stable reason code
 //! ([`GATE_REASONS`]; PRD §13.3 step 5). Recording it never touches the approval.
 
 use crate::executor::Executor;
@@ -78,20 +80,25 @@ fn store_refusal(e: scull_storage::StoreError) -> Refusal {
     (ScullError::from(e), "store")
 }
 
-/// Audit the gate's refusal of the agent plan `plan` (best effort: the refusal stands even
-/// if it can't be recorded). The user is the account the Executor runs as when the OS can
+/// Audit the gate's refusal of the agent plan `plan`, attributed to `by` (best effort: the
+/// refusal stands even if it can't be recorded). The user is the account the Executor runs as when the OS can
 /// tell, else the plan's.
-pub(crate) fn audit_refusal(store: &mut Store, plan: &Plan, reason: &'static str) {
+pub(crate) fn audit_refusal(
+    store: &mut Store,
+    plan: &Plan,
+    reason: &'static str,
+    by: crate::RefusalSource,
+) {
     let user = scull_platform::current_user().unwrap_or_else(|_| plan.user().to_owned());
     let _ = store.record_agent_event(&AgentAuditEvent {
         event_id: 0,
         at: now_unix(),
         kind: EventKind::ExecuteRefused,
-        source: "executor".into(),
+        source: by.source.into(),
         plan_id: Some(plan.id().clone()),
         content_hash: Some(plan.content_hash().clone()),
         reason: reason.into(),
-        channel: "mcp".into(),
+        channel: by.channel.into(),
         machine_id: plan.machine_id().to_owned(),
         user,
         count: 1,
@@ -286,7 +293,7 @@ impl Executor {
     ) -> Result<Operation<'s>, ScullError> {
         if let Err((e, reason)) = self.admit(store, plan, start) {
             if plan.origin() == PlanOrigin::Mcp {
-                audit_refusal(store, plan, reason);
+                audit_refusal(store, plan, reason, self.refusal_source());
             }
             return Err(e);
         }

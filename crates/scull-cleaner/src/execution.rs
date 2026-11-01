@@ -282,7 +282,12 @@ impl Executor {
         {
             // Audited where there is a store to record it in (another plan's operation).
             if let Some(op) = operation.as_deref_mut() {
-                crate::operation::audit_refusal(op.store, plan, "outside_operation");
+                crate::operation::audit_refusal(
+                    op.store,
+                    plan,
+                    "outside_operation",
+                    self.refusal_source(),
+                );
             }
             return Err(ScullError::new(
                 ErrorKind::SafetyBlocked,
