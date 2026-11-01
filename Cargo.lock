@@ -1492,15 +1492,18 @@ dependencies = [
 name = "scull-cleaner"
 version = "0.0.0"
 dependencies = [
+ "schemars",
  "scull-core",
  "scull-detectors",
  "scull-engine",
  "scull-fixtures",
  "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-scanner",
  "scull-storage",
+ "serde",
  "serde_json",
  "tempfile",
 ]

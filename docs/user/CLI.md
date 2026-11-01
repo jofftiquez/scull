@@ -134,6 +134,7 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull doctor` | What this machine supports; where files live | No |
 | `scull rules list\|validate` | Detection rules | No |
 | `scull data show\|export\|purge` | What scull has recorded; export or delete it | `export` writes files; `purge` deletes scull's own files |
+| `scull headroom status\|create\|release` | Emergency reserve file, released when the disk is full (off by default) | `create` writes it; `release` deletes it (only that file) |
 | `scull completions SHELL` | Shell completion script | No |
 | `scull mcp serve` | Read-only MCP server for AI agents | No |
 
@@ -936,6 +937,47 @@ Quarantine     nothing in quarantine
 ```
 
 JSON: `scull/data-show@1`, `scull/data-export@1`, `scull/data-purge@1`.
+
+### `scull headroom`
+
+```text
+scull headroom status
+scull headroom create [--size SIZE] [--yes]
+scull headroom release [--yes]
+```
+
+An emergency reserve. It is off by default. When the disk is completely full, there may not be
+room to run a cleanup. A reserve file set aside earlier fixes that: release it, and you have
+room again.
+
+* **`create`** writes `headroom/reserve.bin` in scull's data folder, on that folder's volume.
+  The file is owner-only and really allocated: scull writes data that doesn't compress, then
+  checks that the disk holds every byte. On a filesystem that would keep it sparse, compressed
+  or deduplicated, scull removes it again and says why. The default size is 2 GiB. `--size`
+  takes 256 MiB to 10 GiB (`512M`, `4G`), and never more than 5% of the volume. scull refuses
+  when free space is already below your forecast reserve (`[proactive] reserve_gib`, 10 GiB by
+  default), or would drop below it.
+* **`release`** deletes the reserve and frees its space. scull deletes only the exact file it
+  created: `headroom.json` records the file's identity and size, and anything else at that path
+  is refused and left alone. Links are never followed. The deletion uses the same safe removal
+  path as every cleanup.
+* **`status`** says whether there is a reserve, how big it is, and whether it can be released.
+  `scull status` mentions a ready reserve too, and the desktop shows it in Settings.
+
+`create` and `release` ask first on a terminal (`[y/N]`). Without one, pass `--yes`. Every
+outcome is recorded in scull's history database (`headroom` events). A release is recorded
+right after it runs, because on a full disk the database may need the freed space to write.
+
+```console
+$ scull headroom create
+Reserve 2.0 GiB of disk space in /home/me/.scull/data/headroom/reserve.bin? It stays until you release it. [y/N] y
+Reserved 2.0 GiB in /home/me/.scull/data/headroom/reserve.bin. Release it with `scull headroom release` when the disk is full.
+
+$ scull headroom release --yes
+Released the headroom file: 2.0 GiB free again. Run the cleanup now (`scull clean`), then `scull headroom create` to set a new reserve.
+```
+
+JSON: `scull/headroom@1`.
 
 ### `scull completions`
 
