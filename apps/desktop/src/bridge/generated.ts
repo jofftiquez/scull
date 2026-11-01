@@ -2574,9 +2574,20 @@ export interface McpConfig {
    */
   hash_names?: boolean;
   /**
+   * Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+   * `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+   * `0` counts as `1`.
+   */
+  max_pending_plans?: number;
+  /**
    * Maximum number of results per tool call.
    */
   max_results?: number;
+  /**
+   * Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+   * (`rate_limited`). File-only setting; `0` counts as `1`.
+   */
+  prepare_per_minute?: number;
   /**
    * Replace the home directory prefix with `~` in results (on by default, PRD §13.5).
    */

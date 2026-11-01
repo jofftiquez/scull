@@ -123,7 +123,9 @@
             "destructive": false,
             "enabled": false,
             "hash_names": false,
+            "max_pending_plans": 5,
             "max_results": 1000,
+            "prepare_per_minute": 6,
             "redact_home": true
           },
           "description": "The MCP server."
@@ -534,9 +536,23 @@
           "description": "Hash project and directory names in results.",
           "type": "boolean"
         },
+        "max_pending_plans": {
+          "default": 5,
+          "description": "Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a\n`prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;\n`0` counts as `1`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_results": {
           "default": 1000,
           "description": "Maximum number of results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prepare_per_minute": {
+          "default": 6,
+          "description": "Most `prepare_cleanup` calls per minute in one MCP session; more are refused\n(`rate_limited`). File-only setting; `0` counts as `1`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"

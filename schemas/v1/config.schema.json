@@ -150,8 +150,26 @@
             "null"
           ]
         },
+        "max_pending_plans": {
+          "description": "Most agent plans awaiting approval per machine and user. Only honored from the user\nconfig file (see [`resolve`]).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_results": {
           "description": "Maximum results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prepare_per_minute": {
+          "description": "Most `prepare_cleanup` calls per minute in one MCP session. Only honored from the user\nconfig file (see [`resolve`]).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -463,7 +481,7 @@
   "$id": "https://scull.dev/schemas/v1/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n\n[quarantine]             # optional; see `QuarantineConfig`\nbase = \"~/.scull-q\"\n\n[quarantine.bases]       # optional, per volume\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n```",
+  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\nmax_pending_plans = 5    # agent plans awaiting approval (file only)\nprepare_per_minute = 6   # prepare_cleanup calls per session per minute (file only)\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n\n[quarantine]             # optional; see `QuarantineConfig`\nbase = \"~/.scull-q\"\n\n[quarantine.bases]       # optional, per volume\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n```",
   "properties": {
     "forge": {
       "$ref": "#/$defs/ForgeLayer",

@@ -993,9 +993,11 @@ Prints a completion script on stdout. See [INSTALL.md](INSTALL.md#shell-completi
 scull mcp serve [--allow-destructive]
 ```
 
-Runs the read-only MCP server over stdio for an AI client. It refuses to start until you
-enable it (exit 2). `--allow-destructive` has no effect in this version: there are no
-destructive MCP tools. See [MCP.md](MCP.md).
+Runs the MCP server over stdio for an AI client. It refuses to start until you enable it
+(exit 2). It is read-only unless `--allow-destructive` is passed **and** `[mcp] destructive =
+true` is in scull's config file; then the agent can prepare cleanup plans that run only after
+you approve them with `scull approve` (never when scull runs elevated). See
+[MCP.md](MCP.md#agent-cleanups-destructive-mode).
 
 ```console
 $ scull mcp serve </dev/null

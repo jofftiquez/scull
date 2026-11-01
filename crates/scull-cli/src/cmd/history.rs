@@ -11,8 +11,9 @@
 //!
 //! * Below the operations (without an ID): what was refused to AI agents (PRD §13.3 step 5),
 //!   newest first: denied approvals (`deny`, too many wrong codes, no terminal, a refused
-//!   attempt), refused `execute_cleanup` calls and approvals the human revoked (#298), each
-//!   with its reason code, plan, channel, who recorded it and how many times it repeated
+//!   attempt), refused `execute_cleanup` and `prepare_cleanup` calls (#299: rate limit,
+//!   pending cap), approvals the human revoked and refused revocations (#298), each with its
+//!   reason code, plan, channel, who recorded it and how many times it repeated
 //!   (`agent_events` in JSON). Bounded: at most `--limit` entries (default
 //!   [`AGENT_EVENTS_LIMIT`]) from `--since` or, by default, the last [`AGENT_EVENTS_DAYS`]
 //!   days; how many more there are is reported (`agent_events_more`).
@@ -64,7 +65,8 @@ pub struct HistoryReport {
 pub struct AgentEventLine {
     /// When (Unix seconds).
     pub at: i64,
-    /// `approval_denied`, `execute_refused`, `approval_revoked` or `revoke_refused`.
+    /// `approval_denied`, `execute_refused`, `approval_revoked`, `revoke_refused` or
+    /// `prepare_refused`.
     pub kind: String,
     /// Stable reason code (`denied`, `wrong_code`, `no_terminal`, `not_approved`,
     /// `approval_used`, `plan_changed`, ...).
@@ -470,6 +472,7 @@ fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
             "execute_refused" => "execution refused",
             "approval_revoked" => "approval revoked",
             "revoke_refused" => "revoke refused",
+            "prepare_refused" => "plan refused",
             other => other,
         };
         t.push(vec![
