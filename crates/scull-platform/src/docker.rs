@@ -467,7 +467,14 @@ fn run<C: Read + Write>(
         if let Some(done) = decode(&buf, false)? {
             return done;
         }
-        set_timeout(&conn, remaining(deadline)?).map_err(io_error)?;
+        // Narrow the read timeout to what's left. macOS refuses SO_RCVTIMEO with EINVAL once
+        // the peer has closed its end (a daemon answering `Connection: close`, its reply still
+        // buffered here): keep the earlier timeout then and read what's left. The caller's
+        // deadline (`docker_get`) still bounds the exchange.
+        match set_timeout(&conn, remaining(deadline)?) {
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+            other => other.map_err(io_error)?,
+        }
         let n = match conn.read(&mut chunk) {
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -640,6 +647,76 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connection whose peer already sent the whole reply and closed: reads drain it.
+    struct Closed(std::io::Cursor<Vec<u8>>, Vec<u8>);
+    impl Read for Closed {
+        fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+            // One byte at a time, so the timeout is re-armed many times.
+            let n = b.len().min(1);
+            self.0.read(&mut b[..n])
+        }
+    }
+    impl Write for Closed {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.1.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// macOS: after the peer closed, setting SO_RCVTIMEO fails with EINVAL; the buffered
+    /// reply is still read (CI flake on macos-latest, main @ ca78fee).
+    #[test]
+    fn a_refused_timeout_rearm_after_the_peer_closed_still_reads_the_reply() {
+        let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".to_vec();
+        let conn = Closed(std::io::Cursor::new(reply), Vec::new());
+        let calls = std::cell::Cell::new(0);
+        let r = run(
+            conn,
+            b"GET /_ping HTTP/1.1\r\n\r\n",
+            Instant::now() + Duration::from_secs(5),
+            |_, _| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    Ok(())
+                } else {
+                    // EINVAL, as macOS reports it (ErrorKind::InvalidInput).
+                    Err(io::Error::from_raw_os_error(22))
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(r.body, b"OK");
+        assert!(calls.get() > 2, "re-armed {} times", calls.get());
+    }
+
+    /// Any other failure to set the timeout still fails the exchange.
+    #[test]
+    fn other_timeout_errors_still_fail() {
+        let conn = Closed(
+            std::io::Cursor::new(b"HTTP/1.1 200 OK\r\n".to_vec()),
+            Vec::new(),
+        );
+        let calls = std::cell::Cell::new(0);
+        let e = run(
+            conn,
+            b"GET /_ping HTTP/1.1\r\n\r\n",
+            Instant::now() + Duration::from_secs(5),
+            |_, _| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::PermissionDenied, "no"))
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(e, DockerError::Io(_)), "{e}");
+    }
 
     #[test]
     fn parses_endpoints() {
