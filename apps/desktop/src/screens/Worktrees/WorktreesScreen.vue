@@ -132,9 +132,13 @@ const artifactNames = (w: WorktreeReport) => w.decision.artifacts.map((a) => a.p
     <header class="flex flex-col gap-4 rounded-tile bg-surface px-6 py-5">
       <div class="flex flex-col gap-1">
         <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Git Worktrees</h1>
-        <span class="text-label text-text-secondary" data-testid="worktrees-summary">
-          {{ present.length }} worktree{{ present.length === 1 ? '' : 's' }} across {{ repoCount(present) }} repo{{ repoCount(present) === 1 ? '' : 's' }}
-          · {{ formatBytes(totalBytes) }} · found through Git metadata, never by folder name · no fetch performed
+        <!-- No counts until the view has loaded: "0 worktrees" while reading would be a false empty state. -->
+        <span class="text-label text-text-secondary" data-testid="worktrees-summary" :aria-busy="!view && !loadError ? 'true' : undefined">
+          <template v-if="view">
+            {{ present.length }} worktree{{ present.length === 1 ? '' : 's' }} across {{ repoCount(present) }} repo{{ repoCount(present) === 1 ? '' : 's' }}
+            · {{ formatBytes(totalBytes) }} · found through Git metadata, never by folder name · no fetch performed
+          </template>
+          <template v-else-if="!loadError">Reading worktrees…</template>
         </span>
       </div>
       <div role="group" aria-label="Filter" class="flex flex-wrap gap-0.5">
@@ -147,7 +151,7 @@ const artifactNames = (w: WorktreeReport) => w.decision.artifacts.map((a) => a.p
           :class="filter === f.key ? 'bg-ink text-on-ink' : 'bg-surface-raised text-ink hover:bg-line'"
           @click="filter = f.key"
         >
-          {{ f.label }} {{ counts[f.key] }}
+          {{ view ? `${f.label} ${counts[f.key]}` : f.label }}
         </button>
       </div>
     </header>
