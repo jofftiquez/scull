@@ -87,12 +87,14 @@ jobs:
       - name: CycloneDX SBOM per release target
         run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          python3 packaging/sbom.py --all-targets --out-dir target/distrib
+          python3 packaging/sbom.py --all-targets --out-dir target/sbom
       - name: Local build (no upload)
         if: inputs.build
         run: |
+          # dist reads every *-dist-manifest.json in target/distrib, so write it elsewhere first.
           dist build --artifacts=local --target x86_64-unknown-linux-gnu --output-format=json \
-            > target/distrib/x86_64-unknown-linux-gnu-dist-manifest.json
+            > "$RUNNER_TEMP/local-dist-manifest.json"
+          cp "$RUNNER_TEMP/local-dist-manifest.json" target/distrib/x86_64-unknown-linux-gnu-dist-manifest.json
       - name: Global artifacts for that build (installers, Homebrew formula, sha256.sum)
         if: inputs.build
         run: |
@@ -110,7 +112,7 @@ jobs:
             target/distrib/sha256.sum
             target/distrib/scull.rb
             target/distrib/scull-cli-installer.*
-            target/distrib/*.cdx.json
+            target/sbom/*.cdx.json
           retention-days: 7
 
   signing-readiness:

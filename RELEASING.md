@@ -192,11 +192,12 @@ cargo build -p scull-cli --release --locked
 python3 packaging/check_inspect_only.py binary target/release/scull
 dist plan
 dist build --artifacts=local --target x86_64-unknown-linux-gnu --output-format=json \
-  > target/distrib/x86_64-unknown-linux-gnu-dist-manifest.json     # local only, no upload
+  > /tmp/local-dist-manifest.json                                   # local only, no upload
+cp /tmp/local-dist-manifest.json target/distrib/x86_64-unknown-linux-gnu-dist-manifest.json
 dist build --artifacts=global                                       # installers, scull.rb, sha256.sum
 (cd target/distrib && sha256sum -c sha256.sum)
 python3 packaging/test_release_packaging.py
-python3 packaging/sbom.py --all-targets --out-dir target/distrib
+python3 packaging/sbom.py --all-targets --out-dir target/sbom
 ```
 
 Never run `dist host` or `dist publish` locally.
