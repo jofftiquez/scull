@@ -2888,6 +2888,14 @@ export interface HeadroomManifest {
   created_at: number;
   identity: FileIdentity;
   /**
+   * The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.
+   */
+  marker: string;
+  /**
+   * Its modification time when created (Unix seconds), when the OS reports one.
+   */
+  mtime_unix?: number | null;
+  /**
    * The reserve, relative to the data directory (always [`reserve_relative`]).
    */
   relative: string;

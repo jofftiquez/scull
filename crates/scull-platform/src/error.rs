@@ -27,6 +27,8 @@ pub enum Operation {
     VolumeOf,
     /// [`crate::free_space`].
     FreeSpace,
+    /// [`crate::open_file_no_follow`].
+    OpenFile,
 }
 
 impl fmt::Display for Operation {
@@ -41,6 +43,7 @@ impl fmt::Display for Operation {
             Operation::ListVolumes => "list mounted volumes",
             Operation::VolumeOf => "find the volume of",
             Operation::FreeSpace => "query free space of",
+            Operation::OpenFile => "open file",
         })
     }
 }
