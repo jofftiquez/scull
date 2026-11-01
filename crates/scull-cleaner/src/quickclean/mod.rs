@@ -213,6 +213,49 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Whether Quick Clean runs `tool`'s own command on this branch at all.
+///
+/// The long-tail tool caches from P5-DET-05 (ccache, Conan, Arduino, CocoaPods, Deno,
+/// Playwright, Cypress, Puppeteer, and the inspect-only ones) are located, measured and shown,
+/// but never run here yet: each needs its own location scoping, sandbox and D-36 review first.
+/// They are refused with [`SkipReason::NotSupportedYet`] when planning and again right before
+/// a run, never offered as orphaned (D-36), and no process is ever started for them. The
+/// match is exhaustive, so a new tool needs an explicit decision.
+pub fn is_supported(tool: CacheTool) -> bool {
+    match tool {
+        CacheTool::Npm
+        | CacheTool::Pnpm
+        | CacheTool::Bun
+        | CacheTool::YarnClassic
+        | CacheTool::YarnBerry
+        | CacheTool::Pip
+        | CacheTool::Uv
+        | CacheTool::Conda
+        | CacheTool::GoBuild
+        | CacheTool::GoMod
+        | CacheTool::Gradle
+        | CacheTool::Maven
+        | CacheTool::NuGet => true,
+        CacheTool::Ccache
+        | CacheTool::Conan
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::Arduino
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::CocoaPods
+        | CacheTool::Coursier
+        | CacheTool::Deno
+        | CacheTool::Zig
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron
+        | CacheTool::Homebrew
+        | CacheTool::Nix => false,
+    }
+}
+
 /// Default per-tool timeout (a large npm cache verify takes minutes).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
@@ -432,6 +475,9 @@ pub enum SkipReason {
     /// The tool has no native cleanup command (Gradle, Maven: S3, inspect-only), so scull never
     /// runs anything for its cache, whatever the request or plan says.
     InspectOnly,
+    /// Quick Clean does not run this tool's command on this branch yet ([`is_supported`]):
+    /// whatever the request or plan says, nothing is started and nothing is removed.
+    NotSupportedYet,
 }
 
 impl fmt::Display for SkipReason {
@@ -487,6 +533,11 @@ impl fmt::Display for SkipReason {
             SkipReason::InspectOnly => f.write_str(
                 "inspect-only: the tool has no command that cleans its cache, so scull never \
                  runs or removes anything for it",
+            ),
+            SkipReason::NotSupportedYet => f.write_str(
+                "not supported yet: Quick Clean does not run this tool's command in this build \
+                 (its location scoping and sandbox are still under review); the cache is shown \
+                 for information and nothing is run or removed",
             ),
         }
     }
@@ -804,6 +855,9 @@ impl QuickClean {
         let Some(commands) = c.commands() else {
             return Err(SkipReason::InspectOnly);
         };
+        if !is_supported(c.tool) {
+            return Err(SkipReason::NotSupportedYet);
+        }
         if request.unticked.contains(&c.tool) {
             return Err(SkipReason::Unticked);
         }
@@ -1301,6 +1355,10 @@ impl QuickClean {
         if commands_for_rule(t.tool.rule_id()).is_none() {
             return Err(SkipReason::InspectOnly);
         }
+        // Likewise a plan naming a tool this build doesn't run (forged or from a newer build).
+        if !is_supported(t.tool) {
+            return Err(SkipReason::NotSupportedYet);
+        }
         self.check_location(&t.cache, &t.anchor, t.identity)?;
         if self.trusted.find(t.tool.binary()).program()
             != Some((t.binary.clone(), t.script.clone()))
@@ -1491,6 +1549,23 @@ fn location_of(c: &LocatedCache) -> Result<PathBuf, SkipReason> {
         | CacheTool::GoMod
         | CacheTool::NuGet => c.path.clone(),
         CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
+        CacheTool::Ccache
+        | CacheTool::Conan
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::Arduino
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::CocoaPods
+        | CacheTool::Coursier
+        | CacheTool::Deno
+        | CacheTool::Zig
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron
+        | CacheTool::Homebrew
+        | CacheTool::Nix => return Err(SkipReason::NotSupportedYet),
     };
     // Absolute, so it can never be read as an option.
     if !loc.is_absolute() {
@@ -1571,6 +1646,24 @@ fn tool_invocation(
         }
         // Unreachable through `plan_one` (no command, refused first); refused, not a panic.
         CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
+        // Unreachable too ([`is_supported`] is checked first); refused, not a panic.
+        CacheTool::Ccache
+        | CacheTool::Conan
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::Arduino
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::CocoaPods
+        | CacheTool::Coursier
+        | CacheTool::Deno
+        | CacheTool::Zig
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron
+        | CacheTool::Homebrew
+        | CacheTool::Nix => return Err(SkipReason::NotSupportedYet),
     }
     Ok((args, env))
 }
@@ -1701,6 +1794,16 @@ mod tests {
                 tool: tool.binary(),
                 args: &["clean"],
             };
+            if !is_supported(tool) {
+                // Long-tail tools (P5-DET-05): refused, with or without a native command.
+                let cmd = commands_for_rule(tool.rule_id()).map_or(fake, |k| k.preferred);
+                assert_eq!(
+                    tool_invocation(tool, cmd, &loc),
+                    Err(SkipReason::NotSupportedYet),
+                    "{tool:?}"
+                );
+                continue;
+            }
             match commands_for_rule(tool.rule_id()) {
                 None => {
                     assert!(
@@ -1716,6 +1819,16 @@ mod tests {
                 Some(k) => assert!(tool_invocation(tool, k.preferred, &loc).is_ok(), "{tool:?}"),
             }
         }
+        assert_eq!(SkipReason::NotSupportedYet.code(), "not_supported_yet");
+        assert_eq!(
+            SkipReason::NotSupportedYet
+                .audit_record(
+                    scull_core::ItemId::derive(scull_core::FileIdentity::new(1, 2), b"/c"),
+                    0,
+                )
+                .outcome,
+            scull_storage::ItemOutcome::Refused
+        );
         assert_eq!(SkipReason::InspectOnly.code(), "inspect_only");
         assert!(
             SkipReason::InspectOnly

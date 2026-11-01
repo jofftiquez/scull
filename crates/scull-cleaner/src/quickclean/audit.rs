@@ -90,16 +90,19 @@ impl SkipReason {
             SkipReason::NotApproved => "not_approved",
             SkipReason::NotOrphanRemovable(_) => "d36_excluded",
             SkipReason::InspectOnly => "inspect_only",
+            SkipReason::NotSupportedYet => "not_supported_yet",
         }
     }
 
     /// The audit record of a tool or removal not started for this reason: `refused` for the
-    /// elevation check (SAFE-14) and for an inspect-only tool in a plan (only a forged or stale
-    /// plan gets that far), `failed` when the sandbox could not be created, `skipped`
+    /// elevation check (SAFE-14) and for an inspect-only or not-yet-supported tool in a plan
+    /// (only a forged or stale plan gets that far), `failed` when the sandbox could not be created, `skipped`
     /// otherwise. Nothing was touched in any case.
     pub(crate) fn audit_record(&self, item_id: ItemId, at: i64) -> ItemRecord {
         let outcome = match self {
-            SkipReason::Elevated(_) | SkipReason::InspectOnly => ItemOutcome::Refused,
+            SkipReason::Elevated(_) | SkipReason::InspectOnly | SkipReason::NotSupportedYet => {
+                ItemOutcome::Refused
+            }
             SkipReason::Sandbox(_) => ItemOutcome::Failed,
             _ => ItemOutcome::Skipped,
         };

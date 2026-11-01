@@ -74,6 +74,27 @@ pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
             "inspect-only: this cache has no command that cleans it, and scull never removes \
              it itself (D-36 excludes it)",
         ),
+        // The long-tail tool caches (P5-DET-05): not run or removed on this branch yet.
+        CacheTool::Ccache
+        | CacheTool::Conan
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::Arduino
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::CocoaPods
+        | CacheTool::Coursier
+        | CacheTool::Deno
+        | CacheTool::Zig
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron
+        | CacheTool::Homebrew
+        | CacheTool::Nix => Some(
+            "not supported yet: Quick Clean does not handle this tool's cache in this build, \
+             and scull never removes it itself (D-36 excludes it)",
+        ),
         CacheTool::Npm
         | CacheTool::Pnpm
         | CacheTool::Bun
@@ -438,11 +459,19 @@ mod tests {
             CacheTool::Maven,
         ];
         for t in CacheTool::ALL {
+            // The long-tail tools (P5-DET-05) are not supported on this branch at all.
+            let unsupported = !crate::quickclean::is_supported(t);
             assert_eq!(
                 not_orphan_removable(t).is_some(),
-                excluded.contains(&t),
+                excluded.contains(&t) || unsupported,
                 "{t:?}"
             );
+            if unsupported {
+                assert!(
+                    not_orphan_removable(t).is_some_and(|w| w.contains("not supported yet")),
+                    "{t:?}"
+                );
+            }
         }
         assert!(not_orphan_removable(CacheTool::GoMod).is_some_and(|w| w.contains("read-only")));
         for t in [CacheTool::Gradle, CacheTool::Maven] {
@@ -494,13 +523,11 @@ mod tests {
         let Some(fx) = fixture() else { return };
         assert!(!crate::is_quick_clean_tool("ollama"));
         for t in CacheTool::ALL {
-            // Gradle and Maven are inspect-only: their binaries are never run either.
-            let inspect_only = matches!(t, CacheTool::Gradle | CacheTool::Maven);
-            assert_eq!(
-                crate::is_quick_clean_tool(t.binary()),
-                !inspect_only,
-                "{t:?}"
-            );
+            // Gradle and Maven are inspect-only, and the long-tail tools (P5-DET-05) are not
+            // supported on this branch: their binaries are never run either.
+            let never = matches!(t, CacheTool::Gradle | CacheTool::Maven)
+                || !crate::quickclean::is_supported(t);
+            assert_eq!(crate::is_quick_clean_tool(t.binary()), !never, "{t:?}");
         }
         let cache = fx.root().join(CACHE);
         let anchor = fx.root().join("home");

@@ -580,6 +580,12 @@ Not run (1):
   npm           /home/me/.npm/_cacache: classified S2: tool commands are allowed at S0/S1 only
 ```
 
+`scull caches` also lists newer tool caches (ccache, Conan, Arduino, CocoaPods, Deno,
+Playwright, Cypress, Puppeteer, and inspect-only ones such as vcpkg, SwiftPM, Coursier, Zig,
+Electron, Homebrew and the Nix store). Quick Clean doesn't run their commands in this build
+yet: they are listed under "Not run" with the reason `not_supported_yet` and are never offered
+as orphaned caches.
+
 A cache whose tool is no longer installed can't be cleaned with the tool's command. If it is
 still a recognized package cache in its usual place, not a link, on the expected drive and not
 in use, the preview lists it under "Orphaned caches" with its size and the not-undoable note

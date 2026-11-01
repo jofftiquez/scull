@@ -228,10 +228,13 @@ pub(crate) fn refuse_docker(item: &PlanItem) -> Result<(), ScullError> {
 
 /// Whether `tool` is one of the package managers Quick Clean runs (resolved from trusted
 /// locations, SAFE-12). Any other tool command is never executed, including the binaries of
-/// inspect-only caches (Gradle's `gradle`, Maven's `mvn`: no cleanup command).
+/// inspect-only caches (Gradle's `gradle`, Maven's `mvn`: no cleanup command) and of the
+/// long-tail tool caches this build doesn't run yet ([`crate::quickclean::is_supported`]).
 pub fn is_quick_clean_tool(tool: &str) -> bool {
     scull_detectors::caches::CacheTool::ALL.iter().any(|t| {
-        t.binary() == tool && scull_detectors::caches::commands_for_rule(t.rule_id()).is_some()
+        t.binary() == tool
+            && crate::quickclean::is_supported(*t)
+            && scull_detectors::caches::commands_for_rule(t.rule_id()).is_some()
     })
 }
 
