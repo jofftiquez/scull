@@ -9,7 +9,8 @@ use crate::insights::{
 };
 use crate::views::{
     CapabilitiesReport, DesktopStatus, GitInfo, HistoryState, LastScan, OpId, ProgressEvent,
-    ProjectsView, ScanParams, StatusState, VolumeSampleView, WorktreesView,
+    ProjectsView, RECENT_ALERTS_SECS, ReviewPlanView, ScanParams, StatusState, VolumeSampleView,
+    WorktreesView, recent_alerts,
 };
 use scull_core::config::{Config, ConfigLayer, EnvLayer, ResolvedConfig, resolve, validate_roots};
 use scull_core::{ErrorKind, FsPath, ScullError};
@@ -374,7 +375,18 @@ impl Session {
         if !history_db_path(data).is_file() {
             return DesktopStatus::new(now, StatusState::NoDatabase, None, session_scan);
         }
-        match open_history(data).and_then(|s| s.status_summary()) {
+        let store = match open_history(data) {
+            Ok(store) => store,
+            Err(e) => {
+                return DesktopStatus::new(
+                    now,
+                    StatusState::Unavailable,
+                    Some(e.to_string()),
+                    session_scan,
+                );
+            }
+        };
+        match store.status_summary() {
             Ok(summary) => {
                 let mut st = DesktopStatus::new(
                     now,
@@ -395,6 +407,16 @@ impl Session {
                     st.state = StatusState::Ok;
                 }
                 st.volumes = summary.volumes.iter().map(VolumeSampleView::from).collect();
+                // Announcements never break the status: unreadable ones are left out.
+                st.review_plan = scull_proactive::review::latest_review_plan(&store, now)
+                    .ok()
+                    .flatten()
+                    .map(|p| ReviewPlanView::from(&p));
+                if let Ok(recorded) = store.alerts(now - RECENT_ALERTS_SECS) {
+                    let alerts: Vec<serde_json::Value> =
+                        recorded.into_iter().map(|a| a.alert).collect();
+                    st.alerts = recent_alerts(&alerts, now);
+                }
                 st
             }
             Err(e) => DesktopStatus::new(

@@ -78,6 +78,37 @@ The mock's history (`src/bridge/fixtures/*-history.json` and `regrowth.json`) is
 `bridge/tests/insights.rs` from a real history database. The mock shifts it so the last sample
 is now.
 
+### Menu bar widget
+
+The tray icon (macOS menu bar, Windows notification area, Linux app indicator) toggles a
+380 × 660 widget window (design 11, D-23). The widget is its own page, `menubar.html` →
+`src/menubar.ts` → `src/screens/MenuBar/MenuBarWidget.vue`, with no router and no shell.
+`src/components/menubar/model.ts` derives its figures:
+
+- Free space is read live from `drives()` (the drive holding home). Without one it falls back to
+  the latest `/` sample in `status()`.
+- The forecast is the Insights trend (`freeSpaceModel`) of 30 days of `freeSpaceHistory`.
+- "Safe to reclaim" is `status().review_plan`, the plan `scull check` prepared (PRO-05). Without
+  a plan it falls back to the last scan's S0 bytes.
+- Alerts are `status().alerts`: one day of `scull check` alerts, the newest per key, at most 5.
+
+The widget is read-only. Review, the alerts, the gear and "Open scull" call the
+`open_main_window` command, which allows only a fixed list of routes. That command shows the main
+window and sends it `scull://navigate`. Escape and losing focus hide the widget. "Check now"
+re-reads the bridge. Quick Clean is the Overview's `quickCleanPreview` stub: the mock simulates
+it, and inside Tauri it is refused. `src-tauri/src/tray.rs` wires the tray. Where the widget
+opens and which routes it may show are decided in `bridge/src/menubar.rs`, which has its own
+tests.
+
+Linux app indicators report no clicks, so on Linux the widget opens from the tray menu ("Show
+scull widget"). The tray needs `libayatana-appindicator3` at run time. Without it the app
+starts with no tray icon. The widget window is only created the first time it opens, and closing
+the main window closes the widget too, so nothing stays running in the background.
+
+Screenshots: in a browser, `menubar.html?demo=design` shows design 11's machine. On Linux, a
+debug build started with `SCULL_DEV_OPEN_WIDGET=1` opens the widget at launch, so you can
+capture it without a tray host.
+
 ## Rust side
 
 The bridge crate is part of the normal workspace bar:

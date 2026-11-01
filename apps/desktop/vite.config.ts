@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import tailwindcss from '@tailwindcss/vite';
@@ -23,6 +24,10 @@ export default defineConfig({
     // No source maps in the shipped bundle; Tauri serves files locally (no network at runtime).
     sourcemap: false,
     outDir: 'dist',
+    // Two pages: the app, and the menu bar widget the tray opens (P4-UI-01).
+    rolldownOptions: {
+      input: { main: resolve(import.meta.dirname, 'index.html'), menubar: resolve(import.meta.dirname, 'menubar.html') },
+    },
   },
   test: {
     environment: 'jsdom',

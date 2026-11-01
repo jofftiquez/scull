@@ -8,6 +8,11 @@
 //!
 //! Frontend side: `apps/desktop/src/bridge/tauri.ts` (types generated from the same Rust
 //! types, see `apps/desktop/schemas/`).
+//!
+//! The menu bar / tray widget lives in [`tray`]: a tray icon, a small widget window and two
+//! window commands (`open_main_window`, `hide_menu_bar`); it never runs a cleanup.
+
+pub mod tray;
 
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
@@ -161,6 +166,11 @@ where
 pub fn run() {
     let result = tauri::Builder::default()
         .manage(Arc::new(Session::new(Setup::native())))
+        .setup(|app| {
+            tray::install(app.handle())?;
+            Ok(())
+        })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             app_info,
             drives,
@@ -176,7 +186,9 @@ pub fn run() {
             free_space_history,
             rollup_history,
             regrowth,
-            footprint_history
+            footprint_history,
+            tray::open_main_window,
+            tray::hide_menu_bar
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

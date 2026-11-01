@@ -1,6 +1,8 @@
 //! The Tauri commands (apps/desktop/src-tauri/src/lib.rs) and the frontend's command table
 //! (apps/desktop/src/bridge/types.ts) name the same commands, and every command is registered
-//! in the invoke handler. Reads sources only (the app crate needs WebKit to build on Linux).
+//! in the invoke handler. The menu bar widget's window commands (src-tauri/src/tray.rs) match
+//! `WINDOW_COMMANDS` in src/bridge/tauri.ts. Reads sources only (the app crate needs WebKit to
+//! build on Linux).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -63,6 +65,18 @@ fn ts_commands(src: &str) -> BTreeSet<String> {
     out
 }
 
+/// String values of `WINDOW_COMMANDS = { key: 'value', ... }` in src/bridge/tauri.ts.
+fn ts_window_commands(src: &str) -> BTreeSet<String> {
+    let start = src
+        .find("export const WINDOW_COMMANDS = {")
+        .expect("WINDOW_COMMANDS table");
+    let end = start + src[start..].find("} as const").unwrap();
+    src[start..end]
+        .lines()
+        .filter_map(|l| l.split('\'').nth(1).map(str::to_owned))
+        .collect()
+}
+
 #[test]
 fn frontend_and_app_name_the_same_commands() {
     let lib = read("src-tauri/src/lib.rs");
@@ -70,10 +84,32 @@ fn frontend_and_app_name_the_same_commands() {
     let ts = ts_commands(&read("src/bridge/types.ts"));
     assert!(rust.len() >= 9, "{rust:?}");
     assert_eq!(rust, ts, "Rust commands vs src/bridge/types.ts COMMANDS");
+
+    let window = rust_commands(&read("src-tauri/src/tray.rs"));
     assert_eq!(
-        rust,
+        window,
+        ts_window_commands(&read("src/bridge/tauri.ts")),
+        "tray.rs commands vs src/bridge/tauri.ts WINDOW_COMMANDS"
+    );
+    let mut all = rust.clone();
+    all.extend(window.iter().map(|c| format!("tray::{c}")));
+    assert_eq!(
+        all,
         registered(&lib),
         "every command is registered, nothing else"
+    );
+}
+
+#[test]
+fn navigate_event_name_matches() {
+    let ts = read("src/bridge/tauri.ts");
+    let line = ts
+        .lines()
+        .find(|l| l.contains("export const NAVIGATE_EVENT"))
+        .unwrap();
+    assert_eq!(
+        line.split('\'').nth(1).unwrap(),
+        scull_desktop_bridge::menubar::NAVIGATE_EVENT
     );
 }
 
@@ -93,7 +129,10 @@ fn progress_event_name_matches() {
 #[test]
 fn no_command_can_mutate() {
     // SAFE-10: the command surface is read-only by name too.
-    for name in rust_commands(&read("src-tauri/src/lib.rs")) {
+    let mut names = rust_commands(&read("src-tauri/src/lib.rs"));
+    names.extend(rust_commands(&read("src-tauri/src/tray.rs")));
+    assert!(names.contains("open_main_window"), "{names:?}");
+    for name in names {
         for bad in [
             "delete",
             "remove",

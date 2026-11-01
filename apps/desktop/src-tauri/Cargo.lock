@@ -2739,6 +2739,7 @@ dependencies = [
  "scull-engine",
  "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-storage",
  "serde",
@@ -2793,6 +2794,17 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "scull-proactive"
+version = "0.0.0"
+dependencies = [
+ "schemars 1.2.3",
+ "scull-core",
+ "scull-storage",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

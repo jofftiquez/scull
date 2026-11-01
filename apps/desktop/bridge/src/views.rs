@@ -329,6 +329,86 @@ pub struct DesktopStatus {
     pub last_scan: Option<LastScan>,
     /// Latest free-space sample of every volume ever sampled.
     pub volumes: Vec<VolumeSampleView>,
+    /// The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.
+    /// Never executed from here: reviewing it is `scull clean --plan <file>`.
+    pub review_plan: Option<ReviewPlanView>,
+    /// Alerts `scull check` raised in the last [`RECENT_ALERTS_SECS`], one per key (the newest),
+    /// most severe first, at most [`MAX_STATUS_ALERTS`]. Alerts never act (PRO-08).
+    pub alerts: Vec<scull_proactive::Alert>,
+}
+
+/// How far back `status` looks for alerts (one day: four default checks).
+pub const RECENT_ALERTS_SECS: i64 = 24 * 60 * 60;
+
+/// At most this many alerts are reported by `status`.
+pub const MAX_STATUS_ALERTS: usize = 5;
+
+/// A ready-to-review cleanup plan, as `scull status --json` reports it (`review_plan`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewPlanView {
+    /// The plan's ID (in the history database's `plans` table).
+    pub plan_id: String,
+    /// The plan file.
+    pub file: String,
+    /// Items in the plan.
+    pub items: u64,
+    /// Estimated reclaimable bytes of all items.
+    pub reclaimable_bytes: u64,
+    /// When it was prepared (Unix seconds).
+    pub created_at: i64,
+    /// When it expires (Unix seconds).
+    pub expires_at: i64,
+    /// Whether S1 (costly to recreate) items were included (opt-in).
+    pub includes_s1: bool,
+    /// The command that reviews it (`scull clean --plan <file>`).
+    pub review_command: String,
+}
+
+impl From<&scull_proactive::review::ReviewPlanSummary> for ReviewPlanView {
+    fn from(s: &scull_proactive::review::ReviewPlanSummary) -> Self {
+        Self {
+            plan_id: s.plan_id.as_str().to_owned(),
+            file: s.file.clone(),
+            items: s.items,
+            reclaimable_bytes: s.reclaimable_bytes,
+            created_at: s.created_at,
+            expires_at: s.expires_at,
+            includes_s1: s.includes_s1,
+            review_command: s.review_command(),
+        }
+    }
+}
+
+/// The alerts `status` reports from the recorded ones (oldest first): those raised at or after
+/// `now - RECENT_ALERTS_SECS`, the newest per key, most severe first (then newest, then key),
+/// at most [`MAX_STATUS_ALERTS`]. Payloads that don't parse are skipped.
+pub fn recent_alerts(recorded: &[serde_json::Value], now: i64) -> Vec<scull_proactive::Alert> {
+    let mut by_key: std::collections::BTreeMap<String, scull_proactive::Alert> =
+        std::collections::BTreeMap::new();
+    for v in recorded {
+        let Ok(a) = serde_json::from_value::<scull_proactive::Alert>(v.clone()) else {
+            continue;
+        };
+        if a.raised_at < now - RECENT_ALERTS_SECS {
+            continue;
+        }
+        match by_key.get(&a.key) {
+            Some(old) if old.raised_at > a.raised_at => {}
+            _ => {
+                by_key.insert(a.key.clone(), a);
+            }
+        }
+    }
+    let mut out: Vec<_> = by_key.into_values().collect();
+    out.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then(b.raised_at.cmp(&a.raised_at))
+            .then(a.key.cmp(&b.key))
+    });
+    out.truncate(MAX_STATUS_ALERTS);
+    out
 }
 
 impl DesktopStatus {
@@ -345,6 +425,8 @@ impl DesktopStatus {
             now,
             last_scan,
             volumes: Vec::new(),
+            review_plan: None,
+            alerts: Vec::new(),
         }
     }
 }
