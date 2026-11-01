@@ -132,15 +132,18 @@ It is never offered when scull runs as root or administrator.
 |---|---|
 | `prepare_cleanup` | Records a plan of exact item IDs from `get_cleanup_candidates`. Changes nothing. Plans expire after 15 minutes. |
 | `get_cleanup_plan` | The plan's items, tiers, actions and approval state |
-| `get_approval_status` | `awaiting_approval`, `approved`, `used`, `revoked` or `expired`. Never reveals or creates an approval. |
+| `get_approval_status` | `awaiting_approval`, `approved`, `used`, `revoked`, `denied` (with `denial_reason`: `denied` or `wrong_code`) or `expired`. Never reveals or creates an approval. |
 | `execute_cleanup` | Runs an approved plan once, through the same Executor as `scull clean` |
 | `get_cleanup_status` | Not yet run, voided, or the recorded outcome per item |
 
 How a cleanup goes:
 
 1. The agent calls `prepare_cleanup` and tells you the plan ID.
-2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan and a
-   short code; type the code to approve, or `deny`. It refuses to run without an interactive
+2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan, the
+   MCP client that prepared it (the name and version the client gave itself, not verified)
+   and a short code; type the code to approve, or `deny`. A denial is final: `deny` (or
+   three wrong codes) means that plan can never be approved, and the agent sees `denied`
+   and has to prepare a new plan if you still want a cleanup. It refuses to run without an interactive
    terminal (a pipe, a script, an agent's shell tool) and as root. It also refuses a terminal
    that looks driven by an agent: an AI agent's environment variables are set, an agent client
    or a terminal-automation tool (`script`, `expect`) started it, or its parent processes
@@ -177,8 +180,8 @@ prepare_per_minute = 6
 
 The rate limit is per server process (each `scull mcp serve` your client starts has its own
 budget); the pending cap is per machine and account, shared by every session. A plan you
-denied in `scull approve` (`deny`, or three wrong codes) stops counting and leaves the list;
-an attempt refused for having no terminal does not.
+denied in `scull approve` (`deny`, or three wrong codes) stops counting and leaves the list
+for good; an attempt refused for having no terminal does not.
 
 Both are read **only from scull's config file**, like `destructive`: there is no environment
 variable or flag, so an agent that can edit its MCP client's launch command still can't raise

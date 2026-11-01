@@ -1383,31 +1383,27 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 68,
-            reason: "one of five items failing on permission denied (exit 3, four complete, failure explained in the report and the audit) is end-to-end on Unix; the Windows variant needs a deny-delete ACL injection",
-            partial: &[t(
-                E2E_EXEC,
-                "fx_exec_14_one_of_five_fails_exit_3_others_complete",
-            )],
-        },
+        Status::Implemented(&[t(
+            E2E_EXEC,
+            "fx_exec_14_one_of_five_fails_exit_3_others_complete",
+        )]),
     )
-    .pending_ci("M")
-    .missing_os("W"),
+    .pending_ci(PHASE2_PENDING),
     fx("FX-EXEC-15", Gate::V1x, "MLW", Mode::Ci, Status::Deferred),
     fx(
         "FX-EXEC-16",
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 71,
-            reason: "the owner-only quarantine folder is checked on Unix in CI; reading it as another test user needs the nightly job, and Windows quarantine is not implemented yet",
-            partial: &[t(QUAR, "fx_exec_16_quarantine_folder_is_owner_only")],
-        },
+        Status::Implemented(&[
+            t(
+                QUAR,
+                "fx_exec_16_another_account_cannot_read_the_quarantine",
+            ),
+            t(QUAR, "fx_exec_16_quarantine_folder_is_owner_only"),
+        ]),
     )
-    .pending_ci("M")
-    .missing_os("W"),
+    .pending_ci(PHASE2_PENDING),
     // §3.6 Physical reclaim accuracy (FX-PHY)
     fx(
         "FX-PHY-01",
@@ -1468,12 +1464,12 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "a reference corpus of realistic projects measured against predictions (G3) is slow and belongs in the nightly job, which doesn't exist yet",
-            partial: &[],
-        },
-    ),
+        Status::Implemented(&[t(
+            E2E_PHY,
+            "fx_phy_06_reference_corpus_median_prediction_error_within_10_percent",
+        )]),
+    )
+    .pending_ci(PHASE2_PENDING),
     fx(
         "FX-PHY-07",
         Gate::Mvp,
