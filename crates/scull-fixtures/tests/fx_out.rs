@@ -284,6 +284,14 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
     // config and writes nothing.
     schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
+    // `schedule` (main, #281) without registering anything: `enable --dry-run` shows the unit
+    // files and commands for the fixture home and stops; `status` with nothing registered runs
+    // no tool.
+    let dry = schemas.json(&cli, &["schedule", "enable", "--dry-run"], "schedule");
+    assert_eq!(dry["data"]["dry_run"], true, "{dry:#}");
+    assert_eq!(dry["data"]["applied"], false, "{dry:#}");
+    let status = schemas.json(&cli, &["schedule", "status"], "schedule");
+    assert_eq!(status["data"]["registered"], false, "{status:#}");
 
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
     clean_history_restore_outputs(&schemas, &cli);
