@@ -7,7 +7,7 @@
 use crate::cancel;
 use crate::cli::{
     CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
-    ScheduleAction, WorktreesAction,
+    WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -61,10 +61,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         } => Some(crate::cmd::insights::PURGE),
         Command::Insights { .. } => None,
         Command::Agent { .. } => None,
-        Command::Schedule { action } => match action {
-            ScheduleAction::Enable => planned("schedule enable", 114),
-            ScheduleAction::Disable => planned("schedule disable", 114),
-        },
+        Command::Schedule { .. } => None,
         Command::Data { action } => match action {
             DataAction::Show => planned("data show", 82),
             DataAction::Export => planned("data export", 82),
@@ -147,6 +144,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
@@ -211,8 +209,6 @@ mod tests {
                 "insights purge",
                 Some(266),
             ),
-            (&["schedule", "enable"], "schedule enable", Some(114)),
-            (&["schedule", "disable"], "schedule disable", Some(114)),
             (&["data", "show"], "data show", Some(82)),
             (&["data", "export"], "data export", Some(82)),
             (&["data", "purge"], "data purge", Some(82)),
@@ -237,6 +233,9 @@ mod tests {
             &["worktrees", "inspect", "."],
             &["worktrees", "register", ".", "--ttl", "7d"],
             &["caches"],
+            &["schedule", "enable"],
+            &["schedule", "disable"],
+            &["schedule", "status"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }

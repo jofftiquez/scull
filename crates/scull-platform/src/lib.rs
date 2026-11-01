@@ -55,6 +55,7 @@ mod error;
 pub mod identity;
 mod native;
 pub mod owner_only;
+pub mod scheduler;
 mod types;
 pub mod volumes;
 

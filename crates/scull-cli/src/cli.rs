@@ -559,10 +559,35 @@ pub struct AgentUninstallArgs {
 /// `scull schedule` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ScheduleAction {
-    /// Register periodic `scull check` runs.
-    Enable,
-    /// Remove periodic checks.
-    Disable,
+    /// Register periodic `scull check` runs (low priority, as you) with launchd, a systemd
+    /// user timer or Task Scheduler. Shows every file and command and asks first (or `--yes`).
+    Enable {
+        /// How often: e.g. `30m`, `6h`, `1d` (15 minutes to 7 days).
+        #[arg(long, value_name = "DURATION", default_value = "6h")]
+        every: String,
+        /// Consent flags.
+        #[command(flatten)]
+        consent: ConsentArgs,
+    },
+    /// Remove the periodic checks registered by `scull schedule enable`.
+    Disable {
+        /// Consent flags.
+        #[command(flatten)]
+        consent: ConsentArgs,
+    },
+    /// Show whether periodic checks are registered (read-only).
+    Status,
+}
+
+/// `--yes` / `--dry-run` for commands that change your system with consent.
+#[derive(Debug, Clone, Copy, Default, Args)]
+pub struct ConsentArgs {
+    /// Apply without asking (the files and commands are still printed first).
+    #[arg(long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and commands; change nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `scull data` subcommands.

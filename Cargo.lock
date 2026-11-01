@@ -1439,6 +1439,7 @@ dependencies = [
  "proptest",
  "schemars",
  "scull-core",
+ "scull-platform",
  "scull-storage",
  "serde",
  "serde_json",

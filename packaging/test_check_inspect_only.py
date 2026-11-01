@@ -39,7 +39,8 @@ class ConsentGated(unittest.TestCase):
 
     def test_refusing_without_writing_passes(self):
         body = (
-            "sys.exit(0 if ('--dry-run' in args or args[1] == 'uninstall') else 2)\n"
+            "nothing_to_do = args[1] in ('uninstall', 'disable', 'status')\n"
+            "sys.exit(0 if ('--dry-run' in args or nothing_to_do) else 2)\n"
         )
         self.assertEqual(self.run_gate(body), 0)
 
@@ -58,12 +59,25 @@ class ConsentGated(unittest.TestCase):
             "    os.makedirs(os.path.join(home, 'scull-home', 'config'), exist_ok=True)\n"
             "    open(os.path.join(home, 'scull-home', 'config', 'config.toml'), 'w').write('x')\n"
             "    sys.exit(0)\n"
-            "sys.exit(0 if args[1] == 'uninstall' else 2)\n"
+            "sys.exit(0 if args[1] in ('uninstall', 'disable', 'status') else 2)\n"
         )
         self.assertEqual(self.run_gate(body), 1)
 
     def test_applying_without_consent_fails(self):
         self.assertEqual(self.run_gate("sys.exit(0)\n"), 1)
+
+    def test_registering_a_schedule_without_consent_fails(self):
+        # `scull schedule enable` writing a unit file under HOME without --yes.
+        body = (
+            "if args[:2] == ['schedule', 'enable'] and '--dry-run' not in args:\n"
+            "    d = os.path.join(home, '.config', 'systemd', 'user')\n"
+            "    os.makedirs(d, exist_ok=True)\n"
+            "    open(os.path.join(d, 'scull-check.timer'), 'w').write('[Timer]')\n"
+            "    sys.exit(2)\n"
+            "nothing_to_do = args[1] in ('uninstall', 'disable', 'status')\n"
+            "sys.exit(0 if ('--dry-run' in args or nothing_to_do) else 2)\n"
+        )
+        self.assertEqual(self.run_gate(body), 1)
 
 
 def exit_code(fn) -> int:

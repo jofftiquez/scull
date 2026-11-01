@@ -16,12 +16,15 @@
 //! * [`review`]: the ready-to-review reclaim plan (PRO-05): which items a proposal holds, and
 //!   the announcement `scull status` / `scull check` read back. A proposal only: reviewing and
 //!   running it is `scull clean --plan`.
+//! * [`schedule`]: the unit files and tool invocations `scull schedule` registers with launchd,
+//!   systemd or Task Scheduler (PRO-07).
 
 pub mod alert;
 pub mod forecast;
 pub mod history;
 pub mod policy;
 pub mod review;
+pub mod schedule;
 pub mod stats;
 
 pub use alert::{Alert, AlertKind, Severity, forecast_alerts};
