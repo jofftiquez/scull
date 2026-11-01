@@ -486,10 +486,11 @@ mod tests {
         inv.assert_ok();
     }
 
-    /// A tool command Quick Clean does not run (`ollama rm` for Ollama models, P4-DET-01) is
-    /// refused by every Executor path with the explicit reason, and nothing changes.
+    /// A tool command Quick Clean does not run (`ollama rm` for Ollama models, P4-DET-01;
+    /// `xcrun simctl delete unavailable` for simulators, P5-DET-02) is refused by every
+    /// Executor path with the explicit reason, and nothing changes.
     #[test]
-    fn ollama_tool_command_is_skipped_with_a_reason() {
+    fn non_quick_clean_tool_commands_are_skipped_with_a_reason() {
         let Some(fx) = fixture() else { return };
         assert!(!crate::is_quick_clean_tool("ollama"));
         for t in CacheTool::ALL {
@@ -512,15 +513,38 @@ mod tests {
             tool: "ollama".into(),
             args: vec!["rm".into(), "llama3:latest".into()],
         };
-        let mut it = item(&fx, Tier::S1, Category::MlCache, ollama);
-        it.rule.id = "ollama.models".into();
         let exec = locked(&fx);
-        let e = exec.delete(&it, &target).expect_err("ollama via delete");
-        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
-        assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
-        let e = crate::executor::check_item_for(&it, &Action::Quarantine)
-            .expect_err("ollama via any action");
-        assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
+        let mut ollama_item = item(&fx, Tier::S1, Category::MlCache, ollama);
+        ollama_item.rule.id = "ollama.models".into();
+        // `xcrun simctl delete unavailable` (P5-DET-02's simulator action) has no device-set
+        // argument, so it would act on whatever set `xcrun` resolves, not the located one: no
+        // Executor path runs it, scoped or not.
+        assert!(!crate::is_quick_clean_tool("xcrun"));
+        let simctl = Action::ToolCommand {
+            tool: "xcrun".into(),
+            args: scull_detectors::xcode::SIMCTL_DELETE_UNAVAILABLE
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        };
+        let mut simctl_item = item(&fx, Tier::S1, Category::Other, simctl);
+        simctl_item.rule.id = "xcode.simulators".into();
+        for it in [ollama_item, simctl_item] {
+            let e = exec
+                .delete(&it, &target)
+                .expect_err("tool command via delete");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+            assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
+            for executing in [Action::Quarantine, Action::Trash, Action::Delete] {
+                let e = crate::executor::check_item_for(&it, &executing)
+                    .expect_err("tool command via any action");
+                assert!(e.message.contains(crate::TOOL_NATIVE_UNSUPPORTED), "{e}");
+            }
+            let e = exec
+                .delete_orphaned_cache(&it, &target, evidence(&fx))
+                .expect_err("tool command via D-36");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        }
         assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");
         let inv = fx.check_invariants(&InvariantInputs::new());
         println!("{inv}");
