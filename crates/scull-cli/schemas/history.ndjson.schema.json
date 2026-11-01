@@ -1,9 +1,103 @@
 {
   "$defs": {
+    "AgentEventLine": {
+      "additionalProperties": false,
+      "description": "One audited refusal in the agent cleanup flow (PRD §13.3 step 5).",
+      "properties": {
+        "at": {
+          "description": "When (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "channel": {
+          "description": "The channel the attempt came through: `terminal`, `desktop` or `mcp`.",
+          "type": "string"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContentHash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its content hash, when known."
+        },
+        "count": {
+          "default": 1,
+          "description": "How many times it happened (repeats within a minute are folded into one entry).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "`approval_denied` or `execute_refused`.",
+          "type": "string"
+        },
+        "machine_id": {
+          "description": "This installation's machine ID.",
+          "type": "string"
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The plan, when the refusal was about one."
+        },
+        "reason": {
+          "description": "Stable reason code (`denied`, `wrong_code`, `no_terminal`, `not_approved`,\n`approval_used`, `plan_changed`, ...).",
+          "type": "string"
+        },
+        "source": {
+          "description": "What recorded it: `cli`, `desktop`, `mcp` or `executor`.",
+          "type": "string"
+        },
+        "user": {
+          "description": "The OS account.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "kind",
+        "reason",
+        "channel",
+        "source",
+        "user",
+        "machine_id"
+      ],
+      "type": "object"
+    },
+    "ContentHash": {
+      "description": "SHA-256 of the plan's canonical JSON, lowercase hex.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "HistoryReport": {
       "additionalProperties": false,
       "description": "`scull history` (`scull/history@1`).",
       "properties": {
+        "agent_events": {
+          "default": [],
+          "description": "What was refused to AI agents (denied approvals, refused executions), newest first.",
+          "items": {
+            "$ref": "#/$defs/AgentEventLine"
+          },
+          "type": "array"
+        },
+        "agent_events_more": {
+          "default": 0,
+          "description": "Agent audit entries in the same period not listed (beyond `--limit`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "operations": {
           "description": "Operations, newest first.",
           "items": {
