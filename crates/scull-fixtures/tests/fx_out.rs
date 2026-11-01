@@ -220,6 +220,10 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         schemas.ndjson(&cli, &a, "doctor-report");
     }
     assert_eq!(status["data"]["registered"], false, "{status:#}");
+    // `headroom status` (PRO-06): read-only, nothing reserved in the fixture home.
+    let headroom = schemas.json(&cli, &["headroom", "status"], "headroom");
+    assert_eq!(headroom["data"]["status"]["state"], "none", "{headroom:#}");
+    schemas.ndjson(&cli, &["headroom", "status"], "headroom");
 
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
     clean_history_restore_outputs(&schemas, &cli);

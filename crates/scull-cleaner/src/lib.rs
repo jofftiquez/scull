@@ -50,6 +50,11 @@
 //!   gathers right before ([`quickclean::QuickClean::remove_orphaned`]) and a per-tool
 //!   confirmation. `Action::allowed_for` is unchanged: no other path deletes at S1.
 //!
+//! * Emergency headroom (PRO-06, off by default, [`headroom`]): the reserve file in scull's own
+//!   data directory is created here and released through [`own_data::purge_own_files`] (the
+//!   walker, no-follow, identity-checked against its manifest); outcomes are audited as
+//!   `headroom` events.
+//!
 //! * Quick Clean is audited like any operation (SAFE-08, P2-EXEC-12): the confirmed preview is
 //!   recorded as a plan ([`quickclean::QuickCleanPlan::audit_plan`]: resolved binary and exact
 //!   arguments per tool) and [`quickclean::QuickClean::run`] /
@@ -86,6 +91,7 @@
 //!   implemented but have not run on Windows CI yet.
 mod execution;
 mod executor;
+pub mod headroom;
 pub mod journal;
 mod lock;
 pub mod measure;

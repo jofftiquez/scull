@@ -19,11 +19,14 @@
 //! * [`monitor`]: tray monitoring (PRD §14.6): which alerts become desktop notifications,
 //!   cooldowns, pause, exclusions, and the weekly digest's schedule (INS-04). Reads and
 //!   notifies only.
+//! * [`headroom`]: the emergency reserve file (PRO-06, off by default): where it lives, its
+//!   size limits and its state. Read-only; `scull_cleaner::headroom` creates and releases it.
 //! * [`schedule`]: the unit files and tool invocations `scull schedule` registers with launchd,
 //!   systemd or Task Scheduler (PRO-07).
 
 pub mod alert;
 pub mod forecast;
+pub mod headroom;
 pub mod history;
 pub mod monitor;
 pub mod policy;
