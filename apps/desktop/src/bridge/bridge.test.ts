@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { insideTauri, selectBridge } from './index';
+import { insideTauri, selectBridge, wantsFirstRun } from './index';
 import { createMockBridge, MOCK_DRIVES } from './mock';
 
 describe('bridge selection', () => {
@@ -11,6 +11,29 @@ describe('bridge selection', () => {
     expect(insideTauri({ __TAURI_INTERNALS__: {} })).toBe(true);
     expect(insideTauri({ __TAURI__: {} })).toBe(true);
     expect(selectBridge({ __TAURI_INTERNALS__: {} }).kind).toBe('tauri');
+  });
+  it('asks for a never-scanned machine only with ?scenario=first-run', () => {
+    expect(wantsFirstRun({ location: { search: '', hash: '#/?scenario=first-run' } })).toBe(true);
+    expect(wantsFirstRun({ location: { search: '?scenario=first-run', hash: '' } })).toBe(true);
+    expect(wantsFirstRun({ location: { search: '', hash: '#/?scenario=design' } })).toBe(false);
+    expect(wantsFirstRun({})).toBe(false);
+  });
+});
+
+describe('mock bridge, first run', () => {
+  it('reports no scan until the first complete scan', async () => {
+    const b = createMockBridge({ firstRun: true });
+    expect((await b.status()).state).toBe('no_scan');
+    expect((await b.status()).last_scan ?? null).toBeNull();
+    const ac = new AbortController();
+    ac.abort();
+    await b.scan({}, { signal: ac.signal });
+    expect((await b.status()).state).toBe('no_scan');
+    await b.scan({});
+    expect((await b.status()).state).toBe('ok');
+  });
+  it('is a scanned machine by default', async () => {
+    expect((await createMockBridge().status()).state).toBe('ok');
   });
 });
 

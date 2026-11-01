@@ -260,6 +260,58 @@ that `scull clean caches` works for now. The recorded fixture's only cache (npm)
 S2 and therefore skipped. With the mock bridge, `#/caches?demo=design` loads the design's
 machine plus the skipped states.
 
+## End-to-end tests (Playwright)
+
+`e2e/` runs the key flows in Chromium against the browser build with the mock bridge:
+
+| Spec | Flow |
+|---|---|
+| `onboarding.spec.ts` | First run → onboarding → first scan → overview |
+| `cleanup.spec.ts` | Overview tier filter and selection → add to cleanup → Cleanup Review → confirm → done |
+| `agent-approval.spec.ts` | Agent request: typed code (wrong, then right → approved → executed), expired, denied, plan changed (D-34: voided) |
+| `worktrees.spec.ts` | Remove a Removable worktree, branch kept; a protected one is blocked |
+| `caches.spec.ts` | Quick Clean with an orphaned cache confirmed ("Include it") and another kept |
+| `history.spec.ts` | Restore a quarantined item beside the occupied original (`.scull-restored-1`) |
+| `settings.spec.ts` | Change a setting → Saved pill; destructive MCP is locked |
+| `keyboard.spec.ts` | Skip link → wheel (arrows, Enter, Shift+Enter) → Cleanup Review → confirm, keyboard only |
+| `reduced-motion.spec.ts` | `prefers-reduced-motion: reduce`: end states with no animation running |
+
+```bash
+pnpm install --frozen-lockfile                  # once, from the repo root
+apps/desktop/e2e/run.sh                         # build, serve and run everything in the container
+apps/desktop/e2e/run.sh --dev                   # the Vite dev server instead of a build
+apps/desktop/e2e/run.sh --shots .evidence/107   # also copy the flows' screenshots there
+apps/desktop/e2e/run.sh --repeat 3              # each test 3 times (flakiness check)
+apps/desktop/e2e/run.sh -- cleanup --headed     # anything after -- goes to `playwright test`
+```
+
+`run.sh` starts the official `mcr.microsoft.com/playwright:v1.64.1-noble` image, which brings its
+own browsers, and runs `e2e/in-container.sh` there. The CI job
+(`.github/workflows/desktop-e2e.yml`, Linux only) runs the same script inside that image. The
+script builds with `VITE_SCULL_E2E=1` into `e2e/.dist` (`dist/` is untouched), serves it with
+`vite preview` and runs `playwright test`. The flag only exposes the mock plan bridge as
+`globalThis.__scullMockPlans`, as the dev server already does, so the "plan changed" test can
+simulate a target changing. A normal build drops that code. The HTML report goes to
+`e2e/report/`, failure traces to `e2e/results/` and screenshots to `e2e/shots/`. All three are
+gitignored, and screenshots are attached to issues, never committed.
+
+`@playwright/test` is a devDependency pinned to the image's version (1.64.1). It is Apache-2.0,
+has no dependencies besides `playwright` and `playwright-core`, and downloads no browsers when
+installed. Pinning it in the lockfile gives the specs types and lint, and lets CI install it with
+everything else. `run.sh` refuses to start if the version and the image drift apart.
+
+Rules for the specs:
+
+- **Wait on conditions, never sleep.** Use locators, `expect` polling,
+  `fixtures.settle()` (finite animations done) and `page.clock` for time (the expiry test
+  fast-forwards 15 minutes). Retries are off, so a flaky wait fails the run.
+- **Safety (PRD §10).** `open()` asserts the page isn't inside Tauri. The auto `guard`
+  fixture aborts and fails on any request outside the app's origin, and on page or console
+  errors. The mock bridges only animate, so nothing on disk can change.
+- `?scenario=first-run` makes the mock bridge a never-scanned machine (`state: "no_scan"` until
+  the first complete scan), so the real first-run redirect to onboarding is exercised.
+  `?scenario=design` / `?demo=design` load the design's illustrative data, as for screenshots.
+
 ## Licenses
 
 `src-tauri/deny.toml` uses the root policy, plus exceptions for five MPL-2.0 crates that Tauri 2

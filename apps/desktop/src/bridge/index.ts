@@ -13,8 +13,18 @@ export function insideTauri(w: unknown = globalThis): boolean {
   return g.__TAURI__ !== undefined || g.__TAURI_INTERNALS__ !== undefined;
 }
 
+/** Whether the page asked the mock for a never-scanned machine (`?scenario=first-run`, E2E). */
+export function wantsFirstRun(w: unknown = globalThis): boolean {
+  const loc = (w as { location?: { search?: string; hash?: string } } | undefined)?.location;
+  if (!loc) return false;
+  const q = `${loc.search ?? ''}&${(loc.hash ?? '').split('?')[1] ?? ''}`;
+  return /(^|[?&])scenario=first-run(&|$)/.test(q);
+}
+
 export function selectBridge(w: unknown = globalThis): ScullBridge {
-  return insideTauri(w) ? createTauriBridge() : createMockBridge({ latencyMs: 120, progressMs: 250 });
+  return insideTauri(w)
+    ? createTauriBridge()
+    : createMockBridge({ latencyMs: 120, progressMs: 250, firstRun: wantsFirstRun(w) });
 }
 
 export const BRIDGE_KEY: InjectionKey<ScullBridge> = Symbol('scull-bridge');
