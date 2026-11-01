@@ -9,6 +9,14 @@
 //!   line per recorded item outcome, and its quarantine manifest entries (held, restored where,
 //!   purged when) with the `scull restore` command for what is still held.
 //!
+//! * Below the operations (without an ID): what was refused to AI agents (PRD §13.3 step 5),
+//!   newest first: denied approvals (`deny`, too many wrong codes, no terminal, a refused
+//!   attempt), refused `execute_cleanup` calls and approvals the human revoked (#298), each
+//!   with its reason code, plan, channel, who recorded it and how many times it repeated
+//!   (`agent_events` in JSON). Bounded: at most `--limit` entries (default
+//!   [`AGENT_EVENTS_LIMIT`]) from `--since` or, by default, the last [`AGENT_EVENTS_DAYS`]
+//!   days; how many more there are is reported (`agent_events_more`).
+//!
 //! Machine output: `scull/history@1` and `scull/history-operation@1`.
 
 use super::{emit_machine, emit_text, exec};
@@ -22,8 +30,14 @@ use crate::output::style::Style;
 use crate::output::table::{Align, Cell, Table};
 use schemars::JsonSchema;
 use scull_core::{ContentHash, ErrorKind, FsPath, ItemId, OperationId, PlanId, ScullError};
-use scull_storage::{OperationRecord, QuarantineEntry, Store};
+use scull_storage::{AgentAuditEvent, OperationRecord, QuarantineEntry, Store};
 use serde::Serialize;
+
+/// Default number of agent audit entries `scull history` lists.
+pub const AGENT_EVENTS_LIMIT: u32 = 50;
+
+/// Without `--since`, agent audit entries come from this many recent days.
+pub const AGENT_EVENTS_DAYS: i64 = 30;
 
 /// Schema of `scull history --json`.
 pub const HISTORY_SCHEMA: SchemaId = SchemaId::new("history", 1);
@@ -36,6 +50,75 @@ pub const HISTORY_OPERATION_SCHEMA: SchemaId = SchemaId::new("history-operation"
 pub struct HistoryReport {
     /// Operations, newest first.
     pub operations: Vec<OperationLine>,
+    /// What was refused to AI agents (denied approvals, refused executions), newest first.
+    #[serde(default)]
+    pub agent_events: Vec<AgentEventLine>,
+    /// Agent audit entries in the same period not listed (beyond `--limit`).
+    #[serde(default)]
+    pub agent_events_more: u64,
+}
+
+/// One audited refusal in the agent cleanup flow (PRD §13.3 step 5).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentEventLine {
+    /// When (Unix seconds).
+    pub at: i64,
+    /// `approval_denied`, `execute_refused`, `approval_revoked` or `revoke_refused`.
+    pub kind: String,
+    /// Stable reason code (`denied`, `wrong_code`, `no_terminal`, `not_approved`,
+    /// `approval_used`, `plan_changed`, ...).
+    pub reason: String,
+    /// The plan, when the refusal was about one.
+    pub plan_id: Option<PlanId>,
+    /// Its content hash, when known.
+    pub content_hash: Option<ContentHash>,
+    /// The channel the attempt came through: `terminal`, `desktop` or `mcp`.
+    pub channel: String,
+    /// What recorded it: `cli`, `desktop`, `mcp` or `executor`.
+    pub source: String,
+    /// The OS account.
+    pub user: String,
+    /// This installation's machine ID.
+    pub machine_id: String,
+    /// How many times it happened (repeats within a minute are folded into one entry).
+    #[serde(default = "one")]
+    pub count: u64,
+}
+
+fn one() -> u64 {
+    1
+}
+
+impl AgentEventLine {
+    fn of(e: &AgentAuditEvent) -> Self {
+        Self {
+            at: e.at,
+            kind: e.kind.as_str().to_owned(),
+            reason: e.reason.clone(),
+            plan_id: e.plan_id.clone(),
+            content_hash: e.content_hash.clone(),
+            channel: e.channel.clone(),
+            source: e.source.clone(),
+            user: e.user.clone(),
+            machine_id: e.machine_id.clone(),
+            count: e.count,
+        }
+    }
+}
+
+/// The most recent `limit` agent audit events at or after `since`, newest first, and how
+/// many more there are in that period.
+pub fn agent_events(
+    store: &Store,
+    since: i64,
+    limit: u32,
+) -> Result<(Vec<AgentEventLine>, u64), ScullError> {
+    let mut events = store.agent_events(since, limit)?;
+    events.reverse();
+    let rows = store.agent_event_rows(since)?;
+    let more = rows.saturating_sub(events.len() as u64);
+    Ok((events.iter().map(AgentEventLine::of).collect(), more))
 }
 
 /// One operation.
@@ -172,16 +255,29 @@ pub fn run(args: &HistoryArgs, ui: &Ui) -> Result<(), ScullError> {
     let missing = matches!(db::probe(&path), Ok(Probe::Missing | Probe::Uninitialized));
     match &args.operation_id {
         None => {
-            let operations = if missing {
-                Vec::new()
+            let (operations, (agent_events, agent_events_more)) = if missing {
+                (Vec::new(), (Vec::new(), 0))
             } else {
                 let store = exec::open_store()?;
+                let now = scull_engine::now_unix();
                 let since = args.since.map_or(0, |s| {
-                    scull_engine::now_unix().saturating_sub(i64::try_from(s).unwrap_or(i64::MAX))
+                    now.saturating_sub(i64::try_from(s).unwrap_or(i64::MAX))
                 });
-                list(&store, since)?
+                let agent_since = if args.since.is_some() {
+                    since
+                } else {
+                    now.saturating_sub(AGENT_EVENTS_DAYS * 24 * 3600)
+                };
+                (
+                    list(&store, since)?,
+                    agent_events(&store, agent_since, args.limit)?,
+                )
             };
-            let r = HistoryReport { operations };
+            let r = HistoryReport {
+                operations,
+                agent_events,
+                agent_events_more,
+            };
             if ui.format.is_machine() {
                 emit_machine(ui.format, HISTORY_SCHEMA, "history", &r)
             } else {
@@ -338,6 +434,59 @@ fn when(t: i64) -> String {
 }
 
 fn render_list(r: &HistoryReport, color: bool) -> String {
+    let mut out = render_operations(r, color);
+    if !r.agent_events.is_empty() {
+        out.push_str(&render_agent_events(&r.agent_events, color));
+    }
+    if r.agent_events_more > 0 {
+        out.push_str(&format!(
+            "... and {} more (scull history --limit N, or --since AGE).\n",
+            r.agent_events_more
+        ));
+    }
+    out
+}
+
+fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
+    let mut out = format!(
+        "\n{}\n",
+        Style::Bold.paint(
+            &format!("Refused to AI agents ({}, newest first):", events.len()),
+            color
+        )
+    );
+    let mut t = Table::new([
+        ("When", Align::Left),
+        ("What", Align::Left),
+        ("Reason", Align::Left),
+        ("Plan", Align::Left),
+        ("Channel", Align::Left),
+        ("Recorded by", Align::Left),
+        ("Times", Align::Right),
+    ]);
+    for e in events {
+        let what = match e.kind.as_str() {
+            "approval_denied" => "approval denied",
+            "execute_refused" => "execution refused",
+            "approval_revoked" => "approval revoked",
+            "revoke_refused" => "revoke refused",
+            other => other,
+        };
+        t.push(vec![
+            Cell::text(&when(e.at)),
+            Cell::text(what),
+            Cell::text(&e.reason),
+            Cell::text(e.plan_id.as_ref().map_or("-", PlanId::as_str)),
+            Cell::text(&e.channel),
+            Cell::text(&e.source),
+            Cell::text(&e.count.to_string()),
+        ]);
+    }
+    out.push_str(&t.render(color));
+    out
+}
+
+fn render_operations(r: &HistoryReport, color: bool) -> String {
     if r.operations.is_empty() {
         return "No cleanup operations recorded yet.\n".into();
     }

@@ -178,10 +178,15 @@ pub enum Command {
     /// Restore quarantined items of a past operation to where they were (never overwriting).
     Restore(RestoreArgs),
 
-    /// Approve a cleanup plan an AI agent prepared through MCP (interactive terminal only).
+    /// Approve a cleanup plan an AI agent prepared through MCP, or revoke an approval before
+    /// the agent uses it (interactive terminal only).
     Approve {
-        /// Plan ID to approve; omit to list the agent plans awaiting approval.
+        /// Plan ID to approve; omit to list the agent plans awaiting approval (and the approved
+        /// ones not yet run).
         plan_id: Option<String>,
+        /// Revoke the approval of this plan before the agent executes it.
+        #[arg(long, value_name = "PLAN_ID", conflicts_with = "plan_id")]
+        revoke: Option<String>,
     },
 
     /// List or validate detection rules.
@@ -487,6 +492,10 @@ pub struct HistoryArgs {
     /// Only operations started within AGE (90m, 12h, 30d, 2w).
     #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age, conflicts_with = "operation_id")]
     pub since: Option<u64>,
+    /// Most entries listed under "Refused to AI agents" (newest first; default 50). Without
+    /// --since they come from the last 30 days.
+    #[arg(long, value_name = "N", default_value_t = crate::cmd::history::AGENT_EVENTS_LIMIT, conflicts_with = "operation_id")]
+    pub limit: u32,
 }
 
 /// Arguments for `scull restore`.

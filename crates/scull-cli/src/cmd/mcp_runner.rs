@@ -6,7 +6,7 @@
 //!
 //! 1. refuse to run elevated (SAFE-14; no override for agents);
 //! 2. take the per-user execution lock, failing at once if another operation holds it
-//!    (SAFE-09, `lock_held`; the approval is not spent);
+//!    (SAFE-09, `lock_held`; the approval is not spent; the refusal is audited);
 //! 3. reconcile operations a crash interrupted (SAFE-19);
 //! 4. start the operation with this account (from the OS) as the approver and the approval's
 //!    channel: `Executor::begin_operation` consumes the approval atomically and refuses an
@@ -38,7 +38,21 @@ pub struct ExecutorRunner {
 impl CleanupRunner for ExecutorRunner {
     fn run(&self, req: RunRequest<'_>) -> Result<RunSummary, ScullError> {
         exec::check_not_elevated(exec::elevation(), false, "execute_cleanup")?;
-        let executor = exec::lock()?;
+        let executor = match exec::lock() {
+            Ok(e) => e,
+            Err(e) => {
+                // Audited (PRD §13.3 step 5); the approval is not spent.
+                let _ = scull_mcp::approval::record_execute_refusal(
+                    req.store,
+                    Some(req.plan.id()),
+                    Some(req.plan.content_hash()),
+                    &super::json_name(&e.kind),
+                    req.principal,
+                    now_unix(),
+                );
+                return Err(e);
+            }
+        };
         let recovered = executor.recover(req.store, now_unix())?;
         for op in &recovered.operations {
             // stderr: the client's log, never the JSON-RPC stream on stdout.

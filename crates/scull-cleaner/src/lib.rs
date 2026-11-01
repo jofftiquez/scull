@@ -106,7 +106,7 @@ pub use executor::{
 };
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
-pub use operation::Operation;
+pub use operation::{GATE_REASONS, Operation};
 pub use orphaned::OrphanedCacheEvidence;
 pub use quarantine::{
     DEFAULT_RETENTION_SECS, DISK_MANIFEST, PurgeOutcome, PurgePolicy, PurgeReport,

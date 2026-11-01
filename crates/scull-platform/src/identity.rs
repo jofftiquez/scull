@@ -69,6 +69,16 @@ pub fn machine_id(data_dir: &Path) -> Result<String> {
     ))
 }
 
+/// The machine ID recorded in `data_dir`, **without creating it**: `None` when there is no
+/// file yet (or it is still empty). Same checks as [`machine_id`] otherwise. For paths that
+/// must leave no trace, such as auditing a refused `scull approve`.
+pub fn existing_machine_id(data_dir: &Path) -> Result<Option<String>> {
+    match read_id(&data_dir.join(MACHINE_ID_FILE))? {
+        Read::Valid(id) => Ok(Some(id)),
+        Read::Empty | Read::Missing => Ok(None),
+    }
+}
+
 enum Read {
     Valid(String),
     Empty,
@@ -137,6 +147,16 @@ fn new_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_machine_id_never_creates_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        assert_eq!(existing_machine_id(&data).unwrap(), None);
+        assert!(!data.exists(), "nothing created");
+        let id = machine_id(&data).unwrap();
+        assert_eq!(existing_machine_id(&data).unwrap(), Some(id));
+    }
 
     #[test]
     fn machine_id_is_created_once_and_reused() {

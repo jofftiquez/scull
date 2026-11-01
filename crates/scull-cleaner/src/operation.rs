@@ -21,6 +21,14 @@
 //! never runs on the agent's say-so. (Approval rows are not authenticated beyond the
 //! database's owner-only permissions: a process that can write the user's database can
 //! insert one; see `docs/THREAT_MODEL.md` T-41.)
+//!
+//! A human can revoke the approval before it is used (#298, `Store::revoke_approval`): the
+//! revocation spends it with the same single-use marker, so it and this consumption can't
+//! both succeed (exactly one update changes the row); a revoked approval is refused here.
+//!
+//! Every refusal to start (or run) an agent plan is audited as an
+//! [`EventKind::ExecuteRefused`] event with source `executor` and a stable reason code
+//! ([`GATE_REASONS`]; PRD §13.3 step 5). Recording it never touches the approval.
 
 use crate::executor::Executor;
 use crate::measure::{Baseline, FreeSpaceSource, MeasuredDelta, Meter, Tally, VolumeMeter};
@@ -31,9 +39,60 @@ use scull_core::{
 };
 use scull_engine::{PlatformOwnerOnly, now_unix};
 use scull_storage::{
-    ApprovalMethod, ItemRecord, OperationAudit, OperationEnd, OperationFinish, OperationStart,
-    OperationSummary, Store,
+    AgentAuditEvent, ApprovalMethod, EventKind, ItemRecord, OperationAudit, OperationEnd,
+    OperationFinish, OperationStart, OperationSummary, Store,
 };
+
+/// The reason codes the Executor's gate records when it refuses an agent plan (see the
+/// module docs): `lock_not_held`, `operation_mismatch`, `unfinished_operation`,
+/// `targets_touched`, `not_approved`, `not_human`, `approval_mismatch`, `account_unknown`,
+/// `other_account`, `approver_not_recorded`, `channel_mismatch`, `approval_used`,
+/// `approval_revoked`, `approval_expired`, `outside_operation` and `store`.
+pub const GATE_REASONS: [&str; 16] = [
+    "lock_not_held",
+    "operation_mismatch",
+    "unfinished_operation",
+    "targets_touched",
+    "not_approved",
+    "not_human",
+    "approval_mismatch",
+    "account_unknown",
+    "other_account",
+    "approver_not_recorded",
+    "channel_mismatch",
+    "approval_used",
+    "approval_revoked",
+    "approval_expired",
+    "outside_operation",
+    "store",
+];
+
+/// A refusal and its audited reason code (one of [`GATE_REASONS`]).
+type Refusal = (ScullError, &'static str);
+
+fn store_refusal(e: scull_storage::StoreError) -> Refusal {
+    (ScullError::from(e), "store")
+}
+
+/// Audit the gate's refusal of the agent plan `plan` (best effort: the refusal stands even
+/// if it can't be recorded). The user is the account the Executor runs as when the OS can
+/// tell, else the plan's.
+pub(crate) fn audit_refusal(store: &mut Store, plan: &Plan, reason: &'static str) {
+    let user = scull_platform::current_user().unwrap_or_else(|_| plan.user().to_owned());
+    let _ = store.record_agent_event(&AgentAuditEvent {
+        event_id: 0,
+        at: now_unix(),
+        kind: EventKind::ExecuteRefused,
+        source: "executor".into(),
+        plan_id: Some(plan.id().clone()),
+        content_hash: Some(plan.content_hash().clone()),
+        reason: reason.into(),
+        channel: "mcp".into(),
+        machine_id: plan.machine_id().to_owned(),
+        user,
+        count: 1,
+    });
+}
 
 /// An operation in progress. Borrowing the store keeps every record of the operation in one
 /// place; drop it only after [`Operation::finish`] (an unfinished operation is what crash
@@ -207,48 +266,11 @@ impl Executor {
         plan: &Plan,
         start: &OperationStart,
     ) -> Result<Operation<'s>, ScullError> {
-        if self.lock().is_none() {
-            return Err(ScullError::new(
-                ErrorKind::SafetyBlocked,
-                "operations start only while holding the execution lock (SAFE-09)",
-            ));
-        }
-        if start.plan_id != *plan.id() || start.content_hash != *plan.content_hash() {
-            return Err(ScullError::new(
-                ErrorKind::PlanTampered,
-                "the operation does not match the plan",
-            ));
-        }
-        let pending = store.unfinished_operations().map_err(ScullError::from)?;
-        if !pending.is_empty() {
-            let ids: Vec<&str> = pending.iter().map(OperationId::as_str).collect();
-            return Err(ScullError::new(
-                ErrorKind::SafetyBlocked,
-                format!(
-                    "an earlier operation did not finish ({}): run crash recovery \
-                     (Executor::recover) before starting a new one (SAFE-19)",
-                    ids.join(", ")
-                ),
-            ));
-        }
-        let identities: Vec<_> = plan.items().iter().map(|i| i.identity).collect();
-        let touched = store
-            .operations_touching(&identities, plan.created_unix(), None)
-            .map_err(ScullError::from)?;
-        if !touched.is_empty() {
-            let ids: Vec<&str> = touched.iter().map(OperationId::as_str).collect();
-            return Err(ScullError::new(
-                ErrorKind::PlanInvalidated,
-                format!(
-                    "another operation touched this plan's targets since it was created ({}); \
-                     create a new plan",
-                    ids.join(", ")
-                ),
-            ));
-        }
-        // Last check before anything is recorded, so a refusal above never spends the approval.
-        if plan.origin() == PlanOrigin::Mcp {
-            consume_human_approval(store, plan, start)?;
+        if let Err((e, reason)) = self.admit(store, plan, start) {
+            if plan.origin() == PlanOrigin::Mcp {
+                audit_refusal(store, plan, reason);
+            }
+            return Err(e);
         }
         let audit = store
             .begin_operation(start, &PlatformOwnerOnly)
@@ -274,6 +296,67 @@ impl Executor {
             plan: (plan.id().clone(), plan.content_hash().clone()),
         })
     }
+
+    /// Every check [`Executor::begin_operation`] makes before recording anything; for an agent
+    /// plan the last one consumes its approval.
+    fn admit(&self, store: &mut Store, plan: &Plan, start: &OperationStart) -> Result<(), Refusal> {
+        if self.lock().is_none() {
+            return Err((
+                ScullError::new(
+                    ErrorKind::SafetyBlocked,
+                    "operations start only while holding the execution lock (SAFE-09)",
+                ),
+                "lock_not_held",
+            ));
+        }
+        if start.plan_id != *plan.id() || start.content_hash != *plan.content_hash() {
+            return Err((
+                ScullError::new(
+                    ErrorKind::PlanTampered,
+                    "the operation does not match the plan",
+                ),
+                "operation_mismatch",
+            ));
+        }
+        let pending = store.unfinished_operations().map_err(store_refusal)?;
+        if !pending.is_empty() {
+            let ids: Vec<&str> = pending.iter().map(OperationId::as_str).collect();
+            return Err((
+                ScullError::new(
+                    ErrorKind::SafetyBlocked,
+                    format!(
+                        "an earlier operation did not finish ({}): run crash recovery \
+                         (Executor::recover) before starting a new one (SAFE-19)",
+                        ids.join(", ")
+                    ),
+                ),
+                "unfinished_operation",
+            ));
+        }
+        let identities: Vec<_> = plan.items().iter().map(|i| i.identity).collect();
+        let touched = store
+            .operations_touching(&identities, plan.created_unix(), None)
+            .map_err(store_refusal)?;
+        if !touched.is_empty() {
+            let ids: Vec<&str> = touched.iter().map(OperationId::as_str).collect();
+            return Err((
+                ScullError::new(
+                    ErrorKind::PlanInvalidated,
+                    format!(
+                        "another operation touched this plan's targets since it was created \
+                         ({}); create a new plan",
+                        ids.join(", ")
+                    ),
+                ),
+                "targets_touched",
+            ));
+        }
+        // Last check before anything is recorded, so a refusal above never spends the approval.
+        if plan.origin() == PlanOrigin::Mcp {
+            consume_human_approval(store, plan, start)?;
+        }
+        Ok(())
+    }
 }
 
 /// MCP-04 (PRD §13.3 step 4): consume the human approval of the agent-prepared `plan`, or
@@ -286,73 +369,118 @@ fn consume_human_approval(
     store: &mut Store,
     plan: &Plan,
     start: &OperationStart,
-) -> Result<(), ScullError> {
+) -> Result<(), Refusal> {
     let blocked = |m: String| ScullError::new(ErrorKind::SafetyBlocked, m);
-    let Some(approval) = store.get_approval(plan.id()).map_err(ScullError::from)? else {
-        return Err(blocked(format!(
-            "plan {id} was prepared by an AI agent and has no human approval: the user approves \
+    let Some(approval) = store.get_approval(plan.id()).map_err(store_refusal)? else {
+        return Err((
+            blocked(format!(
+                "plan {id} was prepared by an AI agent and has no human approval: the user approves \
              it with `scull approve {id}` in their own terminal (MCP-04); nothing was changed",
-            id = plan.id()
-        )));
+                id = plan.id()
+            )),
+            "not_approved",
+        ));
     };
     if !matches!(
         approval.method,
         ApprovalMethod::CliTty | ApprovalMethod::Desktop
     ) {
-        return Err(blocked(format!(
-            "plan {} was prepared by an AI agent; its approval was not given in the `scull \
+        return Err((
+            blocked(format!(
+                "plan {} was prepared by an AI agent; its approval was not given in the `scull \
              approve` terminal or the desktop dialog (MCP-04); nothing was changed",
-            plan.id()
-        )));
+                plan.id()
+            )),
+            "not_human",
+        ));
     }
     if approval.content_hash != *plan.content_hash() {
-        return Err(ScullError::new(
-            ErrorKind::PlanTampered,
-            format!(
-                "the approval of plan {} is bound to different plan content; nothing was changed",
-                plan.id()
+        return Err((
+            ScullError::new(
+                ErrorKind::PlanTampered,
+                format!(
+                    "the approval of plan {} is bound to different plan content; nothing was changed",
+                    plan.id()
+                ),
             ),
+            "approval_mismatch",
         ));
     }
     // The approver must be the account this Executor runs as, read from the OS here (not
     // taken from the caller or the approval): an approval recorded for another account never
     // runs, and the audit records who actually executed.
     let owner = scull_platform::current_user().map_err(|e| {
-        blocked(format!(
-            "cannot tell which account scull runs as ({e}), so the approval of plan {} can't be \
-             checked; nothing was changed",
-            plan.id()
-        ))
+        (
+            blocked(format!(
+                "cannot tell which account scull runs as ({e}), so the approval of plan {} can't \
+                 be checked; nothing was changed",
+                plan.id()
+            )),
+            "account_unknown",
+        )
     })?;
     if approval.approver != owner {
-        return Err(blocked(format!(
-            "plan {} was approved by another account; approvals run only for the account that \
-             gave them; nothing was changed",
-            plan.id()
-        )));
+        return Err((
+            blocked(format!(
+                "plan {} was approved by another account; approvals run only for the account \
+                 that gave them; nothing was changed",
+                plan.id()
+            )),
+            "other_account",
+        ));
     }
     if start.approver != owner {
-        return Err(ScullError::new(
-            ErrorKind::PlanTampered,
-            "the operation must record the account that runs it as the approver (SAFE-08)",
+        return Err((
+            ScullError::new(
+                ErrorKind::PlanTampered,
+                "the operation must record the account that runs it as the approver (SAFE-08)",
+            ),
+            "approver_not_recorded",
         ));
     }
     // Audit consistency only: the channel is the approval's (the caller copies it).
     if start.method != approval.method {
-        return Err(ScullError::new(
-            ErrorKind::PlanTampered,
-            "the operation must record the approval's channel (SAFE-08)",
+        return Err((
+            ScullError::new(
+                ErrorKind::PlanTampered,
+                "the operation must record the approval's channel (SAFE-08)",
+            ),
+            "channel_mismatch",
         ));
     }
     let consumed = store
         .consume_approval(plan.id(), plan.content_hash(), now_unix())
-        .map_err(ScullError::from)?;
+        .map_err(store_refusal)?;
     if !consumed {
-        return Err(blocked(format!(
-            "the approval of plan {} has expired or was already used (approvals are single-use \
-             and lapse with the plan): the agent must prepare a new plan; nothing was changed",
-            plan.id()
-        )));
+        // Which, for the audit: revoked by the human (#298), spent already, or lapsed unused.
+        let used = store
+            .get_approval(plan.id())
+            .ok()
+            .flatten()
+            .is_some_and(|a| a.used_at.is_some());
+        if used && store.approval_revoked(plan.id()).unwrap_or(false) {
+            return Err((
+                blocked(format!(
+                    "the user revoked the approval of plan {}: it will not run; nothing was \
+                     changed",
+                    plan.id()
+                )),
+                "approval_revoked",
+            ));
+        }
+        return Err((
+            blocked(format!(
+                "the approval of plan {} has expired or was already used (approvals are \
+                 single-use and lapse with the plan): the agent must prepare a new plan; nothing \
+                 was changed",
+                plan.id()
+            )),
+            if used {
+                "approval_used"
+            } else {
+                "approval_expired"
+            },
+        ));
     }
     Ok(())
 }

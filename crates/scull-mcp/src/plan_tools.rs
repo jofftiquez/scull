@@ -262,8 +262,8 @@ pub struct OperationView {
 pub struct CleanupStatusOutput {
     /// Plan ID.
     pub plan_id: String,
-    /// `awaiting_approval`, `approved`, `executed`, `voided` (items changed, D-34) or
-    /// `expired`.
+    /// `awaiting_approval`, `approved`, `executed`, `voided` (items changed, D-34),
+    /// `revoked` (the user withdrew the approval) or `expired`.
     pub state: String,
     /// Where the approval stands.
     pub approval: ApprovalStatus,
@@ -319,7 +319,7 @@ pub fn definitions() -> Vec<Tool> {
         tool::<PlanIdArgs, ApprovalStatus>(
             "get_approval_status",
             "Get approval status",
-            "Whether the user has approved a plan yet (awaiting_approval, approved, used, \
+            "Whether the user has approved a plan yet (awaiting_approval, approved, used, revoked, \
              expired). Read-only; it never reveals or creates an approval.",
             true,
             false,
@@ -363,7 +363,21 @@ pub(crate) fn call(
         "prepare_cleanup" => parse(args).and_then(|a| prepare(ctx, plans, allow, a, cancel)),
         "get_cleanup_plan" => parse(args).and_then(|a| get_plan(ctx, plans, a)),
         "get_approval_status" => parse(args).and_then(|a| approval_status(plans, a)),
-        "execute_cleanup" => parse(args).and_then(|a| execute(ctx, plans, allow, a, cancel)),
+        "execute_cleanup" => {
+            let given = args
+                .get("plan_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            match parse(args) {
+                Ok(a) => execute(ctx, plans, allow, a, cancel),
+                // Audited too: an agent smuggling a code or an `approve` flag lands here.
+                Err(e) => {
+                    let id = given.and_then(|g| PlanId::try_from(g).ok());
+                    audit_refusal(plans, id.as_ref(), None, &e.code);
+                    Err(e)
+                }
+            }
+        }
         "get_cleanup_status" => parse(args).and_then(|a| cleanup_status(ctx, plans, a)),
         _ => return None,
     };
@@ -539,6 +553,7 @@ fn state_name(s: ApprovalState) -> &'static str {
         ApprovalState::Approved => "approved",
         ApprovalState::Used => "approval used",
         ApprovalState::Expired => "expired",
+        ApprovalState::Revoked => "approval revoked by the user",
     }
 }
 
@@ -552,6 +567,9 @@ fn next_step(id: &PlanId, s: &ApprovalStatus) -> String {
         ApprovalState::Expired => {
             "Expired: prepare a new plan if a cleanup is still wanted.".into()
         }
+        ApprovalState::Revoked => "The user revoked the approval: this plan will not run. Do \
+             not prepare it again unless the user asks."
+            .into(),
     }
 }
 
@@ -588,6 +606,45 @@ fn execution_roots(allow: &Allowlist, plan: &Plan) -> Result<Vec<PathBuf>, ToolE
     Ok(used)
 }
 
+/// Record a refused `execute_cleanup` (PRD §13.3 step 5). Best effort: the refusal stands
+/// whether or not it could be recorded (a failure is reported on stderr, the client's log).
+fn audit_refusal(
+    plans: &PlanTools,
+    id: Option<&PlanId>,
+    hash: Option<&scull_core::ContentHash>,
+    code: &str,
+) {
+    let recorded = open_store(plans).and_then(|mut store| {
+        let hash = hash
+            .cloned()
+            .or_else(|| id.and_then(|id| approval::recorded_hash(&store, id)));
+        approval::record_execute_refusal(
+            &mut store,
+            id,
+            hash.as_ref(),
+            code,
+            &plans.principal,
+            now_unix(),
+        )
+        .map_err(refused)
+    });
+    if let Err(e) = recorded {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "scull: could not record a refused execute_cleanup in the audit log: {}",
+            e.message
+        );
+    }
+}
+
+/// Why `execute_cleanup` did not run: a refusal (audited) or another failure (a scan error,
+/// a cancellation, or the runner's own error: the Executor audits its refusals itself).
+enum Failure {
+    Refused(ToolError, Option<scull_core::ContentHash>),
+    Other(ToolError),
+}
+
 fn execute(
     ctx: &Ctx,
     plans: &PlanTools,
@@ -595,33 +652,57 @@ fn execute(
     a: PlanIdArgs,
     cancel: &CancelToken,
 ) -> Result<Output, ToolError> {
-    let id = plan_id(&a.plan_id)?;
-    let mut store = open_store(plans)?;
+    let id = plan_id(&a.plan_id).ok();
+    match execute_checked(ctx, plans, allow, &a, cancel) {
+        Ok(out) => Ok(out),
+        Err(Failure::Refused(e, hash)) => {
+            audit_refusal(plans, id.as_ref(), hash.as_ref(), &e.code);
+            Err(e)
+        }
+        Err(Failure::Other(e)) => Err(e),
+    }
+}
+
+fn execute_checked(
+    ctx: &Ctx,
+    plans: &PlanTools,
+    allow: &Allowlist,
+    a: &PlanIdArgs,
+    cancel: &CancelToken,
+) -> Result<Output, Failure> {
+    let id = plan_id(&a.plan_id).map_err(|e| Failure::Refused(e, None))?;
+    let mut store = open_store(plans).map_err(Failure::Other)?;
     // FX-MCP-01…04: a matching, unexpired, unused, human approval, or nothing happens.
-    let auth = approval::authorize(&store, &id, &plans.principal, now_unix()).map_err(refused)?;
-    let roots = execution_roots(allow, &auth.plan)?;
-    let rep = fresh_scan(ctx, &roots, cancel)?;
+    let auth = approval::authorize(&store, &id, &plans.principal, now_unix())
+        .map_err(|r| Failure::Refused(refused(r), None))?;
+    let hash = || Some(auth.plan.content_hash().clone());
+    let roots = execution_roots(allow, &auth.plan).map_err(|e| Failure::Refused(e, hash()))?;
+    let rep = fresh_scan(ctx, &roots, cancel).map_err(Failure::Other)?;
     // D-34: any changed item voids the whole agent plan.
     if let Err(changed) = approval::check_unchanged(&auth.plan, &rep.candidates) {
-        let voided = approval::void(&mut store, &auth.plan, now_unix()).map_err(refused)?;
+        let voided = approval::void(&mut store, &auth.plan, now_unix())
+            .map_err(|r| Failure::Other(refused(r)))?;
         let list: Vec<String> = changed
             .iter()
             .map(|c| format!("{} ({})", c.item_id, c.change.code()))
             .collect();
-        return Err(refused(Refused {
-            reason: Reason::PlanChanged,
-            message: format!(
-                "{} item(s) of plan {id} changed on disk since it was prepared: {}. The plan is \
+        return Err(Failure::Refused(
+            refused(Refused {
+                reason: Reason::PlanChanged,
+                message: format!(
+                    "{} item(s) of plan {id} changed on disk since it was prepared: {}. The plan is \
                  void{}; nothing was changed. Prepare a new plan for the user to approve.",
-                changed.len(),
-                list.join(", "),
-                if voided {
-                    " and its approval spent"
-                } else {
-                    ""
-                }
-            ),
-        }));
+                    changed.len(),
+                    list.join(", "),
+                    if voided {
+                        " and its approval spent"
+                    } else {
+                        ""
+                    }
+                ),
+            }),
+            hash(),
+        ));
     }
     let summary = plans
         .runner
@@ -635,10 +716,10 @@ fn execute(
             cancel,
         })
         .map_err(|e| {
-            ToolError::new(
+            Failure::Other(ToolError::new(
                 &crate::views::json_name(&e.kind),
                 ctx.redactor.text(&e.message),
-            )
+            ))
         })?;
     let r = &ctx.redactor;
     let items: Vec<ItemOutcomeView> = summary
@@ -679,7 +760,7 @@ fn execute(
         if out.cancelled { " (cancelled)" } else { "" },
         out.operation_id
     );
-    output(&out, text)
+    output(&out, text).map_err(Failure::Other)
 }
 
 fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output, ToolError> {
@@ -727,6 +808,7 @@ fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output,
         (None, ApprovalState::AwaitingApproval) => "awaiting_approval",
         (None, ApprovalState::Approved) => "approved",
         (None, ApprovalState::Expired) => "expired",
+        (None, ApprovalState::Revoked) => "revoked",
     };
     let out = CleanupStatusOutput {
         plan_id: id.as_str().to_owned(),

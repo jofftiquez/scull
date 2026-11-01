@@ -15,16 +15,22 @@
 mod planning;
 
 use planning::*;
-use scull_cleaner::{ExecutionReport, Executor};
+use scull_cleaner::{ExecutionReport, Executor, GATE_REASONS};
 use scull_core::{
     ErrorKind, OperationId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, ScullError,
 };
 use scull_engine::{CancelToken, PlatformOwnerOnly, ScanReport, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs};
-use scull_storage::{ApprovalMethod, NewApproval, OperationEnd, OperationStart, Store};
+use scull_storage::{
+    AgentAuditEvent, ApprovalMethod, EventKind, NewApproval, OperationEnd, OperationStart, Store,
+};
+
+fn db_path(fx: &Fixture) -> std::path::PathBuf {
+    fx.base().join("data").join("scull.db")
+}
 
 fn store(fx: &Fixture) -> Store {
-    Store::open(&fx.base().join("data").join("scull.db"), &PlatformOwnerOnly).unwrap()
+    Store::open(&db_path(fx), &PlatformOwnerOnly).unwrap()
 }
 
 /// An agent plan of the candidates at `rels`, created at `created`.
@@ -440,4 +446,387 @@ fn cli_plans_need_no_broker_approval() {
     op.finish(OperationEnd::Normal, now_unix()).unwrap();
     assert_executed(&fx, &r, "app/target");
     check(&fx, &plan, &r, &["app/target"]);
+}
+
+/// The reasons the gate recorded for `plan` (agent audit events with its ID and the hash of
+/// the plan presented, source `executor`), oldest first. Every one carries channel `mcp` and
+/// this account.
+fn gate_reasons(s: &Store, plan: &Plan) -> Vec<String> {
+    s.agent_events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| {
+            e.kind == EventKind::ExecuteRefused
+                && e.plan_id.as_ref() == Some(plan.id())
+                && e.content_hash.as_ref() == Some(plan.content_hash())
+        })
+        .map(|e| {
+            assert_eq!(e.source, "executor");
+            assert_eq!(e.channel, "mcp");
+            assert_eq!(e.user, me());
+            assert_eq!(e.machine_id, MACHINE);
+            assert!(GATE_REASONS.contains(&e.reason.as_str()), "{}", e.reason);
+            e.reason
+        })
+        .collect()
+}
+
+/// PRD §13.3 step 5: every refusal of the Executor's gate is audited with its reason, and
+/// recording it never creates, spends or changes an approval. CLI plans are not audited
+/// here (they are not agent requests).
+#[test]
+fn every_gate_refusal_is_audited_without_touching_the_approval() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let exec = locked(&fx);
+
+    // not_approved, then lock_not_held and operation_mismatch (no approval exists).
+    let none = mcp_plan(&fx, &scan, &["app/target"], "01JAUDNONE", now);
+    s.insert_plan(&none).unwrap();
+    let st = start(&none, "01JAUDNONE", ApprovalMethod::CliTty);
+    exec.begin_operation(&mut s, &none, &st).unwrap_err();
+    Executor::new()
+        .begin_operation(&mut s, &none, &st)
+        .unwrap_err();
+    let mut wrong = st.clone();
+    wrong.plan_id = PlanId::from_suffix("01JAUDOTHER").unwrap();
+    exec.begin_operation(&mut s, &none, &wrong).unwrap_err();
+    assert_eq!(
+        gate_reasons(&s, &none),
+        ["not_approved", "lock_not_held", "operation_mismatch"]
+    );
+    assert!(s.get_approval(none.id()).unwrap().is_none(), "none created");
+
+    // not_human (a non-human method).
+    let flag = mcp_plan(&fx, &scan, &["app/target"], "01JAUDFLAG", now);
+    s.insert_plan(&flag).unwrap();
+    approve(
+        &mut s,
+        &flag,
+        ApprovalMethod::CliFlag,
+        now,
+        flag.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &flag,
+        &start(&flag, "01JAUDFLAG", ApprovalMethod::CliFlag),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &flag), ["not_human"]);
+    assert_eq!(s.get_approval(flag.id()).unwrap().unwrap().used_at, None);
+
+    // channel_mismatch, approver_not_recorded, approval_mismatch (a substitute under the
+    // approved ID), other_account.
+    let who = mcp_plan(&fx, &scan, &["app/target"], "01JAUDWHO", now);
+    s.insert_plan(&who).unwrap();
+    approve(
+        &mut s,
+        &who,
+        ApprovalMethod::CliTty,
+        now,
+        who.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &who,
+        &start(&who, "01JAUDWHO", ApprovalMethod::Desktop),
+    )
+    .unwrap_err();
+    let mut st = start(&who, "01JAUDWHO", ApprovalMethod::CliTty);
+    st.approver = "someone-else".into();
+    exec.begin_operation(&mut s, &who, &st).unwrap_err();
+    assert_eq!(
+        gate_reasons(&s, &who),
+        ["channel_mismatch", "approver_not_recorded"]
+    );
+    assert_eq!(s.get_approval(who.id()).unwrap().unwrap().used_at, None);
+    let substitute = mcp_plan(&fx, &scan, &["lib/target"], "01JAUDWHO", now);
+    exec.begin_operation(
+        &mut s,
+        &substitute,
+        &start(&substitute, "01JAUDSUB", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &substitute), ["approval_mismatch"]);
+    let theirs = mcp_plan(&fx, &scan, &["app/target"], "01JAUDTHEIRS", now);
+    s.insert_plan(&theirs).unwrap();
+    approve_as(
+        &mut s,
+        &theirs,
+        ApprovalMethod::CliTty,
+        now,
+        theirs.expires_unix(),
+        "other-account",
+    );
+    exec.begin_operation(
+        &mut s,
+        &theirs,
+        &start(&theirs, "01JAUDTHEIRS", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &theirs), ["other_account"]);
+    assert_eq!(s.get_approval(theirs.id()).unwrap().unwrap().used_at, None);
+
+    // approval_expired (unused), approval_used (spent by a void).
+    let old = mcp_plan(&fx, &scan, &["app/target"], "01JAUDOLD", now - 14 * 60);
+    s.insert_plan(&old).unwrap();
+    approve(
+        &mut s,
+        &old,
+        ApprovalMethod::CliTty,
+        now - 13 * 60,
+        now - 60,
+    );
+    exec.begin_operation(
+        &mut s,
+        &old,
+        &start(&old, "01JAUDOLD", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &old), ["approval_expired"]);
+    assert_eq!(s.get_approval(old.id()).unwrap().unwrap().used_at, None);
+    let spent = mcp_plan(&fx, &scan, &["app/target"], "01JAUDSPENT", now);
+    s.insert_plan(&spent).unwrap();
+    approve(
+        &mut s,
+        &spent,
+        ApprovalMethod::Desktop,
+        now,
+        spent.expires_unix(),
+    );
+    assert!(
+        s.consume_approval(spent.id(), spent.content_hash(), now_unix())
+            .unwrap()
+    );
+    let used_at = s.get_approval(spent.id()).unwrap().unwrap().used_at;
+    exec.begin_operation(
+        &mut s,
+        &spent,
+        &start(&spent, "01JAUDSPENT", ApprovalMethod::Desktop),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &spent), ["approval_used"]);
+    assert_eq!(
+        s.get_approval(spent.id()).unwrap().unwrap().used_at,
+        used_at
+    );
+    nothing_happened(&fx, &s);
+
+    // unfinished_operation: an earlier operation did not finish (a crash).
+    let cli = plan_named(&fx, &scan, &["lib/target"], "01JAUDCLI");
+    s.insert_plan(&cli).unwrap();
+    let op = exec
+        .begin_operation(
+            &mut s,
+            &cli,
+            &start(&cli, "01JAUDCLI", ApprovalMethod::CliInteractive),
+        )
+        .unwrap();
+    drop(op);
+    let after = mcp_plan(&fx, &scan, &["app/target"], "01JAUDAFTER", now_unix());
+    s.insert_plan(&after).unwrap();
+    approve(
+        &mut s,
+        &after,
+        ApprovalMethod::CliTty,
+        now_unix(),
+        after.expires_unix(),
+    );
+    exec.begin_operation(
+        &mut s,
+        &after,
+        &start(&after, "01JAUDAFTER", ApprovalMethod::CliTty),
+    )
+    .unwrap_err();
+    assert_eq!(gate_reasons(&s, &after), ["unfinished_operation"]);
+    assert_eq!(s.get_approval(after.id()).unwrap().unwrap().used_at, None);
+    // The CLI plan's own refusals are not agent events.
+    assert!(gate_reasons(&s, &cli).is_empty());
+    let inv = fx.check_invariants(&InvariantInputs::new());
+    inv.assert_ok();
+}
+
+/// `targets_touched` and `outside_operation`: an agent plan whose targets another operation
+/// touched is refused (and audited) without spending its approval, and an operation started
+/// for one plan can't run an agent plan (audited through that operation's store).
+#[test]
+fn touched_targets_and_foreign_operations_are_audited() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let exec = locked(&fx);
+    let agent = mcp_plan(&fx, &scan, &["app/target"], "01JAUDTOUCH", now);
+    s.insert_plan(&agent).unwrap();
+    approve(
+        &mut s,
+        &agent,
+        ApprovalMethod::CliTty,
+        now,
+        agent.expires_unix(),
+    );
+    // An operation for a CLI plan of the same target runs first and finishes.
+    let cli = plan_named(&fx, &scan, &["app/target"], "01JAUDFIRST");
+    s.insert_plan(&cli).unwrap();
+    let mut op = exec
+        .begin_operation(
+            &mut s,
+            &cli,
+            &start(&cli, "01JAUDFIRST", ApprovalMethod::CliInteractive),
+        )
+        .unwrap();
+    // While it is open, it can't carry the agent plan.
+    let e = exec
+        .execute_plan(
+            &agent,
+            &ctx(),
+            &h.revalidation(&fx),
+            Some(&mut op),
+            &CancelToken::new(),
+        )
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{}", e.message);
+    op.finish(OperationEnd::Cancelled, now_unix()).unwrap();
+    let e = exec
+        .begin_operation(
+            &mut s,
+            &agent,
+            &start(&agent, "01JAUDTOUCH", ApprovalMethod::CliTty),
+        )
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated, "{}", e.message);
+    assert_eq!(
+        gate_reasons(&s, &agent),
+        ["outside_operation", "targets_touched"]
+    );
+    assert_eq!(s.get_approval(agent.id()).unwrap().unwrap().used_at, None);
+    assert!(fx.root().join("app/target").exists());
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+fn revocation(plan: &Plan) -> AgentAuditEvent {
+    AgentAuditEvent {
+        event_id: 0,
+        at: now_unix(),
+        kind: EventKind::ApprovalRevoked,
+        source: "cli".into(),
+        plan_id: Some(plan.id().clone()),
+        content_hash: Some(plan.content_hash().clone()),
+        reason: "revoked".into(),
+        channel: "terminal".into(),
+        machine_id: MACHINE.into(),
+        user: me(),
+        count: 1,
+    }
+}
+
+/// #298: an approval revoked before execution is refused by the Executor's gate (audited as
+/// `approval_revoked`), and nothing runs.
+#[test]
+fn revoked_approval_is_refused_by_the_gate() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let plan = mcp_plan(&fx, &scan, &["app/target"], "01JREVOKED", now);
+    s.insert_plan(&plan).unwrap();
+    approve(
+        &mut s,
+        &plan,
+        ApprovalMethod::CliTty,
+        now,
+        plan.expires_unix(),
+    );
+    assert!(
+        s.revoke_approval(
+            plan.id(),
+            plan.content_hash(),
+            now_unix(),
+            &revocation(&plan)
+        )
+        .unwrap()
+    );
+    let exec = locked(&fx);
+    let e = refused(
+        run(&fx, &h, &mut s, &exec, &plan, "01JREVOKED"),
+        ErrorKind::SafetyBlocked,
+    );
+    assert!(e.message.contains("revoked"), "{}", e.message);
+    assert_eq!(gate_reasons(&s, &plan), ["approval_revoked"]);
+    nothing_happened(&fx, &s);
+}
+
+/// #298: a revocation racing `Executor::begin_operation` for the same approval, each on its
+/// own database connection and released at the same instant: exactly one wins, every round.
+/// When the operation wins, the revocation is refused and the operation runs; when the
+/// revocation wins, nothing runs and no operation is recorded.
+#[test]
+fn revocation_racing_begin_operation_has_exactly_one_winner() {
+    let (mut ops, mut revs) = (0, 0);
+    for round in 0..8 {
+        let fx = two_cargo_projects();
+        let h = harness(false);
+        let mut s = store(&fx);
+        let scan = h.scan(&fx);
+        let now = now_unix();
+        let id = format!("01JRACE{round}");
+        let plan = mcp_plan(&fx, &scan, &["app/target"], &id, now);
+        s.insert_plan(&plan).unwrap();
+        approve(
+            &mut s,
+            &plan,
+            ApprovalMethod::CliTty,
+            now,
+            plan.expires_unix(),
+        );
+        let exec = locked(&fx);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let starter = {
+            let (barrier, plan, db) = (barrier.clone(), plan.clone(), db_path(&fx));
+            std::thread::spawn(move || {
+                let mut s = Store::open(&db, &PlatformOwnerOnly).unwrap();
+                barrier.wait();
+                let started = exec
+                    .begin_operation(&mut s, &plan, &start(&plan, &id, ApprovalMethod::CliTty))
+                    .map(|op| op.finish(OperationEnd::Cancelled, now_unix()).unwrap());
+                started.is_ok()
+            })
+        };
+        let revoker = {
+            let (barrier, plan, db) = (barrier, plan.clone(), db_path(&fx));
+            std::thread::spawn(move || {
+                let mut s = Store::open(&db, &PlatformOwnerOnly).unwrap();
+                barrier.wait();
+                s.revoke_approval(
+                    plan.id(),
+                    plan.content_hash(),
+                    now_unix(),
+                    &revocation(&plan),
+                )
+                .unwrap()
+            })
+        };
+        let (started, revoked) = (starter.join().unwrap(), revoker.join().unwrap());
+        assert!(
+            started ^ revoked,
+            "round {round}: started={started} revoked={revoked}"
+        );
+        let recorded = s.operations(0).unwrap().len();
+        assert_eq!(recorded, usize::from(started), "round {round}");
+        assert_eq!(s.approval_revoked(plan.id()).unwrap(), revoked);
+        if revoked {
+            assert_eq!(gate_reasons(&s, &plan), ["approval_revoked"]);
+        }
+        ops += usize::from(started);
+        revs += usize::from(revoked);
+        assert!(fx.root().join("app/target").exists(), "nothing executed");
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+    }
+    println!("operation won {ops}, revocation won {revs}");
 }

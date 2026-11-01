@@ -579,3 +579,233 @@ fn open_read_only_reads_but_never_writes_or_creates() {
     assert_eq!(rejected_kind(e), ErrorKind::Config);
     assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
 }
+
+fn refusal_event(
+    at: i64,
+    reason: &str,
+    plan: Option<scull_core::PlanId>,
+) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ExecuteRefused,
+        source: "mcp".into(),
+        plan_id: plan,
+        content_hash: None,
+        reason: reason.into(),
+        channel: "mcp".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// Audit flooding: 1000 identical refusals within the merge window are one row counting
+/// 1000; refusals naming 1000 made-up plan IDs fold together too; a recorded plan, another
+/// reason, or the next window gets its own row. Listing is capped and newest-first by limit.
+#[test]
+fn repeated_agent_refusals_fold_into_bounded_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    for i in 0..1000 {
+        s.record_agent_event(&refusal_event(
+            T0 + i % 30,
+            "not_approved",
+            Some(p.id().clone()),
+        ))
+        .unwrap();
+    }
+    for i in 0..1000u32 {
+        let made_up = scull_core::PlanId::from_suffix(&format!("fake{i}")).unwrap();
+        s.record_agent_event(&refusal_event(T0 + 5, "unknown_plan", Some(made_up)))
+            .unwrap();
+    }
+    s.record_agent_event(&refusal_event(T0 + 6, "invalid_arguments", None))
+        .unwrap();
+    s.record_agent_event(&refusal_event(T0 + 7, "invalid_arguments", None))
+        .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 3);
+    let rows = s.agent_events(0, 100).unwrap();
+    let got: Vec<(&str, u64)> = rows.iter().map(|e| (e.reason.as_str(), e.count)).collect();
+    assert_eq!(
+        got,
+        vec![
+            ("not_approved", 1000),
+            ("unknown_plan", 1000),
+            ("invalid_arguments", 2)
+        ]
+    );
+    // The next window starts a new row.
+    s.record_agent_event(&refusal_event(
+        T0 + scull_storage::AGENT_EVENT_MERGE_SECS + 1,
+        "not_approved",
+        Some(p.id().clone()),
+    ))
+    .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 4);
+    // Capped listing: the most recent ones, oldest first.
+    let last2 = s.agent_events(0, 2).unwrap();
+    assert_eq!(last2.len(), 2);
+    assert_eq!(last2[1].count, 1);
+    assert_eq!(last2[1].reason, "not_approved");
+}
+
+fn revocation(p: &scull_core::Plan, at: i64) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ApprovalRevoked,
+        source: "cli".into(),
+        plan_id: Some(p.id().clone()),
+        content_hash: Some(p.content_hash().clone()),
+        reason: "revoked".into(),
+        channel: "terminal".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// #298: a revocation spends an unused, unexpired approval and records its audit event in
+/// the same transaction; it never creates an approval, and a used, expired or mismatched
+/// approval is not revoked (nothing written).
+#[test]
+fn revoking_spends_the_approval_and_audits_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    // No approval: nothing to revoke, none created, nothing audited.
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 5, &revocation(&p, T0 + 5))
+            .unwrap()
+    );
+    assert!(s.get_approval(p.id()).unwrap().is_none());
+    s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
+        .unwrap();
+    // Other content, before it was given, after it lapsed: refused.
+    assert!(
+        !s.revoke_approval(p.id(), &other_hash(), T0 + 20, &revocation(&p, T0 + 20))
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 5, &revocation(&p, T0 + 5))
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(
+            p.id(),
+            p.content_hash(),
+            T0 + 600,
+            &revocation(&p, T0 + 600)
+        )
+        .unwrap()
+    );
+    assert!(s.agent_events(0, 10_000).unwrap().is_empty());
+    assert!(!s.approval_revoked(p.id()).unwrap());
+    // Revoked once, then the Executor's consumption fails, and so does a second revocation.
+    assert!(
+        s.revoke_approval(p.id(), p.content_hash(), T0 + 30, &revocation(&p, T0 + 30))
+            .unwrap()
+    );
+    assert_eq!(
+        s.get_approval(p.id()).unwrap().unwrap().used_at,
+        Some(T0 + 30)
+    );
+    assert!(s.approval_revoked(p.id()).unwrap());
+    assert!(
+        !s.consume_approval(p.id(), p.content_hash(), T0 + 31)
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(p.id(), p.content_hash(), T0 + 32, &revocation(&p, T0 + 32))
+            .unwrap()
+    );
+    let events = s.agent_events(0, 10_000).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, scull_storage::EventKind::ApprovalRevoked);
+    // A used approval is not "revoked" after the fact.
+    let q = plan(2);
+    s.insert_plan(&q).unwrap();
+    s.insert_approval(&approval_for(&q, T0 + 10, T0 + 600))
+        .unwrap();
+    assert!(
+        s.consume_approval(q.id(), q.content_hash(), T0 + 40)
+            .unwrap()
+    );
+    assert!(
+        !s.revoke_approval(q.id(), q.content_hash(), T0 + 41, &revocation(&q, T0 + 41))
+            .unwrap()
+    );
+    assert!(!s.approval_revoked(q.id()).unwrap());
+    // Only revoke_approval writes a revocation: a forged one through record_agent_event is
+    // refused and changes nothing.
+    let r = plan(3);
+    s.insert_plan(&r).unwrap();
+    s.insert_approval(&approval_for(&r, T0 + 10, T0 + 600))
+        .unwrap();
+    assert_eq!(
+        rejected_kind(s.record_agent_event(&revocation(&r, T0 + 41)).unwrap_err()),
+        ErrorKind::Usage
+    );
+    assert!(!s.approval_revoked(r.id()).unwrap());
+    assert_eq!(s.get_approval(r.id()).unwrap().unwrap().used_at, None);
+    // The audit must be a revocation of the same plan.
+    let mut wrong = revocation(&q, T0 + 42);
+    wrong.plan_id = Some(p.id().clone());
+    assert_eq!(
+        rejected_kind(
+            s.revoke_approval(q.id(), q.content_hash(), T0 + 42, &wrong)
+                .unwrap_err()
+        ),
+        ErrorKind::Usage
+    );
+}
+
+/// #298: a revocation racing the Executor's consumption of the same approval, each through
+/// its own connection: exactly one wins, every time, and the audit matches the winner.
+#[test]
+fn revocation_and_consumption_race_with_exactly_one_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let mut revoked_wins = 0;
+    for n in 1..=25u32 {
+        let p = plan(n);
+        s.insert_plan(&p).unwrap();
+        s.insert_approval(&approval_for(&p, T0 + 10, T0 + 600))
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let (pa, pb) = (p.clone(), p.clone());
+        let (ba, bb) = (barrier.clone(), barrier);
+        let (path_a, path_b) = (path.clone(), path.clone());
+        let consume = std::thread::spawn(move || {
+            let mut c = open(&path_a);
+            ba.wait();
+            c.consume_approval(pa.id(), pa.content_hash(), T0 + 30)
+                .unwrap()
+        });
+        let revoke = std::thread::spawn(move || {
+            let mut c = open(&path_b);
+            bb.wait();
+            c.revoke_approval(
+                pb.id(),
+                pb.content_hash(),
+                T0 + 30,
+                &revocation(&pb, T0 + 30),
+            )
+            .unwrap()
+        });
+        let (consumed, revoked) = (consume.join().unwrap(), revoke.join().unwrap());
+        assert!(
+            consumed ^ revoked,
+            "plan {n}: consumed={consumed} revoked={revoked}"
+        );
+        assert_eq!(s.approval_revoked(p.id()).unwrap(), revoked);
+        assert!(s.get_approval(p.id()).unwrap().unwrap().used_at.is_some());
+        revoked_wins += usize::from(revoked);
+    }
+    assert_eq!(s.agent_events(0, 10_000).unwrap().len(), revoked_wins);
+}
