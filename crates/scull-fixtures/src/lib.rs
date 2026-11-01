@@ -42,6 +42,11 @@
 //! * [`net`]: the I-6 network guard and [`isolate_network!`], which re-runs a test inside an OS
 //!   network sandbox (Linux network namespace, macOS `sandbox-exec`; none on Windows).
 //!
+//! * [`privileged`] and [`Mounts`]: the privileged nightly fixtures (FX-FS-04, FX-LNX-*,
+//!   FX-MAC-05) re-run themselves where they can mount (user + mount namespace, root, or a
+//!   macOS disk image) or are skipped with the reason; mounts stay inside the temporary
+//!   directory and are undone before it is removed.
+//!
 //! * [`registry`]: every fixture ID of `docs/FIXTURES.md` §3 this lane tracks, with where it is
 //!   implemented or which issue tracks it (checked against the document by `tests/registry.rs`).
 //!
@@ -52,9 +57,11 @@ mod error;
 mod fixture;
 mod git;
 pub mod invariants;
+pub mod mounts;
 pub mod net;
 mod os;
 mod outside;
+pub mod privileged;
 mod projects;
 pub mod registry;
 mod snapshot;
@@ -66,6 +73,7 @@ pub use invariants::{
     ALLOWED_TOOLS, BytesRecord, InvariantId, InvariantInputs, InvariantReport, Outcome, PlanEntry,
     SpawnRecord, check_invariants,
 };
+pub use mounts::Mounts;
 pub use projects::{CACHEDIR_TAG, NodeLock};
 pub use snapshot::{ChangedField, Entry, EntryChange, EntryKind, TreeDiff, TreeSnapshot, diff};
 

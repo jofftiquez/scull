@@ -1,0 +1,109 @@
+name: Nightly OS fixtures
+
+# P2-FX-04: the OS-specific fixtures of docs/FIXTURES.md with mode "Nightly" that need real
+# mounts, #[ignore]d in the per-PR `cargo test --workspace`
+# (crates/scull-fixtures/tests/fx_os_nightly.rs):
+#   FX-LNX-02  Trash on a real second volume uses its $topdir/.Trash-$uid (loop ext4 / tmpfs)
+#   FX-LNX-03  NFS and FUSE mounts inside a scan root: skipped by default, never classified,
+#              S3 for a candidate containing one; a frozen FUSE mount doesn't hang the scan
+#   FX-LNX-06  Btrfs subvolume inside a candidate: S3, never planned; the sibling's plan
+#              executes through the real Executor and leaves the subvolume untouched
+#   FX-MAC-05  Trash on an attached disk image (hdiutil) uses its .Trashes/<uid>
+# FX-MAC-01 is Manual: see the signed release checklist, docs/FIXTURES.md §2.2.
+#
+# Privileges: SCULL_FIXTURES_ALLOW_SUDO=1 lets a Linux test re-run itself as root in a private
+# mount namespace (`sudo -n unshare --mount`), so its mounts never outlive it; macOS attaches
+# disk images without root. SCULL_FIXTURES_REQUIRE_PRIVILEGED=1 turns a skip into a failure.
+#
+# Scheduled workflows run from the default branch: this one runs nightly once Phase 2 (the
+# `phase2` branch, D-33) is merged into main. Cost: the scheduled run is skipped when main had
+# no commit in the last 25 hours.
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-os-fixtures-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  SCULL_FIXTURES_REQUIRE_PRIVILEGED: "1"
+  SCULL_FIXTURES_ALLOW_SUDO: "1"
+
+jobs:
+  changes:
+    name: changed since the last run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 200
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          n=$(git log --since='25 hours ago' --oneline | wc -l)
+          echo "commits in the last 25 hours: $n"
+          if [ "$n" -gt 0 ]; then echo "run=true"; else echo "run=false"; fi >> "$GITHUB_OUTPUT"
+
+  fx-os:
+    name: fx-os nightly (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-os-fixtures
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Mount tools and a loopback NFS export (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bindfs btrfs-progs nfs-kernel-server
+          sudo mkdir -p /srv/scull-nfs
+          sudo chmod 0777 /srv/scull-nfs
+          echo "/srv/scull-nfs 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,insecure)" \
+            | sudo tee /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+          sudo exportfs -v
+          echo "SCULL_FX_NFS_EXPORT=127.0.0.1:/srv/scull-nfs" >> "$GITHUB_ENV"
+      - name: FX-LNX-02/03/06 (Linux), FX-MAC-05 (macOS)
+        run: |
+          cargo test -p scull-fixtures --locked --test fx_os_nightly -- \
+            --ignored --nocapture --test-threads=1 2>&1 | tee fx-os-nightly.log
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Nightly OS fixtures (${{ matrix.os }})"
+            echo '```'
+            grep -E 'FX-(LNX|MAC)-|SKIPPED|^test |test result' fx-os-nightly.log || echo "no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

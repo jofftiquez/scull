@@ -36,6 +36,51 @@ The MVP release gate (PRD §21.3) is: **every MVP-gated fixture passes on macOS,
   - **macOS:** APFS clones via `cp -c`; local snapshots via `tmutil localsnapshot` (needs sudo; nightly or manual).
 - **Gate column:** the release that first requires the fixture to pass. OS column: **M** macOS, **L** Linux, **W** Windows.
 
+### 2.2 Manual release checklist
+
+Manual fixtures can't be automated: they need a real desktop session, an account state, or OS permission prompts that hosted runners can't produce. Before each release, a maintainer runs this checklist on a real machine with the **release build**, ticks every box, and signs it (PRD §21.3). The signed copy is attached to the release's tracking issue. A box that can't be ticked blocks the release if the fixture's gate is that release or earlier. The fixture registry marks these fixtures `ManualChecklist`, and `tests/registry.rs` fails if a registered one has no entry here.
+
+Record once per run: scull version and commit, OS version and build, machine model, tester, date.
+
+**FX-MAC-01** (gate MVP). Protected folders without Full Disk Access are reported as inaccessible, with no crash and no repeated permission prompts.
+Setup: a macOS desktop session. In System Settings → Privacy & Security, scull, the scull desktop app and the terminal app you use must **not** have Full Disk Access. Reset earlier answers with `tccutil reset SystemPolicyAllFiles` and `tccutil reset All <bundle id>` for the desktop app.
+- [ ] From Terminal, run `scull scan ~ --json > scan.json` and confirm scanning the home folder. It exits normally, with no crash or hang.
+- [ ] Folders under macOS privacy protection (e.g. `~/Library/Mail`, `~/Library/Messages`, `~/Library/Safari`, `~/Library/Application Support/AddressBook`) are listed as inaccessible (permission-denied issues) in `scan.json`. None of them is a candidate.
+- [ ] Each privacy category prompted at most once during the scan. Deny every prompt.
+- [ ] Run the same scan again. No new prompts appear, and the same folders are reported as inaccessible.
+- [ ] `scull doctor` lists Full Disk Access as unavailable, with the explanation.
+- [ ] In the desktop app, scan the home folder. Inaccessible folders are shown as such, the app stays responsive and doesn't crash. Quit, reopen and scan again: no repeated prompts.
+
+**FX-WIN-07** (gate v1.0). A OneDrive Files On-Demand placeholder is not hydrated and is classified S2.
+Setup: Windows with OneDrive signed in. A folder inside OneDrive holds a `node_modules` (or `target`) whose files are "online-only" (cloud icon, "Free up space").
+- [ ] `scull scan <OneDrive folder> --json`: the artifact containing placeholders is at least S2, with a cloud or placeholder reason.
+- [ ] After the scan, every placeholder still shows the cloud icon (Explorer's "Status" column). Nothing was downloaded, and OneDrive's activity shows no downloads.
+- [ ] No placeholder appears in an executable plan for deletion.
+
+**FX-MAC-02** (gate v1.0). iCloud Drive files evicted by "Optimize Mac Storage" are not hydrated and are classified S2.
+Setup: macOS with iCloud Drive and "Optimize Mac Storage" on. A project in iCloud Drive with an artifact folder evicted to the cloud (`brctl evict <path>`).
+- [ ] `scull scan <iCloud project> --json`: the artifact is at least S2, with a cloud or placeholder reason.
+- [ ] After the scan the files are still evicted (cloud icon in Finder, `brctl status` shows no download). Nothing was downloaded.
+- [ ] No evicted file appears in an executable plan for deletion.
+
+**FX-MAC-06** (gate v1.0). A change in purgeable space during measurement is noted in the result.
+Setup: macOS with purgeable space present (e.g. local Time Machine snapshots or iCloud caches; `diskutil info /` shows "Purgeable").
+- [ ] Clean an S0 item while purgeable space changes, e.g. while `tmutil thinlocalsnapshots / 1000000000 1` runs.
+- [ ] The result's measured delta carries a note that purgeable space changed during measurement, and the confidence is lowered accordingly.
+- [ ] The note appears in `scull history` for that operation.
+
+Signed: ____________________ (name, date, release)
+
+### 2.3 Nightly OS fixtures
+
+FX-LNX-02, FX-LNX-03, FX-LNX-06 and FX-MAC-05 live in `crates/scull-fixtures/tests/fx_os_nightly.rs`. They are `#[ignore]`d and get their privileges from `scull_fixtures::require_privileges!`. Run them with:
+
+```sh
+cargo test -p scull-fixtures --test fx_os_nightly -- --ignored --nocapture --test-threads=1
+```
+
+On Linux, FX-LNX-03 and FX-LNX-06 need real root, either directly or through `SCULL_FIXTURES_ALLOW_SUDO=1`, which runs `sudo -n unshare --mount` so every mount stays in a private namespace. They also need `bindfs` and `btrfs-progs`. FX-LNX-03 additionally mounts an NFS export when `SCULL_FX_NFS_EXPORT` (e.g. `127.0.0.1:/srv/scull-nfs`) names one. FX-LNX-02 needs a user and mount namespace or root. FX-MAC-05 attaches a disk image with `hdiutil`, which needs no root. Without privileges the tests print `SKIPPED <test>: <reason>`. With `SCULL_FIXTURES_REQUIRE_PRIVILEGED=1` they fail instead. `.github/workflows/nightly-os-fixtures.yml` runs them every night once Phase 2 is on `main`.
+
 ---
 
 ## 3. Fixtures
