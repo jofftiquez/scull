@@ -180,6 +180,14 @@ pub fn all() -> Vec<(String, serde_json::Value)> {
         document_schema::<scull_engine::CachesReport>(caches::CACHES_SCHEMA),
         ndjson_schema::<caches::CachesRecord>(caches::CACHES_SCHEMA),
     );
+    {
+        use super::doctor_report::{DOCTOR_REPORT_SCHEMA, ShareableReport};
+        add(
+            DOCTOR_REPORT_SCHEMA,
+            document_schema::<ShareableReport>(DOCTOR_REPORT_SCHEMA),
+            single_record_schema::<ShareableReport>(DOCTOR_REPORT_SCHEMA, "doctor-report"),
+        );
+    }
     out.extend(line_schemas());
     out
 }

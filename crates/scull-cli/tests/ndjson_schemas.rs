@@ -101,6 +101,16 @@ const NO_NDJSON: &[(&str, &str)] = &[
     ("mcp serve", "stdout carries JSON-RPC only"),
 ];
 
+/// Flags that switch a command to another line schema, run like [`RUNS`].
+const VARIANTS: &[(&str, &[&str], &str)] = &[
+    ("doctor --report", &["doctor", "--report"], "doctor-report"),
+    (
+        "doctor --report --hash-names",
+        &["doctor", "--report", "--hash-names"],
+        "doctor-report",
+    ),
+];
+
 /// Commands this build refuses (not implemented / inspect-only gate): stdout stays empty.
 const REFUSED: &[(&str, &[&str])] = &[
     ("clean", &["clean"]),
@@ -250,7 +260,7 @@ fn every_ndjson_command_has_a_line_schema_and_validates() {
             .replace("{wt}", &wt.to_string_lossy())
     };
 
-    for (path, args, name) in RUNS {
+    for (path, args, name) in RUNS.iter().chain(VARIANTS) {
         if !git && args.contains(&"{wt}") {
             eprintln!("skipping `scull {path}`: git is not installed");
             continue;

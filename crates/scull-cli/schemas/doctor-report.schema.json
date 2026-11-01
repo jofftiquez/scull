@@ -1,0 +1,745 @@
+{
+  "$defs": {
+    "BuildInfo": {
+      "additionalProperties": false,
+      "description": "This scull build.",
+      "properties": {
+        "target": {
+          "description": "Target triple the binary was built for.",
+          "type": "string"
+        },
+        "version": {
+          "description": "scull version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "target"
+      ],
+      "type": "object"
+    },
+    "ConfigFileState": {
+      "description": "State of the user config file.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "Parsed successfully.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No config file: built-in defaults apply.",
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "Not valid (other commands exit 2).",
+          "type": "string"
+        },
+        {
+          "const": "unreadable",
+          "description": "Could not be read.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "scull's directories could not be located.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConfigReport": {
+      "additionalProperties": false,
+      "description": "The user config and the effective configuration.",
+      "properties": {
+        "effective": {
+          "description": "Every effective value and where it came from (file and environment; no CLI flags).",
+          "items": {
+            "$ref": "#/$defs/ConfigValue"
+          },
+          "type": "array"
+        },
+        "env_error": {
+          "description": "Invalid `SCULL_*` environment variable, if any (other commands exit 2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "description": "Parse or read error of the file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "$ref": "#/$defs/ConfigFileState",
+          "description": "What was found there."
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The user config file."
+        }
+      },
+      "required": [
+        "file",
+        "effective"
+      ],
+      "type": "object"
+    },
+    "ConfigValue": {
+      "additionalProperties": false,
+      "description": "One effective config value.",
+      "properties": {
+        "field": {
+          "description": "Dotted key, e.g. `scan.roots`.",
+          "type": "string"
+        },
+        "origins": {
+          "description": "Where it came from, most important first.",
+          "items": {
+            "$ref": "#/$defs/Origin"
+          },
+          "type": "array"
+        },
+        "value": {
+          "description": "The value."
+        }
+      },
+      "required": [
+        "field",
+        "value",
+        "origins"
+      ],
+      "type": "object"
+    },
+    "DatabaseReport": {
+      "additionalProperties": false,
+      "description": "The local database.",
+      "properties": {
+        "detail": {
+          "description": "Explanation for anything but `ok`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "footprint_bytes": {
+          "description": "scull's own disk use (database, WAL, backups), when opened.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "integrity": {
+          "$ref": "#/$defs/Integrity",
+          "description": "Integrity check result."
+        },
+        "owner_only": {
+          "description": "Whether the file is accessible only by the current user; `null` if missing or unknown.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Database file."
+        },
+        "schema_version": {
+          "description": "Schema version found, if known.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/DatabaseState",
+          "description": "What was found."
+        },
+        "supported_schema_version": {
+          "description": "Newest schema version this scull supports.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "supported_schema_version",
+        "integrity"
+      ],
+      "type": "object"
+    },
+    "DatabaseState": {
+      "description": "State of the database file.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "Opened with the current schema.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "Not created yet (created by the first scan).",
+          "type": "string"
+        },
+        {
+          "const": "uninitialized",
+          "description": "Exists but has no schema yet.",
+          "type": "string"
+        },
+        {
+          "const": "needs_migration",
+          "description": "Older schema; the next scull command that uses the database migrates it (with a\nbackup). Doctor does not migrate.",
+          "type": "string"
+        },
+        {
+          "const": "too_new",
+          "description": "Written by a newer scull.",
+          "type": "string"
+        },
+        {
+          "const": "not_a_file",
+          "description": "Something other than a regular file is at the path.",
+          "type": "string"
+        },
+        {
+          "const": "not_sqlite",
+          "description": "Not a SQLite database.",
+          "type": "string"
+        },
+        {
+          "const": "foreign",
+          "description": "A SQLite database of another application.",
+          "type": "string"
+        },
+        {
+          "const": "corrupt",
+          "description": "Damaged.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "Could not be read or opened.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "scull's directories could not be located.",
+          "type": "string"
+        }
+      ]
+    },
+    "DirReport": {
+      "additionalProperties": false,
+      "description": "One of scull's directories.",
+      "properties": {
+        "error": {
+          "description": "Error reading its permissions, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exists": {
+          "description": "Whether anything exists at the path.",
+          "type": "boolean"
+        },
+        "exposures": {
+          "description": "Every way access is broader than owner-only.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "owner_only": {
+          "description": "Whether it is accessible only by the current user; `null` if missing or unknown.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The directory."
+        },
+        "roles": {
+          "description": "Roles (`config`, `data`, `cache`, `state`); several when they share a directory.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "roles",
+        "path",
+        "exists",
+        "exposures"
+      ],
+      "type": "object"
+    },
+    "DirsReport": {
+      "additionalProperties": false,
+      "description": "scull's per-user directories.",
+      "properties": {
+        "entries": {
+          "description": "One entry per distinct directory.",
+          "items": {
+            "$ref": "#/$defs/DirReport"
+          },
+          "type": "array"
+        },
+        "error": {
+          "description": "Why the directories could not be located, if they couldn't.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scull_home": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether `SCULL_HOME` relocates every directory."
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "DoctorReport": {
+      "additionalProperties": false,
+      "description": "Everything `scull doctor` reports.",
+      "properties": {
+        "config": {
+          "$ref": "#/$defs/ConfigReport",
+          "description": "The user config file and the effective configuration."
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseReport",
+          "description": "The local database."
+        },
+        "dirs": {
+          "$ref": "#/$defs/DirsReport",
+          "description": "scull's per-user directories."
+        },
+        "git": {
+          "$ref": "#/$defs/GitReport",
+          "description": "The `git` binary scull runs for repository checks."
+        },
+        "platform": {
+          "$ref": "#/$defs/PlatformInfo",
+          "description": "The operating system and CPU architecture."
+        },
+        "privileges": {
+          "$ref": "#/$defs/PrivilegeInfo",
+          "description": "Root/administrator status (SAFE-14)."
+        },
+        "scull": {
+          "$ref": "#/$defs/BuildInfo",
+          "description": "This scull build."
+        },
+        "signals": {
+          "description": "Every safety and accuracy signal, available or not.",
+          "items": {
+            "$ref": "#/$defs/Signal"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "description": "Problems found, one sentence each (empty when everything looks fine).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "scull",
+        "platform",
+        "signals",
+        "privileges",
+        "dirs",
+        "database",
+        "git",
+        "config",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "ElevationState": {
+      "description": "Elevation as reported by the OS.",
+      "oneOf": [
+        {
+          "const": "elevated",
+          "description": "Root (effective UID 0) or an elevated Windows token.",
+          "type": "string"
+        },
+        {
+          "const": "not_elevated",
+          "description": "An ordinary user.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "The OS could not tell; treated as elevated.",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "GitReport": {
+      "additionalProperties": false,
+      "description": "The `git` binary.",
+      "properties": {
+        "available": {
+          "description": "Whether a usable `git` was found.",
+          "type": "boolean"
+        },
+        "binary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absolute path of the binary scull runs."
+        },
+        "error": {
+          "description": "Why it is unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_version": {
+          "description": "Oldest supported version.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Its version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "min_version"
+      ],
+      "type": "object"
+    },
+    "Integrity": {
+      "description": "Result of the full integrity check.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "Every page reads back correctly.",
+          "type": "string"
+        },
+        {
+          "const": "damaged",
+          "description": "Damage found.",
+          "type": "string"
+        },
+        {
+          "const": "not_checked",
+          "description": "Not checked (the database was not opened).",
+          "type": "string"
+        }
+      ]
+    },
+    "Origin": {
+      "description": "Where an effective config value came from.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The built-in default.",
+          "properties": {
+            "source": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user config file.",
+          "properties": {
+            "source": {
+              "const": "user_config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An environment variable.",
+          "properties": {
+            "source": {
+              "const": "env",
+              "type": "string"
+            },
+            "var": {
+              "description": "The variable name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "var"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A command-line flag.",
+          "properties": {
+            "source": {
+              "const": "cli",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PlatformInfo": {
+      "additionalProperties": false,
+      "description": "The operating system and CPU architecture.",
+      "properties": {
+        "arch": {
+          "description": "`x86_64`, `aarch64`, ...",
+          "type": "string"
+        },
+        "family": {
+          "description": "`unix` or `windows`.",
+          "type": "string"
+        },
+        "os": {
+          "description": "`linux`, `macos`, `windows`, ...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "arch",
+        "family"
+      ],
+      "type": "object"
+    },
+    "PrivilegeInfo": {
+      "additionalProperties": false,
+      "description": "Root/administrator status (SAFE-14).",
+      "properties": {
+        "destructive_blocked": {
+          "description": "Whether destructive operations would refuse to run without `--allow-root`.",
+          "type": "boolean"
+        },
+        "elevation": {
+          "$ref": "#/$defs/ElevationState",
+          "description": "Whether the process is elevated."
+        },
+        "sudo_user": {
+          "description": "The invoking user when started through `sudo`/`doas` (a hint from the environment).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "elevation",
+        "destructive_blocked"
+      ],
+      "type": "object"
+    },
+    "Redaction": {
+      "additionalProperties": false,
+      "description": "What the redaction did.",
+      "properties": {
+        "home_as_tilde": {
+          "description": "Whether the home folder prefix is shown as `~` (`false` only when it is unknown).",
+          "type": "boolean"
+        },
+        "names_hashed": {
+          "description": "Whether project and folder names are hashed (`--hash-names`).",
+          "type": "boolean"
+        },
+        "never_included": {
+          "description": "What the report never contains.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "strings_rewritten": {
+          "description": "How many strings the home redaction (and escaping) rewrote.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uploaded": {
+          "description": "Always `false`: scull never uploads the report (INS-05).",
+          "type": "boolean"
+        },
+        "withheld": {
+          "description": "Values left out, by field.",
+          "items": {
+            "$ref": "#/$defs/Withheld"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "home_as_tilde",
+        "strings_rewritten",
+        "names_hashed",
+        "withheld",
+        "never_included",
+        "uploaded"
+      ],
+      "type": "object"
+    },
+    "ShareableReport": {
+      "additionalProperties": false,
+      "description": "A shareable `scull doctor` report.",
+      "properties": {
+        "doctor": {
+          "$ref": "#/$defs/DoctorReport",
+          "description": "The `scull doctor` report after redaction (same shape as `scull/doctor@1` data)."
+        },
+        "redaction": {
+          "$ref": "#/$defs/Redaction",
+          "description": "What was redacted, withheld and never included."
+        }
+      },
+      "required": [
+        "redaction",
+        "doctor"
+      ],
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "description": "One capability signal.",
+      "properties": {
+        "available": {
+          "description": "Whether this OS build provides it.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "What the signal is.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Stable identifier (snake_case).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "When unavailable: why, and what scull does instead.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "available"
+      ],
+      "type": "object"
+    },
+    "Withheld": {
+      "additionalProperties": false,
+      "description": "One withheld value.",
+      "properties": {
+        "field": {
+          "description": "Where it was (`privileges.sudo_user`, `config.effective.scan.roots.value`, ...).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it was left out.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "reason"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/ShareableReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/doctor-report@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/doctor-report@1",
+  "type": "object"
+}

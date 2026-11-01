@@ -67,7 +67,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             DataAction::Export => planned("data export", 82),
             DataAction::Purge => planned("data purge", 82),
         },
-        Command::Doctor => None,
+        Command::Doctor(_) => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
         } => None,
@@ -103,7 +103,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
     }
     cancel::check()?;
     match &cli.command {
-        Command::Doctor => crate::cmd::doctor::run(ui)?,
+        Command::Doctor(args) => crate::cmd::doctor::run(args, ui)?,
         Command::Scan(args) => crate::cmd::scan::run(args, ui)?,
         Command::Projects {
             roots,

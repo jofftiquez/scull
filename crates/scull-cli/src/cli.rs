@@ -240,7 +240,7 @@ pub enum Command {
     },
 
     /// Report platform capabilities, permissions and available signals.
-    Doctor,
+    Doctor(DoctorArgs),
 
     /// Model Context Protocol server for AI agents.
     Mcp {
@@ -277,6 +277,30 @@ pub struct ScanArgs {
     /// overlay (skipped by default, D-22; backup volumes are never scanned).
     #[arg(long)]
     pub allow_network_roots: bool,
+}
+
+/// Arguments for `scull doctor`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct DoctorArgs {
+    /// Build a shareable diagnostic report for a bug report: the home folder is shown as `~`,
+    /// and file contents, environment values and user names are never included. It is shown
+    /// as a redaction preview first and never uploaded.
+    #[arg(long)]
+    pub report: bool,
+
+    /// Also hide project and folder names in paths under the home folder and the scan roots
+    /// (hashed, with a salt used for this report only); free-text messages are omitted.
+    #[arg(long, requires = "report")]
+    pub hash_names: bool,
+
+    /// Write the report to this new file (owner-only; an existing file is never replaced),
+    /// after the preview and your confirmation.
+    #[arg(long, value_name = "FILE", requires = "report")]
+    pub out: Option<PathBuf>,
+
+    /// Write the `--out` file without asking (the preview is still printed first).
+    #[arg(short, long, requires = "out")]
+    pub yes: bool,
 }
 
 /// Arguments for `scull check`.
