@@ -293,6 +293,12 @@ pub(super) fn create_file_owner_only(path: &Path) -> io::Result<fs::File> {
 /// directories are opened (checked with `lstat` first, SAFE-18), and the opened descriptor
 /// must be the entry that was checked (same device and inode), so a swap in between is an
 /// error. Permissions are only ever narrowed. Needs read permission on the entry.
+///
+/// An entry that is already owner-only is **not opened**: closing any descriptor of a file
+/// releases every POSIX record lock this process holds on it (`fcntl` semantics), and SQLite
+/// keeps its database and `-shm` locks that way. `scull-storage` restricts those files while
+/// its own connection may be open, and a lost `-shm` lock lets another process reset the
+/// shared memory under that connection (which then dies of `SIGBUS`).
 pub(super) fn restrict_owner_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let checked = fs::symlink_metadata(path)?;
@@ -304,6 +310,9 @@ pub(super) fn restrict_owner_only(path: &Path) -> io::Result<()> {
                 "refusing to restrict a {found}: only real files and directories are restricted"
             ),
         ));
+    }
+    if checked.mode() & 0o7777 & !0o700 == 0 {
+        return Ok(());
     }
     let file = fs::OpenOptions::new()
         .read(true)
