@@ -9,13 +9,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_ask::{
-    AskConfig, Event, ProviderKind, SYSTEM_PROMPT, Session, Stop, Transport, UreqTransport,
+    AskConfig, Event, ProviderKind, SYSTEM_PROMPT, SYSTEM_PROMPT_PREPARE, Session, Stop, Transport,
+    UreqTransport,
 };
 use scull_core::ErrorKind;
 use scull_core::config::{Config, McpConfig};
 use scull_engine::{CancelToken, Engine, EngineConfig, FixedInUse, InUseSource};
 use scull_fixtures::{Fixture, InvariantInputs, NodeLock, days_ago};
-use scull_mcp::{ScullMcp, ServerOptions, read_only_tool_names};
+use scull_mcp::approval::{ApprovalState, Principal};
+use scull_mcp::{
+    IN_PROCESS_PLAN_TOOL_NAMES, PlanLimits, ScullMcp, ServerOptions, read_only_tool_names,
+};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -157,6 +161,11 @@ fn fixture() -> Fixture {
 
 /// The real read-only tools over `fx` (home = the fixture base, so paths show as `~/...`).
 fn tools(fx: &Fixture, data: &Path) -> ScullMcp {
+    tools_with(fx, data, false)
+}
+
+/// [`tools`] with `mcp.destructive` as given (the user config file's switch).
+fn tools_with(fx: &Fixture, data: &Path, destructive: bool) -> ScullMcp {
     let mut cfg = EngineConfig::new(Config::default(), Arc::new(scull_platform::Native));
     cfg.allow_network_roots = true;
     cfg.in_use = InUseSource::Probe(Arc::new(FixedInUse(scull_safety::Tri::No)));
@@ -168,6 +177,7 @@ fn tools(fx: &Fixture, data: &Path) -> ScullMcp {
             data_dir: Some(data.to_path_buf()),
             mcp: McpConfig {
                 enabled: true,
+                destructive,
                 ..McpConfig::default()
             },
             threads: 2,
@@ -667,4 +677,301 @@ fn never_depends_on_the_cleaner() {
     }
     assert!(seen.contains(&"scull-mcp".to_owned()), "{seen:?}");
     assert!(!seen.iter().any(|c| c == "scull-cleaner"), "{seen:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// AI-05: preparing plans, only when the user opted in
+// ---------------------------------------------------------------------------------------------
+
+fn principal() -> Principal {
+    Principal {
+        machine_id: "test-machine".into(),
+        user: "tester".into(),
+    }
+}
+
+/// The real tools with plan preparation enabled (`mcp.destructive = true`, not elevated).
+fn preparing_tools(fx: &Fixture, data: &Path) -> ScullMcp {
+    tools_with(fx, data, true).with_in_process_plan_tools(
+        principal(),
+        scull_storage::AgentClient::new("scull ask", Some("test")),
+    )
+}
+
+/// The ID of the fixture's S0 Cargo build output, as the model would read it.
+fn s0_item_id(host: &ScullMcp) -> String {
+    let r = host.call_in_process(
+        "get_cleanup_candidates",
+        serde_json::Map::new(),
+        &CancelToken::new(),
+    );
+    assert!(!r.is_error, "{}", r.text);
+    let items = r.structured["candidates"]
+        .as_array()
+        .or_else(|| r.structured["items"].as_array())
+        .unwrap_or_else(|| panic!("{:#}", r.structured));
+    items
+        .iter()
+        .find(|c| c["tier"] == "S0")
+        .and_then(|c| c["id"].as_str())
+        .unwrap_or_else(|| panic!("an S0 item: {:#}", r.structured))
+        .to_owned()
+}
+
+fn tool_names(body: &Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// AI-05: with plan preparation on, the model gets `prepare_cleanup` and the read-only plan
+/// views (never `execute_cleanup`); its plan is recorded as an agent plan from `scull ask`,
+/// awaiting a human's approval, and nothing on disk changes. Asking to execute or approve gets
+/// `unknown_tool` and runs nothing. The tool result tells the model that only the user can
+/// approve, and the answer lists the prepared plan.
+#[test]
+fn prepared_plan_awaits_human_approval_and_nothing_is_executed() {
+    let fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let host = preparing_tools(&fx, data.path());
+    assert!(host.in_process_plan_tools_enabled());
+    let item = s0_item_id(&host);
+    let server = FakeServer::start(vec![
+        (
+            200,
+            vec![],
+            anthropic_reply(
+                vec![
+                    tool_use("t1", "prepare_cleanup", json!({ "item_ids": [item] })),
+                    tool_use("t2", "execute_cleanup", json!({ "plan_id": "plan_x" })),
+                    tool_use("t3", "approve_cleanup", json!({ "plan_id": "plan_x" })),
+                    tool_use("t4", "revoke_approval", json!({ "plan_id": "plan_x" })),
+                ],
+                "tool_use",
+            ),
+        ),
+        (
+            200,
+            vec![],
+            anthropic_reply(
+                vec![json!({ "type": "text", "text": "I prepared a plan for you to approve." })],
+                "end_turn",
+            ),
+        ),
+    ]);
+    let cfg = anthropic(&server.base);
+    let transport = UreqTransport::new(cfg.timeout, false);
+    let session = Session::new(&cfg, &transport, &host);
+    assert!(session.can_prepare());
+    let answer = session
+        .run("free some space", &CancelToken::new(), &mut |_| {})
+        .unwrap();
+    assert_eq!(answer.stop, Stop::Done);
+    assert_eq!(
+        answer.tool_calls,
+        vec![
+            ("prepare_cleanup".to_owned(), false),
+            ("execute_cleanup".to_owned(), true),
+            ("approve_cleanup".to_owned(), true),
+            ("revoke_approval".to_owned(), true),
+        ]
+    );
+    assert_eq!(answer.prepared_plans.len(), 1);
+    let prepared = &answer.prepared_plans[0];
+    assert_eq!(prepared.item_count, 1);
+
+    let reqs = server.received();
+    let names = tool_names(&reqs[0].body);
+    let mut want: Vec<String> = read_only_tool_names()
+        .iter()
+        .chain(IN_PROCESS_PLAN_TOOL_NAMES.iter())
+        .map(|n| (*n).to_owned())
+        .collect();
+    assert_eq!(names, want);
+    want.retain(|n| n == "execute_cleanup");
+    assert!(want.is_empty() && !names.contains(&"execute_cleanup".to_owned()));
+    assert_eq!(reqs[0].body["system"], SYSTEM_PROMPT_PREPARE);
+    let results = reqs[1].body["messages"][2]["content"].as_array().unwrap();
+    let prep = results[0]["content"].as_str().unwrap();
+    assert!(
+        prep.contains(&format!("scull approve {}", prepared.plan_id)),
+        "{prep}"
+    );
+    assert!(prep.contains("cannot execute"), "{prep}");
+    assert!(!prep.contains("execute_cleanup"), "{prep}");
+    for r in &results[1..] {
+        assert_eq!(r["is_error"], json!(true));
+        assert!(
+            r["content"].as_str().unwrap().contains("unknown_tool"),
+            "{r}"
+        );
+    }
+
+    // Recorded as an agent plan from `scull ask`, awaiting approval; never executed.
+    let store = scull_engine::open_history(data.path()).unwrap();
+    let id = scull_core::PlanId::try_from(prepared.plan_id.clone()).unwrap();
+    let plan = store.get_plan(&id).unwrap().expect("plan recorded");
+    assert_eq!(plan.origin(), scull_core::PlanOrigin::Mcp);
+    assert_eq!(plan.items().len(), 1);
+    let client = store.plan_client(&id).unwrap().expect("client recorded");
+    assert_eq!(client.name, "scull ask");
+    let status =
+        scull_mcp::approval::status(&store, &id, &principal(), scull_engine::now_unix()).unwrap();
+    assert_eq!(status.state, ApprovalState::AwaitingApproval);
+    assert_eq!(
+        store
+            .pending_agent_plans("test-machine", "tester", scull_engine::now_unix())
+            .unwrap(),
+        1
+    );
+    // Nothing changed on disk; no non-loopback socket (I-6).
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// AI-05: without the user's opt-in (`mcp.destructive = false` in the config file) or without a
+/// data folder, plan preparation is not offered: the model sees the read-only tools and prompt,
+/// and `prepare_cleanup` is an unknown tool that records nothing.
+#[test]
+fn plan_tools_are_not_offered_without_the_opt_in() {
+    let fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let off = tools_with(&fx, data.path(), false).with_in_process_plan_tools(principal(), None);
+    assert!(!off.in_process_plan_tools_enabled());
+    let server = FakeServer::start(vec![
+        (
+            200,
+            vec![],
+            anthropic_reply(
+                vec![tool_use(
+                    "t1",
+                    "prepare_cleanup",
+                    json!({ "item_ids": ["x"] }),
+                )],
+                "tool_use",
+            ),
+        ),
+        (
+            200,
+            vec![],
+            anthropic_reply(vec![json!({ "type": "text", "text": "ok" })], "end_turn"),
+        ),
+    ]);
+    let cfg = anthropic(&server.base);
+    let transport = UreqTransport::new(cfg.timeout, false);
+    let session = Session::new(&cfg, &transport, &off);
+    assert!(!session.can_prepare());
+    let answer = session
+        .run("free space", &CancelToken::new(), &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        answer.tool_calls,
+        vec![("prepare_cleanup".to_owned(), true)]
+    );
+    assert!(answer.prepared_plans.is_empty());
+    let reqs = server.received();
+    assert_eq!(tool_names(&reqs[0].body), read_only_tool_names());
+    assert_eq!(reqs[0].body["system"], SYSTEM_PROMPT);
+    assert!(
+        reqs[1].body.to_string().contains("unknown_tool"),
+        "{}",
+        reqs[1].body
+    );
+    // Direct calls are refused too, and no database was created.
+    for name in IN_PROCESS_PLAN_TOOL_NAMES {
+        let r = off.call_in_process(name, serde_json::Map::new(), &CancelToken::new());
+        assert!(
+            r.is_error && r.text.contains("unknown_tool"),
+            "{name}: {}",
+            r.text
+        );
+    }
+    assert!(
+        !data.path().join("scull.db").exists() || {
+            let store = scull_engine::open_history(data.path()).unwrap();
+            store
+                .pending_agent_plans("test-machine", "tester", scull_engine::now_unix())
+                .unwrap()
+                == 0
+        }
+    );
+
+    // Opted in, but no data folder: not offered either.
+    let mut cfg_engine = EngineConfig::new(Config::default(), Arc::new(scull_platform::Native));
+    cfg_engine.allow_network_roots = true;
+    let no_data = ScullMcp::new(
+        Engine::new(cfg_engine).unwrap(),
+        ServerOptions {
+            roots: vec![fx.root().to_path_buf()],
+            home: Some(fx.base().to_path_buf()),
+            data_dir: None,
+            mcp: McpConfig {
+                enabled: true,
+                destructive: true,
+                ..McpConfig::default()
+            },
+            threads: 2,
+            cache_env: None,
+            forecast_policy: scull_proactive::ForecastPolicy::default(),
+        },
+    )
+    .unwrap()
+    .with_in_process_plan_tools(principal(), None);
+    assert!(!no_data.in_process_plan_tools_enabled());
+    assert_eq!(
+        no_data.in_process_tools().len(),
+        read_only_tool_names().len()
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// AI-05: the same limits as MCP's agents: `mcp.prepare_per_minute` per session
+/// (`rate_limited`) and `mcp.max_pending_plans` awaiting approval (`too_many_pending_plans`).
+/// A refused call prepares nothing.
+#[test]
+fn plan_preparation_respects_the_rate_limit_and_the_pending_cap() {
+    let fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let item = s0_item_id(&preparing_tools(&fx, data.path()));
+    let args = || {
+        let mut m = serde_json::Map::new();
+        m.insert("item_ids".into(), json!([item.clone()]));
+        m
+    };
+    // Rate: one call per long window.
+    let rate = preparing_tools(&fx, data.path()).with_plan_limits(PlanLimits {
+        max_pending: 10,
+        per_window: 1,
+        window: Duration::from_secs(3600),
+    });
+    let first = rate.call_in_process("prepare_cleanup", args(), &CancelToken::new());
+    assert!(!first.is_error, "{}", first.text);
+    let second = rate.call_in_process("prepare_cleanup", args(), &CancelToken::new());
+    assert!(
+        second.is_error && second.text.contains("rate_limited"),
+        "{}",
+        second.text
+    );
+    // Cap: one plan already awaits approval.
+    let cap = preparing_tools(&fx, data.path()).with_plan_limits(PlanLimits {
+        max_pending: 1,
+        per_window: 10,
+        window: Duration::from_secs(3600),
+    });
+    let third = cap.call_in_process("prepare_cleanup", args(), &CancelToken::new());
+    assert!(
+        third.is_error && third.text.contains("too_many_pending_plans"),
+        "{}",
+        third.text
+    );
+    let store = scull_engine::open_history(data.path()).unwrap();
+    assert_eq!(
+        store
+            .pending_agent_plans("test-machine", "tester", scull_engine::now_unix())
+            .unwrap(),
+        1
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
