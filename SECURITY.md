@@ -18,4 +18,3 @@ Advisories). Do not open a public issue. We aim to acknowledge within 72 hours.
 
 scull is pre-release. Only the latest `main` is supported until 1.0.
 
-See `docs/THREAT_MODEL.md` for the threat model.

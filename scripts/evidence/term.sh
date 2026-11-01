@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture a terminal screenshot for an issue's Evidence comment (HANDOVER.md §6).
+# Capture a terminal screenshot for an issue's Evidence comment.
 #
 #   scripts/evidence/term.sh <issue-number> <name> <command...>
 #

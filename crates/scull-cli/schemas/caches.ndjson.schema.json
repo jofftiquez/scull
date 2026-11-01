@@ -116,6 +116,67 @@
         }
       ]
     },
+    "CacheCommandLine": {
+      "additionalProperties": false,
+      "description": "The cleanup command of one cache candidate (the \"Cleanup commands\" line of the human\nreport).",
+      "properties": {
+        "command": {
+          "description": "The preferred native command (`npm cache verify`); `null` when inspect-only or unknown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "ID of the candidate."
+        },
+        "rule": {
+          "description": "Rule ID of the cache (e.g. `npm.cache`).",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CacheCommandStatus",
+          "description": "Whether the command is offered."
+        },
+        "text": {
+          "description": "The line as printed, e.g. `npm cache verify` or\n`none (inspect-only: no native cleanup command)`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rule",
+        "status",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CacheCommandStatus": {
+      "description": "Whether, and how, `scull clean caches` would clean one cache.",
+      "oneOf": [
+        {
+          "const": "offered",
+          "description": "The tool's native command is offered at the cache's tier.",
+          "type": "string"
+        },
+        {
+          "const": "not_offered",
+          "description": "The tool has a native command, but it is not offered at the cache's tier.",
+          "type": "string"
+        },
+        {
+          "const": "inspect_only",
+          "description": "The tool has no native cleanup command (Gradle, Maven): the cache is shown and\nmeasured, never cleaned.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Not a cache rule scull knows the commands of.",
+          "type": "string"
+        }
+      ]
+    },
     "CachesSummary": {
       "additionalProperties": false,
       "description": "The `summary` record of `scull caches --ndjson`.",
@@ -129,6 +190,14 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "commands": {
+          "default": [],
+          "description": "The cleanup command of each `candidate`, in the same order (added in 1.x; absent in\nolder output).",
+          "items": {
+            "$ref": "#/$defs/CacheCommandLine"
+          },
+          "type": "array"
         },
         "issues": {
           "description": "Places that could not be read.",

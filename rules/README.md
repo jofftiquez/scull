@@ -37,6 +37,15 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   project from its `info.plist` as data, raise Android release outputs (S1) and mapping files
   (S2), and turn the simulator device set into `xcrun simctl delete unavailable`, chosen in Rust
   (CLS-04).
+- Game engines (`ecosystems/unity.toml`: `Library/` S1, `Temp/` S0, `obj/` S0;
+  `ecosystems/unreal.toml`: `Intermediate/`, `Binaries/`, `DerivedDataCache/` S1, `Saved/` S2)
+  are run by `scull_detectors::game_engines::GameEngineDetector`. Every folder needs the
+  engine's project markers beside it (Unity: `ProjectSettings/` holding `ProjectVersion.txt`
+  and `Assets/`; Unreal: a `.uproject` file), FX-CLS-14. Scene backups in Unity's `Temp/` and
+  Unreal `Binaries/` without a `Source/` folder raise the tier to S2, and the editor's
+  `Temp/UnityLockfile` is checked as an activity lock. Folders holding the user's work
+  (`Assets/`, `Content/`, `Source/`, `Config/`, ...), plugin and engine folders, and the shared
+  DerivedDataCache outside projects are never candidates.
 - Package caches (Quick Clean): `scull_detectors::caches::locate_caches` finds the npm, pnpm,
   Bun, Yarn (classic and Berry), pip, uv, conda, Go (build and module), Gradle, Maven and NuGet
   caches per OS from an injected `CacheEnv` (home, environment, OS layout), validates their

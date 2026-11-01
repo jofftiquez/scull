@@ -5,6 +5,7 @@ import App from '../../App.vue';
 import { BRIDGE_KEY, type CachesReport } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
 import { routes } from '../../navigation';
+import { until } from '../../test/until';
 import { createMockCacheActions, createPendingCacheActions, designPreview, previewFrom, MOCK_BINARIES, PENDING_REASON } from './bridge';
 import {
   commandLine,
@@ -154,16 +155,23 @@ describe('caches screen', () => {
     const w = await mountAt('/caches?demo=design');
     expect(w.get('[data-testid="start"]').text()).toBe('Clean 4 caches · 14.9 GiB');
     expect(w.get('[data-testid="row-cmd"]').text()).toContain('/opt/homebrew/bin/npm cache verify');
-    await w.get('[data-testid="start"]').trigger('click');
-    await vi.waitFor(async () => {
-      await flushPromises();
-      const states = w.findAll('[data-testid="row-state"]').map((s) => s.text());
-      expect(states).toEqual(['cleaning…', 'queued', 'queued', 'queued']);
-    }, { timeout: 10000, interval: 25 });
-    await vi.waitFor(async () => {
-      await flushPromises();
-      expect(w.get('[data-testid="done"]').text()).toContain('+14.9 GiB');
-    }, { timeout: 10000, interval: 25 });
+    // The simulated run maps wall-clock time to progress (650 ms per tool), so on a loaded
+    // machine one late timer can carry it past a whole row before the test looks (#290). The
+    // test owns `Date` instead: time stands still at each step and moves only when told to.
+    const root = w.element.parentNode!;
+    const states = () => w.findAll('[data-testid="row-state"]').map((s) => s.text()).join(' | ');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await w.get('[data-testid="start"]').trigger('click');
+      await until(() => states() === 'cleaning… | queued | queued | queued', root);
+      // Halfway through the second tool.
+      vi.setSystemTime(Date.now() + runDuration(4) * 0.375);
+      await until(() => states() === 'cleaned ✓ | cleaning… | queued | queued', root);
+      vi.setSystemTime(Date.now() + runDuration(4));
+      await until(() => w.get('[data-testid="done"]').text().includes('+14.9 GiB'), root);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(w.get('[data-testid="done"]').text()).toContain('freed from 4 caches');
     expect(w.findAll('[data-testid="row-state"]').map((s) => s.text())).toEqual(['cleaned ✓', 'cleaned ✓', 'cleaned ✓', 'cleaned ✓']);
   });

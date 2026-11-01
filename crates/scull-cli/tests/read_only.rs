@@ -28,6 +28,21 @@ const CACHE_VARS: &[&str] = &[
     "BUN_INSTALL_CACHE_DIR",
     "YARN_CACHE_FOLDER",
     "YARN_GLOBAL_FOLDER",
+    "YARN_ENABLE_GLOBAL_CACHE",
+    "PIP_CACHE_DIR",
+    "PIP_CONFIG_FILE",
+    "UV_CACHE_DIR",
+    "UV_CONFIG_FILE",
+    "CONDA_PKGS_DIRS",
+    "CONDARC",
+    "GOCACHE",
+    "GOENV",
+    "GOMODCACHE",
+    "GOPATH",
+    "GRADLE_USER_HOME",
+    "MAVEN_OPTS",
+    "MAVEN_ARGS",
+    "NUGET_PACKAGES",
     "CARGO_TARGET_DIR",
 ];
 
@@ -467,9 +482,129 @@ fn caches_lists_located_caches() {
     assert_eq!(cands.len(), 1, "{doc:#}");
     assert_eq!(cands[0]["category"], "package_cache");
     assert_ne!(cands[0]["tier"], "S0");
+    let cmds = doc["data"]["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 1, "{doc:#}");
+    assert_eq!(cmds[0]["id"], cands[0]["id"]);
+    assert_eq!(cmds[0]["rule"], "npm.cache");
+    assert_eq!(cmds[0]["command"], "npm cache verify");
+    let status = cmds[0]["status"].as_str().unwrap();
+    assert!(matches!(status, "offered" | "not_offered"), "{doc:#}");
+    // `commands` is additive: output from before #286 (without it) still validates.
+    let mut older = doc.clone();
+    older["data"].as_object_mut().unwrap().remove("commands");
+    assert_valid(
+        &validator(&schema_dir().join("caches.schema.json")),
+        &older,
+        "caches@1 without commands",
+    );
     let lines = ndjson(&env, &["caches"], "caches");
     assert_eq!(lines.last().unwrap()["type"], "summary");
     assert_eq!(lines.last().unwrap()["data"]["candidate_count"], 1);
+    assert_eq!(
+        lines.last().unwrap()["data"]["commands"],
+        doc["data"]["commands"]
+    );
+    assert_read_only(&fx, &[&doc]);
+}
+
+/// #286: with nothing located, the message names every tool scull looks for (`CacheTool::ALL`),
+/// not just the first four; the machine output has no commands.
+#[test]
+fn caches_empty_state_names_every_tool() {
+    let env = Env::elsewhere();
+    let o = env.run(&["caches"]);
+    ok(&o);
+    let out = stdout(&o);
+    assert!(out.contains("No package-manager caches found."), "{out}");
+    for tool in scull_detectors::CacheTool::ALL {
+        assert!(out.contains(tool.artifact()), "{tool:?} missing: {out}");
+    }
+    for name in [
+        "Go module cache",
+        "Gradle caches",
+        "Maven local repository",
+        "NuGet",
+    ] {
+        assert!(out.contains(name), "{name} missing: {out}");
+    }
+    let doc = json(&env, &["caches"], "caches");
+    assert_eq!(doc["data"]["candidates"], serde_json::json!([]));
+    assert_eq!(doc["data"]["commands"], serde_json::json!([]));
+    let lines = ndjson(&env, &["caches"], "caches");
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert_eq!(lines[0]["type"], "summary");
+    assert_eq!(lines[0]["data"]["commands"], serde_json::json!([]));
+}
+
+/// #286: inspect-only caches (Gradle, Maven: S3, no native command) say so on the commands
+/// line, in the human report and in `--json` / `--ndjson`, instead of "unknown (not offered
+/// at this tier)".
+#[test]
+fn caches_inspect_only_commands_line() {
+    let mut fx = Fixture::new().unwrap();
+    let gradle = "home/.gradle/caches";
+    fx.file_of_size(
+        format!("{gradle}/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/abc/guava.jar"),
+        4096,
+    )
+    .unwrap()
+    .file(format!("{gradle}/modules-2/modules-2.lock"), "")
+    .unwrap()
+    .file_of_size(
+        format!("{gradle}/transforms-4/0f1e/transformed/x.jar"),
+        1024,
+    )
+    .unwrap()
+    .file_of_size(format!("{gradle}/build-cache-1/0123abcd"), 1024)
+    .unwrap()
+    .file(format!("{gradle}/8.10/kotlin-dsl/accessors.txt"), "x")
+    .unwrap();
+    let maven = "home/.m2/repository/org/apache/commons/commons-lang3/3.14.0";
+    fx.file_of_size(format!("{maven}/commons-lang3-3.14.0.jar"), 4096)
+        .unwrap()
+        .file(format!("{maven}/commons-lang3-3.14.0.pom"), "<project/>")
+        .unwrap()
+        .file(format!("{maven}/_remote.repositories"), "central\n")
+        .unwrap();
+    fx.checkpoint().unwrap();
+    let env = Env::new(fx.root().join("home"));
+    let o = env.run(&["caches"]);
+    ok(&o);
+    let out = stdout(&o);
+    for artifact in ["Gradle caches", "Maven local repository"] {
+        assert!(
+            out.contains(&format!(
+                "  {artifact}: none (inspect-only: no native cleanup command)\n"
+            )),
+            "{out}"
+        );
+    }
+    assert!(!out.contains(": unknown"), "{out}");
+    assert!(!out.contains("not offered at this tier"), "{out}");
+
+    let doc = json(&env, &["caches"], "caches");
+    let cands = doc["data"]["candidates"].as_array().unwrap();
+    let cmds = doc["data"]["commands"].as_array().unwrap();
+    assert_eq!(cands.len(), 2, "{doc:#}");
+    assert_eq!(cmds.len(), 2, "{doc:#}");
+    let mut rules = Vec::new();
+    for (c, k) in cands.iter().zip(cmds) {
+        assert_eq!(c["tier"], "S3", "{c:#}");
+        assert_eq!(c["action"]["type"], "none", "{c:#}");
+        assert_eq!(k["id"], c["id"]);
+        assert_eq!(k["rule"], c["rule"]["id"]);
+        assert_eq!(k["status"], "inspect_only", "{k:#}");
+        assert_eq!(k["command"], Value::Null, "{k:#}");
+        assert_eq!(k["text"], "none (inspect-only: no native cleanup command)");
+        rules.push(k["rule"].as_str().unwrap().to_owned());
+    }
+    rules.sort();
+    assert_eq!(rules, ["gradle.caches", "maven.repository"]);
+
+    let lines = ndjson(&env, &["caches"], "caches");
+    let summary = lines.last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    assert_eq!(summary["data"]["commands"], doc["data"]["commands"]);
     assert_read_only(&fx, &[&doc]);
 }
 
