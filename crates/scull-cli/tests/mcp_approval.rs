@@ -793,6 +793,9 @@ fn history_lists_a_bounded_number_of_agent_events() {
 /// changes, and `scull history` shows the revocation and the refusal.
 #[test]
 fn revoke_through_the_cli_stops_the_agent() {
+    if skip_if_elevated("revoke_through_the_cli_stops_the_agent") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -1090,7 +1093,13 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
     let fake = env.fx.base().join("bin");
     std::fs::create_dir_all(&fake).unwrap();
     let claude = fake.join("claude");
-    std::fs::copy("/bin/sh", &claude).unwrap();
+    // A shell that stays the process it was started as: macOS's `/bin/sh` is a launcher that
+    // re-executes the real shell, so a copy named `claude` would vanish from the parent chain.
+    let shell = ["/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .unwrap();
+    std::fs::copy(shell, &claude).unwrap();
     let Some(c) = under_script(&claude, &cmd) else {
         eprintln!("skipped: no script(1)");
         env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
