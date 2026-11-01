@@ -58,6 +58,13 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
+        env:
+          # Linux: the measured free-space tests (scull-cleaner tests/measure.rs) run strict on a
+          # private tmpfs, re-running themselves as root in a private mount namespace
+          # (`sudo -n unshare --mount`); required, so a missing privilege fails instead of
+          # falling back to the shared volume. Ignored nightly fixtures are unaffected.
+          SCULL_FIXTURES_ALLOW_SUDO: ${{ runner.os == 'Linux' && '1' || '' }}
+          SCULL_FIXTURES_REQUIRE_PRIVILEGED: ${{ runner.os == 'Linux' && '1' || '' }}
         run: cargo test --workspace --locked --no-fail-fast
       - name: doc
         if: runner.os == 'Linux'
