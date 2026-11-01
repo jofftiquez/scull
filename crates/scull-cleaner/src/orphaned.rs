@@ -545,6 +545,30 @@ mod tests {
                 .expect_err("tool command via D-36");
             assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
         }
+        // Docker's prunes (P5-DET-03) act on the whole daemon: refused by every path with the
+        // Docker reason, whatever the item's category.
+        for kind in [
+            scull_detectors::DockerKind::BuildCache,
+            scull_detectors::DockerKind::DanglingImages,
+        ] {
+            let it = item(&fx, Tier::S0, Category::PackageCache, kind.action());
+            let e = exec.delete(&it, &target).expect_err("docker via delete");
+            assert_eq!(e.message, crate::DOCKER_UNSUPPORTED, "{e}");
+            for executing in [
+                Action::Quarantine,
+                Action::Trash,
+                Action::Delete,
+                it.action.clone(),
+            ] {
+                let e = crate::executor::check_item_for(&it, &executing)
+                    .expect_err("docker via any action");
+                assert_eq!(e.message, crate::DOCKER_UNSUPPORTED, "{e}");
+            }
+            let e = exec
+                .delete_orphaned_cache(&it, &target, evidence(&fx))
+                .expect_err("docker via D-36");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        }
         assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");
         let inv = fx.check_invariants(&InvariantInputs::new());
         println!("{inv}");

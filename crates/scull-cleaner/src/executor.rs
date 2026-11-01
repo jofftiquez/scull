@@ -197,6 +197,35 @@ impl Executor {
 /// models, P4-DET-01) is skipped: no trusted-tool runner allow-lists it yet.
 pub const TOOL_NATIVE_UNSUPPORTED: &str = "tool-native ML removal not supported yet";
 
+/// Why a Docker command (P5-DET-03 proposes `docker builder prune` / `docker image prune`) is
+/// never run: Docker is inspected read-only through its Engine API, and those commands act on
+/// the whole daemon rather than on a planned, revalidated path. Docker cleanup through the
+/// Engine API is separate future work.
+pub const DOCKER_UNSUPPORTED: &str = "Docker cleanup is not supported yet: scull only reads \
+     Docker's disk usage (Engine API, read-only), and `docker` prune commands act on the whole \
+     daemon, not on a planned path, so the Executor never runs them; use Docker's own tools";
+
+/// Whether `action` runs the Docker CLI (`docker`, `docker.exe` or a path to either).
+pub fn is_docker_command(action: &Action) -> bool {
+    matches!(action, Action::ToolCommand { tool, .. }
+        if Path::new(tool)
+            .file_stem()
+            .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("docker")))
+}
+
+/// The refusal of a Docker item ([`DOCKER_UNSUPPORTED`]), before anything else is checked
+/// and without touching the disk; `Ok` for every other item.
+pub(crate) fn refuse_docker(item: &PlanItem) -> Result<(), ScullError> {
+    if is_docker_command(&item.action) {
+        return Err(
+            ScullError::new(ErrorKind::SafetyBlocked, DOCKER_UNSUPPORTED)
+                .with_item(item.item_id.clone())
+                .with_path(item.path.clone()),
+        );
+    }
+    Ok(())
+}
+
 /// Whether `tool` is one of the package managers Quick Clean runs (resolved from trusted
 /// locations, SAFE-12). Any other tool command is never executed, including the binaries of
 /// inspect-only caches (Gradle's `gradle`, Maven's `mvn`: no cleanup command).
@@ -219,6 +248,7 @@ pub(crate) fn check_item_for(item: &PlanItem, executing: &Action) -> Result<(), 
             .with_item(item.item_id.clone())
             .with_path(item.path.clone()))
     };
+    refuse_docker(item)?;
     if !item.tier.is_actionable() {
         return blocked("S3 (protected) items are never executed (I-1)".into());
     }
