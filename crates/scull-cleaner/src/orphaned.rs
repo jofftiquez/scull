@@ -58,7 +58,10 @@ pub const MAX_EVIDENCE_AGE: Duration = Duration::from_secs(30);
 ///
 /// conda's `pkgs/` is excluded: environments hard-link (or symlink) into it, and only conda can
 /// tell which packages are still in use (`conda clean --packages`). So are the Go module cache
-/// (read-only files) and the inspect-only Gradle and Maven caches (see the module docs).
+/// (read-only files), the inspect-only Gradle and Maven caches (see the module docs), and of the
+/// long-tail tools (#44) ccache (its folder holds its configuration), Conan (packages built
+/// locally), Deno (web storage) and Cypress (installed per project); only the Arduino download
+/// cache qualifies.
 pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
     match tool {
         CacheTool::Conda => Some(
@@ -74,20 +77,35 @@ pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
             "inspect-only: this cache has no command that cleans it, and scull never removes \
              it itself (D-36 excludes it)",
         ),
-        // The long-tail tool caches (P5-DET-05): not run or removed on this branch yet.
-        CacheTool::Ccache
-        | CacheTool::Conan
-        | CacheTool::Vcpkg
+        // #44, the long-tail tools Quick Clean runs: a direct removal would delete more than
+        // their own command does, or the missing binary doesn't mean the tool is gone.
+        CacheTool::Ccache => Some(
+            "ccache's cache folder also holds its configuration (ccache.conf), which \
+             `ccache --clear` keeps and a removal would delete (D-36 excludes it)",
+        ),
+        CacheTool::Conan => Some(
+            "Conan's storage folder holds the packages themselves, some built locally and slow \
+             to rebuild; only `conan cache clean` may clean its temporary folders (D-36 \
+             excludes it)",
+        ),
+        CacheTool::Deno => Some(
+            "the Deno folder may hold location_data/ (web storage of Deno programs), which is \
+             unique data (D-36 excludes it)",
+        ),
+        CacheTool::Cypress => Some(
+            "Cypress is normally installed per project (node_modules), so finding no trusted \
+             binary doesn't mean it is gone, and the folder also holds Cypress' session \
+             records (D-36 excludes it)",
+        ),
+        // The long-tail tools Quick Clean doesn't run, and the inspect-only ones.
+        CacheTool::Vcpkg
         | CacheTool::PlatformIo
-        | CacheTool::Arduino
         | CacheTool::EspIdf
         | CacheTool::SwiftPm
         | CacheTool::CocoaPods
         | CacheTool::Coursier
-        | CacheTool::Deno
         | CacheTool::Zig
         | CacheTool::Playwright
-        | CacheTool::Cypress
         | CacheTool::Puppeteer
         | CacheTool::Electron
         | CacheTool::Homebrew
@@ -103,7 +121,11 @@ pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
         | CacheTool::Pip
         | CacheTool::Uv
         | CacheTool::GoBuild
-        | CacheTool::NuGet => None,
+        | CacheTool::NuGet
+        // #44: the Arduino download cache (staging/) holds only downloaded archives; the IDE 2
+        // bundles its own arduino-cli, so it may well be "orphaned" while the IDE is installed,
+        // and the IDE downloads what it needs again.
+        | CacheTool::Arduino => None,
     }
 }
 
@@ -457,9 +479,14 @@ mod tests {
             CacheTool::GoMod,
             CacheTool::Gradle,
             CacheTool::Maven,
+            // #44: run by Quick Clean, but a direct removal would delete more than the command.
+            CacheTool::Ccache,
+            CacheTool::Conan,
+            CacheTool::Deno,
+            CacheTool::Cypress,
         ];
         for t in CacheTool::ALL {
-            // The long-tail tools (P5-DET-05) are not supported on this branch at all.
+            // The long-tail tools Quick Clean doesn't run (P5-DET-05, #44).
             let unsupported = !crate::quickclean::is_supported(t);
             assert_eq!(
                 not_orphan_removable(t).is_some(),

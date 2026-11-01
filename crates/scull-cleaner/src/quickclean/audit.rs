@@ -91,6 +91,7 @@ impl SkipReason {
             SkipReason::NotOrphanRemovable(_) => "d36_excluded",
             SkipReason::InspectOnly => "inspect_only",
             SkipReason::NotSupportedYet => "not_supported_yet",
+            SkipReason::NotScoped(_) => "not_scoped",
         }
     }
 
@@ -100,9 +101,10 @@ impl SkipReason {
     /// otherwise. Nothing was touched in any case.
     pub(crate) fn audit_record(&self, item_id: ItemId, at: i64) -> ItemRecord {
         let outcome = match self {
-            SkipReason::Elevated(_) | SkipReason::InspectOnly | SkipReason::NotSupportedYet => {
-                ItemOutcome::Refused
-            }
+            SkipReason::Elevated(_)
+            | SkipReason::InspectOnly
+            | SkipReason::NotSupportedYet
+            | SkipReason::NotScoped(_) => ItemOutcome::Refused,
             SkipReason::Sandbox(_) => ItemOutcome::Failed,
             _ => ItemOutcome::Skipped,
         };
