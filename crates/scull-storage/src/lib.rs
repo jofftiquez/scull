@@ -41,6 +41,7 @@ mod export;
 pub mod history;
 pub mod insights;
 pub mod journal;
+mod live;
 mod migrate;
 mod perms;
 pub mod quarantine;

@@ -641,10 +641,10 @@ fn list_with(dir: &Handle, with_ids: bool) -> io::Result<Vec<Listed>> {
                     },
                 )
             } else {
-                let r = parse_full_record(&buf.0, offset)?;
+                let r = parse_full_record(&buf.0, offset, false)?;
                 // `EaSize` holds the reparse tag for reparse points ([MS-FSCC] 2.4.14).
                 let tag = (r.attributes & raw::FILE_ATTRIBUTE_REPARSE_POINT != 0)
-                    .then_some(r.ea_size_or_tag);
+                    .then_some(r.reparse_tag);
                 (
                     r.next_entry_offset,
                     Listed {

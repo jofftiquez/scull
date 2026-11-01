@@ -2,7 +2,8 @@
 //! becomes unusable.
 //!
 //! Pure, read-only logic over the local history that `scull-storage` records (INS-01,
-//! INS-06). Nothing here touches the filesystem or deletes anything; the CLI (`scull status`,
+//! INS-06). Nothing here touches the filesystem or deletes anything (auto-policies, [`auto`],
+//! only decide what the Executor may quarantine); the CLI (`scull status`,
 //! `scull check`), the MCP server and the desktop call it with samples they read.
 //!
 //! * [`mod@forecast`]: per-volume disk-full forecast (PRO-01, D-22): a robust trend over the last
@@ -19,12 +20,16 @@
 //! * [`monitor`]: tray monitoring (PRD §14.6): which alerts become desktop notifications,
 //!   cooldowns, pause, exclusions, and the weekly digest's schedule (INS-04). Reads and
 //!   notifies only.
+//! * [`auto`]: opt-in unattended auto-policies (PRO-10, D-11): which S0 build outputs a policy
+//!   may quarantine, the per-run and per-day caps, the dry run first, the digest. Decides
+//!   only: `scull check` runs the result through the Executor.
 //! * [`headroom`]: the emergency reserve file (PRO-06, off by default): where it lives, its
 //!   size limits and its state. Read-only; `scull_cleaner::headroom` creates and releases it.
 //! * [`schedule`]: the unit files and tool invocations `scull schedule` registers with launchd,
 //!   systemd or Task Scheduler (PRO-07).
 
 pub mod alert;
+pub mod auto;
 pub mod forecast;
 pub mod headroom;
 pub mod history;

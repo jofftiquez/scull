@@ -45,6 +45,8 @@ pub struct Store {
     backups_taken: Vec<PathBuf>,
     busy_timeout: Duration,
     lock_wait: Option<LockWaitObserver>,
+    /// Registered while the connection lives (dropped after `conn`, declared first).
+    _live: crate::live::LiveConnection,
 }
 
 /// Called when a write finds another connection holding the write lock and is about to wait
@@ -153,6 +155,7 @@ impl Store {
             backups_taken: Vec::new(),
             busy_timeout: options.busy_timeout,
             lock_wait: None,
+            _live: crate::live::LiveConnection::register(path),
         })
     }
 
@@ -165,12 +168,16 @@ impl Store {
         let known = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
         prepare_location(path, perms)?;
         probe(path, known)?;
+        // Restricting may open and close each file, which on Unix drops this process's POSIX
+        // locks on it: never while another connection of this process is live on the database
+        // (its open restricted them; see `crate::live`).
+        let others_live = crate::live::is_live(path);
         for p in [
             path.to_owned(),
             with_suffix(path, "-wal"),
             with_suffix(path, "-shm"),
         ] {
-            if std::fs::symlink_metadata(&p).is_ok() {
+            if !others_live && std::fs::symlink_metadata(&p).is_ok() {
                 perms
                     .restrict(&p)
                     .map_err(|source| StoreError::Permissions { path: p, source })?;
@@ -196,8 +203,11 @@ impl Store {
         // the database file's mode; on Windows they inherit the data folder's owner-only DACL
         // but are owned by the process's default owner, which for an elevated administrator is
         // the Administrators group, not the user. Restricting them makes the user the owner.
+        // Windows only: closing another handle releases no lock there. On Unix this
+        // connection is live now, so the files are never opened and closed here; SQLite
+        // created them with the database file's (owner-only) mode.
         for p in [with_suffix(path, "-wal"), with_suffix(path, "-shm")] {
-            if std::fs::symlink_metadata(&p).is_ok() {
+            if cfg!(windows) && std::fs::symlink_metadata(&p).is_ok() {
                 perms
                     .restrict(&p)
                     .map_err(|source| StoreError::Permissions { path: p, source })?;
@@ -217,6 +227,7 @@ impl Store {
             backups_taken,
             busy_timeout: options.busy_timeout,
             lock_wait: None,
+            _live: crate::live::LiveConnection::register(path),
         })
     }
 

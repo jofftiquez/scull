@@ -34,6 +34,28 @@ class PlatformBoundary(unittest.TestCase):
         code, out = run({"crates/scull-cleaner/src/x.rs": 'extern "C" {\n fn unlinkat(); }\n'})
         self.assertEqual(code, 1, out)
 
+    def test_entry_metadata_outside_the_scanner_fails(self):
+        # Listing-derived metadata must never reach revalidation, the executor or purges (#91).
+        for path in ("crates/scull-cleaner/src/revalidate.rs", "crates/scull-safety/src/x.rs",
+                     "crates/scull-fixtures/src/snap.rs"):
+            for call in ("let md = p.entry_metadata(&e)?;\n",
+                         "let md = Platform::entry_metadata(&p, &e)?;\n"):
+                code, out = run({path: call})
+                self.assertEqual(code, 1, (path, call, out))
+                self.assertIn("entry_metadata", out)
+
+    def test_entry_metadata_in_the_scanner_platform_and_tests_passes(self):
+        code, out = run({
+            "crates/scull-scanner/src/walk.rs": "let md = self.platform.entry_metadata(&de);\n",
+            "crates/scull-platform/src/lib.rs": "fn entry_metadata(&self, e: &DirEntry) {}\nos::entry_metadata(e)\n",
+            "crates/scull-platform/tests/entry_metadata.rs": "p.entry_metadata(&e).unwrap();\n",
+            "crates/scull-cleaner/tests/it.rs": "p.entry_metadata(&e).unwrap();\n",
+            "crates/scull-cleaner/src/x.rs": "pub fn f() {}\n#[cfg(test)]\nmod t { fn g() { p.entry_metadata(&e); } }\n",
+            # Defining it (a fake platform) is not calling it.
+            "crates/scull-engine/src/fake.rs": "fn entry_metadata(&self, e: &DirEntry) -> Result<Metadata> { todo!() }\n",
+        })
+        self.assertEqual(code, 0, out)
+
     def test_platform_crate_is_exempt(self):
         code, out = run({
             "crates/scull-platform/src/unix.rs": "use std::os::unix::fs::MetadataExt;\nlibc::stat;\n",

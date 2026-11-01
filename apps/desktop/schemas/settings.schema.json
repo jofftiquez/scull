@@ -1,5 +1,97 @@
 {
   "$defs": {
+    "AutoConfig": {
+      "additionalProperties": false,
+      "description": "`[auto]` in the user config file: opt-in unattended auto-policies (PRO-10, D-11), read from\nthat file only and off unless a policy says `enabled = true`. Only S0 build outputs, only\ninto quarantine, within the caps below.",
+      "properties": {
+        "max_gib_per_day": {
+          "default": 50,
+          "description": "At most this many GiB within any 24 hours, across all policies and runs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_gib_per_run": {
+          "default": 20,
+          "description": "At most this many GiB per run, across all policies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_items_per_run": {
+          "default": 50,
+          "description": "At most this many items per run, across all policies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paused": {
+          "default": false,
+          "description": "Kill switch: `true` stops every policy.",
+          "type": "boolean"
+        },
+        "policy": {
+          "default": [],
+          "description": "The policies, each off unless it says `enabled = true`.",
+          "items": {
+            "$ref": "#/$defs/AutoPolicy"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AutoKind": {
+      "description": "What an auto-policy may clean. Deliberately small: there is no kind for S1–S3 items,\npackage caches, worktrees or Docker data (D-11).",
+      "oneOf": [
+        {
+          "const": "build_outputs",
+          "description": "S0 build outputs and dependency folders of projects (category `project_artifact`,\ne.g. `target/`, `node_modules/`), moved into quarantine.",
+          "type": "string"
+        }
+      ]
+    },
+    "AutoPolicy": {
+      "additionalProperties": false,
+      "description": "One auto-policy (`[[auto.policy]]`).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Off unless `true`.",
+          "type": "boolean"
+        },
+        "every": {
+          "$ref": "#/$defs/DurationSpec",
+          "description": "Runs at most once per this interval (at least [`MIN_EVERY`])."
+        },
+        "idle": {
+          "$ref": "#/$defs/DurationSpec",
+          "description": "Only items whose project has been idle for longer than this (at least [`MIN_IDLE`])."
+        },
+        "kind": {
+          "$ref": "#/$defs/AutoKind",
+          "description": "What it cleans."
+        },
+        "name": {
+          "description": "A unique name (letters, digits, `.`, `_`, `-`; at most 64 characters).",
+          "type": "string"
+        },
+        "under": {
+          "description": "Only items inside one of these folders (`~` allowed). Empty: anywhere in `scan.roots`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "idle",
+        "every"
+      ],
+      "type": "object"
+    },
     "Budget": {
       "additionalProperties": false,
       "description": "A size cap (PRO-03): the allocated bytes of every candidate matching all the given filters\nmust stay at or below `max_gib`. A budget with no filter caps everything scull found.",
@@ -110,6 +202,17 @@
       "additionalProperties": false,
       "description": "The effective configuration after merging every source.",
       "properties": {
+        "auto": {
+          "$ref": "#/$defs/AutoConfig",
+          "default": {
+            "max_gib_per_day": 50,
+            "max_gib_per_run": 20,
+            "max_items_per_run": 50,
+            "paused": false,
+            "policy": []
+          },
+          "description": "Opt-in unattended auto-policies (D-11). User config file only."
+        },
         "forge": {
           "$ref": "#/$defs/ForgeConfig",
           "default": {

@@ -107,8 +107,8 @@ pub mod trash;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{
-    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, TOOL_NATIVE_UNSUPPORTED,
-    is_docker_command, is_quick_clean_tool,
+    DOCKER_UNSUPPORTED, DeleteReport, DeleteTarget, Executor, RefusalSource,
+    TOOL_NATIVE_UNSUPPORTED, is_docker_command, is_quick_clean_tool,
 };
 pub use journal::{StepHook, StepPoint};
 pub use lock::{ExecutionLock, LockOptions};
@@ -120,7 +120,7 @@ pub use quarantine::{
 };
 pub use recover::{RecoveredItem, RecoveredOperation, Recovery, RecoveryReport};
 pub use restore::{RESTORED_SUFFIX, RestoreOutcome, RestoreReport};
-pub use revalidate::{Revalidated, Revalidation, Skip};
+pub use revalidate::{Condition, Revalidated, Revalidation, Skip};
 pub use scull_platform::quarantine::QUARANTINE_DIR_NAME;
 pub use scull_platform::remove::{
     AbortReason, Anomaly, RemoveOutcome, RemoveReport, RemovedCounts, SkipReason, SkippedEntry,

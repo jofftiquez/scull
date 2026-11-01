@@ -137,6 +137,27 @@ pub struct DirEntry {
     /// the entry relative to it. Held weakly: once the listing is dropped, the entry falls back
     /// to its path.
     pub(crate) at: Option<EntryAt>,
+    /// Windows: what the listing (`FileIdExtdDirectoryInfo`) reported, for
+    /// [`Platform::entry_metadata`](crate::Platform) to stat the entry without opening it.
+    #[cfg(windows)]
+    pub(crate) listed: Option<Listed>,
+    /// macOS: a plain file's metadata as the listing (`getattrlistbulk`) reported it, for
+    /// [`Platform::entry_metadata`](crate::Platform) to return without another call (#91).
+    #[cfg(target_os = "macos")]
+    pub(crate) listed: Option<Metadata>,
+}
+
+/// What a Windows directory listing reported about one entry (#71).
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Listed {
+    /// Volume serial of the listed directory + the entry's 128-bit file ID (`None` when the
+    /// filesystem reports no stable ID).
+    pub(crate) identity: Option<FileIdentity>,
+    /// The low 64 bits of the file ID, to check that a later by-name query hit the same file.
+    pub(crate) file_id_low: u64,
+    /// `FILE_ATTRIBUTE_*` as listed.
+    pub(crate) attributes: u32,
 }
 
 /// The directory an entry was listed from (Unix): a weak handle to its descriptor, opened

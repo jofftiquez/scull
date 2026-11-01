@@ -15,7 +15,7 @@
 mod planning;
 
 use planning::*;
-use scull_cleaner::{ExecutionReport, Executor, GATE_REASONS};
+use scull_cleaner::{ExecutionReport, Executor, GATE_REASONS, RefusalSource};
 use scull_core::{
     ErrorKind, OperationId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, ScullError,
 };
@@ -830,4 +830,38 @@ fn revocation_racing_begin_operation_has_exactly_one_winner() {
         fx.check_invariants(&InvariantInputs::new()).assert_ok();
     }
     println!("operation won {ops}, revocation won {revs}");
+}
+
+/// A refused start is attributed to the [`RefusalSource`] the Executor was given: the
+/// human's `scull approve --run` records `cli` through the `terminal` channel, not the
+/// `executor` acting for the MCP server (the default, above). Same refusal, same approval
+/// untouched.
+#[test]
+fn gate_refusals_are_attributed_to_the_given_source() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let plan = mcp_plan(&fx, &scan, &["app/target"], "01JMCPSRC", now_unix());
+    s.insert_plan(&plan).unwrap();
+    let exec = locked(&fx).with_refusal_source(RefusalSource {
+        source: "cli",
+        channel: "terminal",
+    });
+    refused(
+        run(&fx, &h, &mut s, &exec, &plan, "01JMCPSRC"),
+        ErrorKind::SafetyBlocked,
+    );
+    let events: Vec<(String, String, String)> = s
+        .agent_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::ExecuteRefused)
+        .map(|e| (e.source, e.channel, e.reason))
+        .collect();
+    assert_eq!(
+        events,
+        [("cli".into(), "terminal".into(), "not_approved".into())]
+    );
+    nothing_happened(&fx, &s);
 }
