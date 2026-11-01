@@ -4,13 +4,15 @@ Tauri 2 + Vue 3 app. The design reference is `design/html/index.html`. The token
 `design/tokens.json`, and the layout follows D-16…D-21: a full-height left sidebar, ink +
 magenta duotone, no shadows, DM Sans and DM Mono.
 
-**The desktop never deletes (SAFE-10).** The Rust side is a read-only bridge to the scull
-crates. It doesn't depend on `scull-cleaner`, the only code that deletes, and it doesn't enable
-`scull-platform`'s `delete` feature. Its window has no filesystem, shell or process
-permissions. Tests enforce all three (see [Safety checks](#safety-checks)). The only thing it
-writes is scull's own database, and only the human's decision on an AI agent's plan (an
-approval, a denial, a revocation, through the core's approval broker); the agent executes an
-approved plan itself, never the desktop.
+**The desktop deletes only through the core Executor (SAFE-10).** On `phase2` the app cleans
+(P3-EXEC-01): Cleanup Review, Quick Clean and Restore call Tauri commands that run reviewed
+plans through `scull_cleaner::Executor`, the same engine as `scull clean`: the execution lock,
+revalidation of every item right before it is touched, D-28 actions (delete S0 only, quarantine
+or Trash S1/S2, never S3), the refusal to run elevated, and the audit (method `desktop`). Only
+`bridge/src/cleanup.rs` uses `scull-cleaner`, and only through the Executor's API; no desktop
+source calls a filesystem API itself; the commands are granted to the main window only (not the
+menu bar widget) and are never reachable from MCP. Its windows have no filesystem, shell or
+process permissions. Tests enforce all of it (see [Safety checks](#safety-checks)).
 
 ## Layout
 
@@ -257,16 +259,17 @@ ticked by default. Ticking one asks for confirmation first, and only then does t
 ## Plan bridge (Cleanup Review, Git Worktrees)
 
 The screens talk to a separate `PlanBridge` (`src/bridge/plan.ts`), which keeps `ScullBridge`
-read-only. The desktop's **own** plans (preparing and executing) are not core-bridge commands
-yet: execution will go through the core Executor behind a reviewed plan, never through the
-desktop. **AI agent plans** (MCP, PRD §13.3) are connected to the core's approval broker
+read-only. The desktop's **own** plans run through the core Executor (P3-EXEC-01, `phase2`;
+`bridge/src/cleanup.rs`); Quick Clean (`quick_clean`) and History's Restore
+(`restore_quarantined`) likewise. In the browser build the mock answers instead and touches
+nothing. **AI agent plans** (MCP, PRD §13.3) are connected to the core's approval broker
 (P4-MCP-02): the human approves, denies or revokes here, and the agent executes an approved
 plan itself through `scull mcp serve`.
 
 | Method | What it does |
 |---|---|
-| `preparePlan({items?})` | (not wired) Build a dry-run plan from the last scan (`PlanPreview`: items as full `Candidate`s, skipped, left-out S3, hash, expiry) |
-| `executePlan({plan_id, hash, items}, {onEvent, signal})` | (not wired) Execute the selected items of the reviewed plan through the Executor |
+| `preparePlan({items?})` | `prepare_desktop_plan`: a recorded desktop plan (D-25: 1 h) from the app's last complete scan, with the SAFE-09 watermark taken before that scan; S3 and tool/Git actions left out |
+| `executePlan({plan_id, hash, items}, {onEvent, signal})` | `execute_desktop_plan`: exactly the items the human confirmed, through the core Executor (lock, revalidation, D-28, audit with method `desktop`); refused when elevated |
 | `approvalRequests()` | Agent plans waiting for the human (`approval_requests`): the notification |
 | `approvalRequest(planId)` | Open one (`open_approval_request`): the plan exactly as recorded and a fresh confirmation code **for display** |
 | `approvePlan` / `denyPlan` / `revokeApproval` | Record the human's decision (`approve_agent_plan` with the reviewed hash and the typed code, `deny_agent_plan`, `revoke_agent_approval`) |
