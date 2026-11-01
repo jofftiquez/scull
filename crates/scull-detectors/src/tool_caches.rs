@@ -19,13 +19,14 @@
 //! | `cypress.cache` | Cypress | `CYPRESS_CACHE_FOLDER` | `$XDG_CACHE_HOME/Cypress` or `~/.cache/Cypress` / `~/Library/Caches/Cypress` / `%LocalAppData%\Cypress\Cache` | `cypress cache prune` (wipe: `cypress cache clear`) |
 //! | `puppeteer.browsers` | Puppeteer | `PUPPETEER_CACHE_DIR` | `~/.cache/puppeteer` | `puppeteer browsers clear` |
 //! | `electron.cache` | Electron downloads | `electron_config_cache` | `$XDG_CACHE_HOME/electron` or `~/.cache/electron` / `~/Library/Caches/electron` / `%LocalAppData%\electron\Cache` | inspect-only |
-//! | `homebrew.cache` | Homebrew | `HOMEBREW_CACHE` | `$XDG_CACHE_HOME/Homebrew` or `~/.cache/Homebrew` / `~/Library/Caches/Homebrew` / — | `brew cleanup` |
+//! | `homebrew.cache` | Homebrew | `HOMEBREW_CACHE` | `$XDG_CACHE_HOME/Homebrew` or `~/.cache/Homebrew` / `~/Library/Caches/Homebrew` / — | inspect-only |
 //! | `nix.store` | Nix | `NIX_STORE_DIR`; `/nix/store` when Nix is set up (`NIX_PROFILES` or `NIX_PATH`) | `/nix/store` (Linux, macOS) | inspect-only (`nix-collect-garbage` is user-run) |
 //!
 //! "Inspect-only" means located, measured and shown at S3 with no action: either the tool has
 //! no command that cleans exactly this folder, or its command can't be pointed at it (SwiftPM's
 //! `purge-cache` needs a package, PlatformIO's prune also removes platforms, ESP-IDF's
-//! `idf_tools.py` needs an ESP-IDF checkout, Nix garbage collection is the user's call).
+//! `idf_tools.py` needs an ESP-IDF checkout, `brew cleanup` also uninstalls old versions of
+//! installed formulae, Nix garbage collection is the user's call).
 
 use crate::caches::{
     CacheEnv, CacheSource, CacheTool, Spot, Spots, UserRc, configured, parse_yarnrc_yml, refused,
@@ -506,10 +507,6 @@ pub(crate) fn note(tool: CacheTool) -> Option<&'static str> {
             "`puppeteer browsers clear` removes every browser in this folder; \
              `npx puppeteer browsers install` downloads them again"
         }
-        CacheTool::Homebrew => {
-            "`brew cleanup` removes outdated downloads from this cache, and also uninstalls old \
-             versions of installed formulae (pinned formulae are kept)"
-        }
         _ => return None,
     })
 }
@@ -530,6 +527,11 @@ pub(crate) fn inspect_only_reason(tool: CacheTool) -> Option<&'static str> {
         CacheTool::SwiftPm => {
             "SwiftPM's `swift package purge-cache` runs inside a package, so scull doesn't \
              offer it and only shows this cache"
+        }
+        CacheTool::Homebrew => {
+            "Homebrew's own `brew cleanup` removes more than this cache: it also uninstalls old \
+             versions of installed formulae from the Cellar, so scull doesn't offer it and only \
+             shows this cache"
         }
         CacheTool::Nix => {
             "the Nix store is managed by Nix: run `nix-collect-garbage` yourself to remove \

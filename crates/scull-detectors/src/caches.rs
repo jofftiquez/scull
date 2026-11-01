@@ -148,7 +148,8 @@ pub enum CacheTool {
     Puppeteer,
     /// Electron's download cache; inspect-only.
     Electron,
-    /// Homebrew's download cache.
+    /// Homebrew's download cache; inspect-only (`brew cleanup` also uninstalls old formula
+    /// versions).
     Homebrew,
     /// The Nix store; inspect-only.
     Nix,
@@ -499,11 +500,6 @@ fn commands_for_tool(tool: CacheTool) -> Option<CacheCommands> {
             preferred_prunes: false,
             wipe: None,
         },
-        CacheTool::Homebrew => CacheCommands {
-            preferred: c("brew", &["cleanup"]),
-            preferred_prunes: true,
-            wipe: None,
-        },
         // No native cleanup command at all (see `crate::jvm`, `crate::tool_caches`).
         CacheTool::Gradle
         | CacheTool::Maven
@@ -514,6 +510,7 @@ fn commands_for_tool(tool: CacheTool) -> Option<CacheCommands> {
         | CacheTool::Coursier
         | CacheTool::Zig
         | CacheTool::Electron
+        | CacheTool::Homebrew
         | CacheTool::Nix => return None,
     })
 }

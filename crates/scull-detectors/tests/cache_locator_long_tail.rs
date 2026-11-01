@@ -142,10 +142,6 @@ fn native_commands_are_chosen_in_rust_and_the_rest_is_inspect_only() {
         cmd(CacheTool::Puppeteer),
         Some((s("puppeteer browsers clear"), false, None))
     );
-    assert_eq!(
-        cmd(CacheTool::Homebrew),
-        Some((s("brew cleanup"), true, None))
-    );
     for t in [
         CacheTool::Vcpkg,
         CacheTool::PlatformIo,
@@ -154,6 +150,7 @@ fn native_commands_are_chosen_in_rust_and_the_rest_is_inspect_only() {
         CacheTool::Coursier,
         CacheTool::Zig,
         CacheTool::Electron,
+        CacheTool::Homebrew,
         CacheTool::Nix,
     ] {
         assert_eq!(cmd(t), None, "{t} is inspect-only");
@@ -205,6 +202,11 @@ fn inspect_only_caches_say_why_and_are_never_planned() {
             CacheTool::Electron,
             "home/.cache/electron",
             "electron has no command",
+        ),
+        (
+            CacheTool::Homebrew,
+            "home/.cache/Homebrew",
+            "old versions of installed formulae",
         ),
         (CacheTool::Nix, "nix/store", "nix-collect-garbage"),
     ];
@@ -565,12 +567,6 @@ fn recognized_tool_caches_are_s1_with_their_command() {
             "cypress",
             &["cache", "prune"][..],
         ),
-        (
-            CacheTool::Homebrew,
-            "home/.cache/Homebrew",
-            "brew",
-            &["cleanup"][..],
-        ),
     ];
     for (t, d, ..) in table {
         build(&mut fx, t, d);
@@ -592,12 +588,53 @@ fn recognized_tool_caches_are_s1_with_their_command() {
         }
         cands.push(cand);
     }
-    let brew = cands.last().unwrap();
-    assert!(
-        notes(brew)
+    check(&fx, &plan_inputs(&cands));
+}
+
+/// `brew cleanup` also uninstalls old formula versions from the Cellar, which is more than the
+/// located cache (T-23): the Homebrew cache is shown and measured, never cleaned, on every OS
+/// layout that has one, and the reason says why.
+#[test]
+fn homebrew_cache_is_inspect_only_because_brew_cleanup_removes_more() {
+    let mut fx = Fixture::new().unwrap();
+    build(&mut fx, CacheTool::Homebrew, "home/.cache/Homebrew");
+    build(&mut fx, CacheTool::Homebrew, "home/Library/Caches/Homebrew");
+    fx.checkpoint().unwrap();
+    assert!(scull_detectors::commands_for_rule("homebrew.cache").is_none());
+    let mut cands = Vec::new();
+    for (os, dir) in [
+        (Os::Linux, "home/.cache/Homebrew"),
+        (Os::Macos, "home/Library/Caches/Homebrew"),
+    ] {
+        let scan = locate(&env(&fx, os, &[]));
+        let c = the(&scan, CacheTool::Homebrew).clone();
+        assert_eq!(rel(fx.root(), &c.path), dir, "{os:?}");
+        assert!(c.recognized);
+        assert!(c.commands().is_none());
+        let cand = c.into_candidate(&idle(), None);
+        assert!(cand.is_consistent());
+        assert_eq!(cand.tier, Tier::S3, "{os:?}");
+        assert_eq!(cand.action, Action::None, "no `brew cleanup` action");
+        let why = cand
+            .reasons
             .iter()
-            .any(|n| n.contains("old versions of installed formulae"))
-    );
+            .find(|r| r.code == ReasonCode::InspectOnly)
+            .unwrap();
+        assert!(why.message.contains("brew cleanup"), "{why:?}");
+        assert!(
+            why.message.contains("old versions of installed formulae"),
+            "{why:?}"
+        );
+        assert!(
+            notes(&cand).iter().any(|n| n.contains("Cellar")),
+            "{:?}",
+            notes(&cand)
+        );
+        cands.push(cand);
+    }
+    // Windows has no Homebrew.
+    let scan = locate(&env(&fx, Os::Windows, &[]));
+    assert!(scan.found.iter().all(|c| c.tool != CacheTool::Homebrew));
     check(&fx, &plan_inputs(&cands));
 }
 

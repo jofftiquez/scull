@@ -78,9 +78,10 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   locations): ccache (`ccache --clear`), Conan (`conan cache clean`), Arduino (`arduino-cli
   cache clean`), CocoaPods (`pod cache clean --all`), Deno (`deno clean`; S2 when it holds
   `location_data/`), Playwright (`playwright uninstall --all`), Cypress (`cypress cache prune`),
-  Puppeteer (`puppeteer browsers clear`) and Homebrew (`brew cleanup`); vcpkg, PlatformIO,
-  ESP-IDF, SwiftPM, Coursier, Zig, Electron and the Nix store are located and measured but
-  inspect-only (no command that cleans exactly that folder).
+  and Puppeteer (`puppeteer browsers clear`); vcpkg, PlatformIO, ESP-IDF, SwiftPM, Coursier,
+  Zig, Electron, Homebrew and the Nix store are located and measured but inspect-only (no
+  command that cleans exactly that folder: `brew cleanup`, for one, also uninstalls old formula
+  versions).
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.
