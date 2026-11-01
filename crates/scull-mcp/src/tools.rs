@@ -136,6 +136,8 @@ pub struct Ctx {
     pub data_dir: Option<PathBuf>,
     /// Where package-manager caches are looked for (`None`: `list_caches` is unavailable).
     pub cache_env: Option<CacheEnv>,
+    /// The disk-full forecast's policy (the configured one, shared by every surface).
+    pub forecast_policy: scull_proactive::ForecastPolicy,
     cache: Mutex<Option<CachedScan>>,
 }
 
@@ -164,8 +166,16 @@ impl Ctx {
             threads,
             data_dir,
             cache_env,
+            forecast_policy: scull_proactive::ForecastPolicy::default(),
             cache: Mutex::new(None),
         }
+    }
+
+    /// With the configured disk-full forecast policy (default: the PRO-01 defaults).
+    #[must_use]
+    pub fn with_forecast_policy(mut self, policy: scull_proactive::ForecastPolicy) -> Self {
+        self.forecast_policy = policy;
+        self
     }
 
     fn cap(&self, asked: Option<u32>) -> usize {
@@ -1805,7 +1815,7 @@ fn check_capacity(
     };
     let needed = request.as_ref().and_then(|q| q.needed_bytes);
 
-    let policy = scull_proactive::ForecastPolicy::default();
+    let policy = &ctx.forecast_policy;
     let store = crate::history::open_read_only(ctx.data_dir.as_deref());
     let mut volumes: Vec<(PathBuf, CapacityVolume, Vec<PathBuf>)> = Vec::new();
     for root in &roots {
@@ -1822,7 +1832,7 @@ fn check_capacity(
                 None,
                 Some(r.text(&format!("forecast unavailable: {}", u.detail()))),
             ),
-            Ok(s) => match scull_proactive::forecast_volume(s, &id, &[], now, &policy) {
+            Ok(s) => match scull_proactive::forecast_volume(s, &id, &[], now, policy) {
                 Ok(f) => (
                     Some(ForecastView {
                         state: f.state,

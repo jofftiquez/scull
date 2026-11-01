@@ -1268,6 +1268,7 @@ dependencies = [
  "schemars",
  "scull-cleaner",
  "scull-core",
+ "scull-desktop-bridge",
  "scull-detectors",
  "scull-engine",
  "scull-fixtures",

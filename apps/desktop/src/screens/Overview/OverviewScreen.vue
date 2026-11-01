@@ -83,7 +83,7 @@ watch(
   },
 );
 
-const forecast = computed(() => driveForecast(drive.value, drives.value, core.status?.volumes ?? [], qc.value.freed));
+const forecast = computed(() => driveForecast(drive.value, drives.value, core.forecasts, qc.value.freed));
 watch(drive, () => (selected.value = null));
 const center = computed(() => {
   if (scanningView.value) return wheelCenter({ kind: 'scanning', entries: seenEntries.value, where: where.value });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Insights (design 05): trends from the user's own history. Every series comes from the
+// Insights (design 05): trends from the user's own history. The forecast (tile and dashed line)
+// is the core's (`forecasts`), the same as the digest, the menu bar and `scull check`. Every series comes from the
 // read-only history commands (free_space_history, rollup_history, regrowth, footprint_history)
 // and the last scan's worktrees; src/components/insights/model.ts turns them into figures.
 // Tiles without a data source yet (duplication, cleanup accuracy) say so; with the mock bridge
@@ -14,6 +15,7 @@ import {
   type DigestView,
   type FootprintHistory,
   type FreeSpaceHistory,
+  type Forecast,
   type MonitorStatus,
   type RegrowthHistory,
   type RollupHistory,
@@ -21,13 +23,13 @@ import {
 } from '../../bridge';
 import { formatBytes } from '../../lib/format';
 import { formatWhen } from '../../monitor/format';
+import { forecastOf } from '../../lib/forecast';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import ForecastChart from '../../components/insights/ForecastChart.vue';
 import { insightsActionsFor } from '../../components/insights/actions';
 import { DESIGN_ACCURACY, DESIGN_DUPLICATION } from '../../components/insights/designScenario';
 import {
   DAY,
-  FULL_RESERVE,
   HISTORY_BUDGET,
   RANGES,
   agentModel,
@@ -54,6 +56,8 @@ const footprint = ref<FootprintHistory | null>(null);
 const worktrees = ref<WorktreesView | null>(null);
 const status = ref<DesktopStatus | null>(null);
 const digest = ref<DigestView | null>(null);
+/** The core's forecasts (one forecast source with check/status/digest/menu bar). */
+const forecasts = ref<Forecast[]>([]);
 const monitor = ref<MonitorStatus | null>(null);
 const loadError = ref('');
 const actionNote = ref('');
@@ -82,13 +86,15 @@ async function load() {
 onMounted(async () => {
   await load();
   // Six months for the mix, the last scan's worktrees and reclaimable bytes: once.
-  const [m, w, s, d, ms] = await Promise.allSettled([
+  const [m, w, s, d, ms, fc] = await Promise.allSettled([
     bridge.rollupHistory(Math.floor(now.value - 183 * DAY)),
     bridge.worktrees(),
     bridge.status(),
     bridge.weeklyDigest(),
     bridge.monitorStatus(),
+    bridge.forecasts(),
   ]);
+  if (fc.status === 'fulfilled') forecasts.value = fc.value.forecasts;
   if (m.status === 'fulfilled') mixRollups.value = m.value;
   if (w.status === 'fulfilled') worktrees.value = w.value;
   if (s.status === 'fulfilled') status.value = s.value;
@@ -101,7 +107,18 @@ const rangeLabel = computed(() => RANGES.find((r) => r.id === range.value)?.labe
 const noHistory = computed(() => free.value?.state === 'no_database');
 const unavailable = computed(() => [free.value, rollups.value, regrowth.value, footprint.value].find((d) => d?.state === 'unavailable')?.detail ?? null);
 
-const fs = computed(() => freeSpaceModel(free.value?.samples ?? []));
+const fs = computed(() => freeSpaceModel(free.value?.samples ?? [], forecastOf(forecasts.value, free.value?.volume_id)));
+/** Why there is no forecast, in the core's words. */
+const noForecastText = computed(() => {
+  switch (fs.value.state) {
+    case 'below_reserve':
+      return `Already below ${formatBytes(fs.value.reserve)} free: free up space now.`;
+    case 'not_filling':
+      return "Free space isn't shrinking.";
+    default:
+      return 'Not enough history yet: the forecast needs a few days of scans or checks.';
+  }
+});
 const driver = computed(() => drivenBy(rollups.value?.series ?? []));
 const regrow = computed(() => regrowthModel(regrowth.value?.events ?? []));
 const mix = computed(() => mixModel(mixRollups.value?.series ?? []));
@@ -248,11 +265,11 @@ async function exportHistory() {
         <h2 class="m-0 text-label font-medium text-text-strong-muted">Forecast</h2>
         <template v-if="fs.trend">
           <span class="text-stat-lg leading-none font-semibold tracking-[-0.04em] tabular-nums">≈ {{ fs.trend.days }} day{{ fs.trend.days === 1 ? '' : 's' }}</span>
-          <span class="text-body text-text-strong-muted">until less than {{ formatBytes(FULL_RESERVE) }} free</span>
+          <span class="text-body text-text-strong-muted">until less than {{ formatBytes(fs.reserve) }} free</span>
         </template>
         <template v-else>
           <span class="text-stat-md leading-none font-semibold">No forecast</span>
-          <span class="text-body text-text-strong-muted">Free space isn't shrinking, or there aren't enough samples yet.</span>
+          <span class="text-body text-text-strong-muted" data-testid="no-forecast">{{ noForecastText }}</span>
         </template>
         <dl class="m-0 mt-2 grid grid-cols-2 gap-1.5">
           <div class="flex flex-col gap-0.5 rounded-[14px] bg-surface p-3.5">

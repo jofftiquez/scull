@@ -16,6 +16,7 @@ import type {
   DigestView,
   Drive,
   FootprintHistory,
+  ForecastsView,
   FreeSpaceHistory,
   HistoryView,
   MonitorStatus,
@@ -107,6 +108,9 @@ export interface ScullBridge {
   /** The last 7 days in a few lines (INS-04): Insights "This week" and the digest
    * notification's text. Read-only. */
   weeklyDigest(): Promise<DigestView>;
+  /** Every sampled volume's disk-full forecast (PRO-01), the one source of days left for the
+   * Insights tile, the Overview alert and the menu bar widget (src/lib/forecast.ts). Read-only. */
+  forecasts(): Promise<ForecastsView>;
   /** What tray monitoring is doing: settings, pause, last/next check and digest. Read-only
    * (changing it is src/monitor/control.ts, app state only). */
   monitorStatus(): Promise<MonitorStatus>;
@@ -129,6 +133,7 @@ export const COMMANDS = {
   regrowth: 'regrowth',
   footprintHistory: 'footprint_history',
   weeklyDigest: 'weekly_digest',
+  forecasts: 'forecasts',
   monitorStatus: 'monitor_status',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 

@@ -35,7 +35,6 @@ use scull_proactive::forecast::forecast;
 use scull_proactive::monitor::{
     self as rules, digest_due, mark_digest_sent, next_check, next_digest,
 };
-use scull_proactive::policy::forecast_policy;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -333,22 +332,25 @@ impl Session {
                 footprint_history: Vec::new(),
                 budget_used_bytes: 0,
                 budget_bytes: None,
+                forecast_policy: self.forecast_policy(),
             });
             scull_insights::digest::weekly_digest(&report, &[], None, None)
         };
         match self.history_source() {
-            Source::Store(store) => match read_weekly_digest(&store, now, prefer.as_deref()) {
-                Ok(d) => DigestView {
-                    state: HistoryRead::Ok,
-                    detail: None,
-                    digest: Some(d),
-                },
-                Err(e) => DigestView {
-                    state: HistoryRead::Unavailable,
-                    detail: Some(e.to_string()),
-                    digest: None,
-                },
-            },
+            Source::Store(store) => {
+                match read_weekly_digest(&store, now, prefer.as_deref(), &self.forecast_policy()) {
+                    Ok(d) => DigestView {
+                        state: HistoryRead::Ok,
+                        detail: None,
+                        digest: Some(d),
+                    },
+                    Err(e) => DigestView {
+                        state: HistoryRead::Unavailable,
+                        detail: Some(e.to_string()),
+                        digest: None,
+                    },
+                }
+            }
             Source::Missing => DigestView {
                 state: HistoryRead::NoDatabase,
                 detail: None,
@@ -393,8 +395,7 @@ impl Session {
         settings: &MonitorSettings,
         live: &[VolumeSample],
     ) -> Vec<Alert> {
-        let cfg = self.config().map(|c| c.proactive).unwrap_or_default();
-        let mut policy = forecast_policy(&cfg);
+        let mut policy = self.forecast_policy();
         if let Some(days) = settings.alert_days {
             policy.alert_days = days;
             policy.critical_days = policy.critical_days.min(days);

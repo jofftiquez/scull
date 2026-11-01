@@ -180,31 +180,6 @@
         }
       ]
     },
-    "Confidence": {
-      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
-      "oneOf": [
-        {
-          "const": "unknown",
-          "description": "Not enough history to say anything.",
-          "type": "string"
-        },
-        {
-          "const": "low",
-          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
-          "type": "string"
-        },
-        {
-          "const": "medium",
-          "description": "Shown in status lines and may alert.",
-          "type": "string"
-        },
-        {
-          "const": "high",
-          "description": "Long, regular history and a short extrapolation.",
-          "type": "string"
-        }
-      ]
-    },
     "Coverage": {
       "additionalProperties": false,
       "description": "How much history a report rests on.",
@@ -385,7 +360,7 @@
           ]
         },
         "confidence": {
-          "$ref": "#/$defs/Confidence",
+          "$ref": "#/$defs/ForecastConfidence",
           "description": "How much to trust it."
         },
         "days_until_threshold": {
@@ -487,6 +462,31 @@
         "jumps_ignored"
       ],
       "type": "object"
+    },
+    "ForecastConfidence": {
+      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "Not enough history to say anything.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Shown in status lines and may alert.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Long, regular history and a short extrapolation.",
+          "type": "string"
+        }
+      ]
     },
     "ForecastState": {
       "description": "What the forecast concluded.",
@@ -956,7 +956,7 @@
         },
         "forecast": {
           "$ref": "#/$defs/Forecast",
-          "description": "Disk-full forecast from the last 30 days of samples (PRO-01; the same as `scull\ncheck`), independent of the report window."
+          "description": "Disk-full forecast from the policy window of samples (PRO-01; the same as `scull\ncheck`), independent of the report window."
         },
         "points": {
           "description": "The last sample of each UTC day, oldest first.",

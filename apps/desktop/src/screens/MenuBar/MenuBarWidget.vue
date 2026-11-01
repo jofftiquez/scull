@@ -35,7 +35,7 @@ const bridge: ScullBridge = wantsDesign() ? designMenuBarBridge(base) : base;
 const win = inject(WIDGET_WINDOW_KEY, null) ?? widgetWindowFor(bridge);
 const reduced = useReducedMotion();
 
-const data = ref<MenuBarData>({ drives: null, status: null, caches: null, history: null });
+const data = ref<MenuBarData>({ drives: null, status: null, caches: null, forecasts: null });
 const loading = ref(true);
 const error = ref('');
 const checking = ref(false);
@@ -53,7 +53,7 @@ let stopFrame: (() => void) | null = null;
 const cacheTotal = computed(() => model.value.tools.reduce((a, t) => a + t.bytes, 0));
 const frame = computed(() => cleanFrame(cacheTotal.value, phase.value, p.value, result.value?.freed ?? cacheTotal.value));
 const free = computed(() => (model.value.volume ? model.value.volume.free + frame.value.freed : null));
-const days = computed(() => (free.value === null ? null : daysLeft(free.value, model.value.perDay)));
+const days = computed(() => (free.value === null ? null : daysLeft(model.value.forecast, frame.value.freed)));
 const ringView = computed(() => {
   const v = model.value.volume;
   return v && free.value !== null ? ring(free.value, v.total, model.value.reclaim?.bytes ?? 0) : null;
@@ -65,19 +65,15 @@ const checkedLabel = computed(() => {
   return a === null ? 'Not checked yet' : `Checked ${ago(a)}`;
 });
 
-const DAY = 86_400;
-const HISTORY_DAYS = 30;
-
 async function load(): Promise<void> {
-  const since = Math.floor(Date.now() / 1000) - HISTORY_DAYS * DAY;
-  const [drives, status, caches, history] = await Promise.allSettled([
+  const [drives, status, caches, forecasts] = await Promise.allSettled([
     bridge.drives(),
     bridge.status(),
     bridge.caches(),
-    bridge.freeSpaceHistory(since),
+    bridge.forecasts(),
   ]);
   const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
-  data.value = { drives: val(drives), status: val(status), caches: val(caches), history: val(history) };
+  data.value = { drives: val(drives), status: val(status), caches: val(caches), forecasts: val(forecasts) };
   const failed = [drives, status].find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
   error.value = failed ? toBridgeError(failed.reason).message : '';
   loading.value = false;

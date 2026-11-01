@@ -41,6 +41,8 @@ toml_edit = "0.25"
 proptest.workspace = true
 scull-fixtures.workspace = true
 scull-insights = { workspace = true, features = ["fixtures"] }
+# The desktop bridge, for the cross-surface forecast test (tests/forecast_surfaces.rs) only.
+scull-desktop-bridge = { path = "../../apps/desktop/bridge" }
 jsonschema = { version = "0.60", default-features = false }
 tempfile = "3"
 
