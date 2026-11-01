@@ -1,4 +1,4 @@
-//! [`Executor::trash`]: move one verified plan item to the platform Trash / Recycle Bin
+//! `Executor::trash`: move one verified plan item to the platform Trash / Recycle Bin
 //! (P2-EXEC-07; PRD §10.6, §9, D-3, D-28).
 //!
 //! Trash is the **fallback** for S1/S2 items whose same-volume quarantine is impossible
@@ -50,58 +50,62 @@ impl TrashReport {
 }
 
 impl Executor {
-    /// Moves one plan item to the platform Trash (the fallback where quarantine is impossible).
-    ///
-    /// * The item must be actionable, planned for [`Action::Trash`] or [`Action::Quarantine`]
-    ///   (Trash as quarantine's fallback), and Trash must be allowed for its tier (D-28: S0-S2;
-    ///   S3 never). Anything else is refused with [`ErrorKind::SafetyBlocked`].
-    /// * `target.path` must be absolute, strictly below `target.anchor`, and hash with the
-    ///   item's identity to its [`ItemId`] ([`ErrorKind::PlanInvalidated`] otherwise).
-    /// * The platform layer then re-checks identity and kind without following links and
-    ///   renames the item into a trash directory on its own volume ([`scull_platform::trash`]).
-    ///
-    /// `Err` means nothing was moved and nothing was deleted: the item stays where it is and is
-    /// reported as blocked. The caller never escalates to deletion (PRD §10.6). In particular
-    /// [`ErrorKind::SafetyBlocked`] covers "no usable Trash on this volume" (headless
-    /// machines, FX-LNX-01) and "the only Trash is on another volume".
-    pub fn trash(
-        &self,
-        item: &PlanItem,
-        target: &DeleteTarget<'_>,
-        locations: &TrashLocations,
-    ) -> Result<TrashReport, ScullError> {
-        self.trash_checked(item, target, locations, None)
+    bare_api! {
+        /// Moves one plan item to the platform Trash (the fallback where quarantine is impossible).
+        ///
+        /// * The item must be actionable, planned for [`Action::Trash`] or [`Action::Quarantine`]
+        ///   (Trash as quarantine's fallback), and Trash must be allowed for its tier (D-28: S0-S2;
+        ///   S3 never). Anything else is refused with [`ErrorKind::SafetyBlocked`].
+        /// * `target.path` must be absolute, strictly below `target.anchor`, and hash with the
+        ///   item's identity to its [`ItemId`] ([`ErrorKind::PlanInvalidated`] otherwise).
+        /// * The platform layer then re-checks identity and kind without following links and
+        ///   renames the item into a trash directory on its own volume ([`scull_platform::trash`]).
+        ///
+        /// `Err` means nothing was moved and nothing was deleted: the item stays where it is and is
+        /// reported as blocked. The caller never escalates to deletion (PRD §10.6). In particular
+        /// [`ErrorKind::SafetyBlocked`] covers "no usable Trash on this volume" (headless
+        /// machines, FX-LNX-01) and "the only Trash is on another volume".
+        fn trash(
+            &self,
+            item: &PlanItem,
+            target: &DeleteTarget<'_>,
+            locations: &TrashLocations,
+        ) -> Result<TrashReport, ScullError> {
+            self.trash_checked(item, target, locations, None)
+        }
     }
 
-    /// [`Executor::trash`] that also requires the item to be of `expected_kind` (as observed at
-    /// revalidation).
-    pub fn trash_checked(
-        &self,
-        item: &PlanItem,
-        target: &DeleteTarget<'_>,
-        locations: &TrashLocations,
-        expected_kind: Option<EntryKind>,
-    ) -> Result<TrashReport, ScullError> {
-        check_trash_item(item)?;
-        let relative = check_target(item, target)?;
-        // Journaling (SAFE-19) and the audit row (SAFE-08) are done by `execute_plan`, which
-        // owns the operation; a bare `trash` call has no operation.
-        let req = TrashRequest {
-            anchor: target.anchor,
-            anchor_identity: target.anchor_identity,
-            relative,
-            expected: item.identity,
-            expected_kind,
-            locations,
-        };
-        match trash::move_to_trash(&req) {
-            Ok(outcome) => Ok(TrashReport {
-                item_id: item.item_id.clone(),
-                outcome,
-            }),
-            Err(e) => Err(refusal(&e)
-                .with_item(item.item_id.clone())
-                .with_path(item.path.clone())),
+    bare_api! {
+        /// `Executor::trash` that also requires the item to be of `expected_kind` (as observed at
+        /// revalidation).
+        fn trash_checked(
+            &self,
+            item: &PlanItem,
+            target: &DeleteTarget<'_>,
+            locations: &TrashLocations,
+            expected_kind: Option<EntryKind>,
+        ) -> Result<TrashReport, ScullError> {
+            check_trash_item(item)?;
+            let relative = check_target(item, target)?;
+            // Journaling (SAFE-19) and the audit row (SAFE-08) are done by `execute_plan`, which
+            // owns the operation; a bare `trash` call has no operation.
+            let req = TrashRequest {
+                anchor: target.anchor,
+                anchor_identity: target.anchor_identity,
+                relative,
+                expected: item.identity,
+                expected_kind,
+                locations,
+            };
+            match trash::move_to_trash(&req) {
+                Ok(outcome) => Ok(TrashReport {
+                    item_id: item.item_id.clone(),
+                    outcome,
+                }),
+                Err(e) => Err(refusal(&e)
+                    .with_item(item.item_id.clone())
+                    .with_path(item.path.clone())),
+            }
         }
     }
 }
@@ -133,7 +137,7 @@ fn check_trash_item(item: &PlanItem) -> Result<(), ScullError> {
 }
 
 /// Binds the native path to the item and returns it relative to the anchor. Same binding as
-/// [`Executor::delete`] applies.
+/// `Executor::delete` applies.
 fn check_target<'a>(item: &PlanItem, target: &DeleteTarget<'a>) -> Result<&'a Path, ScullError> {
     let invalid = |kind: ErrorKind, msg: &str| {
         Err(ScullError::new(kind, msg)

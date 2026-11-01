@@ -8,6 +8,7 @@
 use crate::approvals::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
 };
+use crate::cleanup::{DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun};
 use crate::forecasts::ForecastsView;
 use crate::history::HistoryView;
 use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
@@ -120,6 +121,22 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
         (
             "agent-plan-status",
             schema::<AgentPlanStatus>("agent-plan-status", "AgentPlanStatus"),
+        ),
+        (
+            "desktop-plan",
+            schema::<DesktopPlan>("desktop-plan", "DesktopPlan"),
+        ),
+        (
+            "desktop-run",
+            schema::<DesktopRun>("desktop-run", "DesktopRun"),
+        ),
+        (
+            "desktop-restore",
+            schema::<DesktopRestore>("desktop-restore", "DesktopRestore"),
+        ),
+        (
+            "desktop-quick-clean",
+            schema::<DesktopQuickClean>("desktop-quick-clean", "DesktopQuickClean"),
         ),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]

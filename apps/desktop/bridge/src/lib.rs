@@ -48,6 +48,7 @@
 //! plan and a human approval, never through the desktop bridge.
 
 pub mod approvals;
+pub mod cleanup;
 pub mod db;
 pub mod drives;
 pub mod forecasts;
@@ -64,6 +65,7 @@ pub use approvals::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
     ApprovalDesk,
 };
+pub use cleanup::{CleanupDesk, DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun};
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
 pub use forecasts::ForecastsView;
 pub use history::HistoryView;

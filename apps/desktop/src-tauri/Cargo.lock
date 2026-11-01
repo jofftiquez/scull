@@ -3143,6 +3143,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "scull-cleaner"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "schemars 1.2.3",
+ "scull-core",
+ "scull-detectors",
+ "scull-engine",
+ "scull-platform",
+ "scull-proactive",
+ "scull-safety",
+ "scull-scanner",
+ "scull-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "scull-core"
 version = "0.0.0"
 dependencies = [
@@ -3178,6 +3197,7 @@ name = "scull-desktop-bridge"
 version = "0.0.0"
 dependencies = [
  "schemars 1.2.3",
+ "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",
@@ -3270,6 +3290,7 @@ name = "scull-platform"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "rustix",
  "scull-core",
  "serde",
  "serde_json",

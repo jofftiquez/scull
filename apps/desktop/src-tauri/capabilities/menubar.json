@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "menubar",
-  "description": "The menu bar widget (menubar): scull's own read and window commands and core events, but none of the commands that approve, deny or revoke an AI agent's plan (main window only, P4-MCP-02). No filesystem, shell, process or HTTP plugin (SAFE-10).",
+  "description": "The menu bar widget (menubar): scull's own read and window commands and core events, but none of the commands that approve, deny or revoke an AI agent's plan or that run a cleanup (main window only, P4-MCP-02, P3-EXEC-01). No filesystem, shell, process or HTTP plugin (SAFE-10).",
   "windows": [
     "menubar"
   ],

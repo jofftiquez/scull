@@ -84,7 +84,7 @@ impl std::fmt::Debug for Executor {
 
 impl Executor {
     /// An Executor **without** the execution lock: it can run the single-item primitives
-    /// ([`Executor::delete`]) but [`Executor::execute_plan`] refuses to run. Use
+    /// (`Executor::delete`) but [`Executor::execute_plan`] refuses to run. Use
     /// [`Executor::acquire`] to execute plans.
     pub fn new() -> Self {
         Self::default()
@@ -133,38 +133,42 @@ impl Executor {
         self.lock.as_ref()
     }
 
-    /// Deletes one plan item. `item` must come from [`scull_core::narrow`] (verified plan,
-    /// re-derived candidate); this method re-checks what it can on its own:
-    ///
-    /// * the item is not S3 and its action is [`Action::Delete`], allowed for its tier (D-3,
-    ///   D-28: only S0 may be deleted); anything else is refused with
-    ///   [`ErrorKind::SafetyBlocked`]; quarantine, Trash and tool actions are not executed by
-    ///   this build at all;
-    /// * `target.path` is absolute, strictly below `target.anchor`, and hashes with the item's
-    ///   identity to its [`ItemId`] ([`ErrorKind::PlanInvalidated`] otherwise);
-    /// * the walker then verifies device + inode at open time (SAFE-05) and removes the tree
-    ///   without following links or crossing mounts.
-    ///
-    /// `Err` means nothing was removed. `Ok` carries the walker's report, which may be
-    /// [`remove::RemoveOutcome::Incomplete`] (entries kept, each with a reason) or
-    /// [`remove::RemoveOutcome::Aborted`] (an anomaly stopped the walk).
-    pub fn delete(
-        &self,
-        item: &PlanItem,
-        target: &DeleteTarget<'_>,
-    ) -> Result<DeleteReport, ScullError> {
-        self.run(item, target, None, None)
+    bare_api! {
+        /// Deletes one plan item. `item` must come from [`scull_core::narrow`] (verified plan,
+        /// re-derived candidate); this method re-checks what it can on its own:
+        ///
+        /// * the item is not S3 and its action is [`Action::Delete`], allowed for its tier (D-3,
+        ///   D-28: only S0 may be deleted); anything else is refused with
+        ///   [`ErrorKind::SafetyBlocked`]; quarantine, Trash and tool actions are not executed by
+        ///   this build at all;
+        /// * `target.path` is absolute, strictly below `target.anchor`, and hashes with the item's
+        ///   identity to its [`ItemId`] ([`ErrorKind::PlanInvalidated`] otherwise);
+        /// * the walker then verifies device + inode at open time (SAFE-05) and removes the tree
+        ///   without following links or crossing mounts.
+        ///
+        /// `Err` means nothing was removed. `Ok` carries the walker's report, which may be
+        /// [`remove::RemoveOutcome::Incomplete`] (entries kept, each with a reason) or
+        /// [`remove::RemoveOutcome::Aborted`] (an anomaly stopped the walk).
+        fn delete(
+            &self,
+            item: &PlanItem,
+            target: &DeleteTarget<'_>,
+        ) -> Result<DeleteReport, ScullError> {
+            self.run(item, target, None, None)
+        }
     }
 
-    /// [`Executor::delete`] with an observer called at each [`WalkEvent`], for fault-injection
-    /// tests (FX-RACE-02). The walker re-verifies everything after each call.
-    pub fn delete_observed(
-        &self,
-        item: &PlanItem,
-        target: &DeleteTarget<'_>,
-        observer: &mut dyn FnMut(&WalkEvent<'_>),
-    ) -> Result<DeleteReport, ScullError> {
-        self.run(item, target, None, Some(observer))
+    bare_api! {
+        /// `Executor::delete` with an observer called at each [`WalkEvent`], for fault-injection
+        /// tests (FX-RACE-02). The walker re-verifies everything after each call.
+        fn delete_observed(
+            &self,
+            item: &PlanItem,
+            target: &DeleteTarget<'_>,
+            observer: &mut dyn FnMut(&WalkEvent<'_>),
+        ) -> Result<DeleteReport, ScullError> {
+            self.run(item, target, None, Some(observer))
+        }
     }
 
     pub(crate) fn run(

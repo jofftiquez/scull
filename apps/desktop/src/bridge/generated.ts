@@ -309,6 +309,13 @@ export type ElevationView = "elevated" | "not_elevated" | "unknown";
  */
 export type HistoryState = "present" | "not_created" | "off";
 /**
+ * What happened to one item of a run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RunItemOutcome".
+ */
+export type RunItemOutcome = "deleted" | "quarantined" | "trashed" | "skipped";
+/**
  * What kind of storage a volume is (mirrors [`VolumeKind`]).
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -891,6 +898,10 @@ export interface BridgePayloads {
   AppInfo: AppInfo;
   CachesReport: CachesReport;
   CapabilitiesReport: CapabilitiesReport;
+  DesktopPlan: DesktopPlan;
+  DesktopQuickClean: DesktopQuickClean;
+  DesktopRestore: DesktopRestore;
+  DesktopRun: DesktopRun;
   Drives: Drives;
   ScullError: ScullError;
   FootprintHistory: FootprintHistory;
@@ -1577,6 +1588,208 @@ export interface SignalView {
    * Stable name.
    */
   name: string;
+}
+/**
+ * A Cleanup Review plan as the human reviews it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopPlan".
+ */
+export interface DesktopPlan {
+  /**
+   * Content hash; send it back to execute.
+   */
+  content_hash: string;
+  /**
+   * When it was made (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires (Unix seconds; D-25: 1 hour).
+   */
+  expires_at: number;
+  /**
+   * Every item that may be cleaned, as the last scan classified it (S0, S1, S2).
+   */
+  items: Candidate[];
+  /**
+   * What scull left out on purpose: S3 and items with no cleanup action.
+   */
+  left_out: LeftOut[];
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * An item scull doesn't clean.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "LeftOut".
+ */
+export interface LeftOut {
+  /**
+   * Its path.
+   */
+  path: string;
+  /**
+   * Why.
+   */
+  reason: string;
+  tier: Tier;
+}
+/**
+ * The result of a Quick Clean.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopQuickClean".
+ */
+export interface DesktopQuickClean {
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * The recorded operation, when anything ran.
+   */
+  operation_id?: string | null;
+  /**
+   * Bytes the caches held before (estimate).
+   */
+  predicted_bytes: number;
+  /**
+   * Tools not run, with the reason (`not trusted`, `in use`, ...).
+   */
+  skipped: QuickCleanSkip[];
+  /**
+   * The tools that ran.
+   */
+  tools: QuickCleanTool[];
+}
+/**
+ * A tool Quick Clean didn't run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuickCleanSkip".
+ */
+export interface QuickCleanSkip {
+  /**
+   * Why, for display.
+   */
+  reason: string;
+  /**
+   * The tool.
+   */
+  tool: string;
+}
+/**
+ * One tool Quick Clean ran.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuickCleanTool".
+ */
+export interface QuickCleanTool {
+  /**
+   * Bytes the cache shrank by, when measured.
+   */
+  cache_bytes_freed?: number | null;
+  /**
+   * The cache's candidate (the Quick Clean chip).
+   */
+  item_id?: string | null;
+  /**
+   * Whether its command succeeded.
+   */
+  succeeded: boolean;
+  /**
+   * The tool (`npm`, `pnpm`, ...).
+   */
+  tool: string;
+}
+/**
+ * A restored quarantine entry.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopRestore".
+ */
+export interface DesktopRestore {
+  /**
+   * `true` when it had already been restored (nothing moved now).
+   */
+  already: boolean;
+  /**
+   * Where it is now.
+   */
+  restored_to: string;
+  /**
+   * `true` when the original path was taken and a `.scull-restored-<n>` sibling was used.
+   */
+  sibling: boolean;
+}
+/**
+ * The result of a Cleanup Review run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopRun".
+ */
+export interface DesktopRun {
+  /**
+   * Whether the run stopped early.
+   */
+  cancelled: boolean;
+  /**
+   * When it finished (Unix seconds).
+   */
+  finished_at: number;
+  /**
+   * Every item, in plan order.
+   */
+  items: RunItem[];
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * Bytes moved aside.
+   */
+  moved_bytes: number;
+  /**
+   * The recorded operation (`scull history <id>`).
+   */
+  operation_id: string;
+  /**
+   * The plan that ran (the reviewed one, or the chosen subset of it).
+   */
+  plan_id: string;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+}
+/**
+ * One item of a run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RunItem".
+ */
+export interface RunItem {
+  /**
+   * Bytes freed (the planned estimate for a completed delete).
+   */
+  freed_bytes: number;
+  /**
+   * Plan item.
+   */
+  item_id: string;
+  /**
+   * Bytes moved aside (quarantine, Trash).
+   */
+  moved_bytes: number;
+  outcome: RunItemOutcome;
+  /**
+   * Stable reason code when not cleaned (or only partly).
+   */
+  reason?: string | null;
 }
 /**
  * One volume in the drives widget. Unknown sizes are `null`, never 0.

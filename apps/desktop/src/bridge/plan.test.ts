@@ -7,15 +7,12 @@ import { BridgeError } from './types';
 import { actionAllowed } from '../components/review/plan';
 
 describe('plan bridge stubs', () => {
-  it('goes with the core bridge: mock with mock, the approval broker with Tauri', async () => {
+  it('goes with the core bridge: mock with mock, the core (approvals, cleanups) with Tauri', () => {
     const m = createMockBridge();
     expect(planBridgeFor(m).kind).toBe('mock');
     expect(planBridgeFor(m)).toBe(planBridgeFor(m));
     const t = planBridgeFor({ ...m, kind: 'tauri' });
     expect(t.kind).toBe('tauri');
-    // Inside Tauri the desktop's own plans still refuse: the desktop never executes (SAFE-10).
-    await expect(t.preparePlan({})).rejects.toMatchObject({ kind: 'unsupported_platform' });
-    await expect(t.executePlan({ plan_id: 'x', hash: 'y', items: [] })).rejects.toMatchObject({ kind: 'unsupported_platform' });
   });
 
   it('the mock announces its agent request only when asked (?agent=request)', async () => {

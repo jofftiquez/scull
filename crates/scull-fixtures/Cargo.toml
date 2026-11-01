@@ -35,7 +35,7 @@ scull-safety.workspace = true
 scull-cli = { path = "../scull-cli" }
 # FX-PHY/QC/RACE/EXEC: the real Executor, Quick Clean and measured delta (a dev-dependency:
 # scull-cleaner itself dev-depends on scull-fixtures; it does not enable `delete` here).
-scull-cleaner.workspace = true
+scull-cleaner = { workspace = true, features = ["bare-api"] }
 # FX-FS-04 / FX-FS-15 (nightly): the shared read-only pipeline, which alone checks the mount
 # table for same-device bind mounts.
 scull-engine.workspace = true

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentApprovalRequest, AgentPlanStatus, Candidate } from './generated';
 import type { ApprovalEvent } from './plan';
 import type { TauriTransport } from './tauri';
-import { APPROVAL_COMMANDS, OPEN_REQUEST_EVENT, createTauriPlanBridge, eventsFor, initialsOf } from './tauriPlans';
+import { APPROVAL_COMMANDS, CLEANUP_COMMANDS, OPEN_REQUEST_EVENT, createTauriPlanBridge, eventsFor, initialsOf } from './tauriPlans';
 import { BridgeError } from './types';
 
 const T0 = 1_900_000_000; // Unix seconds
@@ -162,10 +162,50 @@ describe('Tauri plan bridge: commands', () => {
     expect(e).toMatchObject({ kind: 'safety_blocked', message: expect.stringContaining('2 tries left') });
   });
 
-  it("the desktop's own plans are not connected (it never executes)", async () => {
-    const b = createTauriPlanBridge({ transport: fake() });
-    await expect(b.preparePlan({})).rejects.toMatchObject({ kind: 'unsupported_platform' });
-    await expect(b.executePlan({ plan_id: 'x', hash: 'y', items: [] })).rejects.toMatchObject({ kind: 'unsupported_platform' });
+  it("the desktop's own plans: prepare from the last scan, execute exactly the confirmed items", async () => {
+    const t = fake();
+    t.answers.set(CLEANUP_COMMANDS.prepare, () => ({
+      plan_id: 'plan_01JDESK',
+      content_hash: HASH,
+      created_at: T0,
+      expires_at: T0 + 3600,
+      items: [candidate('a1'), candidate('b2')],
+      left_out: [{ path: '/home/dev/code/vault/target', tier: 'S3', reason: 'protected: never cleaned' }],
+    }));
+    t.answers.set(CLEANUP_COMMANDS.execute, () => ({
+      plan_id: 'plan_01JSUB',
+      operation_id: 'op_01JRUN',
+      items: [{ item_id: 'a1', outcome: 'deleted', reason: null, freed_bytes: 1000, moved_bytes: 0 }],
+      predicted_bytes: 1000,
+      measured_delta_bytes: 980,
+      moved_bytes: 0,
+      cancelled: false,
+      finished_at: T0 + 5,
+    }));
+    const b = createTauriPlanBridge({ transport: t });
+    const p = await b.preparePlan({ items: ['a1', 'b2'] });
+    expect(p).toMatchObject({ plan_id: 'plan_01JDESK', hash: HASH, source: { kind: 'desktop' }, expires_at: iso(T0 + 3600) });
+    expect(p.items.map((i) => i.candidate.id)).toEqual(['a1', 'b2']);
+    expect(p.left_out).toEqual([{ label: '/home/dev/code/vault/target', tier: 'S3', reason: 'protected: never cleaned' }]);
+    const events: string[] = [];
+    const r = await b.executePlan({ plan_id: p.plan_id, hash: p.hash, items: ['a1'] }, { onEvent: (e) => events.push(e.kind) });
+    expect(t.calls).toEqual([
+      { cmd: 'prepare_desktop_plan', args: { items: ['a1', 'b2'] } },
+      { cmd: 'execute_desktop_plan', args: { planId: 'plan_01JDESK', contentHash: HASH, items: ['a1'], typedCount: null } },
+    ]);
+    expect(r).toMatchObject({ plan_id: 'plan_01JSUB', measured_freed_bytes: 980, finished_at: iso(T0 + 5) });
+    expect(r.items).toEqual([{ item_id: 'a1', outcome: 'deleted', freed_bytes: 1000, moved_bytes: 0 }]);
+    expect(events).toEqual(['item_finished']);
+  });
+
+  it('a refused run (elevated, lock held, plan changed) comes back as the core error', async () => {
+    const t = fake();
+    t.answers.set(CLEANUP_COMMANDS.execute, () => {
+      throw { kind: 'safety_blocked', message: 'scull is running as root/administrator … Nothing was changed.' };
+    });
+    await expect(
+      createTauriPlanBridge({ transport: t }).executePlan({ plan_id: 'plan_x', hash: HASH, items: ['a1'] }),
+    ).rejects.toMatchObject({ kind: 'safety_blocked' });
   });
 });
 

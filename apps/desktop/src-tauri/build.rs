@@ -2,8 +2,8 @@
 //!
 //! The app manifest puts every app command under the ACL, so a window can call only what its
 //! capability grants (`allow-<command>`): `capabilities/default.json` grants everything to the
-//! main window, `capabilities/menubar.json` everything but the approval commands to the menu bar
-//! widget (P4-MCP-02). `bridge/tests/commands.rs` checks these lists against `src/lib.rs`.
+//! main window, `capabilities/menubar.json` everything but the approval and cleanup commands to
+//! the menu bar widget (P4-MCP-02, P3-EXEC-01). `bridge/tests/commands.rs` checks these lists against `src/lib.rs`.
 
 /// Every app command registered in `src/lib.rs` (`run`).
 const COMMANDS: &[&str] = &[
@@ -38,6 +38,11 @@ const COMMANDS: &[&str] = &[
     "revoke_agent_approval",
     "agent_plan_status",
     "take_deep_link",
+    // Cleaning through the core Executor (P3-EXEC-01): the main window only.
+    "prepare_desktop_plan",
+    "execute_desktop_plan",
+    "restore_quarantined",
+    "quick_clean",
 ];
 
 fn main() {
