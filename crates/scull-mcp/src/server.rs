@@ -48,6 +48,9 @@ pub struct ServerOptions {
     pub threads: usize,
     /// Where package-manager caches are looked for (`None` disables `list_caches`).
     pub cache_env: Option<CacheEnv>,
+    /// The disk-full forecast's policy (`scull_proactive::forecast_policy(&config.proactive)`,
+    /// shared with `scull check`/`status` and the desktop).
+    pub forecast_policy: scull_proactive::ForecastPolicy,
 }
 
 /// The read-only scull MCP server.
@@ -90,7 +93,8 @@ impl ScullMcp {
             opts.threads,
             opts.data_dir,
             opts.cache_env,
-        );
+        )
+        .with_forecast_policy(opts.forecast_policy);
         Ok(Self {
             ctx: Arc::new(ctx),
             tools: Arc::new(tools::definitions()),

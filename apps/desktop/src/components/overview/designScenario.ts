@@ -14,6 +14,7 @@ import type {
   Candidate,
   Category,
   DesktopStatus,
+  ForecastsView,
   OperationOptions,
   ProgressEvent,
   ReasonCode,
@@ -22,6 +23,7 @@ import type {
   Tier,
   Totals,
 } from '../../bridge';
+import { forecastsView, steadyForecast } from '../../bridge/forecastMock';
 import { registerScanCandidates } from '../../bridge/planMock';
 
 const GiB = 1024 ** 3;
@@ -156,6 +158,14 @@ export function designScenarioBridge(base: ScullBridge, stepMs = 300, secondDriv
       const cands = DESIGN_CANDIDATES.filter((c) => CACHE_IDS.has(c.id));
       registerScanCandidates(cands);
       return { ...r, candidates: structuredClone(cands) as Candidate[], totals: totals(cands) };
+    },
+    async forecasts(): Promise<ForecastsView> {
+      const now = (await base.status()).now;
+      // The same disks as the samples below: 41.2 GB free losing 3.5 GB a day (about 9 days);
+      // the Dev SSD 390 GB free losing 14 GB a day (about 27 days).
+      const list = [steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 41.2, perDayGiB: 3.5, asOf: now })];
+      if (secondDrive) list.push(steadyForecast({ volumeId: SSD, totalGiB: 1000, freeGiB: 390, perDayGiB: 14, asOf: now }));
+      return forecastsView(now, list);
     },
     async status(): Promise<DesktopStatus> {
       const s = await base.status();

@@ -6,6 +6,7 @@ use scull_core::{Category, FsPath, ScanId};
 use scull_insights::fixtures::{DEMO_ROOT, candidate, record_scan, seed_demo};
 use scull_insights::time::{DAY, iso_month};
 use scull_insights::{InsightsReport, agent_of, compute, csv, read, report};
+use scull_proactive::ForecastPolicy;
 use scull_storage::{DEFAULT_BUDGET_BYTES, DefaultPermissions, Store, VolumeSample};
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -25,7 +26,14 @@ fn demo(window_days: i64) -> (tempfile::TempDir, Store, InsightsReport) {
     let dir = tempfile::tempdir().unwrap();
     let mut s = store(&dir);
     seed_demo(&mut s, NOW).unwrap();
-    let r = report(&s, NOW, NOW - window_days * DAY, Some(DEFAULT_BUDGET_BYTES)).unwrap();
+    let r = report(
+        &s,
+        NOW,
+        NOW - window_days * DAY,
+        Some(DEFAULT_BUDGET_BYTES),
+        &ForecastPolicy::default(),
+    )
+    .unwrap();
     (dir, s, r)
 }
 
@@ -235,7 +243,7 @@ fn fx_ins_10_free_space_trend_and_own_footprint_against_the_budget() {
 fn fx_ins_11_empty_history_gives_an_empty_report() {
     let dir = tempfile::tempdir().unwrap();
     let s = store(&dir);
-    let r = report(&s, NOW, NOW - 30 * DAY, None).unwrap();
+    let r = report(&s, NOW, NOW - 30 * DAY, None, &ForecastPolicy::default()).unwrap();
     assert!(!r.coverage.covers_window);
     assert_eq!(r.coverage.items, 0);
     assert!(
@@ -289,7 +297,7 @@ fn fx_ins_12_csv_export_is_one_tidy_table_and_formula_safe() {
         let scan = ScanId::from_suffix(&format!("e{n}")).unwrap();
         record_scan(&mut s, &scan, NOW - age * DAY, &["="], &c, &[]).unwrap();
     }
-    let r = report(&s, NOW, NOW - 30 * DAY, None).unwrap();
+    let r = report(&s, NOW, NOW - 30 * DAY, None, &ForecastPolicy::default()).unwrap();
     assert_eq!(r.regrowth[0].path.as_str(), evil);
     let out = csv::to_csv(&r);
     assert!(
@@ -312,7 +320,7 @@ fn fx_ins_13_reports_are_read_only_and_deterministic() {
         )
     };
     let before = snapshot();
-    let input = read(&s, NOW, NOW - 30 * DAY, None).unwrap();
+    let input = read(&s, NOW, NOW - 30 * DAY, None, &ForecastPolicy::default()).unwrap();
     assert_eq!(snapshot(), before, "reading changes nothing");
     let a = compute(&input);
     assert_eq!(compute(&input), a, "pure");
@@ -350,7 +358,7 @@ fn fx_ins_14_window_without_history_start_is_flagged() {
         &[vol(NOW - 3 * DAY)],
     )
     .unwrap();
-    let r = report(&s, NOW, NOW - 30 * DAY, None).unwrap();
+    let r = report(&s, NOW, NOW - 30 * DAY, None, &ForecastPolicy::default()).unwrap();
     assert!(!r.coverage.covers_window);
     assert_eq!(r.coverage.history_starts_at, Some(NOW - 3 * DAY));
     // The item appeared inside the window: it is growth.

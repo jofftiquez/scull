@@ -214,7 +214,7 @@ pub(crate) enum Source {
 }
 
 impl Source {
-    fn state(&self) -> (HistoryRead, Option<String>) {
+    pub(crate) fn state(&self) -> (HistoryRead, Option<String>) {
         match self {
             Source::Store(_) => (HistoryRead::Ok, None),
             Source::Missing => (HistoryRead::NoDatabase, None),

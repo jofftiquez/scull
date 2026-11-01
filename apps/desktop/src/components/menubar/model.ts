@@ -5,8 +5,8 @@
 // Pure functions over bridge payloads, so every figure is unit-tested. Nothing here (or in the
 // widget) deletes anything: Quick Clean is the Overview's refused stub (quickClean.ts), and every
 // other control opens the main window.
-import type { Alert, AlertKind, CachesReport, DesktopStatus, Drive, FreeSpaceHistory, Severity } from '../../bridge';
-import { freeSpaceModel, FULL_RESERVE } from '../insights/model';
+import type { Alert, AlertKind, CachesReport, DesktopStatus, Drive, Forecast, ForecastsView, Severity } from '../../bridge';
+import { daysLeft as coreDaysLeft, forecastOf, forecastOfDrive } from '../../lib/forecast';
 import { easeOutCubic, quickCleanTools, type QuickCleanTool } from '../overview/quickClean';
 import { formatBytes } from '../../lib/format';
 
@@ -25,7 +25,8 @@ export interface MenuBarData {
   drives: Drive[] | null;
   status: DesktopStatus | null;
   caches: CachesReport | null;
-  history: FreeSpaceHistory | null;
+  /** The core's forecasts (`forecasts`; the one source of days left). */
+  forecasts: ForecastsView | null;
 }
 
 export interface VolumeFigures {
@@ -54,8 +55,8 @@ export interface AlertRow {
 
 export interface MenuBarModel {
   volume: VolumeFigures | null;
-  /** Bytes per day the volume loses; `null` when there is no trend (never guessed). */
-  perDay: number | null;
+  /** The core's forecast of the volume shown (the home drive's, else `/`); `null` without one. */
+  forecast: Forecast | null;
   reclaim: Reclaim | null;
   tools: QuickCleanTool[];
   alerts: AlertRow[];
@@ -106,10 +107,9 @@ export function checkedAgo(status: DesktopStatus | null): number | null {
 }
 
 export function menuBarModel(d: MenuBarData): MenuBarModel {
-  const trend = d.history ? freeSpaceModel(d.history.samples).trend : null;
   return {
     volume: pickVolume(d.drives, d.status),
-    perDay: trend?.perDay ?? null,
+    forecast: pickForecast(d.drives, d.forecasts),
     reclaim: pickReclaim(d.status),
     tools: d.caches ? quickCleanTools(d.caches.candidates) : [],
     alerts: alertRows(d.status?.alerts ?? []),
@@ -117,10 +117,18 @@ export function menuBarModel(d: MenuBarData): MenuBarModel {
   };
 }
 
-/** Days until the volume is full (FULL_RESERVE left), from its trend; at least 1. */
-export function daysLeft(free: number, perDay: number | null): number | null {
-  if (perDay === null || !(perDay > 0)) return null;
-  return Math.max(1, Math.round((free - FULL_RESERVE) / perDay));
+/** The forecast of the volume the widget shows: the home drive's, else `/`'s. */
+export function pickForecast(drives: readonly Drive[] | null, view: ForecastsView | null): Forecast | null {
+  const list = view?.forecasts ?? [];
+  const home = drives?.find((d) => d.holds_home);
+  return (home && forecastOfDrive(home, list, drives ?? [])) ?? forecastOf(list, '/');
+}
+
+/** Days until the volume is full: the core's forecast (shown only when actionable, like a
+ *  status line), with bytes freed since its latest sample (Quick Clean) as a release. */
+export function daysLeft(forecast: Forecast | null, freed = 0): number | null {
+  const d = coreDaysLeft(forecast, freed);
+  return d && d.actionable ? d.days : null;
 }
 
 export interface Ring {

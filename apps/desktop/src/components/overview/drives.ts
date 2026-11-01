@@ -5,9 +5,9 @@
 // Pure (no Vue components): which drives can be switched to, which candidates and free-space
 // samples belong to a drive, and the one-line drive context under the switcher.
 import { ref } from 'vue';
-import type { Candidate, Drive, VolumeSampleView } from '../../bridge';
+import type { Candidate, Drive, Forecast, VolumeSampleView } from '../../bridge';
 import { formatBytes, usedPercent } from '../../lib/format';
-import { forecastFull, type Forecast } from './forecast';
+import { daysLeft, forecastOf, forecastOfDrive, type DaysLeft } from '../../lib/forecast';
 
 /** "all", or a drive's mount point. Kept for the session (across screen visits). */
 export const ALL_DRIVES = 'all';
@@ -109,34 +109,41 @@ export function samplesOf(drive: Drive, samples: readonly VolumeSampleView[], dr
   return ids.length === 1 && !listed ? [...samples] : [];
 }
 
-export interface DriveForecast extends Forecast {
+export interface DriveForecast extends DaysLeft {
   /** The drive it is about (`null`: the volume could not be matched to a listed drive). */
   drive: Drive | null;
 }
 
+/** An actionable forecast (core rule) or nothing. */
+function shown(f: Forecast | null, released: number): DaysLeft | null {
+  const d = daysLeft(f, released);
+  return d && d.actionable ? d : null;
+}
+
 /**
- * The forecast to show: the chosen drive's own; for All, the drive that fills first (or, without
- * drives, the default volume of the samples).
+ * The forecast to show, from the core's `forecasts`: the chosen drive's own; for All, the drive
+ * that fills first (or, without drives, `/` or the only volume). `extraFree` (bytes freed by
+ * Quick Clean since the latest sample) is a release on the home drive.
  */
 export function driveForecast(
   drive: Drive | null,
   drives: readonly Drive[],
-  samples: readonly VolumeSampleView[],
+  forecasts: readonly Forecast[],
   extraFree = 0,
 ): DriveForecast | null {
   if (drive) {
-    const f = forecastFull(samplesOf(drive, samples, drives), extraFree);
+    const f = shown(forecastOfDrive(drive, forecasts, drives), drive.holds_home ? extraFree : 0);
     return f && { ...f, drive };
   }
   let best: DriveForecast | null = null;
   for (const d of drives) {
     if (d.scan_policy === 'never') continue;
     // Freed bytes (Quick Clean) are package caches: they come back to the home drive.
-    const f = forecastFull(samplesOf(d, samples, drives), d.holds_home ? extraFree : 0);
+    const f = shown(forecastOfDrive(d, forecasts, drives), d.holds_home ? extraFree : 0);
     if (f && (!best || f.days < best.days)) best = { ...f, drive: d };
   }
   if (best) return best;
-  const f = forecastFull(samples, extraFree);
+  const f = shown(forecastOf(forecasts, '/') ?? (forecasts.length === 1 ? forecasts[0]! : null), extraFree);
   return f && { ...f, drive: null };
 }
 

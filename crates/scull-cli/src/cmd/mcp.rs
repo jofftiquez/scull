@@ -70,6 +70,7 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
             mcp: loaded.config.mcp.clone(),
             threads: loaded.config.scan.threads as usize,
             cache_env,
+            forecast_policy: scull_proactive::forecast_policy(&loaded.config.proactive),
         },
     )?;
     // Ctrl-C ends the session with exit 130 (CLI-05), whether it came before or after the

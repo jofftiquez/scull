@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { mockMonitor } from '../../monitor/mock';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import type { CategorySeries, RegrowthEventView, VolumeSampleView, WorktreeReport } from '../../bridge';
+import type { CategorySeries, Forecast, RegrowthEventView, VolumeSampleView, WorktreeReport } from '../../bridge';
+import { steadyForecast } from '../../bridge/forecastMock';
 import { BRIDGE_KEY } from '../../bridge';
 import { createMockBridge, shiftHistory, MOCK_HISTORY } from '../../bridge/mock';
 import InsightsScreen from '../../screens/Insights/InsightsScreen.vue';
@@ -28,31 +29,40 @@ function samples(gibs: number[]): VolumeSampleView[] {
 }
 
 describe('freeSpaceModel', () => {
-  it('finds cleanups as rises in free space and forecasts from the samples after the last one', () => {
+  const last = T0 + 9 * DAY;
+  const core = (over: Partial<Forecast> = {}): Forecast => ({
+    ...steadyForecast({ volumeId: '/', totalGiB: 494, freeGiB: 38, perDayGiB: 3, asOf: last, confidence: 'medium' }),
+    ...over,
+  });
+
+  it("finds cleanups as rises in free space; the trend, days and confidence are the core's", () => {
     // 50 → 41 GiB, a +12 GiB cleanup, then 3 GiB a day down to 38 GiB.
-    const m = freeSpaceModel(samples([50, 47, 44, 41, 53, 50, 47, 44, 41, 38]));
+    const m = freeSpaceModel(samples([50, 47, 44, 41, 53, 50, 47, 44, 41, 38]), core());
     expect(m.cleanups).toHaveLength(1);
     expect(m.cleanups[0]!.gained).toBe(12 * GiB);
-    expect(m.trend).not.toBeNull();
-    expect(m.trend!.perDay).toBeCloseTo(3 * GiB, -3);
-    // (38 - 10) / 3 ≈ 9 days.
-    expect(m.trend!.days).toBe(9);
-    expect(m.trend!.confidence).toBe('Medium');
-    expect(m.forecast[0]!.free).toBe(38 * GiB);
-    const end = m.forecast.at(-1)!;
-    expect(end.free).toBeLessThanOrEqual(FULL_RESERVE + 3 * GiB);
+    expect(m.trend).toEqual({ perDay: 3 * GiB, days: 9, confidence: 'Medium' }); // (38 − 10) / 3 ≈ 9
+    expect(m.state).toBe('filling');
+    expect(m.reserve).toBe(FULL_RESERVE);
+    // The dashed line starts at the core's latest sample and reaches the reserve.
+    expect(m.forecast[0]).toMatchObject({ at: last, free: 38 * GiB });
+    expect(m.forecast.at(-1)!.free).toBeLessThanOrEqual(FULL_RESERVE + 3 * GiB);
     expect(m.forecast.every((p) => p.lo <= p.free && p.free <= p.hi && p.lo >= 0)).toBe(true);
   });
 
-  it('a perfectly straight decline is high confidence with a zero-width band', () => {
-    const m = freeSpaceModel(samples([90, 87, 84, 81, 78, 75, 72, 69, 66, 63]));
-    expect(m.trend!.confidence).toBe('High');
-    expect(m.forecast.every((p) => Math.abs(p.hi - p.lo) < 1)).toBe(true);
+  it("the band widens with the core's noise ratio; a steady line has none", () => {
+    const steady = freeSpaceModel(samples([90, 87, 84]), core({ noise_ratio: 0 }));
+    expect(steady.forecast.every((p) => Math.abs(p.hi - p.lo) < 1)).toBe(true);
+    const noisy = freeSpaceModel(samples([90, 87, 84]), core({ noise_ratio: 0.2 }));
+    const end = noisy.forecast.at(-1)!;
+    expect(end.hi - end.lo).toBeGreaterThan(0);
+    // A configured reserve moves the line's end.
+    expect(freeSpaceModel(samples([90]), core({ reserve_bytes: 20 * GiB })).reserve).toBe(20 * GiB);
   });
 
-  it('no forecast when free space grows or there is one sample; small rises are not cleanups', () => {
-    expect(freeSpaceModel(samples([40, 41, 42])).trend).toBeNull();
-    expect(freeSpaceModel(samples([40])).trend).toBeNull();
+  it('no trend without a filling forecast; the state says why; small rises are not cleanups', () => {
+    expect(freeSpaceModel(samples([40, 41, 42]), null)).toMatchObject({ trend: null, state: 'no_forecast' });
+    expect(freeSpaceModel(samples([40, 41]), core({ state: 'not_filling', days_until_threshold: null })).state).toBe('not_filling');
+    expect(freeSpaceModel(samples([4]), core({ state: 'below_reserve', free_bytes: 4 * GiB })).trend).toBeNull();
     const small = freeSpaceModel(samples([40, 40 + (CLEANUP_MIN_RISE / GiB) * 0.5, 39]));
     expect(small.cleanups).toHaveLength(0);
   });

@@ -5,6 +5,7 @@
 //! `tests/schemas.rs` fails when the committed files are stale. Regenerate them with
 //! `SCULL_UPDATE_SCHEMAS=1 cargo test -p scull-desktop-bridge --test schemas`.
 
+use crate::forecasts::ForecastsView;
 use crate::history::HistoryView;
 use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
 use crate::monitor::{DigestView, MonitorConfig, MonitorSnapshot, MonitorStatus};
@@ -72,6 +73,10 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
         (
             "footprint-history",
             schema::<FootprintHistory>("footprint-history", "FootprintHistory"),
+        ),
+        (
+            "forecasts",
+            schema::<ForecastsView>("forecasts", "ForecastsView"),
         ),
         (
             "weekly-digest",
