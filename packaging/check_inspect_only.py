@@ -88,6 +88,10 @@ CONSENT_GATED = [
     (["schedule", "enable", "--dry-run"], 0),
     (["schedule", "disable"], 0),
     (["schedule", "status"], 0),
+    # P5-AI-01: `scull ask` is off by default; it refuses (exit 2) and sends nothing until the
+    # user enables it, and `--show-request` only prints what would be sent.
+    (["ask", "why is my disk full?"], 2),
+    (["ask", "--show-request", "why is my disk full?"], 0),
 ]
 
 

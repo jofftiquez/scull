@@ -40,7 +40,8 @@ class ConsentGated(unittest.TestCase):
     def test_refusing_without_writing_passes(self):
         body = (
             "nothing_to_do = args[1] in ('uninstall', 'disable', 'status')\n"
-            "sys.exit(0 if ('--dry-run' in args or nothing_to_do) else 2)\n"
+            "preview = '--dry-run' in args or '--show-request' in args\n"
+            "sys.exit(0 if (preview or nothing_to_do) else 2)\n"
         )
         self.assertEqual(self.run_gate(body), 0)
 
@@ -60,6 +61,16 @@ class ConsentGated(unittest.TestCase):
             "    open(os.path.join(home, 'scull-home', 'config', 'config.toml'), 'w').write('x')\n"
             "    sys.exit(0)\n"
             "sys.exit(0 if args[1] in ('uninstall', 'disable', 'status') else 2)\n"
+        )
+        self.assertEqual(self.run_gate(body), 1)
+
+    def test_sending_a_question_without_consent_fails(self):
+        # `scull ask` succeeding (as if it had sent the question) while it is off.
+        body = (
+            "if args[0] == 'ask':\n"
+            "    sys.exit(0)\n"
+            "nothing_to_do = args[1] in ('uninstall', 'disable', 'status')\n"
+            "sys.exit(0 if ('--dry-run' in args or nothing_to_do) else 2)\n"
         )
         self.assertEqual(self.run_gate(body), 1)
 

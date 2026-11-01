@@ -99,6 +99,10 @@ const RUNS: &[(&str, &[&str], &str)] = &[
 const NO_NDJSON: &[(&str, &str)] = &[
     ("completions", "prints a shell script"),
     ("mcp serve", "stdout carries JSON-RPC only"),
+    (
+        "ask",
+        "prints a prose answer from the user's own model; --json/--ndjson are refused",
+    ),
 ];
 
 /// Flags that switch a command to another line schema, run like [`RUNS`].
