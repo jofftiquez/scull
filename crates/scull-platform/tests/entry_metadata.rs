@@ -92,7 +92,48 @@ fn entry_metadata_after_the_listing_or_the_entry_is_gone() {
     }
     let mut it = p.read_dir(d).unwrap();
     let first = it.next().unwrap().unwrap();
+    let before = p.metadata(&first.path).unwrap();
     fs::remove_file(&first.path).unwrap();
-    assert!(p.entry_metadata(&first).unwrap_err().is_not_found());
+    if cfg!(target_os = "macos") {
+        // macOS lists plain files with their metadata (`getattrlistbulk`, #91): an entry
+        // removed after it was listed reports what the listing saw.
+        assert_eq!(p.entry_metadata(&first).unwrap(), before);
+    } else {
+        assert!(p.entry_metadata(&first).unwrap_err().is_not_found());
+    }
     drop(it);
+}
+
+/// A directory larger than one batch of a bulk listing (macOS reads entries a batch at a time):
+/// every entry is listed once, and each one's metadata equals `lstat`, including empty,
+/// sparse, read-only and long-named files.
+#[test]
+fn entry_metadata_equals_metadata_in_a_large_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    let long = "n".repeat(200);
+    let n = 3000;
+    for i in 0..n {
+        fs::write(d.join(format!("{long}-{i}")), vec![b'x'; i % 5000]).unwrap();
+    }
+    fs::File::create(d.join("empty")).unwrap();
+    let sparse = fs::File::create(d.join("sparse")).unwrap();
+    sparse.set_len(64 * 1024 * 1024).unwrap();
+    drop(sparse);
+    let ro = d.join("readonly");
+    fs::write(&ro, b"r").unwrap();
+    let mut perms = fs::metadata(&ro).unwrap().permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(&ro, perms).unwrap();
+    for i in 0..20 {
+        fs::create_dir(d.join(format!("dir{i}"))).unwrap();
+    }
+    let p = Native::new();
+    let mut names = std::collections::BTreeSet::new();
+    for entry in p.read_dir(d).unwrap() {
+        let entry = entry.unwrap();
+        assert!(names.insert(entry.file_name.clone()), "listed twice");
+    }
+    assert_eq!(names.len(), n + 3 + 20);
+    assert_eq!(listed_equals_lstat(d), n + 3 + 20);
 }
