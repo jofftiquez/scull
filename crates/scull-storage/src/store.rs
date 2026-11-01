@@ -43,6 +43,19 @@ pub struct Store {
     pub(crate) conn: Connection,
     path: PathBuf,
     backups_taken: Vec<PathBuf>,
+    busy_timeout: Duration,
+    lock_wait: Option<LockWaitObserver>,
+}
+
+/// Called when a write finds another connection holding the write lock and is about to wait
+/// for it ([`Store::on_lock_wait`]).
+#[derive(Clone)]
+struct LockWaitObserver(std::sync::Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for LockWaitObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LockWaitObserver")
+    }
 }
 
 impl Store {
@@ -137,6 +150,8 @@ impl Store {
             conn,
             path: path.to_owned(),
             backups_taken: Vec::new(),
+            busy_timeout: options.busy_timeout,
+            lock_wait: None,
         })
     }
 
@@ -188,6 +203,8 @@ impl Store {
             conn,
             path: path.to_owned(),
             backups_taken,
+            busy_timeout: options.busy_timeout,
+            lock_wait: None,
         })
     }
 
@@ -541,12 +558,47 @@ impl Store {
             .collect()
     }
 
+    /// Call `observer` each time a write finds another connection (another scull) holding the
+    /// write lock, right before it waits for it (up to the busy timeout). A UI can say "waiting
+    /// for another scull to finish"; tests synchronise on it instead of on wall-clock time.
+    /// Without an observer, writes behave exactly as before.
+    pub fn on_lock_wait(&mut self, observer: impl Fn() + Send + Sync + 'static) {
+        self.lock_wait = Some(LockWaitObserver(std::sync::Arc::new(observer)));
+    }
+
+    /// With an observer: whether the write lock is held elsewhere right now (a non-waiting
+    /// `BEGIN IMMEDIATE` that is rolled back at once). Calls the observer when it is.
+    fn report_lock_wait(&mut self) -> Result<()> {
+        let Some(observer) = self.lock_wait.clone() else {
+            return Ok(());
+        };
+        self.conn.busy_timeout(Duration::ZERO)?;
+        let probe = self.conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;");
+        self.conn.busy_timeout(self.busy_timeout)?;
+        match probe {
+            Ok(()) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                (observer.0)();
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Run `f` in a `BEGIN IMMEDIATE` transaction (waits up to the busy timeout for the write
     /// lock up front, so it never fails half-way on lock upgrade) and commit if it succeeds.
     pub(crate) fn write<T>(
         &mut self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
     ) -> Result<T> {
+        if let Err(e) = self.report_lock_wait() {
+            return Err(classify(&self.path, e));
+        }
         let path = &self.path;
         let result = (|| {
             let tx = self
