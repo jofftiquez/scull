@@ -769,6 +769,21 @@ fn platform_current_is_supported_on_ci_targets() {
     }
     let set = RuleSet::bundled().unwrap();
     if let Some(p) = Platform::current() {
-        assert_eq!(set.enabled_for(p).count(), set.len());
+        // Every bundled rule applies everywhere except the macOS-only Xcode rules.
+        let macos_only = set
+            .all()
+            .filter(|r| r.platforms() == [Platform::Macos])
+            .count();
+        assert!(
+            set.all()
+                .filter(|r| r.platforms() == [Platform::Macos])
+                .all(|r| r.id().starts_with("xcode."))
+        );
+        let want = if p == Platform::Macos {
+            set.len()
+        } else {
+            set.len() - macos_only
+        };
+        assert_eq!(set.enabled_for(p).count(), want);
     }
 }
