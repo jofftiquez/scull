@@ -285,6 +285,20 @@ fn needs_allow_root() -> bool {
     elevated
 }
 
+/// `path` without Windows' verbatim prefix (`\\?\C:\...` → `C:\...`), so a canonicalized
+/// path and one scull reports compare equal whichever spelling each side used (it depends on
+/// whether the temp folder had 8.3 short names to expand, #65). Unchanged elsewhere.
+fn plain(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
+}
+
 fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
@@ -358,9 +372,9 @@ fn preview_lists_tools_commands_and_note() {
     );
     every_tool_accounted_for(&v);
     for t in d["tools"].as_array().unwrap() {
-        let bin = Path::new(t["binary"].as_str().unwrap());
+        let bin = plain(Path::new(t["binary"].as_str().unwrap()));
         assert!(
-            bin.starts_with(std::fs::canonicalize(env.tools()).unwrap()),
+            bin.starts_with(plain(&std::fs::canonicalize(env.tools()).unwrap())),
             "{t:#}"
         );
         assert!(
@@ -483,7 +497,7 @@ fn confirm_prunes_with_trusted_tools_in_private_sandbox() {
         assert_eq!(c.argv[..2], ["cache".to_owned(), "verify".to_owned()]);
         assert_eq!(c.argv[2], "--cache");
         assert!(
-            c.cwd.starts_with(&sandbox_base),
+            plain(&c.cwd).starts_with(plain(&sandbox_base)),
             "sandbox under scull's state: {:?}",
             c.cwd
         );
