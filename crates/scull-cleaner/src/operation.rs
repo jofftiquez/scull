@@ -22,6 +22,10 @@
 //! database's owner-only permissions: a process that can write the user's database can
 //! insert one; see `docs/THREAT_MODEL.md` T-41.)
 //!
+//! A human can revoke the approval before it is used (#298, `Store::revoke_approval`): the
+//! revocation spends it with the same single-use marker, so it and this consumption can't
+//! both succeed (exactly one update changes the row); a revoked approval is refused here.
+//!
 //! Every refusal to start (or run) an agent plan is audited as an
 //! [`EventKind::ExecuteRefused`] event with source `executor` and a stable reason code
 //! ([`GATE_REASONS`]; PRD §13.3 step 5). Recording it never touches the approval.
@@ -43,8 +47,8 @@ use scull_storage::{
 /// module docs): `lock_not_held`, `operation_mismatch`, `unfinished_operation`,
 /// `targets_touched`, `not_approved`, `not_human`, `approval_mismatch`, `account_unknown`,
 /// `other_account`, `approver_not_recorded`, `channel_mismatch`, `approval_used`,
-/// `approval_expired`, `outside_operation` and `store`.
-pub const GATE_REASONS: [&str; 15] = [
+/// `approval_revoked`, `approval_expired`, `outside_operation` and `store`.
+pub const GATE_REASONS: [&str; 16] = [
     "lock_not_held",
     "operation_mismatch",
     "unfinished_operation",
@@ -57,6 +61,7 @@ pub const GATE_REASONS: [&str; 15] = [
     "approver_not_recorded",
     "channel_mismatch",
     "approval_used",
+    "approval_revoked",
     "approval_expired",
     "outside_operation",
     "store",
@@ -447,12 +452,22 @@ fn consume_human_approval(
         .consume_approval(plan.id(), plan.content_hash(), now_unix())
         .map_err(store_refusal)?;
     if !consumed {
-        // Which of the two, for the audit: spent already, or lapsed unused.
+        // Which, for the audit: revoked by the human (#298), spent already, or lapsed unused.
         let used = store
             .get_approval(plan.id())
             .ok()
             .flatten()
             .is_some_and(|a| a.used_at.is_some());
+        if used && store.approval_revoked(plan.id()).unwrap_or(false) {
+            return Err((
+                blocked(format!(
+                    "the user revoked the approval of plan {}: it will not run; nothing was \
+                     changed",
+                    plan.id()
+                )),
+                "approval_revoked",
+            ));
+        }
         return Err((
             blocked(format!(
                 "the approval of plan {} has expired or was already used (approvals are \

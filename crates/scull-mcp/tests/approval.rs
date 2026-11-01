@@ -1139,3 +1139,227 @@ async fn looping_refused_executes_leave_bounded_audit_rows() {
     client.cancel().await.unwrap();
     env.invariants(&[]);
 }
+
+/// #298: the human revokes an approval before the agent executes: the plan reports
+/// `revoked`, `execute_cleanup` is refused (`approval_revoked`, audited) without reaching the
+/// runner, and the revocation itself is audited. Revoking needs an unused approval of this
+/// user's plan: an unapproved, foreign, already revoked or already executed plan is refused,
+/// and no refusal creates or spends an approval.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoked_approval_never_executes() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let id = id_of(&prepare(&client, &["app/target"]).await);
+    let p = json!({ "plan_id": id.as_str() });
+    let mut store = env.store();
+
+    // Nothing to revoke yet: refused, and no approval appears.
+    let e =
+        approval::revoke(&mut store, &id, HumanChannel::Terminal, &who(), now_unix()).unwrap_err();
+    assert_eq!(e.reason, Reason::NotApproved);
+    assert!(store.get_approval(&id).unwrap().is_none());
+
+    human_approves(&mut store, &id);
+    let listed = approval::revocable(&store, &who(), now_unix()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].plan_id, id.as_str());
+    // Another account can't revoke it.
+    let mallory = Principal {
+        machine_id: MACHINE.into(),
+        user: "mallory".into(),
+    };
+    let e = approval::revoke(
+        &mut store,
+        &id,
+        HumanChannel::Terminal,
+        &mallory,
+        now_unix(),
+    )
+    .unwrap_err();
+    assert_eq!(e.reason, Reason::PlanForeign);
+    assert_eq!(store.get_approval(&id).unwrap().unwrap().used_at, None);
+
+    let r = approval::revoke(&mut store, &id, HumanChannel::Desktop, &who(), now_unix()).unwrap();
+    assert_eq!(r.channel, "desktop");
+    assert!(
+        approval::revocable(&store, &who(), now_unix())
+            .unwrap()
+            .is_empty()
+    );
+    let e =
+        approval::revoke(&mut store, &id, HumanChannel::Terminal, &who(), now_unix()).unwrap_err();
+    assert_eq!(e.reason, Reason::ApprovalRevoked, "revoked once");
+
+    let s = ok(
+        "status",
+        &call(&client, "get_approval_status", p.clone()).await,
+    );
+    assert_eq!(s["state"], "revoked");
+    assert_eq!(s["executable"], false);
+    let r = call(&client, "execute_cleanup", p.clone()).await;
+    assert_eq!(error_code(&r), "approval_revoked");
+    assert!(text_of(&r).contains("revoked"), "{}", text_of(&r));
+    assert_eq!(env.calls(), 0, "never reaches the runner");
+    let st = ok(
+        "cleanup status",
+        &call(&client, "get_cleanup_status", p.clone()).await,
+    );
+    assert_eq!(st["state"], "revoked");
+    let shown = ok("plan", &call(&client, "get_cleanup_plan", p).await);
+    assert_eq!(shown["approval"]["state"], "revoked");
+    // The published output schemas accept the new state.
+    let tools = client.list_all_tools().await.unwrap();
+    for (name, v) in [
+        ("get_approval_status", &s),
+        ("get_cleanup_status", &st),
+        ("get_cleanup_plan", &shown),
+    ] {
+        let tool = tools.iter().find(|t| t.name == name).unwrap();
+        let schema = Value::Object(tool.output_schema.as_ref().unwrap().as_ref().clone());
+        let validator = jsonschema::validator_for(&schema).expect("schema compiles");
+        let errors: Vec<String> = validator.iter_errors(v).map(|e| e.to_string()).collect();
+        assert!(errors.is_empty(), "{name}: {errors:?}\n{v:#}");
+    }
+    let events = env.store().agent_events(0, 10_000).unwrap();
+    let got: Vec<(&str, &str, &str, &str, &str)> = events
+        .iter()
+        .map(|e| {
+            (
+                e.kind.as_str(),
+                e.source.as_str(),
+                e.channel.as_str(),
+                e.reason.as_str(),
+                e.user.as_str(),
+            )
+        })
+        .collect();
+    // Failed revocations are audited too (with who tried), and only `revoke_approval`
+    // wrote the one `approval_revoked`.
+    assert_eq!(
+        got,
+        vec![
+            ("revoke_refused", "cli", "terminal", "not_approved", USER),
+            (
+                "revoke_refused",
+                "cli",
+                "terminal",
+                "plan_foreign",
+                "mallory"
+            ),
+            ("approval_revoked", "desktop", "desktop", "revoked", USER),
+            (
+                "revoke_refused",
+                "cli",
+                "terminal",
+                "approval_revoked",
+                USER
+            ),
+            ("execute_refused", "mcp", "mcp", "approval_revoked", USER),
+        ]
+    );
+
+    // An executed plan's approval can't be revoked after the fact.
+    let done = id_of(&prepare(&client, &["web/node_modules"]).await);
+    human_approves(&mut store, &done);
+    ok(
+        "execute",
+        &call(
+            &client,
+            "execute_cleanup",
+            json!({ "plan_id": done.as_str() }),
+        )
+        .await,
+    );
+    let e = approval::revoke(
+        &mut store,
+        &done,
+        HumanChannel::Terminal,
+        &who(),
+        now_unix(),
+    )
+    .unwrap_err();
+    assert_eq!(e.reason, Reason::ApprovalUsed);
+    assert!(!store.approval_revoked(&done).unwrap());
+    let last = store.agent_events(0, 10_000).unwrap().pop().unwrap();
+    assert_eq!(
+        (last.kind.as_str(), last.reason.as_str()),
+        ("revoke_refused", "approval_used")
+    );
+    // A forged "revoked" entry is refused: only revoke_approval writes one, with the spend.
+    let forged = scull_storage::AgentAuditEvent {
+        kind: scull_storage::EventKind::ApprovalRevoked,
+        reason: "revoked".into(),
+        ..last
+    };
+    assert!(store.record_agent_event(&forged).is_err());
+    assert!(!store.approval_revoked(&done).unwrap());
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// #298: `approval::revoke` racing the Executor's atomic consumption (what
+/// `Executor::begin_operation` does first), each on its own connection: exactly one wins in
+/// every round; the loser gets `approval_used` (revocation lost) or nothing consumed.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_racing_consumption_has_exactly_one_winner() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let data: PathBuf = env.data.path().to_path_buf();
+    let mut revoked_wins = 0;
+    for _ in 0..12 {
+        let id = id_of(&prepare(&client, &["app/target"]).await);
+        human_approves(&mut env.store(), &id);
+        let plan = env.store().get_plan(&id).unwrap().unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let consumer = {
+            let (data, plan, barrier) = (data.clone(), plan.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let mut s = scull_engine::open_history(&data).unwrap();
+                barrier.wait();
+                s.consume_approval(plan.id(), plan.content_hash(), now_unix())
+                    .unwrap()
+            })
+        };
+        let revoker = {
+            let (data, id) = (data.clone(), id.clone());
+            std::thread::spawn(move || {
+                let mut s = scull_engine::open_history(&data).unwrap();
+                barrier.wait();
+                approval::revoke(&mut s, &id, HumanChannel::Terminal, &who(), now_unix())
+            })
+        };
+        let consumed = consumer.join().unwrap();
+        let revoked = revoker.join().unwrap();
+        assert!(
+            consumed ^ revoked.is_ok(),
+            "consumed={consumed} revoked={revoked:?}"
+        );
+        if let Err(e) = &revoked {
+            assert_eq!(e.reason, Reason::ApprovalUsed, "{e}");
+        } else {
+            revoked_wins += 1;
+        }
+        let state = approval::status(&env.store(), &id, &who(), now_unix())
+            .unwrap()
+            .state;
+        let want = if consumed {
+            ApprovalState::Used
+        } else {
+            ApprovalState::Revoked
+        };
+        assert_eq!(state, want);
+    }
+    let revocations = env
+        .store()
+        .agent_events(0, 10_000)
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind.as_str() == "approval_revoked")
+        .count();
+    assert_eq!(
+        revocations, revoked_wins,
+        "one audit per successful revocation"
+    );
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
