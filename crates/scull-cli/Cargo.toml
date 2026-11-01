@@ -22,6 +22,8 @@ scull-safety.workspace = true
 scull-storage.workspace = true
 scull-cleaner.workspace = true
 scull-mcp.workspace = true
+# `scull ask` (optional, off by default): the only crate here that talks to a network endpoint.
+scull-ask = { path = "../scull-ask" }
 scull-engine.workspace = true
 scull-proactive.workspace = true
 scull-insights.workspace = true

@@ -49,30 +49,7 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
              serving read-only tools only",
         );
     }
-    let roots = allowlisted_roots(&loaded, ui);
-    if roots.is_empty() {
-        pipeline::warn(
-            ui,
-            "no scan roots are configured, so every path will be refused; set scan.roots \
-             (scull init)",
-        );
-    }
-    let engine = pipeline::engine(&loaded, &roots, false, ui)?;
-    let cache_env = loaded.home.clone().and_then(|home| {
-        RulesOs::current().map(|os| CacheEnv::new(home, os, |k| std::env::var(k).ok()))
-    });
-    let server = ScullMcp::new(
-        engine,
-        ServerOptions {
-            roots,
-            home: loaded.home.clone(),
-            data_dir: dirs.map(|d| d.data),
-            mcp: loaded.config.mcp.clone(),
-            threads: loaded.config.scan.threads as usize,
-            cache_env,
-            forecast_policy: scull_proactive::forecast_policy(&loaded.config.proactive),
-        },
-    )?;
+    let server = build_server(&loaded, dirs.map(|d| d.data), ui)?;
     // Ctrl-C ends the session with exit 130 (CLI-05), whether it came before or after the
     // client's `initialize` (#251): a handshake cut short by the stop is reported as cancelled,
     // not as a failed session.
@@ -80,6 +57,39 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
         Err(_) if cancel::is_cancelled() => Err(cancel::cancelled_error()),
         other => other,
     }
+}
+
+/// The read-only server over `scan.roots` (without broad roots) and the `[mcp]` settings: what
+/// `scull mcp serve` offers its client, and what `scull ask` offers the model.
+pub(crate) fn build_server(
+    loaded: &pipeline::Loaded,
+    data_dir: Option<PathBuf>,
+    ui: &Ui,
+) -> Result<ScullMcp, ScullError> {
+    let roots = allowlisted_roots(loaded, ui);
+    if roots.is_empty() {
+        pipeline::warn(
+            ui,
+            "no scan roots are configured, so every path will be refused; set scan.roots \
+             (scull init)",
+        );
+    }
+    let engine = pipeline::engine(loaded, &roots, false, ui)?;
+    let cache_env = loaded.home.clone().and_then(|home| {
+        RulesOs::current().map(|os| CacheEnv::new(home, os, |k| std::env::var(k).ok()))
+    });
+    ScullMcp::new(
+        engine,
+        ServerOptions {
+            roots,
+            home: loaded.home.clone(),
+            data_dir,
+            mcp: loaded.config.mcp.clone(),
+            threads: loaded.config.scan.threads as usize,
+            cache_env,
+            forecast_policy: scull_proactive::forecast_policy(&loaded.config.proactive),
+        },
+    )
 }
 
 fn disabled(config_path: Option<&Path>) -> ScullError {

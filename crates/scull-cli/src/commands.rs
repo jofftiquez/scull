@@ -68,6 +68,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
             DataAction::Purge => planned("data purge", 82),
         },
         Command::Doctor(_) => None,
+        Command::Ask(_) => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
         } => None,
@@ -144,6 +145,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        Command::Ask(args) => crate::cmd::ask::run(args, ui)?,
         Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
