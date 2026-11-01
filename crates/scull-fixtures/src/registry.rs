@@ -277,13 +277,10 @@ const CLI_CLEAN_CACHES: &str = "crates/scull-cli/tests/clean_caches/main.rs";
 const CLI_DOCTOR_REPORT: &str = "crates/scull-cli/tests/doctor_report.rs";
 const ENGINE_ROOTS: &str = "crates/scull-engine/tests/roots.rs";
 
-/// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
-/// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
+/// Phase 2 fixtures whose macOS and Windows runs are still unproven: a test of theirs is
+/// `#[ignore]`d in CI (it needs a second account or the reference corpus). The others were
+/// cleared with the 3-OS run 41349623187 (#113), where a runtime skip fails CI.
 const PHASE2_PENDING: &str = "MW";
-
-/// Windows-only fixtures written while the Windows CI was unavailable: type-checked and
-/// clippy-clean for `x86_64-pc-windows-gnu`, never run on Windows yet.
-const WINDOWS_PENDING: &str = "W";
 
 const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
@@ -811,8 +808,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-02",
         Gate::Mvp,
@@ -854,8 +850,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_03_candidate_behind_an_escaping_link_is_never_reached",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-04",
         Gate::Mvp,
@@ -922,8 +917,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_07_read_only_entries_inside_candidate_permissions_untouched",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-08",
         Gate::Mvp,
@@ -947,8 +941,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_fs_08_unreadable_directory_is_reported_and_scan_continues",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-FS-09",
         Gate::Mvp,
@@ -1083,8 +1076,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_01_candidate_replaced_by_junction_is_refused",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-02",
         Gate::Mvp,
@@ -1145,8 +1137,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_race_02_concurrent_symlink_swaps_never_reach_the_canary",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-03",
         Gate::Mvp,
@@ -1156,8 +1147,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             REVAL,
             "fx_race_03_new_untracked_file_in_worktree_raises_tier_item_skipped",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-RACE-04",
         Gate::Mvp,
@@ -1373,8 +1363,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             E2E_EXEC,
             "fx_exec_14_one_of_five_fails_exit_3_others_complete",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx("FX-EXEC-15", Gate::V1x, "MLW", Mode::Ci, Status::Deferred),
     fx(
         "FX-EXEC-16",
@@ -1415,8 +1404,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_phy_01_hardlinks_predict_zero_and_measured_zero_agrees",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-PHY-02",
         Gate::Mvp,
@@ -1501,8 +1489,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_01_default_layout_macos"),
             t(CACHES, "fx_qc_01_default_layout_windows"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-02",
         Gate::Mvp,
@@ -1515,8 +1502,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(CACHES, "fx_qc_02_pnpm_store_prune_only_with_shared_bytes"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-03",
         Gate::Mvp,
@@ -1528,8 +1514,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(QC, "fx_qc_03_real_process_inside_cache_is_detected"),
             t(CACHES, "fx_qc_03_tool_running_is_skipped"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-04",
         Gate::Mvp,
@@ -1545,8 +1530,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_04_folder_above_cache_symlinked_elsewhere"),
             t(CACHES, "fx_qc_04_cache_junction_to_unexpected_location"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-05",
         Gate::Mvp,
@@ -1568,8 +1552,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                 "fx_qc_05_uninstalled_tool_cache_is_reported_not_removed",
             ),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-06",
         Gate::Mvp,
@@ -1581,8 +1564,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(QC, "fx_qc_06_only_untrusted_binaries_means_not_installed"),
             t(QC, "fx_qc_06_trusted_symlink_into_node_modules_is_rejected"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-07",
         Gate::Mvp,
@@ -1595,16 +1577,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(CACHES, "fx_qc_07_env_redirects_to_home_or_root_are_refused"),
             t(CACHES, "fx_qc_07_project_npmrc_is_never_read"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-QC-08",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
         Status::Implemented(&[t(QC, "fx_qc_08_unticked_tools_are_not_cleaned")]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     // §3.8 Configuration and rules (FX-CFG)
     fx(
         "FX-CFG-01",
@@ -1696,8 +1676,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_WIN, "fx_win_01_junction_detected_and_not_followed"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-02",
         Gate::Mvp,
@@ -1711,8 +1690,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(EXEC_WIN, "fx_win_02_symlink_item_removes_only_the_link"),
             t(PLAT_WIN, "fx_win_02_symlinks_detected_and_not_followed"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-03",
         Gate::Mvp,
@@ -1753,8 +1731,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(PLAT_REMOVE_WIN, "fx_win_05_short_names_resolve_by_identity"),
         ]),
-    )
-    .pending_ci(WINDOWS_PENDING),
+    ),
     fx(
         "FX-WIN-06",
         Gate::Mvp,
@@ -2026,8 +2003,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             CLI_DATA,
             "fx_data_04_purge_all_removes_exactly_sculls_files",
         )]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-05",
         Gate::Mvp,
@@ -2065,8 +2041,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(STORE_DATA, "fx_data_06_damaged_pages_are_detected"),
             t(STORE_DATA, "fx_data_06_restore_refuses_a_bad_backup"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
     fx(
         "FX-DATA-07",
         Gate::Mvp,
@@ -2140,8 +2115,7 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             ),
             t(E2E_OUT, "fx_out_03_cli_and_mcp_plan_identical_contents"),
         ]),
-    )
-    .pending_ci(PHASE2_PENDING),
+    ),
 ];
 
 /// The registered fixture with this ID.
