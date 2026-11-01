@@ -68,11 +68,15 @@ pub enum EventKind {
     /// A `prepare_cleanup` was refused by the agent limits (`rate_limited`,
     /// `too_many_pending_plans`; #299). An [`AgentAuditEvent`] without a plan.
     PrepareRefused,
+    /// Recorded trends were forgotten (`scull insights purge`): written in the same
+    /// transaction as the deletion by [`Store::purge_insights_recorded`], with the cutoff and
+    /// the rows deleted per stream. Never deleted by the purge itself.
+    InsightsPurged,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 8] = [
+    pub const ALL: [EventKind; 9] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
@@ -81,6 +85,7 @@ impl EventKind {
         EventKind::RevokeRefused,
         EventKind::Headroom,
         EventKind::PrepareRefused,
+        EventKind::InsightsPurged,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
@@ -93,7 +98,7 @@ impl EventKind {
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
-    /// `approval_revoked`, `revoke_refused`, `headroom`, `prepare_refused`.
+    /// `approval_revoked`, `revoke_refused`, `headroom`, `prepare_refused`, `insights_purged`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -104,6 +109,7 @@ impl EventKind {
             EventKind::RevokeRefused => "revoke_refused",
             EventKind::Headroom => "headroom",
             EventKind::PrepareRefused => "prepare_refused",
+            EventKind::InsightsPurged => "insights_purged",
         }
     }
 

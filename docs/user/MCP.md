@@ -141,7 +141,11 @@ How a cleanup goes:
 1. The agent calls `prepare_cleanup` and tells you the plan ID.
 2. You run `scull approve <plan-id>` in **your own terminal**. It shows the full plan and a
    short code; type the code to approve, or `deny`. It refuses to run without an interactive
-   terminal (a pipe, a script, an agent's shell tool) and as root.
+   terminal (a pipe, a script, an agent's shell tool) and as root. It also refuses a terminal
+   that looks driven by an agent: an AI agent's environment variables are set, an agent client
+   or a terminal-automation tool (`script`, `expect`) started it, or its parent processes
+   can't be read. That check is a heuristic, not a proof of a human; see
+   [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
 3. The agent calls `execute_cleanup`. It runs only with your approval: bound to the plan's
    exact content, unexpired, used once. If any item changed on disk since the plan was made,
    the whole plan is void and the agent has to prepare a new one. Every item is checked again
@@ -194,7 +198,7 @@ Everything that was **refused** is recorded too, and `scull history` lists it un
 
 | Recorded as | When | Reason codes |
 |---|---|---|
-| `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
+| `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), `agent_environment`, `agent_process`, `pty_driver` or `ancestry_unknown` (a terminal that looks driven by an agent), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
 | `execute_refused` by `mcp` | The server refused `execute_cleanup` | `invalid_arguments` (including any attempt to pass a code), `unknown_plan`, `plan_foreign`, `plan_expired`, `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `plan_changed` (void), `outside_allowlist`, `lock_held` |
 | `prepare_refused` | A `prepare_cleanup` hit a limit (above) | `rate_limited`, `too_many_pending_plans` (no plan ID) |
 | `approval_revoked` | You revoked an approval before it was used (recorded in the same transaction; nothing else can write this entry) | `revoked` |

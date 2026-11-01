@@ -1,6 +1,6 @@
 //! Storage behind local insights (P4-INS-01): the storage budget and downsampling
 //! (FX-DATA-02, INS-02, DATA-05/06), the typed reads (item timelines, operation accuracy) and
-//! `purge_insights`. All databases live in temp dirs.
+//! `purge_insights` (and its recorded form). All databases live in temp dirs.
 #![allow(clippy::unwrap_used)]
 
 mod common;
@@ -11,9 +11,9 @@ use scull_core::{
     PlanParams, Tier,
 };
 use scull_storage::{
-    ApprovalMethod, ItemEventKind, ItemOutcome, ItemRecord, OperationEnd, OperationFinish,
-    OperationStart, RetentionPolicy, ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals,
-    Store, VolumeSample, rollups_from_candidates,
+    ApprovalMethod, EventKind, ItemEventKind, ItemOutcome, ItemRecord, OperationEnd,
+    OperationFinish, OperationStart, RetentionPolicy, ScanFinish, ScanRecord, ScanStart,
+    ScanStatus, ScanTotals, Store, VolumeSample, rollups_from_candidates,
 };
 
 const HOUR: i64 = 3600;
@@ -467,6 +467,45 @@ fn fx_ins_03_purge_forgets_history_but_keeps_live_items_scans_and_append_only_ro
     let h = s.item_history(&nm(2, 0).id).unwrap().unwrap();
     assert_eq!(h.events.len(), 1);
     assert_eq!(h.events[0].kind, ItemEventKind::Changed);
+}
+
+/// `scull insights purge` records itself: the `insights_purged` event is written in the same
+/// transaction as the deletion, with the cutoff and the rows per stream, and a later purge
+/// never deletes it.
+#[test]
+fn recorded_purge_writes_an_insights_purged_event_that_purges_keep() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let mut s = open(&path);
+    let nm = |file, mib| cand("/work/a/node_modules", file, mib * MIB);
+    scan(&mut s, 1, T0, &[nm(1, 100)]);
+    scan(&mut s, 2, T0 + DAY, &[]);
+    let purged = s
+        .purge_insights_recorded(Some(T0 + DAY + 1), T0 + 2 * DAY, "cli")
+        .unwrap();
+    assert!(purged.total() > 0);
+    let again = s
+        .purge_insights_recorded(None, T0 + 3 * DAY, "cli")
+        .unwrap();
+    let events = s.events(EventKind::InsightsPurged, 0).unwrap();
+    assert_eq!(events.len(), 2, "{events:#?}");
+    let first = &events[0];
+    assert_eq!(first.at, T0 + 2 * DAY);
+    assert_eq!(first.source, "cli");
+    assert_eq!(first.payload["older_than"], T0 + DAY + 1);
+    assert_eq!(first.payload["total"], purged.total());
+    assert_eq!(
+        first.payload["deleted"]["free_space_samples"],
+        purged.free_space_samples
+    );
+    assert_eq!(first.payload["deleted"]["gone_items"], purged.gone_items);
+    assert!(events[1].payload["older_than"].is_null());
+    assert_eq!(events[1].payload["total"], again.total());
+    assert_eq!(EventKind::InsightsPurged.as_str(), "insights_purged");
+    assert_eq!(
+        EventKind::parse("insights_purged"),
+        Some(EventKind::InsightsPurged)
+    );
 }
 
 #[test]

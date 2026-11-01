@@ -8,7 +8,8 @@
 //!   duplication, agent footprint).
 //! * [`Store::operation_accuracy`]: predicted vs. measured bytes per cleanup operation, read
 //!   from the append-only audit (cleanup effectiveness, G3).
-//! * [`Store::purge_insights`]: forgets recorded trends (`scull insights purge`).
+//! * [`Store::purge_insights`]: forgets recorded trends; [`Store::purge_insights_recorded`]
+//!   (`scull insights purge`) also records the purge as an `insights_purged` event.
 //!
 //! # What `purge_insights` deletes
 //!
@@ -284,38 +285,44 @@ impl Store {
     /// `before` (Unix seconds), or all of them with `None`. See the [module
     /// docs](crate::insights) for exactly what is deleted and what is kept. One transaction.
     pub fn purge_insights(&mut self, before: Option<i64>) -> Result<InsightsPurged> {
-        let t = before.unwrap_or(i64::MAX);
+        self.write(|tx| purge_rows(tx, before))
+    }
+
+    /// [`Store::purge_insights`], recording what was deleted as an
+    /// [`EventKind::InsightsPurged`](crate::EventKind::InsightsPurged) event (at `at`, by
+    /// `source`: `cli`, `desktop`, ...) in the **same** transaction: either both happen or
+    /// neither does. The event's payload is `{"older_than": <before or null>, "deleted":
+    /// {<stream>: rows, ...}, "total": rows}`; events are never deleted by a purge.
+    pub fn purge_insights_recorded(
+        &mut self,
+        before: Option<i64>,
+        at: i64,
+        source: &str,
+    ) -> Result<InsightsPurged> {
         self.write(|tx| {
-            const GONE: &str =
-                "SELECT item_id FROM items WHERE disappeared_at IS NOT NULL AND disappeared_at < ?1";
-            let regrowth_events = tx.execute(
-                &format!(
-                    "DELETE FROM regrowth_events WHERE reappeared_at < ?1 \
-                     OR item_id IN ({GONE}) OR previous_item_id IN ({GONE})"
-                ),
-                params![t],
-            )? as u64;
-            let item_events = tx.execute(
-                &format!("DELETE FROM item_events WHERE occurred_at < ?1 OR item_id IN ({GONE})"),
-                params![t],
-            )? as u64;
-            let gone_items = tx.execute(
-                "DELETE FROM items WHERE disappeared_at IS NOT NULL AND disappeared_at < ?1",
-                params![t],
-            )? as u64;
-            let free_space_samples =
-                tx.execute("DELETE FROM free_space_samples WHERE sampled_at < ?1", params![t])?
-                    as u64;
-            let footprint_samples =
-                tx.execute("DELETE FROM footprint_samples WHERE sampled_at < ?1", params![t])?
-                    as u64;
-            Ok(InsightsPurged {
-                free_space_samples,
-                footprint_samples,
-                item_events,
-                regrowth_events,
-                gone_items,
-            })
+            let purged = purge_rows(tx, before)?;
+            let payload = serde_json::json!({
+                "older_than": before,
+                "deleted": {
+                    "free_space_samples": purged.free_space_samples,
+                    "footprint_samples": purged.footprint_samples,
+                    "item_events": purged.item_events,
+                    "regrowth_events": purged.regrowth_events,
+                    "gone_items": purged.gone_items,
+                },
+                "total": purged.total(),
+            });
+            tx.execute(
+                "INSERT INTO events (occurred_at, kind, source, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    at,
+                    crate::EventKind::InsightsPurged.as_str(),
+                    source,
+                    payload.to_string()
+                ],
+            )?;
+            Ok(purged)
         })
     }
 
@@ -327,6 +334,43 @@ impl Store {
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }
+}
+
+/// The deletions of [`Store::purge_insights`], inside the caller's transaction.
+fn purge_rows(tx: &rusqlite::Transaction<'_>, before: Option<i64>) -> Result<InsightsPurged> {
+    let t = before.unwrap_or(i64::MAX);
+    const GONE: &str =
+        "SELECT item_id FROM items WHERE disappeared_at IS NOT NULL AND disappeared_at < ?1";
+    let regrowth_events = tx.execute(
+        &format!(
+            "DELETE FROM regrowth_events WHERE reappeared_at < ?1 \
+             OR item_id IN ({GONE}) OR previous_item_id IN ({GONE})"
+        ),
+        params![t],
+    )? as u64;
+    let item_events = tx.execute(
+        &format!("DELETE FROM item_events WHERE occurred_at < ?1 OR item_id IN ({GONE})"),
+        params![t],
+    )? as u64;
+    let gone_items = tx.execute(
+        "DELETE FROM items WHERE disappeared_at IS NOT NULL AND disappeared_at < ?1",
+        params![t],
+    )? as u64;
+    let free_space_samples = tx.execute(
+        "DELETE FROM free_space_samples WHERE sampled_at < ?1",
+        params![t],
+    )? as u64;
+    let footprint_samples = tx.execute(
+        "DELETE FROM footprint_samples WHERE sampled_at < ?1",
+        params![t],
+    )? as u64;
+    Ok(InsightsPurged {
+        free_space_samples,
+        footprint_samples,
+        item_events,
+        regrowth_events,
+        gone_items,
+    })
 }
 
 fn parse_kind(s: &str) -> Result<ItemEventKind> {

@@ -59,6 +59,7 @@
 //!   `read_dir` enumerates the no-follow handle it checked, so it is race-free.
 
 pub mod activity;
+pub mod ancestry;
 pub mod app_dirs;
 pub mod cloud;
 pub mod docker;
@@ -81,6 +82,7 @@ pub mod volumes;
 
 use std::path::Path;
 
+pub use ancestry::{MAX_ANCESTRY, ProcessInfo, ancestry};
 pub use app_dirs::{
     APP_NAME, AppDirs, AppDirsError, DirLayout, DirSource, HOME_OVERRIDE_ENV, app_dirs,
 };

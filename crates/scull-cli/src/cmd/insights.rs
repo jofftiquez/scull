@@ -1,5 +1,6 @@
-//! `scull insights [--since WHEN]` and `scull insights export [--format json|csv]`
-//! (P4-INS-01; PRD §15 INS-02…04, DATA-07).
+//! `scull insights [--since WHEN]`, `scull insights export [--format json|csv]` and
+//! `scull insights purge [--older-than WHEN] [--confirm]` (P4-INS-01; PRD §15 INS-02…04,
+//! DATA-07).
 //!
 //! * **`insights`** reads the local history database and prints top growers, regrowth,
 //!   duplication, agent footprint, predicted-vs-measured accuracy, ecosystem mix, free space
@@ -11,36 +12,95 @@
 //! * **`export`** writes the same report to stdout: `--format json` (default) is the
 //!   `scull/insights@1` document; `--format csv` is one tidy table
 //!   ([`scull_insights::csv`]). Redirect it to a file to keep it. Parquet (DATA-07) is not built.
-//! * **`purge`** is refused in this build: the inspect-only release gate requires it during the
-//!   alpha. The storage side exists ([`scull_storage::Store::purge_insights`]); enabling the
-//!   command is tracked in #266.
+//! * **`purge`** forgets recorded trends: rows of the history streams (free-space and footprint
+//!   samples, item and regrowth events, items that are gone), all of them or those older than
+//!   `--older-than`, through [`scull_storage::Store::purge_insights_recorded`]. Live items,
+//!   scans and rollups, plans, approvals, operations and audit (append-only, never row-deleted)
+//!   and the quarantine manifest are kept. No file is deleted; `scull data purge` removes
+//!   scull's files. The purge is recorded in the same transaction as an `insights_purged`
+//!   event (cutoff and rows per stream), which no purge deletes. Confirmation: `--confirm`, or
+//!   typing `purge` at the prompt on a terminal; without a terminal (or with
+//!   `--json`/`--ndjson`) `--confirm` is required. With no database nothing is created.
+//!   Machine output: `scull/insights-purge@1` (`--ndjson`: one `insights_purge` record).
 
 use super::{emit_machine, emit_text};
 use crate::cli::{ExportFormat, InsightsAction};
-use crate::commands::{Planned, not_implemented};
 use crate::db::{self, NotOpened, Probe};
 use crate::output::bytes::format_bytes;
 use crate::output::escape::escape_for_terminal;
 use crate::output::json::{SchemaId, write_document};
 use crate::output::style::Style;
 use crate::output::{Format, Ui};
+use schemars::JsonSchema;
 use scull_core::{ErrorKind, ScullError};
 use scull_insights::time::{DAY, iso_date, unix_of};
 use scull_insights::{InsightsInput, InsightsReport};
 use scull_proactive::ForecastState;
-use scull_storage::{DEFAULT_BUDGET_BYTES, Footprint, Store, StoreError};
+use scull_storage::{DEFAULT_BUDGET_BYTES, Footprint, InsightsPurged, Store, StoreError};
+use serde::Serialize;
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, BufRead, IsTerminal, Write as _};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Schema of `scull insights --json` and `scull insights export --format json`.
 pub const INSIGHTS_SCHEMA: SchemaId = SchemaId::new("insights", 1);
 
-/// `scull insights purge` is refused in this build (inspect-only release gate); see #266.
-pub const PURGE: Planned = Planned {
-    name: "insights purge",
-    issue: Some(266),
-};
+/// Schema of `scull insights purge --json`.
+pub const INSIGHTS_PURGE_SCHEMA: SchemaId = SchemaId::new("insights-purge", 1);
+/// The word typed at the prompt to confirm a purge.
+pub const CONFIRM_WORD: &str = "purge";
+
+/// What `scull insights purge` deleted (`scull/insights-purge@1`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InsightsPurgeReport {
+    /// Whether a database was found (nothing to purge otherwise).
+    pub database_found: bool,
+    /// Only history older than this was deleted (Unix seconds); `null` means all of it.
+    pub older_than: Option<i64>,
+    /// Rows deleted per stream.
+    pub deleted: PurgedRows,
+    /// What is always kept.
+    pub kept: Vec<String>,
+}
+
+/// Rows deleted per history stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PurgedRows {
+    /// Free-space samples.
+    pub free_space_samples: u64,
+    /// scull's own footprint samples.
+    pub footprint_samples: u64,
+    /// Item lifecycle events.
+    pub item_events: u64,
+    /// Regrowth events.
+    pub regrowth_events: u64,
+    /// Rows of items that are gone.
+    pub gone_items: u64,
+    /// All of the above.
+    pub total: u64,
+}
+
+impl From<InsightsPurged> for PurgedRows {
+    fn from(p: InsightsPurged) -> Self {
+        Self {
+            free_space_samples: p.free_space_samples,
+            footprint_samples: p.footprint_samples,
+            item_events: p.item_events,
+            regrowth_events: p.regrowth_events,
+            gone_items: p.gone_items,
+            total: p.total(),
+        }
+    }
+}
+
+const KEPT: [&str; 4] = [
+    "items present in the latest scans",
+    "scans and their rollups",
+    "plans, approvals, operations and audit (append-only)",
+    "the quarantine manifest and every file on disk",
+];
 /// A point in time given on the command line: a duration back from now, or a UTC date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum When {
@@ -146,7 +206,10 @@ pub fn run(
                 ExportFormat::Csv => emit_text(&scull_insights::csv::to_csv(&report)),
             }
         }
-        Some(InsightsAction::Purge { .. }) => Err(not_implemented(PURGE)),
+        Some(InsightsAction::Purge {
+            older_than,
+            confirm,
+        }) => purge(now, *older_than, *confirm, ui),
     }
 }
 
@@ -228,6 +291,72 @@ pub fn collect(now: i64, since: Option<When>) -> Result<InsightsReport, ScullErr
             forecast_policy: policy,
         })),
     }
+}
+
+fn purge(now: i64, older_than: Option<When>, confirm: bool, ui: &Ui) -> Result<(), ScullError> {
+    let cutoff = older_than.map(|w| w.resolve(now));
+    let what = match cutoff {
+        Some(t) => format!("recorded trends older than {}", iso_date(t)),
+        None => "all recorded trends".to_owned(),
+    };
+    let store = open_existing()?;
+    let mut report = InsightsPurgeReport {
+        database_found: store.is_some(),
+        older_than: cutoff,
+        deleted: PurgedRows::default(),
+        kept: KEPT.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    if let Some(mut store) = store {
+        if !confirm {
+            let interactive = !ui.format.is_machine() && io::stdin().is_terminal();
+            if !interactive {
+                return Err(ScullError::new(
+                    ErrorKind::Usage,
+                    format!("`scull insights purge` deletes {what}; add --confirm to proceed"),
+                ));
+            }
+            let mut err = io::stderr().lock();
+            let _ = write!(
+                err,
+                "This deletes {what} (free-space and footprint samples, item and regrowth \
+                 events, items that are gone).\nKept: {}.\nType `{CONFIRM_WORD}` to continue: ",
+                KEPT.join("; ")
+            );
+            let _ = err.flush();
+            let mut line = String::new();
+            io::stdin()
+                .lock()
+                .read_line(&mut line)
+                .map_err(|e| ScullError::from_io(&e))?;
+            if line.trim() != CONFIRM_WORD {
+                return Err(ScullError::new(ErrorKind::Cancelled, "purge cancelled"));
+            }
+        }
+        report.deleted = store
+            .purge_insights_recorded(cutoff, now, "cli")
+            .map_err(store_err)?
+            .into();
+    }
+    if ui.format.is_machine() {
+        return emit_machine(ui.format, INSIGHTS_PURGE_SCHEMA, "insights_purge", &report);
+    }
+    let d = &report.deleted;
+    let text = if report.database_found {
+        format!(
+            "Deleted {} history rows ({what}): {} free-space samples, {} footprint samples, {} \
+             item events, {} regrowth events, {} gone items.\nKept: {}.\n",
+            d.total,
+            d.free_space_samples,
+            d.footprint_samples,
+            d.item_events,
+            d.regrowth_events,
+            d.gone_items,
+            KEPT.join("; ")
+        )
+    } else {
+        "Nothing to purge: no history recorded yet.\n".to_owned()
+    };
+    emit_text(&text)
 }
 
 // ---------------------------------------------------------------------------------------------
