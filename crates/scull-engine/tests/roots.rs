@@ -16,6 +16,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_core::config::Config;
+use scull_engine::paths::canon;
 use scull_engine::{
     CancelToken, Engine, EngineConfig, FixedInUse, InUseSource, ScanReport, ScanRequest, now_unix,
 };
@@ -120,9 +121,11 @@ fn assert_same_as_single(single: &ScanReport, both: &ScanReport) {
 #[test]
 fn fx_mac_03_firmlinked_root_is_not_counted_twice() {
     let fx = fixture();
-    let root = fx.root().to_path_buf();
+    // Canonical spellings, as the engine compares roots (the temp dir can be a short 8.3
+    // name such as `C:\Users\RUNNER~1` on Windows, which the engine spells out in full).
+    let root = canon(fx.root());
     // Doesn't exist on disk: only the platform seam knows it (like a firmlink to `root`).
-    let alias = fx.base().join("System-Volumes-Data-alias");
+    let alias = canon(fx.base()).join("System-Volumes-Data-alias");
     let platform: Arc<dyn Platform> = Arc::new(Aliased {
         alias: alias.clone(),
         target: root.clone(),
@@ -155,8 +158,8 @@ fn fx_mac_03_firmlinked_root_is_not_counted_twice() {
 #[test]
 fn fx_mac_03_root_nested_through_an_alias_is_not_counted_twice() {
     let fx = fixture();
-    let root = fx.root().to_path_buf();
-    let alias = fx.base().join("System-Volumes-Data-alias");
+    let root = canon(fx.root());
+    let alias = canon(fx.base()).join("System-Volumes-Data-alias");
     let e = engine(Arc::new(Aliased {
         alias: alias.clone(),
         target: root.clone(),
@@ -199,7 +202,7 @@ fn fx_mac_03_root_nested_through_an_alias_is_not_counted_twice() {
 #[test]
 fn fx_mac_03_system_volumes_data_alias_is_not_counted_twice() {
     let fx = fixture();
-    let root = scull_engine::paths::canon(fx.root());
+    let root = canon(fx.root());
     let alias = Path::new("/System/Volumes/Data").join(root.strip_prefix("/").unwrap());
     assert!(
         alias.is_dir(),

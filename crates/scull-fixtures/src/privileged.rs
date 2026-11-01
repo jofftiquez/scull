@@ -121,14 +121,22 @@ pub fn is_real_root() -> bool {
 }
 
 /// The environment forwarded through `sudo` (which resets it): the harness's own variables
-/// plus `PATH` and `RUST_BACKTRACE`.
+/// plus `PATH` and `RUST_BACKTRACE`. Names compare case-insensitively on Windows, where the
+/// search path is usually spelled `Path`.
 fn forwarded_env(label: &str) -> Vec<OsString> {
+    let is = |k: &str, name: &str| {
+        if cfg!(windows) {
+            k.eq_ignore_ascii_case(name)
+        } else {
+            k == name
+        }
+    };
     let mut env: Vec<OsString> = vec!["env".into(), format!("{PRIVILEGED_ENV}={label}").into()];
     for (k, v) in std::env::vars_os() {
         let ks = k.to_string_lossy();
-        if (ks.starts_with("SCULL_") && ks != PRIVILEGED_ENV)
-            || ks == "PATH"
-            || ks == "RUST_BACKTRACE"
+        if (ks.starts_with("SCULL_") && !is(&ks, PRIVILEGED_ENV))
+            || is(&ks, "PATH")
+            || is(&ks, "RUST_BACKTRACE")
         {
             let mut kv = k.clone();
             kv.push("=");
@@ -338,7 +346,12 @@ mod tests {
         assert_eq!(env[0], "env");
         assert_eq!(env[1], OsString::from(format!("{PRIVILEGED_ENV}=x")));
         if std::env::var_os("PATH").is_some() {
-            assert!(env.iter().any(|e| e.to_string_lossy().starts_with("PATH=")));
+            // `Path=` on Windows, where names are case-insensitive.
+            assert!(env.iter().any(|e| {
+                e.to_string_lossy()
+                    .to_ascii_uppercase()
+                    .starts_with("PATH=")
+            }));
         }
     }
 

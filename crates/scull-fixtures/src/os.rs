@@ -52,8 +52,18 @@ pub(crate) fn symlink(target: &Path, link: &Path, _target_is_dir: bool) -> io::R
 
 /// Create a symbolic link at `link` pointing to `target` (Windows distinguishes file and
 /// directory links).
+///
+/// A relative target is stored with `\` separators: Windows keeps the target text as given
+/// and doesn't resolve `/` in a relative link target, so `../a/b` would make a dangling link.
 #[cfg(windows)]
 pub(crate) fn symlink(target: &Path, link: &Path, target_is_dir: bool) -> io::Result<()> {
+    let native: std::path::PathBuf;
+    let target = if target.is_relative() {
+        native = target.components().collect();
+        native.as_path()
+    } else {
+        target
+    };
     if target_is_dir {
         std::os::windows::fs::symlink_dir(target, link)
     } else {
