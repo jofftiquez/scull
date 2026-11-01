@@ -72,7 +72,13 @@ pub fn serve(allow_destructive: bool, ui: &Ui) -> Result<(), ScullError> {
             cache_env,
         },
     )?;
-    scull_mcp::serve_stdio(server, cancel::is_cancelled)
+    // Ctrl-C ends the session with exit 130 (CLI-05), whether it came before or after the
+    // client's `initialize` (#251): a handshake cut short by the stop is reported as cancelled,
+    // not as a failed session.
+    match scull_mcp::serve_stdio(server, cancel::is_cancelled) {
+        Err(_) if cancel::is_cancelled() => Err(cancel::cancelled_error()),
+        other => other,
+    }
 }
 
 fn disabled(config_path: Option<&Path>) -> ScullError {

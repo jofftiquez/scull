@@ -1554,3 +1554,35 @@ async fn registrations_outside_the_allowlist_are_never_returned() {
     client.cancel().await.unwrap();
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
+
+/// `stop()` is honored before the client's `initialize` (#251): with the client end of the
+/// pipe still open but silent, setting the stop flag ends `serve_until` promptly with `Ok`
+/// (the CLI then exits 130). Runs on every OS: no signal involved.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_before_initialize_ends_the_server_promptly() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let fx = fixture(false);
+    let data = tempfile::tempdir().unwrap();
+    let (s, client_end) = tokio::io::duplex(1 << 16);
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    let server = tokio::spawn(scull_mcp::serve_until(
+        Setup::new(&fx, data.path()).server(),
+        s,
+        move || flag.load(Ordering::SeqCst),
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !server.is_finished(),
+        "waits for a client while not stopped"
+    );
+    stop.store(true, Ordering::SeqCst);
+    let done = tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .expect("stops within 10 s although the client never spoke");
+    assert!(done.unwrap().is_ok(), "a stop is not a failed session");
+    drop(client_end);
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}

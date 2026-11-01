@@ -237,6 +237,11 @@ where
 
 /// Serve `server` over any transport until the client disconnects or `stop()` returns true
 /// (checked every 100 ms; e.g. Ctrl-C in a terminal).
+///
+/// `stop()` is honored during the `initialize` handshake too: a server started by hand and
+/// interrupted before any client spoke returns `Ok(())` promptly instead of waiting for (or
+/// failing on) a handshake that never comes (#251). Callers map the stop to their own outcome
+/// (the CLI exits 130, CLI-05).
 pub async fn serve_until<T, E, A>(
     server: ScullMcp,
     transport: T,
@@ -246,21 +251,28 @@ where
     T: rmcp::transport::IntoTransport<RoleServer, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    let running = server
-        .serve(transport)
-        .await
-        .map_err(|e| ScullError::new(ErrorKind::Io, format!("MCP session failed to start: {e}")))?;
+    let running = tokio::select! {
+        started = server.serve(transport) => started.map_err(|e| {
+            ScullError::new(ErrorKind::Io, format!("MCP session failed to start: {e}"))
+        })?,
+        () = wait_for(&stop) => return Ok(()),
+    };
     let token = running.cancellation_token();
     let watcher = tokio::spawn(async move {
-        while !stop() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        wait_for(stop).await;
         token.cancel();
     });
     let done = running.waiting().await;
     watcher.abort();
     done.map_err(|e| ScullError::new(ErrorKind::Internal, format!("MCP session failed: {e}")))?;
     Ok(())
+}
+
+/// Resolve once `stop()` returns true (polled every 100 ms).
+async fn wait_for(stop: impl Fn() -> bool) {
+    while !stop() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Serve `server` over stdin/stdout until the client disconnects or `stop()` returns true

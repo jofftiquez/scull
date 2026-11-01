@@ -222,3 +222,66 @@ fn serves_read_only_tools_over_stdio() {
     assert!(!env.scull_home.path().join("data").join("scull.db").exists());
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
+
+/// Ctrl-C (SIGINT) to `scull mcp serve` exits 130, "cancelled by user" (CLI-05), both before
+/// the client sent `initialize` (#251: someone started the server in a terminal by hand) and
+/// during a session; promptly, while stdin is still open.
+///
+/// Unix only: the test sends SIGINT with `kill -INT`. Windows has no equivalent a test can
+/// aim at one child process: `GenerateConsoleCtrlEvent` delivers CTRL_BREAK/CTRL_C to a whole
+/// console process group, which needs a new console group for the child and an OS API outside
+/// scull-platform (PLT-11). The cancel path itself is platform-independent (`ctrlc` sets the
+/// same flag on both).
+#[cfg(unix)]
+#[test]
+fn ctrl_c_exits_130_before_and_after_initialize() {
+    use std::time::{Duration, Instant};
+
+    let mut fx = Fixture::new().unwrap();
+    fx.checkpoint().unwrap();
+    let env = Env::new();
+    env.write_config(&format!(
+        "[scan]\nroots = [\"{}\"]\n\n[mcp]\nenabled = true\n",
+        toml_path(fx.root())
+    ));
+
+    for handshake in [false, true] {
+        let mut s = Session::start(env.command(fx.base(), &[]));
+        if handshake {
+            s.initialize();
+        } else {
+            // Wait until the server is up (the disclosure is on stderr before it serves);
+            // a fixed pause keeps the test simple and the handler installed long before.
+            std::thread::sleep(Duration::from_millis(700));
+        }
+        let pid = s.child.id().to_string();
+        let k = Command::new("kill").args(["-INT", &pid]).status().unwrap();
+        assert!(k.success(), "kill -INT {pid}");
+        let sent = Instant::now();
+        // stdin stays open: the server must stop on the signal, not on EOF.
+        let status = s.child.wait().unwrap();
+        let elapsed = sent.elapsed();
+        let mut err = String::new();
+        s.child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut err)
+            .unwrap();
+        assert_eq!(status.code(), Some(130), "handshake={handshake}: {err}");
+        assert!(
+            err.contains("cancelled by user"),
+            "handshake={handshake}: {err}"
+        );
+        assert!(
+            !err.contains("failed to start"),
+            "handshake={handshake}: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "handshake={handshake}: stopped promptly, took {elapsed:?}"
+        );
+        drop(s.child.stdin.take());
+    }
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
