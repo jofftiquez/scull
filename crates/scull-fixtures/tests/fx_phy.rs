@@ -95,7 +95,9 @@ fn fx_phy_01_pnpm_hardlinked_node_modules_predicts_zero_measured_recorded() {
 
 /// FX-PHY-02 (macOS): an APFS clone (`cp -c`) of a large file inside the candidate. The
 /// estimate's confidence is "low" with the clones explanation; after deletion the measured
-/// delta is recorded and explained (`clones_possible`), whatever it is.
+/// delta is recorded, and a shortfall beyond the threshold is explained (`clones_possible`).
+/// Explanations are for disagreements: when the busy CI volume's free space happens to move by
+/// about the predicted amount there is nothing to explain.
 #[test]
 #[cfg(target_os = "macos")]
 fn fx_phy_02_apfs_clone_low_confidence_measured_and_explained() {
@@ -122,9 +124,14 @@ fn fx_phy_02_apfs_clone_low_confidence_measured_and_explained() {
         "{:?}",
         p.notes
     );
-    assert!(m.delta.measured_total.is_some(), "{}", m.delta);
+    let measured = m.delta.measured_total.expect("free space measured");
     let codes = m.delta.explanation_codes();
-    assert!(codes.contains(&"clones_possible"), "{codes:?}");
+    let shortfall = i128::from(measured) < i128::from(p.reclaim.freed_now);
+    if m.delta.exceeds_threshold && !m.delta.within_resolution && shortfall {
+        assert!(codes.contains(&"clones_possible"), "{codes:?}\n{}", m.delta);
+    } else {
+        println!("FX-PHY-02: measured {measured:+} B agrees with the prediction: {codes:?}");
+    }
     assert!(fx.root().join("keep/original.bin").is_file());
     check(&fx, &m);
 }

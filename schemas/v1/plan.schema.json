@@ -349,6 +349,15 @@
     "machine_id": {
       "type": "string"
     },
+    "operations_watermark": {
+      "description": "SAFE-09: the position of the last recorded operation in scull's database when the scan\nthe items came from started (operations are append-only, so positions only grow). An\noperation recorded after this position touched the targets after the scan saw them and\ninvalidates the plan. Absent in plans that predate it; those use the creation time.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "origin": {
       "$ref": "#/$defs/PlanOrigin"
     },

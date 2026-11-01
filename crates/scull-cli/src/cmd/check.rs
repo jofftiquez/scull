@@ -117,6 +117,10 @@ pub struct NotSampled {
 pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     let loaded = load_config(&[])?;
     let (scan_state, scanned) = light_scan(&loaded, args, ui)?;
+    let (scanned, watermark) = match scanned {
+        Some((r, w)) => (Some(r), w),
+        None => (None, None),
+    };
     let now = scull_engine::now_unix();
     let dirs = scull_platform::app_dirs().map_err(|e| {
         ScullError::new(
@@ -182,8 +186,11 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
             review_plan::refresh(
                 &mut store,
                 &dirs.data,
-                &r.scan_id,
-                &r.candidates,
+                &review_plan::ReviewScan {
+                    id: &r.scan_id,
+                    candidates: &r.candidates,
+                    operations_watermark: watermark,
+                },
                 args.include_s1,
                 &binding,
                 now,
@@ -242,6 +249,9 @@ pub fn alert_events(alerts: &[Alert]) -> Vec<AlertEvent> {
         .collect()
 }
 
+/// A check's scan and the SAFE-09 operations watermark taken before it started.
+type Scanned = (ScanReport, Option<u64>);
+
 /// Scan the configured roots for the check (step 1 in the module docs). A root `scull scan`
 /// would refuse without a flag, or a scan that fails, is reported as skipped; Ctrl-C stops the
 /// check.
@@ -249,7 +259,7 @@ fn light_scan(
     loaded: &pipeline::Loaded,
     args: &CheckArgs,
     ui: &Ui,
-) -> Result<(CheckScan, Option<ScanReport>), ScullError> {
+) -> Result<(CheckScan, Option<Scanned>), ScullError> {
     if loaded.config.scan.roots.is_empty() {
         return Ok((CheckScan::NotConfigured, None));
     }
@@ -265,6 +275,12 @@ fn light_scan(
         Ok(e) => e,
         Err(e) => return Ok((skipped(e), None)),
     };
+    // SAFE-09: the last recorded operation before the scan starts, for the review plan built
+    // from it. Without the database the plan falls back to its creation time.
+    let watermark = scull_platform::app_dirs()
+        .ok()
+        .and_then(|d| scull_engine::open_history(&d.data).ok())
+        .and_then(|s| s.operations_watermark().ok());
     let bridge = CancelBridge::start();
     let mut req = ScanRequest::full().history(true);
     req.threads = loaded.config.scan.threads as usize;
@@ -285,7 +301,7 @@ fn light_scan(
         entries_scanned: report.entries_scanned,
         allocated_bytes: report.totals.allocated.total(),
     };
-    Ok((state, Some(report)))
+    Ok((state, Some((report, watermark))))
 }
 
 fn store_error(e: scull_storage::StoreError) -> ScullError {

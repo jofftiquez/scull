@@ -293,6 +293,12 @@ pub struct Plan {
     machine_id: String,
     user: String,
     origin: PlanOrigin,
+    /// SAFE-09: the position of the last recorded operation in scull's database when the scan
+    /// the items came from started (operations are append-only, so positions only grow). An
+    /// operation recorded after this position touched the targets after the scan saw them and
+    /// invalidates the plan. Absent in plans that predate it; those use the creation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operations_watermark: Option<u64>,
     items: Vec<PlanItem>,
     content_hash: ContentHash,
 }
@@ -345,11 +351,28 @@ impl Plan {
             machine_id: params.machine_id,
             user: params.user,
             origin: params.origin,
+            operations_watermark: None,
             items,
             content_hash: ContentHash("0".repeat(ContentHash::HEX_LEN)),
         };
         plan.content_hash = plan.compute_hash()?;
         Ok(plan)
+    }
+
+    /// The same plan bound to the operations watermark taken when its scan started (see
+    /// [`Plan::operations_watermark`]); the content hash is recomputed, so the watermark can't
+    /// be edited afterwards.
+    pub fn with_operations_watermark(mut self, watermark: u64) -> Result<Self, ScullError> {
+        self.operations_watermark = Some(watermark);
+        self.content_hash = self.compute_hash()?;
+        Ok(self)
+    }
+
+    /// SAFE-09: the last recorded operation's position in scull's database when the scan the
+    /// items came from started. Every operation recorded after it invalidates the plan. `None`
+    /// for plans without one: then operations started at or after [`Plan::created_unix`] do.
+    pub fn operations_watermark(&self) -> Option<u64> {
+        self.operations_watermark
     }
 
     /// Schema version the plan was written with.

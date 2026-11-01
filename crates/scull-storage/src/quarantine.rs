@@ -373,26 +373,52 @@ impl Store {
         })
     }
 
-    /// Operations other than `excluding` that started at or after `since` and targeted any of
-    /// `identities` (a plan created at `since` is invalidated by them, SAFE-09).
+    /// The position of the last recorded operation (0 when there is none): the SAFE-09
+    /// watermark a scan takes before it starts. `operations` is append-only (rows are never
+    /// deleted), so positions only grow and every later operation is above it.
+    pub fn operations_watermark(&self) -> Result<u64> {
+        self.read(|c| {
+            let n: i64 =
+                c.query_row("SELECT coalesce(max(rowid), 0) FROM operations", [], |r| {
+                    r.get(0)
+                })?;
+            u64::try_from(n).map_err(|_| bad("operation position"))
+        })
+    }
+
+    /// Operations other than `excluding` that targeted any of `identities` after a plan's scan
+    /// observed them (SAFE-09): with the plan's `watermark` ([`Store::operations_watermark`]
+    /// taken when its scan started), every operation recorded after it, whatever its clock
+    /// says; without one (older plans), every operation started at or after `since`, the
+    /// plan's creation time.
     pub fn operations_touching(
         &self,
         identities: &[FileIdentity],
         since: i64,
+        watermark: Option<u64>,
         excluding: Option<&OperationId>,
     ) -> Result<Vec<OperationId>> {
+        let watermark = watermark
+            .map(|w| i64::try_from(w).map_err(|_| bad("operation watermark")))
+            .transpose()?;
         self.read(|c| {
             let mut stmt = c.prepare(
                 "SELECT DISTINCT t.operation_id FROM operation_targets t \
                  JOIN operations o ON o.operation_id = t.operation_id \
-                 WHERE t.identity = ?1 AND o.started_at >= ?2 \
+                 WHERE t.identity = ?1 \
+                   AND (CASE WHEN ?4 IS NULL THEN o.started_at >= ?2 ELSE o.rowid > ?4 END) \
                    AND (?3 IS NULL OR t.operation_id <> ?3) \
                  ORDER BY t.operation_id",
             )?;
             let mut out: Vec<OperationId> = Vec::new();
             for id in identities {
                 let rows = stmt.query_map(
-                    params![identity_key(*id), since, excluding.map(OperationId::as_str)],
+                    params![
+                        identity_key(*id),
+                        since,
+                        excluding.map(OperationId::as_str),
+                        watermark
+                    ],
                     |r| r.get::<_, String>(0),
                 )?;
                 for r in rows {

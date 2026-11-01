@@ -229,6 +229,57 @@ fn hold_file(path: &OsString) {
     drop(file);
 }
 
+/// Stages of FX-WIN-03, for the watchdog's message.
+const FX_WIN_03_STAGES: [&str; 5] = [
+    "waiting for the holder to open the file",
+    "checking the file is locked",
+    "deleting the candidate (walker + Restart Manager)",
+    "waiting for the holder to exit after its stdin closed",
+    "done",
+];
+
+/// Fails FX-WIN-03 instead of letting it hang: after 90 s names the stage and kills the holder;
+/// 60 s later, still stuck, aborts the test process. Written straight to stderr (not captured).
+fn watch_fx_win_03(
+    holder: u32,
+    stage: &std::sync::atomic::AtomicUsize,
+    done: &AtomicBool,
+    timed_out: &AtomicBool,
+) {
+    let say = |m: String| {
+        let _ = std::io::stderr().write_all(format!("FX-WIN-03 watchdog: {m}\n").as_bytes());
+    };
+    let wait = |secs: u64| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while std::time::Instant::now() < end {
+            if done.load(Ordering::SeqCst) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    };
+    if wait(90) {
+        return;
+    }
+    timed_out.store(true, Ordering::SeqCst);
+    let at = FX_WIN_03_STAGES[stage.load(Ordering::SeqCst).min(4)];
+    say(format!(
+        "stuck for 90 s while {at}; killing holder pid {holder}"
+    ));
+    let _ = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &holder.to_string()])
+        .output();
+    if wait(60) {
+        return;
+    }
+    let at = FX_WIN_03_STAGES[stage.load(Ordering::SeqCst).min(4)];
+    say(format!(
+        "still stuck 60 s after killing the holder, while {at}; aborting"
+    ));
+    std::process::abort();
+}
+
 /// FX-WIN-03: a file inside the candidate is held open (no sharing) by another process → it is
 /// kept and reported `Busy`, its ancestors are kept, the rest of the candidate is removed, and
 /// the detail names the holding process from Restart Manager. Nothing is forced.
@@ -259,6 +310,24 @@ fn fx_win_03_file_held_open_by_another_process_is_skipped_and_named() {
         .spawn()
         .unwrap();
     let child_pid = child.id();
+    // A hang anywhere below must fail the test with where it stopped, not stall the CI job:
+    // the watchdog names the stage, kills the holder (which unblocks anything waiting on the
+    // file) and, if that doesn't help, aborts the test process.
+    let stage = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let watchdog = std::thread::spawn({
+        let (stage, done, timed_out) = (stage.clone(), done.clone(), timed_out.clone());
+        move || watch_fx_win_03(child_pid, &stage, &done, &timed_out)
+    });
+    // A panic below also stops the watchdog.
+    struct StopOnDrop(Arc<AtomicBool>);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let _stop = StopOnDrop(done.clone());
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     loop {
         match lines.next() {
@@ -267,15 +336,25 @@ fn fx_win_03_file_held_open_by_another_process_is_skipped_and_named() {
             other => panic!("the holder exited before opening the file: {other:?}"),
         }
     }
+    stage.store(1, Ordering::SeqCst);
     // Opening it ourselves now fails: it really is locked.
     assert!(fs::OpenOptions::new().read(true).open(&locked).is_err());
 
     let item = s0_delete(&fx, "cand");
+    stage.store(2, Ordering::SeqCst);
     let r = delete(&fx, &item, "cand").unwrap();
+    stage.store(3, Ordering::SeqCst);
 
     // Release the holder before asserting, so a failure doesn't leave it running.
     drop(child.stdin.take());
     let status = child.wait().unwrap();
+    stage.store(4, Ordering::SeqCst);
+    done.store(true, Ordering::SeqCst);
+    watchdog.join().unwrap();
+    assert!(
+        !timed_out.load(Ordering::SeqCst),
+        "FX-WIN-03 hung (see the watchdog message above)"
+    );
     drop(lines);
     println!("report: {:#?}", r.report);
     assert!(status.success(), "holder process failed: {status}");

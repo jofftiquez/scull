@@ -347,6 +347,48 @@ fn fx_race_05_plan_invalidated_when_another_operation_touched_its_targets() {
     check(&fx, &stale, &r, &["web/node_modules"]);
 }
 
+/// SAFE-09 with the watermark taken when the plan's scan started: an operation recorded after
+/// it invalidates the plan even though it started *before* the plan was created (between the
+/// scan and the plan, where the creation-time rule only caught it within the same second). A
+/// watermark taken after that operation (a rescan) is not invalidated by it.
+#[test]
+fn fx_race_05_operation_recorded_after_the_scan_started_invalidates_the_plan() {
+    let fx = fixture();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let watermark = s.operations_watermark().unwrap();
+    let scan = h.scan(&fx);
+    // After the scan, before the plan is created, another operation runs on the same item.
+    let (_, r) = run(&fx, &h, &mut s, &["web/node_modules"], "FIRST");
+    quarantined(&fx, &r, "web/node_modules");
+    let stale = plan_named(&fx, &scan, &["web/node_modules", "app/target"], "STALE")
+        .with_operations_watermark(watermark)
+        .unwrap();
+    s.insert_plan(&stale).unwrap();
+
+    let exec = locked(&fx);
+    let e = exec
+        .begin_operation(&mut s, &stale, &start(&stale, "SECOND"))
+        .unwrap_err();
+    println!("stale plan: [{}] {}", e.kind, e.message);
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated);
+    assert!(e.message.contains("FIRST"), "{}", e.message);
+    drop(exec);
+
+    // A rescan takes a new watermark: FIRST is before it and no longer counts.
+    let rescan_watermark = s.operations_watermark().unwrap();
+    assert!(rescan_watermark > watermark);
+    let rescan = h.scan(&fx);
+    let fresh = plan_named(&fx, &rescan, &["app/target"], "FRESH")
+        .with_operations_watermark(rescan_watermark)
+        .unwrap();
+    s.insert_plan(&fresh).unwrap();
+    let exec = locked(&fx);
+    exec.begin_operation(&mut s, &fresh, &start(&fresh, "THIRD"))
+        .expect("an operation before the rescan does not invalidate the new plan");
+    check(&fx, &stale, &r, &["web/node_modules"]);
+}
+
 /// Operations need the execution lock.
 #[test]
 fn operations_and_purge_need_the_lock() {

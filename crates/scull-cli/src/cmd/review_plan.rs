@@ -101,17 +101,29 @@ impl Binding {
     }
 }
 
+/// The scan a review plan is built from.
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewScan<'a> {
+    /// Its ID.
+    pub id: &'a ScanId,
+    /// Its candidates.
+    pub candidates: &'a [Candidate],
+    /// SAFE-09: the last operation recorded before it started (`Store::operations_watermark`),
+    /// when the database could be read then.
+    pub operations_watermark: Option<u64>,
+}
+
 /// Refresh the review plan from the candidates of scan `scan_id` (see the module docs). Returns the current plan, or
 /// `None` when nothing qualifies (a previous plan is then withdrawn).
 pub fn refresh(
     store: &mut Store,
     data_dir: &Path,
-    scan_id: &ScanId,
-    candidates: &[Candidate],
+    scan: &ReviewScan<'_>,
     include_s1: bool,
     binding: &Binding,
     now: i64,
 ) -> Result<Option<ReviewPlanReport>, ScullError> {
+    let (scan_id, candidates) = (scan.id, scan.candidates);
     let items = review_items(candidates, include_s1);
     let current = latest_review_plan(store, now).map_err(ScullError::from)?;
     if items.is_empty() {
@@ -152,6 +164,11 @@ pub fn refresh(
         },
         items,
     )?;
+    // SAFE-09: bound to the last operation recorded before its scan started, when known.
+    let plan = match scan.operations_watermark {
+        Some(w) => plan.with_operations_watermark(w)?,
+        None => plan,
+    };
     store.insert_plan(&plan).map_err(ScullError::from)?;
     let file = write_plan_file(data_dir, &plan)?;
     let summary = ReviewPlanSummary::of(&plan, file.to_string_lossy(), include_s1);
@@ -240,6 +257,14 @@ mod tests {
         c
     }
 
+    fn scanned<'a>(id: &'a ScanId, candidates: &'a [Candidate]) -> ReviewScan<'a> {
+        ReviewScan {
+            id,
+            candidates,
+            operations_watermark: None,
+        }
+    }
+
     fn binding() -> Binding {
         Binding {
             machine_id: "a".repeat(32),
@@ -257,9 +282,16 @@ mod tests {
         assert_eq!(one[0].tier, scull_core::Tier::S0);
 
         // First check: a new plan, recorded, written owner-only, announced.
-        let p = refresh(&mut store, &data, &scan, &one, false, &binding(), NOW)
-            .expect("refresh")
-            .expect("plan");
+        let p = refresh(
+            &mut store,
+            &data,
+            &scanned(&scan, &one),
+            false,
+            &binding(),
+            NOW,
+        )
+        .expect("refresh")
+        .expect("plan");
         assert!(!p.reused);
         assert_eq!(p.items, 1);
         assert_eq!(p.expires_at - p.created_at, scull_core::CLI_PLAN_TTL_SECS);
@@ -281,8 +313,7 @@ mod tests {
         let again = refresh(
             &mut store,
             &data,
-            &scan,
-            &one,
+            &scanned(&scan, &one),
             false,
             &binding(),
             NOW + 3_600,
@@ -294,17 +325,31 @@ mod tests {
 
         // Same work but under 6 hours left: refreshed.
         let late = NOW + scull_core::CLI_PLAN_TTL_SECS - REUSE_MIN_SECS + 1;
-        let fresh = refresh(&mut store, &data, &scan, &one, false, &binding(), late)
-            .expect("refresh")
-            .expect("plan");
+        let fresh = refresh(
+            &mut store,
+            &data,
+            &scanned(&scan, &one),
+            false,
+            &binding(),
+            late,
+        )
+        .expect("refresh")
+        .expect("plan");
         assert!(!fresh.reused);
         assert_ne!(fresh.plan_id, p.plan_id);
 
         // Different work: a new plan replaces the file.
         let two = vec![candidate("/p/a/target"), candidate("/p/bb/target")];
-        let bigger = refresh(&mut store, &data, &scan, &two, false, &binding(), late + 60)
-            .expect("refresh")
-            .expect("plan");
+        let bigger = refresh(
+            &mut store,
+            &data,
+            &scanned(&scan, &two),
+            false,
+            &binding(),
+            late + 60,
+        )
+        .expect("refresh")
+        .expect("plan");
         assert!(!bigger.reused);
         assert_eq!(bigger.items, 2);
         let on_disk: Plan =
@@ -312,9 +357,16 @@ mod tests {
         assert_eq!(on_disk.id().as_str(), bigger.plan_id);
 
         // Opting in to S1 is a different proposal, even with the same items.
-        let s1 = refresh(&mut store, &data, &scan, &two, true, &binding(), late + 120)
-            .expect("refresh")
-            .expect("plan");
+        let s1 = refresh(
+            &mut store,
+            &data,
+            &scanned(&scan, &two),
+            true,
+            &binding(),
+            late + 120,
+        )
+        .expect("refresh")
+        .expect("plan");
         assert!(!s1.reused && s1.includes_s1);
 
         // Nothing eligible: no plan, and the announcement is withdrawn.
@@ -325,8 +377,7 @@ mod tests {
             refresh(
                 &mut store,
                 &data,
-                &scan,
-                &[protected],
+                &scanned(&scan, &[protected]),
                 false,
                 &binding(),
                 late + 180
@@ -353,8 +404,7 @@ mod tests {
         refresh(
             &mut store,
             &data,
-            &scan,
-            &[candidate("/p/a/target")],
+            &scanned(&scan, &[candidate("/p/a/target")]),
             false,
             &binding(),
             NOW,
