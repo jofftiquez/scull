@@ -1,5 +1,8 @@
 //! Package-manager caches: npm, pnpm, Bun, Yarn, pip, uv, conda, Go, Gradle, Maven and NuGet
-//! (P1-DET-04, P4-DET-02, P4-DET-01, P5-DET-01, PRD §10.8 QC-01…05, T-23).
+//! (P1-DET-04, P4-DET-02, P4-DET-01, P5-DET-01, PRD §10.8 QC-01…05, T-23), plus the long-tail
+//! tool caches of [`crate::tool_caches`] (P5-DET-05: ccache, Conan, vcpkg, PlatformIO, Arduino,
+//! ESP-IDF, SwiftPM, CocoaPods, Coursier, Deno, Zig, Playwright, Cypress, Puppeteer, Electron,
+//! Homebrew, Nix), whose locations are listed there.
 //!
 //! Global package caches hold no unique data, so they form the Quick Clean category
 //! ([`Category::PackageCache`]): **S1**, cleaned with the tool's **own** command (QC-02, QC-03),
@@ -115,11 +118,45 @@ pub enum CacheTool {
     Maven,
     /// NuGet's global packages folder (`NUGET_PACKAGES`).
     NuGet,
+    /// ccache's compiler cache.
+    Ccache,
+    /// Conan 2's package cache (`$CONAN_HOME/p`).
+    Conan,
+    /// vcpkg's binary cache; inspect-only.
+    Vcpkg,
+    /// PlatformIO's download and HTTP cache; inspect-only.
+    PlatformIo,
+    /// The Arduino CLI / IDE 2 download cache (`staging/`).
+    Arduino,
+    /// ESP-IDF's downloaded tool archives (`dist/`); inspect-only.
+    EspIdf,
+    /// SwiftPM's global repository and artifact cache; inspect-only.
+    SwiftPm,
+    /// CocoaPods' download cache.
+    CocoaPods,
+    /// Coursier's artifact cache (sbt, Mill, Metals); inspect-only.
+    Coursier,
+    /// Deno's cache folder (`DENO_DIR`).
+    Deno,
+    /// Zig's global cache; inspect-only.
+    Zig,
+    /// Playwright's browser downloads.
+    Playwright,
+    /// Cypress' binary cache.
+    Cypress,
+    /// Puppeteer's browser downloads.
+    Puppeteer,
+    /// Electron's download cache; inspect-only.
+    Electron,
+    /// Homebrew's download cache.
+    Homebrew,
+    /// The Nix store; inspect-only.
+    Nix,
 }
 
 impl CacheTool {
     /// Every tool, in reporting order.
-    pub const ALL: [CacheTool; 13] = [
+    pub const ALL: [CacheTool; 30] = [
         CacheTool::Npm,
         CacheTool::Pnpm,
         CacheTool::Bun,
@@ -133,6 +170,23 @@ impl CacheTool {
         CacheTool::Gradle,
         CacheTool::Maven,
         CacheTool::NuGet,
+        CacheTool::Ccache,
+        CacheTool::Conan,
+        CacheTool::Vcpkg,
+        CacheTool::PlatformIo,
+        CacheTool::Arduino,
+        CacheTool::EspIdf,
+        CacheTool::SwiftPm,
+        CacheTool::CocoaPods,
+        CacheTool::Coursier,
+        CacheTool::Deno,
+        CacheTool::Zig,
+        CacheTool::Playwright,
+        CacheTool::Cypress,
+        CacheTool::Puppeteer,
+        CacheTool::Electron,
+        CacheTool::Homebrew,
+        CacheTool::Nix,
     ];
 
     /// Rule ID recorded on its candidates.
@@ -151,6 +205,23 @@ impl CacheTool {
             CacheTool::Gradle => "gradle.caches",
             CacheTool::Maven => "maven.repository",
             CacheTool::NuGet => "nuget.packages",
+            CacheTool::Ccache => "ccache.cache",
+            CacheTool::Conan => "conan.cache",
+            CacheTool::Vcpkg => "vcpkg.binary-cache",
+            CacheTool::PlatformIo => "platformio.cache",
+            CacheTool::Arduino => "arduino.staging",
+            CacheTool::EspIdf => "espidf.dist",
+            CacheTool::SwiftPm => "swiftpm.cache",
+            CacheTool::CocoaPods => "cocoapods.cache",
+            CacheTool::Coursier => "coursier.cache",
+            CacheTool::Deno => "deno.cache",
+            CacheTool::Zig => "zig.global-cache",
+            CacheTool::Playwright => "playwright.browsers",
+            CacheTool::Cypress => "cypress.cache",
+            CacheTool::Puppeteer => "puppeteer.browsers",
+            CacheTool::Electron => "electron.cache",
+            CacheTool::Homebrew => "homebrew.cache",
+            CacheTool::Nix => "nix.store",
         }
     }
 
@@ -173,6 +244,23 @@ impl CacheTool {
             CacheTool::Gradle => "gradle",
             CacheTool::Maven => "mvn",
             CacheTool::NuGet => "dotnet",
+            CacheTool::Ccache => "ccache",
+            CacheTool::Conan => "conan",
+            CacheTool::Vcpkg => "vcpkg",
+            CacheTool::PlatformIo => "pio",
+            CacheTool::Arduino => "arduino-cli",
+            CacheTool::EspIdf => "idf.py",
+            CacheTool::SwiftPm => "swift",
+            CacheTool::CocoaPods => "pod",
+            CacheTool::Coursier => "cs",
+            CacheTool::Deno => "deno",
+            CacheTool::Zig => "zig",
+            CacheTool::Playwright => "playwright",
+            CacheTool::Cypress => "cypress",
+            CacheTool::Puppeteer => "puppeteer",
+            CacheTool::Electron => "electron",
+            CacheTool::Homebrew => "brew",
+            CacheTool::Nix => "nix",
         }
     }
 
@@ -192,6 +280,23 @@ impl CacheTool {
             CacheTool::Gradle => "Gradle caches",
             CacheTool::Maven => "Maven local repository",
             CacheTool::NuGet => "NuGet global packages folder",
+            CacheTool::Ccache => "ccache compiler cache",
+            CacheTool::Conan => "Conan package cache",
+            CacheTool::Vcpkg => "vcpkg binary cache",
+            CacheTool::PlatformIo => "PlatformIO cache",
+            CacheTool::Arduino => "Arduino download cache",
+            CacheTool::EspIdf => "ESP-IDF downloaded archives",
+            CacheTool::SwiftPm => "SwiftPM cache",
+            CacheTool::CocoaPods => "CocoaPods cache",
+            CacheTool::Coursier => "Coursier cache",
+            CacheTool::Deno => "Deno cache",
+            CacheTool::Zig => "Zig global cache",
+            CacheTool::Playwright => "Playwright browsers",
+            CacheTool::Cypress => "Cypress binary cache",
+            CacheTool::Puppeteer => "Puppeteer browsers",
+            CacheTool::Electron => "Electron download cache",
+            CacheTool::Homebrew => "Homebrew cache",
+            CacheTool::Nix => "Nix store",
         }
     }
 
@@ -210,6 +315,23 @@ impl CacheTool {
             CacheTool::Gradle => &["gradle", "gradlew", "java"],
             CacheTool::Maven => &["mvn", "mvnd", "java"],
             CacheTool::NuGet => &["dotnet", "nuget", "MSBuild", "msbuild", "VBCSCompiler"],
+            CacheTool::Ccache => &["ccache"],
+            CacheTool::Conan => &["conan"],
+            CacheTool::Vcpkg => &["vcpkg"],
+            CacheTool::PlatformIo => &["pio", "platformio"],
+            CacheTool::Arduino => &["arduino-cli", "arduino-ide"],
+            CacheTool::EspIdf => &["idf.py"],
+            CacheTool::SwiftPm => &["swift", "swift-build", "swift-package", "sourcekit-lsp"],
+            CacheTool::CocoaPods => &["pod"],
+            CacheTool::Coursier => &["cs", "coursier", "sbt", "metals", "bloop"],
+            CacheTool::Deno => &["deno"],
+            CacheTool::Zig => &["zig", "zls"],
+            CacheTool::Playwright => &["playwright"],
+            CacheTool::Cypress => &["cypress", "Cypress"],
+            CacheTool::Puppeteer => &["puppeteer"],
+            CacheTool::Electron => &["electron"],
+            CacheTool::Homebrew => &["brew"],
+            CacheTool::Nix => &["nix", "nix-daemon", "nix-build", "nix-env", "nix-store"],
         }
     }
 }
@@ -334,8 +456,65 @@ fn commands_for_tool(tool: CacheTool) -> Option<CacheCommands> {
             preferred_prunes: false,
             wipe: None,
         },
-        // No native cleanup command at all (see `crate::jvm`).
-        CacheTool::Gradle | CacheTool::Maven => return None,
+        // Empties the cache; ccache keeps its configuration file.
+        CacheTool::Ccache => CacheCommands {
+            preferred: c("ccache", &["--clear"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        // Only the temporary source, build and download folders; packages stay. Removing the
+        // packages (`conan remove`) is not offered: some may have been built locally.
+        CacheTool::Conan => CacheCommands {
+            preferred: c("conan", &["cache", "clean"]),
+            preferred_prunes: true,
+            wipe: None,
+        },
+        CacheTool::Arduino => CacheCommands {
+            preferred: c("arduino-cli", &["cache", "clean"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::CocoaPods => CacheCommands {
+            preferred: c("pod", &["cache", "clean", "--all"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::Deno => CacheCommands {
+            preferred: c("deno", &["clean"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::Playwright => CacheCommands {
+            preferred: c("playwright", &["uninstall", "--all"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::Cypress => CacheCommands {
+            preferred: c("cypress", &["cache", "prune"]),
+            preferred_prunes: true,
+            wipe: Some(c("cypress", &["cache", "clear"])),
+        },
+        CacheTool::Puppeteer => CacheCommands {
+            preferred: c("puppeteer", &["browsers", "clear"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::Homebrew => CacheCommands {
+            preferred: c("brew", &["cleanup"]),
+            preferred_prunes: true,
+            wipe: None,
+        },
+        // No native cleanup command at all (see `crate::jvm`, `crate::tool_caches`).
+        CacheTool::Gradle
+        | CacheTool::Maven
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::Coursier
+        | CacheTool::Zig
+        | CacheTool::Electron
+        | CacheTool::Nix => return None,
     })
 }
 
@@ -536,6 +715,9 @@ pub struct LocatedCache {
     pub notes: Vec<String>,
     /// Failed QC-05 checks; any one makes the candidate S3.
     pub problems: Vec<CacheProblem>,
+    /// Data in the folder that isn't a cache (e.g. Deno's `location_data/`); any entry makes
+    /// the candidate S2, where no tool command is offered.
+    pub non_cache_data: Vec<String>,
     /// Whether the volume check could run (both identities known).
     pub volume_checked: bool,
 }
@@ -588,6 +770,7 @@ pub fn locate_caches(
             CacheTool::Gradle => Ok(crate::jvm::gradle_spots(env)),
             CacheTool::Maven => crate::jvm::maven_spots(env, platform, ctx),
             CacheTool::NuGet => crate::dotnet::nuget_spots(env, platform, ctx),
+            t => crate::tool_caches::spots(t, env, platform, ctx).unwrap_or_else(|| Ok(Vec::new())),
         };
         let spots = match spots {
             Ok(s) => s,
@@ -1226,6 +1409,7 @@ fn inspect(env: &CacheEnv, platform: &dyn Platform, s: Spot) -> Option<LocatedCa
         markers: Vec::new(),
         notes: s.notes,
         problems,
+        non_cache_data: Vec::new(),
         volume_checked: false,
     };
     if is_link {
@@ -1320,6 +1504,10 @@ fn recognize(c: &mut LocatedCache, inside: &Listing, platform: &dyn Platform) {
             c.markers = crate::dotnet::nuget_markers(&c.path, inside, platform);
             c.recognized = !c.markers.is_empty();
             return;
+        }
+        t => {
+            c.non_cache_data = crate::tool_caches::non_cache_data(t, inside);
+            crate::tool_caches::markers(t, inside).unwrap_or_default()
         }
     };
     c.recognized = !markers.is_empty();
@@ -1418,10 +1606,7 @@ impl LocatedCache {
                 Some(CacheCommands { preferred, .. }) => {
                     format!("cleaned with `{preferred}` (removes everything)")
                 }
-                None => format!(
-                    "{} has no command that cleans this cache, so scull only shows it",
-                    self.tool.binary()
-                ),
+                None => no_command_note(self.tool),
             },
         });
         evidence.extend(tool_note(self.tool).map(|t| Evidence::Note { text: t.into() }));
@@ -1520,11 +1705,24 @@ impl LocatedCache {
             candidate.raise(TierReason::new(
                 Tier::S3,
                 ReasonCode::InspectOnly,
-                format!(
-                    "inspect-only: {} has no command to clean its cache, and scull never \
-                     removes a cache whose tool is installed by itself",
-                    self.tool.binary()
-                ),
+                match crate::tool_caches::inspect_only_reason(self.tool) {
+                    Some(why) => format!("inspect-only: {why}"),
+                    None => format!(
+                        "inspect-only: {} has no command to clean its cache, and scull never \
+                         removes a cache whose tool is installed by itself",
+                        self.tool.binary()
+                    ),
+                },
+            ));
+        }
+        for why in &self.non_cache_data {
+            candidate
+                .evidence
+                .push(Evidence::Note { text: why.clone() });
+            candidate.raise(TierReason::new(
+                Tier::S2,
+                ReasonCode::SignalUnavailable,
+                format!("not only a cache: {why}"),
             ));
         }
         if !self.recognized && self.problems.is_empty() {
@@ -1608,8 +1806,19 @@ fn tool_note(tool: CacheTool) -> Option<&'static str> {
             "`dotnet nuget locals global-packages --clear` empties this folder only; projects \
              restore their packages again on the next `dotnet restore` or build"
         }
-        _ => return None,
+        t => return crate::tool_caches::note(t),
     })
+}
+
+/// The commands note for a cache with no offered command.
+fn no_command_note(tool: CacheTool) -> String {
+    match crate::tool_caches::inspect_only_reason(tool) {
+        Some(why) => why.to_owned(),
+        None => format!(
+            "{} has no command that cleans this cache, so scull only shows it",
+            tool.binary()
+        ),
+    }
 }
 
 /// Expand a configured path: `${VAR}` from the environment (an unset variable is an error, as

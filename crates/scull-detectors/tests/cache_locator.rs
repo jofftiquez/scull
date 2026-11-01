@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{StdReader, check, identity_available, jvm_caches, plan_inputs, rel};
+use common::{StdReader, check, identity_available, jvm_caches, plan_inputs, rel, tool_caches};
 use scull_core::{
     Action, Candidate, Category, Evidence, PlanId, PlanItem, PlanOrigin, PlanParams, ReasonCode,
     ScanId, Tier,
@@ -249,11 +249,19 @@ fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
         CacheTool::Gradle => jvm_caches::gradle_caches(fx, dir),
         CacheTool::Maven => jvm_caches::maven_repository(fx, dir),
         CacheTool::NuGet => jvm_caches::nuget_packages(fx, dir),
+        t => tool_caches::build(fx, t, dir),
     }
 }
 
-/// Default cache folders per OS, relative to the fixture root (home is `home/`, no env).
+/// Default cache folders per OS, relative to the fixture root (home is `home/`, no env): the
+/// package managers, then the long-tail tools (P5-DET-05).
 fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
+    let mut v = package_manager_layout(os);
+    v.extend(tool_caches::default_layout(os));
+    v
+}
+
+fn package_manager_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
     match os {
         Os::Linux => vec![
             (CacheTool::Npm, "home/.npm/_cacache"),
@@ -326,7 +334,7 @@ fn default_layout_for(os: Os) {
     let want: Vec<(CacheTool, String)> = mine.iter().map(|(t, d)| (*t, (*d).to_owned())).collect();
     assert_eq!(found_rel(&fx, &scan), want, "{os:?} layout");
 
-    assert_eq!(scan.found.len(), CacheTool::ALL.len(), "every tool found");
+    assert_eq!(scan.found.len(), mine.len(), "every tool found");
     // Gradle and Maven have no cleanup command: shown, inspect-only, never planned.
     let want_len = scan.found.iter().filter(|c| c.commands().is_some()).count();
     let mut candidates = Vec::new();

@@ -119,3 +119,136 @@ processes = ["mvn", "mvnd", "java"]
 instructions = "Run `mvn package` (or `mvn install`) in the project to rebuild."
 network = false
 long_build = false
+
+# ---------------------------------------------------------------------------------------------
+# JVM extras: sbt, Bloop and Metals (P5-DET-05). The Coursier cache (used by sbt, Mill, Metals
+# and `cs`) is located by Rust code in `scull_detectors::caches` (rule ID `coursier.cache`,
+# inspect-only: Coursier has no command that cleans it).
+
+[[rule]]
+id = "sbt.target"
+version = 1
+artifact = "sbt build output"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["target"]
+
+[rule.markers]
+# The sbt build definition beside it, and what sbt writes inside.
+all = ["../build.sbt"]
+any = ["streams", "task-temp-directory", "global-logging", "scala-*"]
+
+[rule.exclude]
+# Cargo, Maven and Leiningen also write `target/` (mirrors `maven.target`).
+markers = ["../{Cargo.toml,pom.xml,project.clj}"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["sbt", "java", "bloop", "metals"]
+
+[rule.regeneration]
+instructions = "Run `sbt compile` (or `sbt package`) in the project to rebuild."
+network = false
+long_build = false
+
+[[rule]]
+id = "sbt.project-target"
+version = 1
+artifact = "sbt build definition output (project/target)"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["target"]
+
+[rule.markers]
+# `project/target`: the compiled build definition, beside `project/build.properties`, with the
+# project's `build.sbt` one level up.
+all = ["../build.properties", "../../build.sbt"]
+any = ["config-classes", "streams", "scala-*"]
+
+[rule.exclude]
+markers = ["../{Cargo.toml,pom.xml,project.clj}"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["sbt", "java", "bloop", "metals"]
+
+[rule.regeneration]
+instructions = "sbt compiles the build definition again when it next starts in the project."
+network = false
+long_build = false
+
+[[rule]]
+id = "bloop.dir"
+version = 1
+artifact = "Bloop build server folder"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".bloop"]
+
+[rule.markers]
+# A JVM build beside it, and the per-project JSON configurations Bloop reads inside.
+all = [
+  "../{build.sbt,build.sc,build.mill,build.gradle,build.gradle.kts,pom.xml}",
+  "*.json",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["bloop", "java", "metals"]
+
+[rule.regeneration]
+instructions = "Import the build again (Metals: \"Import build\"; sbt: `sbt bloopInstall`). Bloop then recompiles the projects."
+network = false
+long_build = true
+
+[[rule]]
+id = "metals.dir"
+version = 1
+artifact = "Metals language server folder"
+ecosystem = "jvm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".metals"]
+
+[rule.markers]
+# A Scala build beside it, and Metals' database or log inside.
+all = [
+  "../{build.sbt,build.sc,build.mill,project.scala,build.gradle,build.gradle.kts,pom.xml}",
+  "{metals.mv.db,metals.lock.db,metals.log}",
+]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["metals", "java"]
+
+[rule.regeneration]
+instructions = "Metals recreates it when the project is next opened (it asks again which build tool or server to use, and re-indexes)."
+network = false
+long_build = true
