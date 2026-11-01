@@ -31,8 +31,12 @@
 //!   forecast (PRO-01, computed by [`scull_proactive::forecast()`], the same method as
 //!   `scull check`), and **scull's own footprint** against the storage budget
 //!   ([`OwnFootprint`], DATA-05, INS-02).
+//!
+//! [`digest`] condenses a 7-day report, the week's alerts and the ready-to-review plan into the
+//! opt-in weekly digest (INS-04) the tray app notifies and the desktop Insights page shows.
 
 pub mod csv;
+pub mod digest;
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
 pub mod time;

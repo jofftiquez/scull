@@ -28,6 +28,7 @@ import {
 } from '../../components/settings/bridge';
 import {
   ACTIVITY_WINDOWS,
+  ALERT_COOLDOWN,
   APP_DEFAULTS,
   CAUTION,
   CHECK_EVERY,
@@ -35,6 +36,7 @@ import {
   DESIGN_BUDGETS,
   DESIGN_CLIENTS,
   HISTORY_KEEP,
+  MONITOR_EVERY,
   RETENTION,
   TABS,
   activityOption,
@@ -47,6 +49,10 @@ import {
   type AppKey,
   type TabId,
 } from '../../components/settings/model';
+import type { MonitorStatus } from '../../bridge';
+import { monitorControlFor } from '../../monitor/control';
+import { isMonitorKey, loadPrefs, saveMonitorPref } from '../../monitor/prefs';
+import { formatWhen, secsUntilTomorrowMorning } from '../../monitor/format';
 
 const props = defineProps<{ writer?: SettingsWriter }>();
 
@@ -73,8 +79,13 @@ watch(
   },
 );
 
-/** Values changed in this session (saved through the writer). */
-const changed = ref<Map<string, SettingValue>>(new Map());
+// Tray monitoring (P5-PRO-01): its keys are app state kept on this computer and sent to the
+// monitor (src/monitor), so they save inside Tauri too; everything else goes through the writer.
+const monitor = monitorControlFor(bridge);
+const monitorStatus = ref<MonitorStatus | null>(null);
+
+/** Values changed in this session (saved through the writer), and the stored monitor keys. */
+const changed = ref<Map<string, SettingValue>>(new Map(Object.entries(loadPrefs())));
 const saved = ref(false);
 const saveError = ref('');
 const busy = ref<string | null>(null);
@@ -95,6 +106,7 @@ onMounted(async () => {
   } catch (e) {
     loadError.value = toBridgeError(e).message;
   }
+  monitorStatus.value = await bridge.monitorStatus().catch(() => null);
 });
 onBeforeUnmount(() => clearTimeout(savedTimer));
 
@@ -113,7 +125,15 @@ async function set(key: string, value: SettingValue) {
   saveError.value = '';
   notice.value = '';
   try {
-    await writer.save(key, value);
+    if (isMonitorKey(key) && !Array.isArray(value)) {
+      await saveMonitorPref(monitor, key, value);
+      void bridge.monitorStatus().then(
+        (st) => (monitorStatus.value = st),
+        () => undefined,
+      );
+    } else {
+      await writer.save(key, value);
+    }
     flashSaved();
   } catch (e) {
     changed.value = before;
@@ -197,6 +217,35 @@ function addPath(kind: 'scan.roots' | 'scan.protect', input: string | null, curr
   else newProtect.value = null;
   void set(kind, [...current, p]);
 }
+
+async function pauseAlerts(secs: number | null) {
+  saveError.value = '';
+  notice.value = '';
+  try {
+    monitorStatus.value = await monitor.pause(secs);
+    notice.value = secs == null ? 'Alerts resumed.' : `Alerts paused until ${formatWhen(monitorStatus.value.settings.paused_until ?? 0)}.`;
+    flashSaved();
+  } catch (e) {
+    saveError.value = toBridgeError(e).message;
+  }
+}
+
+async function sendDigest() {
+  await act(
+    async () => {
+      await monitor.sendDigestNow();
+    },
+    monitor.kind === 'mock'
+      ? "This week's digest is ready (the browser preview shows no notification)."
+      : "This week's digest was sent to your notifications.",
+  );
+}
+
+const pausedUntil = computed(() => (monitorStatus.value?.paused ? (monitorStatus.value.settings.paused_until ?? null) : null));
+const nextDigestText = computed(() => {
+  const t = monitorStatus.value?.next_digest;
+  return app('app.weekly_digest') && t ? `Next digest ${formatWhen(t)}.` : 'Turn on Weekly digest to get it every Monday.';
+});
 
 const footprintPct = computed(() => Math.min(100, ((view.value?.data.footprint_bytes ?? 0) / DATA_BUDGET_BYTES) * 100));
 const versionText = computed(() => info.value?.version ?? '');
@@ -392,6 +441,35 @@ const versionText = computed(() => info.value?.version ?? '');
             </SettingRow>
             <SettingRow title="Weekly digest" description="A short local notification every Monday.">
               <SettingSwitch label="Weekly digest" :on="app('app.weekly_digest')" @toggle="set('app.weekly_digest', !app('app.weekly_digest'))" />
+            </SettingRow>
+          </section>
+          <section class="settings-section" data-testid="monitoring">
+            <h2>Menu bar monitoring</h2>
+            <SettingRow title="Look every" description="The menu bar app reads free space and the alerts scull check recorded. It never scans or cleans.">
+              <SegmentedControl label="Look every" :options="MONITOR_EVERY" :value="app('app.monitor_every')" @pick="set('app.monitor_every', $event)" />
+            </SettingRow>
+            <SettingRow title="Repeat an alert after" description="The same alert stays quiet this long, unless it gets worse.">
+              <SegmentedControl label="Repeat an alert after" :options="ALERT_COOLDOWN" :value="app('app.alert_cooldown')" @pick="set('app.alert_cooldown', $event)" />
+            </SettingRow>
+            <SettingRow title="Pause alerts" description="-">
+              <template #description>
+                <span data-testid="pause-state">{{ pausedUntil ? `Paused until ${formatWhen(pausedUntil)}.` : 'Alerts are on.' }}</span>
+              </template>
+              <span class="flex flex-wrap gap-2">
+                <template v-if="pausedUntil">
+                  <button type="button" class="settings-outline" @click="pauseAlerts(null)">Resume</button>
+                </template>
+                <template v-else>
+                  <button type="button" class="settings-outline" @click="pauseAlerts(3600)">1 hour</button>
+                  <button type="button" class="settings-outline" @click="pauseAlerts(secsUntilTomorrowMorning())">Until tomorrow</button>
+                </template>
+              </span>
+            </SettingRow>
+            <SettingRow title="This week's digest" description="-">
+              <template #description>
+                <span data-testid="next-digest">{{ nextDigestText }}</span>
+              </template>
+              <button type="button" class="settings-outline" @click="sendDigest">Send now</button>
             </SettingRow>
           </section>
           <section class="settings-section pb-5">

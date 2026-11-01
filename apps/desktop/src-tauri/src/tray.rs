@@ -1,7 +1,7 @@
 //! The menu bar / tray widget (design 11, D-23; P4-UI-01).
 //!
 //! A tray icon (the macOS menu bar, the Windows notification area, a Linux app indicator) with a
-//! small menu, and a 380 × 660 widget window (`menubar.html`) that a left click toggles next to
+//! small menu (widget, open, "Check now" and "Pause alerts for 1 hour" for the monitor, quit), and a 380 × 660 widget window (`menubar.html`) that a left click toggles next to
 //! the icon. Linux app indicators report no clicks, so there the menu's "Show scull widget"
 //! opens it in the top-right corner. The widget hides when it loses focus or on Escape.
 //!
@@ -44,8 +44,29 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let widget = MenuItem::with_id(app, "widget", "Show scull widget", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open scull", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let check = MenuItem::with_id(app, "monitor-check", "Check now", true, None::<&str>)?;
+    let pause = MenuItem::with_id(
+        app,
+        "monitor-pause",
+        "Pause alerts for 1 hour",
+        true,
+        None::<&str>,
+    )?;
+    let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit scull", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&widget, &open, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &widget,
+            &open,
+            &separator,
+            &check,
+            &pause,
+            &separator2,
+            &quit,
+        ],
+    )?;
+    crate::monitor::set_pause_item(app, pause.clone());
     let mut tray = TrayIconBuilder::with_id("scull")
         .tooltip("scull")
         .menu(&menu)
@@ -53,6 +74,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "widget" => report(toggle_widget(app, None)),
             "open" => report(show_main(app, "/")),
+            "monitor-check" => crate::monitor::check_now(app),
+            "monitor-pause" => crate::monitor::toggle_pause(app),
             "quit" => app.exit(0),
             _ => {}
         })

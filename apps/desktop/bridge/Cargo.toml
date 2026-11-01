@@ -27,6 +27,7 @@ scull-git.workspace = true
 scull-safety.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
+scull-insights.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

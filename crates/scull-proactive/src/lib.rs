@@ -16,12 +16,16 @@
 //! * [`review`]: the ready-to-review reclaim plan (PRO-05): which items a proposal holds, and
 //!   the announcement `scull status` / `scull check` read back. A proposal only: reviewing and
 //!   running it is `scull clean --plan`.
+//! * [`monitor`]: tray monitoring (PRD §14.6): which alerts become desktop notifications,
+//!   cooldowns, pause, exclusions, and the weekly digest's schedule (INS-04). Reads and
+//!   notifies only.
 //! * [`schedule`]: the unit files and tool invocations `scull schedule` registers with launchd,
 //!   systemd or Task Scheduler (PRO-07).
 
 pub mod alert;
 pub mod forecast;
 pub mod history;
+pub mod monitor;
 pub mod policy;
 pub mod review;
 pub mod schedule;

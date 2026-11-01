@@ -436,7 +436,7 @@ impl Session {
 
     /// The history database for a read, never created or migrated here: a missing one is
     /// [`Source::Missing`].
-    fn history_source(&self) -> Source {
+    pub(crate) fn history_source(&self) -> Source {
         let Some(data) = &self.setup.data_dir else {
             return Source::Missing;
         };

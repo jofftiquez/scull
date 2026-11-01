@@ -1,7 +1,7 @@
 // The Tauri bridge over a fake transport: command names and arguments, progress filtering by
 // operation ID, cancellation, and errors as BridgeError(ScullError).
 import { describe, expect, it } from 'vitest';
-import { createTauriBridge, newOpId, type TauriTransport } from './tauri';
+import { MONITOR_COMMANDS, MONITOR_EVENT, createTauriBridge, createTauriMonitorControl, newOpId, type TauriTransport } from './tauri';
 import { BridgeError, CANCEL_COMMAND, COMMANDS, PROGRESS_EVENT, type ProgressEvent } from './types';
 import { MOCK_DATA } from './mock';
 
@@ -67,6 +67,41 @@ describe('tauri bridge', () => {
       { cmd: COMMANDS.regrowth, args: { since: 300 } },
       { cmd: COMMANDS.footprintHistory, args: { since: 400 } },
     ]);
+  });
+
+  it('digest and monitor status are plain read commands', async () => {
+    const { t, calls } = fake();
+    const b = createTauriBridge(t);
+    await b.weeklyDigest();
+    await b.monitorStatus();
+    expect(calls).toEqual([
+      { cmd: 'weekly_digest', args: undefined },
+      { cmd: 'monitor_status', args: undefined },
+    ]);
+  });
+
+  it('monitor control: configure, pause, send now and snapshots', async () => {
+    const { t, calls, handlers } = fake();
+    const c = createTauriMonitorControl(t);
+    await c.configure({ settings: { interval_secs: 900 }, memory: null });
+    await c.pause(3600);
+    await c.pause(null);
+    await c.sendDigestNow();
+    expect(calls).toEqual([
+      { cmd: MONITOR_COMMANDS.configure, args: { config: { settings: { interval_secs: 900 }, memory: null } } },
+      { cmd: MONITOR_COMMANDS.pause, args: { secs: 3600 } },
+      { cmd: MONITOR_COMMANDS.pause, args: { secs: null } },
+      { cmd: MONITOR_COMMANDS.sendDigestNow, args: undefined },
+    ]);
+    const got: unknown[] = [];
+    const stop = await c.onSnapshot((s) => got.push(s));
+    handlers.get(MONITOR_EVENT)?.forEach((h) => h({ settings: {}, memory: { last_check: 5 } }));
+    stop();
+    handlers.get(MONITOR_EVENT)?.forEach((h) => h({ settings: {}, memory: {} }));
+    expect(got).toEqual([{ settings: {}, memory: { last_check: 5 } }]);
+    const { t: bad } = fake(() => new Error('no monitor'));
+    const err = await createTauriMonitorControl(bad).pause(60).catch((e) => e);
+    expect(err).toBeInstanceOf(BridgeError);
   });
 
   it('scan sends params and an operation ID, and only forwards its own progress', async () => {

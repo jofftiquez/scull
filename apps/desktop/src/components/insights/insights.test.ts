@@ -1,5 +1,6 @@
 // Insights model (pure) and the screen over the mock bridge's recorded history.
 import { describe, expect, it, vi } from 'vitest';
+import { mockMonitor } from '../../monitor/mock';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import type { CategorySeries, RegrowthEventView, VolumeSampleView, WorktreeReport } from '../../bridge';
@@ -211,6 +212,21 @@ describe('InsightsScreen (mock bridge)', { timeout: 20_000 }, () => {
     // No source yet: honest empty states, not invented numbers.
     expect(w.find('[data-testid="duplication"]').text()).toContain("aren't measured yet");
     expect(w.find('[data-testid="accuracy"]').text()).toContain('After your first cleanups');
+  });
+
+  it('shows this week\'s digest and whether the weekly notification is on', async () => {
+    mockMonitor.reset();
+    const w = await mountScreen();
+    await vi.waitFor(() => expect(w.find('[data-testid="digest"]').exists()).toBe(true));
+    const card = w.get('[data-testid="digest"]').text();
+    expect(card).toMatch(/41\.2 GiB free on \/ \(−24\.5 GiB this week\), about \d+ days until 10\.0 GiB free/);
+    expect(card).toContain('Grew most: ML model caches');
+    expect(w.get('[data-testid="digest-note"]').text()).toContain('The weekly digest is off');
+    expect(card).toContain('Turn on the weekly digest');
+    await mockMonitor.control.configure({ settings: { digest: { enabled: true } } });
+    const on = await mountScreen();
+    await vi.waitFor(() => expect(on.get('[data-testid="digest-note"]').text()).toMatch(/^Sent as a notification every Monday morning\. Next: /));
+    mockMonitor.reset();
   });
 
   it('?demo=design shows the design values for the tiles without a source', async () => {

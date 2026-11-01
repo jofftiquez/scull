@@ -109,6 +109,32 @@ Screenshots: in a browser, `menubar.html?demo=design` shows design 11's machine.
 debug build started with `SCULL_DEV_OPEN_WIDGET=1` opens the widget at launch, so you can
 capture it without a tray host.
 
+### Tray monitoring and the weekly digest
+
+While the app runs, a background thread in `src-tauri/src/monitor.rs` checks for trouble (PRD
+§14.6, INS-04). Each check reads live free space, the free-space history, and the alerts
+`scull check` recorded in the last day. It then decides which OS notification to show, through
+Tauri's notification plugin. The plugin is used from Rust only: no window gets the notification
+permission. A check never scans, never writes the history database, and never runs a cleanup.
+A low-space notification leads to Cleanup Review. The thread sleeps between checks, and it stops
+when the app quits. No daemon is installed: `scull schedule` covers checks while the app is
+closed.
+
+The defaults are quiet. Only warnings and critical alerts notify, at most once a day per alert
+unless one gets worse. Several alerts make one notification. The weekly digest is off until
+the user turns it on. When on, it goes out every Monday at 09:00 local time, and turning it on
+never sends one at once. Settings → Alerts → "Menu bar monitoring" sets how often the app looks
+and how long an alert stays quiet. It can also pause alerts and send this week's digest now. The
+tray menu has "Check now" and "Pause alerts for 1 hour".
+
+The decisions live in `bridge/src/monitor.rs` (`Monitor`) and in `scull_proactive::monitor`,
+tested with a fake clock and a temp database. The digest text comes from
+`scull_insights::digest`. The main window keeps the settings and the monitor's memory in its
+local storage (`src/monitor/prefs.ts`). It sends them with `configure_monitor` at start and
+keeps the `scull://monitor` snapshots, so a restart doesn't repeat notifications. In a browser,
+`src/monitor/mock.ts` stands in for the monitor and shows no notifications. The Insights page
+shows the same digest as a "This week" card.
+
 ## Rust side
 
 The bridge crate is part of the normal workspace bar:
@@ -161,6 +187,8 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 | `rollupHistory(since)` | `rollup_history` | `RollupHistory`: bytes per category per usable scan (growth, mix) |
 | `regrowth(since)` | `regrowth` | `RegrowthHistory`: artifacts that came back after they had gone |
 | `footprintHistory(since)` | `footprint_history` | `FootprintHistory`: scull's own disk use ("What scull knows") |
+| `weeklyDigest()` | `weekly_digest` | `DigestView`: the last 7 days in a few lines (Insights "This week", the digest notification) |
+| `monitorStatus()` | `monitor_status` | `MonitorStatus`: tray monitoring's settings, pause, last and next check and digest |
 | (abort) | `cancel_operation` | `bool` |
 
 - **Progress.** Long operations get a fresh operation ID. The core emits `scull://progress`
