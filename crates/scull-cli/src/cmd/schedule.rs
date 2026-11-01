@@ -15,7 +15,8 @@
 //! it belongs to. `--dry-run` and `status` still work.
 //!
 //! **Read-only job.** The registered command is `scull check --quiet --no-progress` (see
-//! [`scull_proactive::schedule`] for the exact units). It never deletes anything.
+//! [`scull_proactive::schedule`] for the exact units). It never deletes anything (an
+//! auto-policy the user enabled in the config file only moves S0 items into quarantine, D-11).
 //!
 //! The files, commands and tool paths come from [`scull_proactive::schedule`]; the tools are
 //! run through [`scull_platform::scheduler::CommandRunner`], injected so tests use a fake and

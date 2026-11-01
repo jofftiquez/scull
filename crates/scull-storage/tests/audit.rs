@@ -181,7 +181,13 @@ fn every_approval_method_round_trips() {
     let strings: Vec<&str> = ApprovalMethod::ALL.iter().map(|m| m.as_str()).collect();
     assert_eq!(
         strings,
-        ["cli_tty", "cli_interactive", "desktop", "cli_flag"]
+        [
+            "cli_tty",
+            "cli_interactive",
+            "desktop",
+            "cli_flag",
+            "auto_policy"
+        ]
     );
     let dir = tempfile::tempdir().unwrap();
     let mut s = open(&db_in(&dir));

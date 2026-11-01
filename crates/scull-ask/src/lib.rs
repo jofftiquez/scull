@@ -13,11 +13,20 @@
 //!   sees [`disclosure`] (what is sent, and to whom) and must agree; [`ConsentLog`] records the
 //!   agreement (provider, endpoint origin, notice version; no key, no question). `scull ask
 //!   --show-request` prints the exact first request without sending anything.
-//! * **Read-only tools only.** The model can call exactly the tools `scull mcp serve` offers,
-//!   minus the metadata-only `register_worktree`, through [`scull_mcp::ScullMcp::call_read_only`]:
+//! * **Read-only tools.** The model can call exactly the tools `scull mcp serve` offers, minus
+//!   the metadata-only `register_worktree`, through [`scull_mcp::ScullMcp::call_in_process`]:
 //!   the same allowlist (scan roots) and the same redaction (`mcp.redact_home`,
-//!   `mcp.hash_names`, escaping, size caps). It cannot delete, move or change files, write
-//!   anything, or prepare or approve a cleanup. This crate never depends on `scull-cleaner`.
+//!   `mcp.hash_names`, escaping, size caps). It cannot delete, move or change files, or approve
+//!   or run a cleanup. This crate never depends on `scull-cleaner`.
+//! * **Preparing plans, only if the user opted in** (AI-05). When `[mcp] destructive = true` is
+//!   in the user config file and scull is not elevated (the same gates as MCP's destructive
+//!   mode; checked by the CLI), the model also gets `prepare_cleanup` and the read-only plan
+//!   views ([`scull_mcp::IN_PROCESS_PLAN_TOOL_NAMES`]), never `execute_cleanup`. A prepared plan
+//!   is an agent plan like any other: it changes nothing, awaits the user's own
+//!   `scull approve <plan_id>` (or the desktop dialog), and counts against
+//!   `mcp.max_pending_plans` and `mcp.prepare_per_minute`. [`Answer::prepared_plans`] lists
+//!   them so the CLI can tell the user exactly what to run. The notice says so
+//!   ([`disclosure`]), and consent given for read-only use doesn't cover it.
 
 mod config;
 mod endpoint;
@@ -35,7 +44,10 @@ pub use provider::{
     ANTHROPIC_VERSION, FALLBACK_BETA, FALLBACK_MODELS, MAX_TOOL_RESULT_CHARS, ModelTurn, Stop,
     ToolCall, Usage, headers, parse_response, request_body, tool_result_text, uses_fallback,
 };
-pub use session::{Answer, Event, MAX_CALLS_PER_TURN, SYSTEM_PROMPT, Session, ToolHost};
+pub use session::{
+    Answer, Event, MAX_CALLS_PER_TURN, PreparedPlan, SYSTEM_PROMPT, SYSTEM_PROMPT_PREPARE, Session,
+    ToolHost, system_prompt,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +61,14 @@ pub const DISCLOSURE_VERSION: u32 = 1;
 pub const CONSENT_FILE: &str = "ask-consent.json";
 
 /// The privacy notice shown before the first request to a provider and endpoint (PRD §13.5
-/// applied to AI-05). `hash_names` is `mcp.hash_names`, `redact_home` is `mcp.redact_home`.
-pub fn disclosure(cfg: &AskConfig, redact_home: bool, hash_names: bool) -> String {
+/// applied to AI-05). `hash_names` is `mcp.hash_names`, `redact_home` is `mcp.redact_home`,
+/// `can_prepare` whether the model may prepare cleanup plans (the user opted in).
+pub fn disclosure(
+    cfg: &AskConfig,
+    redact_home: bool,
+    hash_names: bool,
+    can_prepare: bool,
+) -> String {
     let model = if cfg.model.is_empty() {
         "model not set"
     } else {
@@ -65,6 +83,15 @@ pub fn disclosure(cfg: &AskConfig, redact_home: bool, hash_names: bool) -> Strin
         "hashed (mcp.hash_names is on)"
     } else {
         "shown (set mcp.hash_names = true to hash them)"
+    };
+    let tools = if can_prepare {
+        "The model can call read-only tools and prepare cleanup plans ([mcp] destructive = true).
+  Preparing a plan changes nothing: it only runs after you review and approve it yourself with
+  `scull approve <plan-id>` in your own terminal (or in the scull desktop app). The model
+  cannot approve or run a cleanup, or delete, move or change your files."
+    } else {
+        "The model can only call read-only tools: it cannot delete, move or change your files, write
+  anything, or prepare or approve a cleanup."
     };
     let where_ = if cfg.endpoint.is_loopback() {
         "This endpoint is on this machine: nothing leaves your computer unless that server\n  \
@@ -84,8 +111,7 @@ pub fn disclosure(cfg: &AskConfig, redact_home: bool, hash_names: bool) -> Strin
   File contents, commit messages and environment values are never sent.
   Your API key ({key}) goes only to this endpoint, as its authentication header;
   scull never stores or logs it.
-  The model can only call read-only tools: it cannot delete, move or change your files, write
-  anything, or prepare or approve a cleanup.
+  {tools}
   {where_}
   Preview the exact first request with `scull ask --show-request \"<question>\"`.",
         provider = cfg.provider.label(),
@@ -106,6 +132,10 @@ pub struct Consent {
     pub disclosure_version: u32,
     /// When (Unix seconds).
     pub at_unix: u64,
+    /// Whether the notice agreed to included plan preparation (AI-05). Older records lack it:
+    /// read-only consent.
+    #[serde(default)]
+    pub prepare: bool,
 }
 
 /// The consent records in [`CONSENT_FILE`]. A missing, unreadable or invalid file means no
@@ -123,18 +153,22 @@ impl ConsentLog {
         serde_json::from_str(text).unwrap_or_default()
     }
 
-    /// Whether the user agreed to the current notice for `cfg`'s provider and endpoint.
-    pub fn allows(&self, cfg: &AskConfig) -> bool {
+    /// Whether the user agreed to the current notice for `cfg`'s provider and endpoint; with
+    /// `can_prepare`, to the notice that includes plan preparation (read-only consent doesn't
+    /// cover it).
+    pub fn allows(&self, cfg: &AskConfig, can_prepare: bool) -> bool {
         let origin = cfg.endpoint.origin();
         self.consents.iter().any(|c| {
             c.provider == cfg.provider.as_str()
                 && c.endpoint == origin
                 && c.disclosure_version == DISCLOSURE_VERSION
+                && (c.prepare || !can_prepare)
         })
     }
 
-    /// Record agreement for `cfg`'s provider and endpoint (replacing an older record).
-    pub fn record(&mut self, cfg: &AskConfig, at_unix: u64) {
+    /// Record agreement for `cfg`'s provider and endpoint (replacing an older record), to the
+    /// notice with or without plan preparation.
+    pub fn record(&mut self, cfg: &AskConfig, can_prepare: bool, at_unix: u64) {
         let origin = cfg.endpoint.origin();
         self.consents
             .retain(|c| !(c.provider == cfg.provider.as_str() && c.endpoint == origin));
@@ -143,6 +177,7 @@ impl ConsentLog {
             endpoint: origin,
             disclosure_version: DISCLOSURE_VERSION,
             at_unix,
+            prepare: can_prepare,
         });
     }
 
@@ -184,33 +219,57 @@ mod tests {
         let a = cfg("enabled = true");
         let local = cfg("provider = \"openai\"\nbase_url = \"http://localhost:11434/v1\"");
         let mut log = ConsentLog::default();
-        assert!(!log.allows(&a));
-        log.record(&a, 1);
-        assert!(log.allows(&a));
-        assert!(!log.allows(&local));
+        assert!(!log.allows(&a, false));
+        log.record(&a, false, 1);
+        assert!(log.allows(&a, false));
+        assert!(!log.allows(&local, false));
         let text = log.to_text();
         assert!(!text.contains("sk-ant-secret"));
         let mut back = ConsentLog::parse(&text);
-        assert!(back.allows(&a));
+        assert!(back.allows(&a, false));
         back.consents[0].disclosure_version = DISCLOSURE_VERSION + 1;
-        assert!(!back.allows(&a));
+        assert!(!back.allows(&a, false));
         assert_eq!(ConsentLog::parse("not json"), ConsentLog::default());
-        log.record(&a, 2);
+        log.record(&a, false, 2);
         assert_eq!(log.consents.len(), 1);
+    }
+
+    /// AI-05: read-only consent doesn't cover plan preparation; consent to the notice with
+    /// preparation covers both. Records from before this field are read-only consent.
+    #[test]
+    fn read_only_consent_does_not_cover_plan_preparation() {
+        let a = cfg("enabled = true");
+        let mut log = ConsentLog::default();
+        log.record(&a, false, 1);
+        assert!(log.allows(&a, false));
+        assert!(!log.allows(&a, true));
+        log.record(&a, true, 2);
+        assert!(log.allows(&a, true) && log.allows(&a, false));
+        assert_eq!(log.consents.len(), 1);
+        let old = r#"{"consents":[{"provider":"anthropic","endpoint":"https://api.anthropic.com","disclosure_version":1,"at_unix":5}]}"#;
+        let old = ConsentLog::parse(old);
+        assert!(old.allows(&a, false));
+        assert!(!old.allows(&a, true));
     }
 
     #[test]
     fn disclosure_names_the_endpoint_and_the_key_source_never_the_key() {
         let a = cfg("enabled = true");
-        let d = disclosure(&a, true, false);
+        let d = disclosure(&a, true, false, false);
         assert!(d.contains("Anthropic (claude-opus-5-5) at https://api.anthropic.com"));
         assert!(d.contains("from $ANTHROPIC_API_KEY"));
         assert!(d.contains("`~`"));
         assert!(d.contains("cannot delete"));
+        assert!(d.contains("prepare or approve a cleanup"));
         assert!(!d.contains("sk-ant-secret"));
         let local = cfg("provider = \"openai\"\nbase_url = \"http://127.0.0.1:1234/v1\"");
-        assert!(disclosure(&local, true, true).contains("on this machine"));
-        assert!(disclosure(&local, true, true).contains("hashed"));
+        assert!(disclosure(&local, true, true, false).contains("on this machine"));
+        assert!(disclosure(&local, true, true, false).contains("hashed"));
+        // AI-05: with plan preparation, the notice says what it means.
+        let p = disclosure(&a, true, false, true);
+        assert!(p.contains("prepare cleanup plans"), "{p}");
+        assert!(p.contains("scull approve <plan-id>"), "{p}");
+        assert!(p.contains("cannot approve or run a cleanup"), "{p}");
     }
 
     #[test]
