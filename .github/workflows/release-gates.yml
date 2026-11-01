@@ -1,13 +1,23 @@
 name: Release gates
 
-# P1-REL-01: gates for the inspect-only alpha (PRD §22 Phase 1).
+# Gates every release build waits for (dist `plan-jobs` in dist-workspace.toml). Every build job
+# `needs:` this workflow, so a failing gate stops the release before anything is built or
+# uploaded.
 #
-# * Called by release.yml (dist `plan-jobs` in dist-workspace.toml) on a version tag. Every
-#   build job `needs:` this one, so a failing gate stops the release before anything is built
-#   or uploaded.
-# * Run by hand (Actions -> Release gates -> Run workflow) as a DRY RUN: the same gates plus
-#   `dist plan`, and optionally a local Linux build kept as a workflow artifact. A dry run never
-#   creates a tag, a GitHub release or an upload anywhere else.
+# Which gate runs depends on the tag (job `select`):
+# * **Alpha tags** (`-alpha` in the version, P1-REL-01): the inspect-only gate
+#   (packaging/check_inspect_only.py): no destructive command or MCP tool may be wired.
+# * **Every other tag** (the MVP and later, PRD §21.3; #66): the MVP gates
+#   (packaging/check_mvp_gates.py): the CLI pulls in no desktop crates; the destructive commands
+#   are present and gated exactly as designed (through the release binary); and every MVP-gated
+#   fixture passes on macOS, Linux and Windows with zero invariant violations, with no MVP
+#   fixture left Tracked or Deferred.
+# `main` keeps only the alpha gate until `phase2` merges (docs/PHASE2_MERGE.md).
+#
+# Run by hand (Actions -> Release gates -> Run workflow) as a DRY RUN: pick the gate (auto: the
+# MVP gates on any branch but `main`), plus `dist plan` and optionally a local Linux build kept
+# as a workflow artifact. A dry run never creates a tag, a GitHub release or an upload anywhere
+# else.
 #
 # P2-REL-01 adds to the dry run: the packaging self-tests, the CycloneDX SBOMs, and (with
 # "Also build") dist's global artifacts for that one archive (installers, the Homebrew formula
@@ -15,9 +25,6 @@ name: Release gates
 # "signing readiness" job that reports which signing and publishing secrets are configured
 # (names only, never values) without signing anything.
 #
-# Linux only on purpose: the gates check what the binary wires up, which is the same on every
-# OS, and macOS minutes cost 10x. Per-OS smoke tests of the published binaries are a manual
-# step in RELEASING.md.
 on:
   workflow_call:
   workflow_dispatch:
@@ -26,6 +33,11 @@ on:
         description: "Also build the x86_64 Linux archive locally (kept as a workflow artifact, not released)"
         type: boolean
         default: false
+      gate:
+        description: "Which gate (auto: inspect-only on main, MVP elsewhere)"
+        type: choice
+        options: [auto, alpha, mvp]
+        default: auto
 
 permissions:
   contents: read
@@ -38,8 +50,39 @@ env:
   DIST_SHA256: "da68e159d5fed1ee61b00284da444e719927dbd0b7d0e2c34e57a04414453cf9"
 
 jobs:
+  select:
+    name: select the gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      gate: ${{ steps.s.outputs.gate }}
+    steps:
+      - id: s
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          CHOICE: ${{ inputs.gate }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$CHOICE" != "auto" ] && [ -n "$CHOICE" ]; then
+            gate="$CHOICE"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            case "$REF_NAME" in
+              *-alpha*) gate=alpha ;;
+              *) gate=mvp ;;
+            esac
+          elif [ "$REF_NAME" = "main" ]; then
+            gate=alpha
+          else
+            gate=mvp
+          fi
+          echo "gate=$gate" >> "$GITHUB_OUTPUT"
+          echo "### Release gate: $gate ($REF_TYPE $REF_NAME)" >> "$GITHUB_STEP_SUMMARY"
+
   inspect-only:
     name: inspect-only gate
+    needs: select
+    if: needs.select.outputs.gate == 'alpha'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -58,10 +101,92 @@ jobs:
       - name: No destructive command or MCP tool is wired (alpha is inspect-only)
         run: python3 packaging/check_inspect_only.py binary target/release/scull
 
+  mvp-binary:
+    name: MVP gate (dependencies and release binary)
+    needs: select
+    if: needs.select.outputs.gate == 'mvp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: scull-cli pulls in no Tauri/webview crates
+        run: python3 packaging/check_mvp_gates.py deps
+      - name: Self-test the gate
+        run: python3 packaging/test_check_mvp_gates.py
+      - name: Build the release binary
+        run: cargo build -p scull-cli --release --locked
+      - name: Destructive commands are present and gated as designed (release binary)
+        run: python3 packaging/check_mvp_gates.py binary target/release/scull
+
+  mvp-fixtures:
+    name: MVP fixture gate (${{ matrix.os }})
+    needs: select
+    if: needs.select.outputs.gate == 'mvp'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Privileged (mount) fixtures re-run themselves as root in a private namespace on Linux;
+      # without privileges they fail instead of skipping.
+      SCULL_FIXTURES_ALLOW_SUDO: "1"
+      SCULL_FIXTURES_REQUIRE_PRIVILEGED: "1"
+    steps:
+      - name: Git settings (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Mount tools and a loopback NFS export (Linux; as in nightly-os-fixtures.yml)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bindfs btrfs-progs nfs-kernel-server
+          sudo mkdir -p /srv/scull-nfs
+          sudo chmod 0777 /srv/scull-nfs
+          echo "/srv/scull-nfs 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,insecure)" \
+            | sudo tee /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+          echo "SCULL_FX_NFS_EXPORT=127.0.0.1:/srv/scull-nfs" >> "$GITHUB_ENV"
+      - name: Every MVP fixture for this OS passes, none is Tracked or Deferred
+        run: python3 packaging/check_mvp_gates.py fixtures --report "mvp-fixtures-${{ runner.os }}.json"
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvp-fixtures-${{ runner.os }}
+          path: mvp-fixtures-${{ runner.os }}.json
+          if-no-files-found: ignore
+          retention-days: 30
+
   dry-run:
     name: dist plan (dry run)
-    if: github.event_name == 'workflow_dispatch'
-    needs: inspect-only
+    if: >-
+      always() && github.event_name == 'workflow_dispatch'
+      && (needs.inspect-only.result == 'success' || needs.inspect-only.result == 'skipped')
+      && (needs.mvp-binary.result == 'success' || needs.mvp-binary.result == 'skipped')
+    needs: [inspect-only, mvp-binary]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
