@@ -551,6 +551,7 @@ impl Detectors {
                     .or_else(|| crate::dotnet::detector_for(r))
                     .or_else(|| crate::xcode::detector_for(r))
                     .or_else(|| crate::android::detector_for(r))
+                    .or_else(|| crate::game_engines::detector_for(r))
                     .unwrap_or_else(|| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
             })
             .collect();

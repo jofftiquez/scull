@@ -29,6 +29,8 @@
 //! * [`current_user`] / [`machine_id`]: the account scull runs as (`uid:<n>` / the user SID)
 //!   and a random per-installation machine ID kept in the data directory, which plans are
 //!   bound to (SAFE-11, PRD §10.4).
+//! * [`docker`]: the read-only Docker Engine API transport (Unix socket, Windows named pipe,
+//!   loopback TCP): `GET` on allow-listed endpoints only, with a hard deadline (P5-DET-03).
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -50,6 +52,7 @@
 pub mod activity;
 pub mod app_dirs;
 pub mod cloud;
+pub mod docker;
 pub mod elevation;
 mod error;
 pub mod identity;

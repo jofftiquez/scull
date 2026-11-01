@@ -3,7 +3,7 @@
 //   pnpm --filter @scull/desktop tokens          # rewrite the file
 //   node scripts/gen-theme.mjs --check           # exit 1 if the file is stale
 //
-// The design tokens are the single source of truth (HANDOVER §9, D-16/D-17). Tailwind's default
+// The design tokens are the single source of truth (D-16/D-17). Tailwind's default
 // palette and every shadow utility are removed, so a class that isn't backed by a token fails
 // to exist instead of quietly drifting from the design ("no shadows anywhere").
 

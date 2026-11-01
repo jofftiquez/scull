@@ -1,0 +1,168 @@
+# Unreal Engine rules. Format: rules/README.md.
+#
+# Every rule needs the project's `.uproject` file beside the folder (CLS-03). The Rust detector
+# in `scull_detectors::game_engines` adds to these rules, never loosens them:
+# * the `.uproject` must be a regular file;
+# * `unreal.binaries`: without a `Source/` folder beside it the binaries can't be rebuilt from
+#   this project (a Blueprint-only copy, or binaries handed over by a programmer): S2;
+# * `unreal.saved`: notes the user data found inside (autosaves, editor settings, screenshots,
+#   save games, collections).
+#
+# `Saved/` holds editor and per-platform settings, autosaved maps and assets, screenshots,
+# crash reports and logs next to cooked and staged builds: S2 (quarantined, restorable, never
+# preselected). `Content/`, `Config/`, `Source/`, `Plugins/` and `Build/` hold the user's work:
+# no rule matches them. Plugin folders (`Plugins/<Name>/Binaries`) are never candidates: a
+# plugin may ship prebuilt binaries without source. Engine folders (no `.uproject` beside) and
+# the shared DerivedDataCache outside projects are not candidates either.
+
+schema_version = 1
+
+[[rule]]
+id = "unreal.intermediate"
+version = 1
+artifact = "Unreal Intermediate (build and project files)"
+ecosystem = "unreal"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Intermediate"]
+
+[rule.markers]
+# The project file beside it, and UnrealBuildTool or editor output inside.
+all = ["../*.uproject"]
+any = [
+  "Build",
+  "ProjectFiles",
+  "ShaderAutogen",
+  "TargetInfo.json",
+  "CachedAssetRegistry*.bin",
+  "Config",
+]
+
+[rule.activity]
+processes = [
+  "UnrealEditor",
+  "UnrealEditor-Cmd",
+  "UE4Editor",
+  "UE4Editor-Cmd",
+  "UnrealBuildTool",
+  "ShaderCompileWorker",
+]
+
+[rule.regeneration]
+instructions = "Build the project (or open it in the Unreal Editor): UnrealBuildTool and the editor recreate it; a C++ project recompiles."
+network = false
+long_build = true
+
+[[rule]]
+id = "unreal.binaries"
+version = 1
+artifact = "Unreal Binaries (compiled modules)"
+ecosystem = "unreal"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Binaries"]
+
+[rule.markers]
+# The project file beside it, and a platform folder inside.
+all = [
+  "../*.uproject",
+  "{Win64,Win32,Mac,Linux,LinuxArm64,Android,IOS,TVOS}",
+]
+
+[rule.activity]
+processes = [
+  "UnrealEditor",
+  "UnrealEditor-Cmd",
+  "UE4Editor",
+  "UE4Editor-Cmd",
+  "UnrealBuildTool",
+  "ShaderCompileWorker",
+]
+
+[rule.regeneration]
+instructions = "Build the project's editor target (IDE or UnrealBuildTool): the C++ modules are recompiled from Source/."
+network = false
+long_build = true
+
+[[rule]]
+id = "unreal.derived-data-cache"
+version = 1
+artifact = "Unreal DerivedDataCache (project)"
+ecosystem = "unreal"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["DerivedDataCache"]
+
+[rule.markers]
+all = ["../*.uproject"]
+
+[rule.activity]
+processes = [
+  "UnrealEditor",
+  "UnrealEditor-Cmd",
+  "UE4Editor",
+  "UE4Editor-Cmd",
+  "ShaderCompileWorker",
+]
+
+[rule.regeneration]
+instructions = "Open the project in the Unreal Editor: shaders and derived asset data are rebuilt on demand, which can take a long time."
+network = false
+long_build = true
+
+[[rule]]
+id = "unreal.saved"
+version = 1
+artifact = "Unreal Saved (settings, autosaves, logs, cooked builds)"
+ecosystem = "unreal"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S2"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Saved"]
+
+[rule.markers]
+# The project file beside it, and editor-written folders inside.
+all = ["../*.uproject"]
+any = [
+  "Config",
+  "Logs",
+  "Autosaves",
+  "Crashes",
+  "Cooked",
+  "StagedBuilds",
+  "SaveGames",
+  "Screenshots",
+  "Backup",
+  "Collections",
+  "ShaderDebugInfo",
+]
+
+[rule.activity]
+processes = [
+  "UnrealEditor",
+  "UnrealEditor-Cmd",
+  "UE4Editor",
+  "UE4Editor-Cmd",
+]
+
+[rule.regeneration]
+instructions = "Not fully regenerable: logs, cooked and staged builds come back from the editor and packaging, but editor settings, autosaves, screenshots and save games inside are lost. Review it before removing."

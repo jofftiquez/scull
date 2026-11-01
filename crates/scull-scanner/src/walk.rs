@@ -21,6 +21,16 @@
 //!   *claims* the node to commit them. The watchdog can claim a node first when its listing
 //!   overruns [`ScanOptions::dir_timeout`]; the worker then discards its work. Either way a
 //!   node's results are committed exactly once.
+//! * **Per-entry deadline.** Around each entry's metadata call a worker publishes the entry
+//!   in its [`Slot`] (no system call, no allocation once the buffer has grown). When one call
+//!   overruns the timeout (a frozen mount point inside a healthy directory), the watchdog
+//!   starts a new *attempt* at the directory instead of giving it up: the entry is reported
+//!   as timed out and remembered on the node, the stuck worker's attempt is voided, and the
+//!   directory is queued again and listed without that entry. A hung entry costs one
+//!   timeout; its siblings are still counted, listed and descended.
+//! * **Mounts never touched.** Mount points in [`ScanOptions::skip_mounts`] (network mounts
+//!   from the OS mount table) are recognized by name in their parent's listing and reported
+//!   as boundaries without any system call on them, so a stale one costs nothing at all.
 //! * **Detached workers.** Workers are ordinary (not scoped) threads, so a worker stuck in an
 //!   OS call (a stalled network mount) can neither stop cancellation from returning on time
 //!   nor stall the scan: the watchdog replaces it and the stuck thread exits when the call
@@ -35,8 +45,10 @@ use crate::types::{
 };
 use scull_core::{Confidence, FileIdentity};
 use scull_platform::{EntryKind, Metadata, Platform};
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -111,6 +123,11 @@ impl Agg {
         }
     }
 
+    /// Count an entry that was deliberately not `lstat`ed (see [`ScanOptions::skip_mounts`]).
+    fn add_unstatted(&mut self, kind: EntryKind) {
+        self.totals.add_unstatted(kind);
+    }
+
     /// Fold in a finished part of this directory (its own listing or a subdirectory).
     fn merge(&mut self, part: Agg) {
         self.totals.merge(&part.totals);
@@ -156,8 +173,13 @@ struct DirNode {
     identity: Option<FileIdentity>,
     mtime: Option<i64>,
     parent: Option<Arc<DirNode>>,
-    /// Set once by whoever commits this node's listing: its worker or the watchdog.
-    claimed: AtomicBool,
+    /// The current listing attempt and whether it was committed: `attempt << 1`, plus 1 once
+    /// whoever commits this node's listing (its worker or the watchdog) has claimed it. The
+    /// watchdog starts a new attempt when one entry's metadata hangs; a worker still on an
+    /// older attempt then discards its work.
+    state: AtomicU64,
+    /// Entries whose metadata timed out in an earlier attempt: later attempts skip them.
+    skipped: Mutex<Vec<PathBuf>>,
     /// Unfinished parts: 1 for the listing itself plus one per queued subdirectory.
     pending: AtomicUsize,
     agg: Mutex<Agg>,
@@ -171,19 +193,38 @@ impl DirNode {
             identity: md.identity,
             mtime: md.mtime_unix,
             parent,
-            claimed: AtomicBool::new(false),
+            state: AtomicU64::new(0),
+            skipped: Mutex::new(Vec::new()),
             pending: AtomicUsize::new(1),
             agg: Mutex::new(Agg::new(md)),
         }
     }
 
-    /// Try to become the one who commits this node's listing.
-    fn claim(&self) -> bool {
-        !self.claimed.swap(true, Ordering::AcqRel)
+    /// The attempt a worker starting on this node now works on, or `None` if the node's
+    /// listing was already committed.
+    fn begin(&self) -> Option<u64> {
+        let state = self.state.load(Ordering::Acquire);
+        (state & 1 == 0).then_some(state)
     }
 
-    fn is_claimed(&self) -> bool {
-        self.claimed.load(Ordering::Acquire)
+    /// Whether `attempt` is still the live, uncommitted attempt (else its work is discarded).
+    fn is_live(&self, attempt: u64) -> bool {
+        self.state.load(Ordering::Acquire) == attempt
+    }
+
+    /// Try to become the one who commits this node's listing, as of `attempt`.
+    fn claim(&self, attempt: u64) -> bool {
+        self.state
+            .compare_exchange(attempt, attempt | 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Void `attempt` so the directory can be listed again; fails if it was committed (or
+    /// voided) meanwhile.
+    fn retry(&self, attempt: u64) -> bool {
+        self.state
+            .compare_exchange(attempt, attempt + 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// Whether `id` is the identity of this directory or one of its ancestors.
@@ -199,10 +240,27 @@ impl DirNode {
     }
 }
 
+/// The directory a worker is listing: the node, the attempt and when it started.
+type Job = (Arc<DirNode>, u64, Instant);
+
+/// The entry whose metadata a worker is reading right now.
+#[derive(Default)]
+struct StatCall {
+    /// Bumped for every call, so the watchdog can tell a hung call from a stream of fast ones.
+    seq: u64,
+    /// A call is in progress, on `path`.
+    active: bool,
+    /// Reused buffer: no allocation per entry once it has grown.
+    path: PathBuf,
+}
+
 /// What one worker is doing, for the watchdog and progress display.
 #[derive(Default)]
 struct Slot {
-    current: Mutex<Option<(Arc<DirNode>, Instant)>>,
+    current: Mutex<Option<Job>>,
+    stat: Mutex<StatCall>,
+    /// Watchdog only: the metadata call it last saw in progress here, and since when.
+    seen: Mutex<Option<(u64, Instant)>>,
     /// Set by the watchdog when it gave up on this worker's directory and started a
     /// replacement; the worker exits after its current call returns.
     retired: AtomicBool,
@@ -214,6 +272,8 @@ struct Shared {
     cancel: CancelToken,
     opts: ScanOptions,
     root_volume: Option<u64>,
+    /// [`ScanOptions::skip_mounts`] by parent directory: the names never to touch there.
+    skip_mounts: HashMap<PathBuf, Vec<OsString>>,
     queue: Mutex<Vec<Arc<DirNode>>>,
     queue_cv: Condvar,
     /// The scan is over (finished, cancelled or failed); workers exit.
@@ -317,12 +377,12 @@ impl Shared {
         parent.has_ancestor(id).then_some(BoundaryReason::Loop)
     }
 
-    /// List one directory and commit the results.
-    fn process(&self, node: &Arc<DirNode>) {
+    /// List one directory (attempt `attempt` at it) and commit the results.
+    fn process(&self, node: &Arc<DirNode>, attempt: u64, slot: &Slot) {
         let entries = match self.platform.read_dir(&node.path) {
             Ok(it) => it,
             Err(e) => {
-                if node.claim() {
+                if node.claim(attempt) {
                     let issue = ScanIssue::from_platform(IssueOp::ListDir, &e);
                     {
                         let mut agg = lock(&node.agg);
@@ -347,11 +407,22 @@ impl Shared {
         let mut boundaries = Vec::new();
         let mut subdirs: Vec<(PathBuf, Metadata)> = Vec::new();
         let mut listing = self.opts.emit_listings.then(Vec::new);
+        // Entries whose metadata hung in an earlier attempt (already reported), and mount
+        // points never to touch. Both are almost always empty: then nothing is compared.
+        let skipped = {
+            let s = lock(&node.skipped);
+            if s.is_empty() { Vec::new() } else { s.clone() }
+        };
+        let untouched: &[OsString] = if self.skip_mounts.is_empty() {
+            &[]
+        } else {
+            self.skip_mounts.get(&node.path).map_or(&[], Vec::as_slice)
+        };
 
         for item in entries {
             // Checked per entry: bounds cancellation latency in huge directories, and stops
-            // work the watchdog already gave up on.
-            if self.should_stop() || node.is_claimed() {
+            // work the watchdog already gave up on (or started again).
+            if self.should_stop() || !node.is_live(attempt) {
                 return;
             }
             let de = match item {
@@ -361,9 +432,35 @@ impl Shared {
                     continue;
                 }
             };
+            if !skipped.is_empty() && skipped.contains(&de.path) {
+                continue;
+            }
+            if !untouched.is_empty() && untouched.contains(&de.file_name) {
+                // A network mount point from the mount table: not even `lstat`ed, so a stale
+                // one can't stall this listing (T-53). Never descended.
+                counted.add_unstatted(de.kind);
+                local.add_unstatted(de.kind);
+                if de.kind == EntryKind::Dir {
+                    boundaries.push(Boundary {
+                        path: de.path,
+                        depth: child_depth,
+                        identity: None,
+                        reason: BoundaryReason::OtherVolume,
+                    });
+                }
+                if let Some(l) = listing.as_mut() {
+                    l.push(EntryInfo::unstatted(de.file_name, de.kind));
+                }
+                continue;
+            }
             // lstat: authoritative kind (the listing's hint may be stale) and sizes. Never
-            // follows a link and never opens the entry, so FIFOs and devices are safe.
-            let md = match self.platform.metadata(&de.path) {
+            // follows a link and never opens the entry, so FIFOs and devices are safe. The
+            // call is published in the slot, so the watchdog can skip just this entry if it
+            // hangs (a frozen mount point).
+            slot.begin_stat(&de.path);
+            let md = self.platform.metadata(&de.path);
+            slot.end_stat();
+            let md = match md {
                 Ok(md) => md,
                 Err(e) => {
                     issues.push(ScanIssue::from_platform(IssueOp::Metadata, &e));
@@ -400,8 +497,8 @@ impl Shared {
             local.add_entry(&md);
         }
 
-        if !node.claim() {
-            return; // the watchdog gave up on this directory and reported it
+        if !node.claim(attempt) {
+            return; // the watchdog gave up on this attempt (and reported why)
         }
 
         for (id, nlink, logical, allocated) in linked {
@@ -445,54 +542,163 @@ impl Shared {
         self.finish_part(node);
     }
 
-    /// Give up on directories whose listing overran the timeout.
+    /// Skip entries whose metadata call overran the timeout, and give up on directories
+    /// whose listing did.
     fn watchdog(self: &Arc<Self>, timeout: Duration, replacements: &mut usize) {
         let slots: Vec<Arc<Slot>> = lock(&self.slots).clone();
         for slot in slots {
-            let overdue = match &*lock(&slot.current) {
-                Some((node, started)) if started.elapsed() > timeout => Some(Arc::clone(node)),
-                _ => None,
-            };
-            let Some(node) = overdue else { continue };
-            if !node.claim() {
+            // A retired worker is stuck in a call whose attempt was already dealt with.
+            if slot.retired.load(Ordering::Acquire) {
                 continue;
             }
-            slot.retired.store(true, Ordering::Release);
-            {
-                let mut agg = lock(&node.agg);
-                agg.totals.issues += 1;
-                agg.complete = false;
+            let Some((node, attempt, started)) = lock(&slot.current).clone() else {
+                *lock(&slot.seen) = None;
+                continue;
+            };
+            let (in_stat, hung) = slot.watch_stat(timeout);
+            if let Some(entry) = hung {
+                self.entry_timed_out(&slot, &node, attempt, entry, timeout, replacements);
+                continue;
             }
-            lock(&self.totals).issues += 1;
-            self.emit(ScanEvent::Issue(ScanIssue::timed_out(
-                node.path.clone(),
-                timeout,
-            )));
-            // Keep the pool at strength, but don't pile up threads behind a mount that hangs
-            // every call.
-            if *replacements < self.opts.effective_threads() {
-                *replacements += 1;
-                // A failed spawn only means one fewer worker.
-                let _ = spawn_worker(self);
+            // While an entry's metadata call is in progress it gets its own deadline first
+            // (above), unless the listing as a whole has overrun twice over (every call slow).
+            let elapsed = started.elapsed();
+            if elapsed > timeout && (!in_stat || elapsed > timeout * 2) {
+                self.give_up(&slot, &node, attempt, timeout, replacements);
             }
-            self.finish_part(&node);
         }
+    }
+
+    /// One entry's metadata call hung: report it, void the attempt and list the directory
+    /// again without the entry. Falls back to giving up the directory when it already lost
+    /// [`ScanOptions::MAX_ENTRY_TIMEOUTS_PER_DIR`] entries or no replacement worker can be
+    /// started (the queued directory would wait behind stuck workers).
+    fn entry_timed_out(
+        self: &Arc<Self>,
+        slot: &Slot,
+        node: &Arc<DirNode>,
+        attempt: u64,
+        entry: PathBuf,
+        timeout: Duration,
+        replacements: &mut usize,
+    ) {
+        let threads = self.opts.effective_threads();
+        let exhausted = lock(&node.skipped).len() >= ScanOptions::MAX_ENTRY_TIMEOUTS_PER_DIR;
+        if exhausted || *replacements >= threads {
+            self.give_up(slot, node, attempt, timeout, replacements);
+            return;
+        }
+        if !node.retry(attempt) {
+            return; // the worker committed (or abandoned) this attempt meanwhile
+        }
+        slot.retired.store(true, Ordering::Release);
+        lock(&node.skipped).push(entry.clone());
+        {
+            let mut agg = lock(&node.agg);
+            agg.totals.issues += 1;
+            agg.complete = false;
+        }
+        lock(&self.totals).issues += 1;
+        self.emit(ScanEvent::Issue(ScanIssue::entry_timed_out(entry, timeout)));
+        *replacements += 1;
+        // A failed spawn only means one fewer worker; the others pick up the directory.
+        let _ = spawn_worker(self);
+        self.push_jobs(vec![Arc::clone(node)]);
+    }
+
+    /// The listing of `node` overran the timeout: report the directory and finish it as is.
+    fn give_up(
+        self: &Arc<Self>,
+        slot: &Slot,
+        node: &Arc<DirNode>,
+        attempt: u64,
+        timeout: Duration,
+        replacements: &mut usize,
+    ) {
+        if !node.claim(attempt) {
+            return;
+        }
+        slot.retired.store(true, Ordering::Release);
+        {
+            let mut agg = lock(&node.agg);
+            agg.totals.issues += 1;
+            agg.complete = false;
+        }
+        lock(&self.totals).issues += 1;
+        self.emit(ScanEvent::Issue(ScanIssue::timed_out(
+            node.path.clone(),
+            timeout,
+        )));
+        // Keep the pool at strength, but don't pile up threads behind a mount that hangs
+        // every call.
+        if *replacements < self.opts.effective_threads() {
+            *replacements += 1;
+            // A failed spawn only means one fewer worker.
+            let _ = spawn_worker(self);
+        }
+        self.finish_part(node);
     }
 
     fn current_dir(&self) -> Option<PathBuf> {
         let slots = lock(&self.slots);
         slots
             .iter()
-            .filter_map(|s| lock(&s.current).as_ref().map(|(n, t)| (*t, n.path.clone())))
+            .filter(|s| !s.retired.load(Ordering::Acquire))
+            .filter_map(|s| {
+                lock(&s.current)
+                    .as_ref()
+                    .map(|(n, _, t)| (*t, n.path.clone()))
+            })
             .max_by_key(|(t, _)| *t)
             .map(|(_, p)| p)
     }
 }
 
+impl Slot {
+    /// Publish the metadata call this worker is about to make (on `path`).
+    fn begin_stat(&self, path: &Path) {
+        let mut st = lock(&self.stat);
+        st.seq = st.seq.wrapping_add(1);
+        st.active = true;
+        let buf = st.path.as_mut_os_string();
+        buf.clear();
+        buf.push(path.as_os_str());
+    }
+
+    /// The published metadata call returned.
+    fn end_stat(&self) {
+        lock(&self.stat).active = false;
+    }
+
+    /// Watchdog: whether a metadata call is in progress, and its path if it has been for
+    /// longer than `timeout` (the same call, by sequence number, since first seen).
+    fn watch_stat(&self, timeout: Duration) -> (bool, Option<PathBuf>) {
+        let st = lock(&self.stat);
+        let mut seen = lock(&self.seen);
+        if !st.active {
+            *seen = None;
+            return (false, None);
+        }
+        match *seen {
+            Some((seq, since)) if seq == st.seq => {
+                (true, (since.elapsed() > timeout).then(|| st.path.clone()))
+            }
+            _ => {
+                *seen = Some((st.seq, Instant::now()));
+                (true, None)
+            }
+        }
+    }
+}
+
 fn worker(shared: &Arc<Shared>, slot: &Slot) {
     while let Some(node) = shared.next_job() {
-        *lock(&slot.current) = Some((Arc::clone(&node), Instant::now()));
-        shared.process(&node);
+        // A queued node is never committed; if it somehow was, there is nothing to do.
+        let Some(attempt) = node.begin() else {
+            continue;
+        };
+        *lock(&slot.current) = Some((Arc::clone(&node), attempt, Instant::now()));
+        shared.process(&node, attempt, slot);
         *lock(&slot.current) = None;
         if slot.retired.load(Ordering::Acquire) {
             break;
@@ -598,6 +804,7 @@ pub fn scan(
         cancel: cancel.clone(),
         opts: options.clone(),
         root_volume: root_md.identity.map(|i| i.volume),
+        skip_mounts: skip_mounts_by_parent(&options.skip_mounts),
         queue: Mutex::new(vec![Arc::new(DirNode::new(
             root.to_path_buf(),
             0,
@@ -685,6 +892,19 @@ pub fn scan(
         threads,
         peak_link_identities: shared.links.peak(),
     })
+}
+
+/// [`ScanOptions::skip_mounts`] grouped by parent directory, for one lookup per listing.
+fn skip_mounts_by_parent(mounts: &[PathBuf]) -> HashMap<PathBuf, Vec<OsString>> {
+    let mut map: HashMap<PathBuf, Vec<OsString>> = HashMap::new();
+    for m in mounts {
+        if let (Some(parent), Some(name)) = (m.parent(), m.file_name()) {
+            map.entry(parent.to_path_buf())
+                .or_default()
+                .push(name.to_os_string());
+        }
+    }
+    map
 }
 
 /// Stop the workers and wait (briefly) for them to exit.

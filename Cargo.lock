@@ -1331,6 +1331,8 @@ dependencies = [
  "scull-scanner",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "toml",
 ]
 
@@ -1359,6 +1361,7 @@ dependencies = [
  "scull-cli",
  "scull-core",
  "scull-detectors",
+ "scull-engine",
  "scull-git",
  "scull-platform",
  "scull-safety",

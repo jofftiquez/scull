@@ -46,7 +46,7 @@ wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
 deny = [
-  # Desktop/MCP must never pull in GUI runtimes through the CLI build (HANDOVER §8.1);
+  # Desktop/MCP must never pull in GUI runtimes through the CLI build;
   # enforced per-crate in P3. Placeholder for explicit bans.
 ]
 

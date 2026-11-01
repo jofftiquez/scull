@@ -4,8 +4,7 @@
 issue for each part that isn't built yet. rustdoc (`cargo doc --workspace --no-deps --open`) is
 the API reference; this file explains how the parts fit together and why.
 
-Companion docs: [PRD](./PRD.md) (requirements, IDs like SAFE-05) ·
-[Decisions](./DECISIONS.md) · [Threat model](./THREAT_MODEL.md) · [Fixtures](./FIXTURES.md) ·
+Companion docs: [Fixtures](./FIXTURES.md) ·
 [CI](./CI.md) · [Benchmarks](./BENCHMARKS.md)
 
 ---
