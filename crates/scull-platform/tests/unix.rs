@@ -446,6 +446,31 @@ fn restrict_clears_group_other_and_special_bits() -> TestResult {
     Ok(())
 }
 
+/// An entry that is already owner-only is left alone without being opened: closing a
+/// descriptor would drop this process's POSIX locks on it (SQLite's `-shm` locks, which
+/// `scull-storage` restricts while its connection is open). Shown with a write-only file,
+/// which can't be opened for reading: restricting it succeeds and changes nothing.
+#[test]
+fn restrict_does_not_open_an_owner_only_entry() -> TestResult {
+    if scull_platform::is_elevated().blocks_destructive() {
+        eprintln!("skipped: root can open any file");
+        return Ok(());
+    }
+    let tmp = tempfile::tempdir()?;
+    let file = tmp.path().join("f");
+    write_file(&file, b"x")?;
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o200))?;
+    assert!(fs::File::open(&file).is_err(), "unreadable");
+    owner_only::restrict(&file)?;
+    assert_eq!(mode(&file)?, 0o200);
+    // Not owner-only: opened (and refused, as before, without read permission).
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o220))?;
+    assert!(owner_only::restrict(&file).is_err());
+    assert_eq!(mode(&file)?, 0o220);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
 #[test]
 fn restrict_never_follows_links_or_opens_special_files() -> TestResult {
     let tmp = tempfile::tempdir()?;
