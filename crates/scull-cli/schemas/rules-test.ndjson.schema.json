@@ -1,0 +1,219 @@
+{
+  "$defs": {
+    "CaseResult": {
+      "additionalProperties": false,
+      "description": "One evaluated case.",
+      "properties": {
+        "candidate": {
+          "description": "The candidate folder (relative to the case's tree).",
+          "type": "string"
+        },
+        "detail": {
+          "description": "The marker, exclusion or problem behind the outcome.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expect": {
+          "$ref": "#/$defs/Expect",
+          "description": "What it expects."
+        },
+        "name": {
+          "description": "The case's name.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "What the rule decided: `match`, `lockfile_missing`, `name_mismatch`, `excluded`,\n`missing_marker`, `incomplete`, or `invalid_case`.",
+          "type": "string"
+        },
+        "passed": {
+          "description": "Whether the outcome is what the case expects.",
+          "type": "boolean"
+        },
+        "rule": {
+          "description": "The rule it exercises.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "rule",
+        "candidate",
+        "expect",
+        "outcome",
+        "passed"
+      ],
+      "type": "object"
+    },
+    "Expect": {
+      "description": "What a case expects.",
+      "oneOf": [
+        {
+          "const": "match",
+          "description": "The rule claims the candidate (with its lockfile, if it declares one).",
+          "type": "string"
+        },
+        {
+          "const": "lockfile_missing",
+          "description": "The rule claims it, but the declared lockfile is missing (reported at least S2).",
+          "type": "string"
+        },
+        {
+          "const": "no_match",
+          "description": "The rule does not claim it, for any reason.",
+          "type": "string"
+        },
+        {
+          "const": "excluded",
+          "description": "An exclusion applies.",
+          "type": "string"
+        },
+        {
+          "const": "missing_marker",
+          "description": "A required marker is absent.",
+          "type": "string"
+        }
+      ]
+    },
+    "Rejection": {
+      "additionalProperties": false,
+      "description": "Why a rule file was rejected.",
+      "properties": {
+        "code": {
+          "description": "Stable machine code, e.g. `name_only`, `s0_not_allowed`, `command_field`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human explanation.",
+          "type": "string"
+        },
+        "rule_id": {
+          "description": "The rule concerned, if the problem is about one rule.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RulesTest": {
+      "additionalProperties": false,
+      "description": "`scull rules test` output.",
+      "properties": {
+        "files": {
+          "description": "One entry per rule file, in the order given.",
+          "items": {
+            "$ref": "#/$defs/TestFile"
+          },
+          "type": "array"
+        },
+        "passed": {
+          "description": "Whether every file passed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "files"
+      ],
+      "type": "object"
+    },
+    "TestFile": {
+      "additionalProperties": false,
+      "description": "The results for one rule file.",
+      "properties": {
+        "cases": {
+          "description": "Every case, in file order.",
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "type": "array"
+        },
+        "cases_path": {
+          "description": "Its cases file.",
+          "type": "string"
+        },
+        "missing": {
+          "description": "Rules without a case expecting a match, or without one expecting no match.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "passed": {
+          "description": "Whether the file loads, every case passes and nothing is missing.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The rule file.",
+          "type": "string"
+        },
+        "rejection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rejection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the rule file (or its cases file) was rejected."
+        },
+        "rules": {
+          "description": "The rules it declares (empty when it doesn't load).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "cases_path",
+        "rules",
+        "cases",
+        "missing",
+        "passed"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/rules-test@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/RulesTest",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/rules-test@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "rules_test",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/rules-test@1 (NDJSON line)",
+  "type": "object"
+}

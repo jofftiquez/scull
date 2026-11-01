@@ -9,10 +9,10 @@ use std::process::{Command, Output};
 const VALID: &str = r#"schema_version = 1
 
 [[rule]]
-id = "community.unity-library"
+id = "community.godot-import"
 version = 1
-artifact = "Unity Library cache"
-ecosystem = "unity"
+artifact = "Godot import cache"
+ecosystem = "godot"
 category = "project_artifact"
 platforms = ["macos", "linux", "windows"]
 base_tier = "S1"
@@ -20,10 +20,10 @@ strategy = "filesystem"
 evidence = ["marker"]
 
 [rule.match]
-names = ["Library"]
+names = [".godot"]
 
 [rule.markers]
-all = ["../Assets", "../ProjectSettings"]
+all = ["../project.godot"]
 "#;
 
 /// `VALID` with `from` replaced by `to` (exactly once).
@@ -62,8 +62,13 @@ fn committed_schemas_match_generated() {
     use scull_cli::cmd::rules::{
         RULES_LIST_SCHEMA, RULES_VALIDATE_SCHEMA, RulesList, RulesValidation,
     };
+    use scull_cli::cmd::rules_test::{RULES_TEST_SCHEMA, RulesTest};
     use scull_cli::output::json::document_schema;
     for (name, generated) in [
+        (
+            "rules-test",
+            document_schema::<RulesTest>(RULES_TEST_SCHEMA),
+        ),
         (
             "rules-list",
             document_schema::<RulesList>(RULES_LIST_SCHEMA),
@@ -159,7 +164,7 @@ fn list_includes_user_rules_disabled_until_enabled() {
         .as_array()
         .expect("rules")
         .iter()
-        .find(|r| r["id"] == "community.unity-library")
+        .find(|r| r["id"] == "community.godot-import")
         .expect("user rule listed")
         .clone();
     assert_eq!(unity["source"], "user");
@@ -172,7 +177,7 @@ fn list_includes_user_rules_disabled_until_enabled() {
     // Enabled through the user config file...
     std::fs::write(
         home.path().join("config").join("config.toml"),
-        "[rules]\nenabled = [\"community.unity-library\", \"nope.missing\"]\n",
+        "[rules]\nenabled = [\"community.godot-import\", \"nope.missing\"]\n",
     )
     .expect("config");
     let v = list(&[]);
@@ -180,7 +185,7 @@ fn list_includes_user_rules_disabled_until_enabled() {
         .as_array()
         .expect("rules")
         .iter()
-        .find(|r| r["id"] == "community.unity-library")
+        .find(|r| r["id"] == "community.godot-import")
         .expect("listed")
         .clone();
     assert_eq!(unity["enabled"], true);
@@ -197,7 +202,7 @@ fn list_includes_user_rules_disabled_until_enabled() {
         .as_array()
         .expect("rules")
         .iter()
-        .find(|r| r["id"] == "community.unity-library")
+        .find(|r| r["id"] == "community.godot-import")
         .expect("listed")
         .clone();
     assert_eq!(unity["enabled"], false);
@@ -222,7 +227,7 @@ fn validate_bundled_by_default_and_valid_user_file() {
     assert_eq!(v["data"]["files"][0]["source"], "user");
     assert_eq!(
         v["data"]["files"][0]["rules"],
-        serde_json::json!(["community.unity-library"])
+        serde_json::json!(["community.godot-import"])
     );
 }
 
@@ -242,10 +247,7 @@ fn validate_reports_each_rejection_with_exit_2() {
         ),
         (
             "name_only",
-            variant(
-                "\n[rule.markers]\nall = [\"../Assets\", \"../ProjectSettings\"]\n",
-                "",
-            ),
+            variant("\n[rule.markers]\nall = [\"../project.godot\"]\n", ""),
         ),
         (
             "s0_not_allowed",
@@ -259,7 +261,7 @@ fn validate_reports_each_rejection_with_exit_2() {
             "command_field",
             variant(
                 "\nversion = 1\n",
-                "\nversion = 1\ncleanup_command = \"rm -rf Library\"\n",
+                "\nversion = 1\ncleanup_command = \"rm -rf .godot\"\n",
             ),
         ),
         (
@@ -268,25 +270,36 @@ fn validate_reports_each_rejection_with_exit_2() {
         ),
         (
             "invalid_pattern",
-            variant("names = [\"Library\"]", "names = [\"Lib{rary\"]"),
+            variant("names = [\".godot\"]", "names = [\".go{dot\"]"),
         ),
         (
             "wildcard_marker",
-            variant(
-                "all = [\"../Assets\", \"../ProjectSettings\"]",
-                "all = [\"../*\"]",
-            ),
+            variant("all = [\"../project.godot\"]", "all = [\"../*\"]"),
         ),
         (
             "marker_matches_candidate",
-            variant(
-                "all = [\"../Assets\", \"../ProjectSettings\"]",
-                "all = [\"../Library\"]",
-            ),
+            variant("all = [\"../project.godot\"]", "all = [\"../.godot\"]"),
+        ),
+        // P6-COM-01 guardrails for community rules.
+        (
+            "user_work_folder",
+            variant("names = [\".godot\"]", "names = [\"Library\"]"),
+        ),
+        (
+            "user_work_folder",
+            variant("names = [\".godot\"]", "names = [\"S{rc,ource}\"]"),
+        ),
+        (
+            "wildcard_name",
+            variant("names = [\".godot\"]", "names = [\"*\"]"),
+        ),
+        (
+            "no_project_marker",
+            variant("all = [\"../project.godot\"]", "all = [\"imported\"]"),
         ),
         (
             "duplicate_id",
-            variant("id = \"community.unity-library\"", "id = \"rust.target\""),
+            variant("id = \"community.godot-import\"", "id = \"rust.target\""),
         ),
     ];
     for (code, text) in &cases {
@@ -346,4 +359,149 @@ fn validate_reports_each_rejection_with_exit_2() {
         .collect();
     assert_eq!(valid, [true, false, false]);
     assert_eq!(files[1]["rejection"]["code"], "unreadable");
+}
+
+// ---------------------------------------------------------------------------------------------
+// `scull rules test` (P6-COM-01): the rule authors' harness.
+
+fn example(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/rules")
+        .join(name)
+}
+
+/// Files in `dir`, sorted (the harness writes nothing but `--init`'s cases file).
+fn listing(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .expect("dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn rules_test_runs_the_shipped_example() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let rule = example("godot.toml");
+    let path = rule.to_str().expect("utf-8");
+    let o = scull_in(home.path(), &["rules", "validate", path], &[]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let o = scull_in(home.path(), &["rules", "test", path, "--json"], &[]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let v: Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    validate_against("rules-test", &v);
+    let f = &v["data"]["files"][0];
+    assert_eq!(f["passed"], true, "{f:#}");
+    let outcomes: Vec<&str> = f["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|c| c["outcome"].as_str().expect("outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["match", "missing_marker", "excluded", "name_mismatch"]
+    );
+    let o = scull_in(home.path(), &["rules", "test", path], &[]);
+    let out = String::from_utf8(o.stdout).expect("utf-8");
+    assert!(out.contains("4 of 4 case(s) passed"), "{out}");
+}
+
+#[test]
+fn rules_test_reports_failures_missing_cases_and_rejections() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rule = dir.path().join("godot.toml");
+    std::fs::write(&rule, VALID).expect("rule");
+    let path = rule.to_str().expect("utf-8");
+    let json = |args: &[&str]| -> (Option<i32>, Value) {
+        let o = scull_in(dir.path(), args, &[]);
+        let v: Value = serde_json::from_slice(&o.stdout).expect("JSON report");
+        validate_against("rules-test", &v);
+        (o.status.code(), v)
+    };
+
+    // No cases file: refused, with the way to make one.
+    let (code, v) = json(&["rules", "test", path, "--json"]);
+    assert_eq!(code, Some(2));
+    assert_eq!(v["data"]["files"][0]["rejection"]["code"], "no_cases");
+
+    // A wrong expectation fails that case; a missing negative case is reported.
+    std::fs::write(
+        dir.path().join("godot.cases.toml"),
+        "schema_version = 1\n\n[[case]]\nname = \"wrong\"\nrule = \"community.godot-import\"\n\
+         tree = [\"g/.godot/\"]\ncandidate = \"g/.godot\"\nexpect = \"match\"\n",
+    )
+    .expect("cases");
+    let (code, v) = json(&["rules", "test", path, "--json"]);
+    assert_eq!(code, Some(2));
+    let f = &v["data"]["files"][0];
+    assert_eq!(f["passed"], false);
+    assert_eq!(f["cases"][0]["passed"], false);
+    assert_eq!(f["cases"][0]["outcome"], "missing_marker");
+    assert_eq!(
+        f["missing"],
+        serde_json::json!(["community.godot-import: no case expects no match"])
+    );
+
+    // Unknown fields and unknown rules in the cases file are refused.
+    std::fs::write(
+        dir.path().join("godot.cases.toml"),
+        "schema_version = 1\nrun = \"x\"\n",
+    )
+    .expect("cases");
+    let (_, v) = json(&["rules", "test", path, "--json"]);
+    assert_eq!(v["data"]["files"][0]["rejection"]["code"], "cases_syntax");
+
+    // A rule the loader refuses never gets to its cases.
+    std::fs::write(&rule, variant("names = [\".godot\"]", "names = [\"src\"]")).expect("rule");
+    let (code, v) = json(&["rules", "test", path, "--json"]);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        v["data"]["files"][0]["rejection"]["code"],
+        "user_work_folder"
+    );
+    assert_eq!(listing(dir.path()), ["godot.cases.toml", "godot.toml"]);
+}
+
+#[test]
+fn rules_test_init_writes_a_passing_starter_and_never_overwrites() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rule = dir.path().join("godot.toml");
+    std::fs::write(&rule, VALID).expect("rule");
+    let path = rule.to_str().expect("utf-8");
+    let o = scull_in(dir.path(), &["rules", "test", "--init", path], &[]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let cases = dir.path().join("godot.cases.toml");
+    let written = std::fs::read_to_string(&cases).expect("cases written");
+    assert!(written.contains("expect = \"match\""), "{written}");
+    assert!(written.contains("expect = \"no_match\""), "{written}");
+    let o = scull_in(dir.path(), &["rules", "test", path], &[]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    // A second --init refuses and leaves the file as it is.
+    std::fs::write(&cases, "# mine\n").expect("edit");
+    let o = scull_in(dir.path(), &["rules", "test", "--init", path], &[]);
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(std::fs::read_to_string(&cases).expect("cases"), "# mine\n");
+    assert_eq!(listing(dir.path()), ["godot.cases.toml", "godot.toml"]);
 }

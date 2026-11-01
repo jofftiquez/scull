@@ -120,6 +120,13 @@ pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
             ),
         ),
         single(
+            super::rules_test::RULES_TEST_SCHEMA,
+            single_record_schema::<super::rules_test::RulesTest>(
+                super::rules_test::RULES_TEST_SCHEMA,
+                "rules_test",
+            ),
+        ),
+        single(
             insights::INSIGHTS_SCHEMA,
             single_record_schema::<scull_insights::InsightsReport>(
                 insights::INSIGHTS_SCHEMA,

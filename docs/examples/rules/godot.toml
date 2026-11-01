@@ -1,0 +1,38 @@
+# Example community rule: the Godot 4 import cache.
+#
+# Load it as a user rule (copy it to <config dir>/rules/ and enable "community.godot-import"
+# under [rules] in scull's config), or test it with:
+#
+#   scull rules validate docs/examples/rules/godot.toml
+#   scull rules test docs/examples/rules/godot.toml      # runs godot.cases.toml
+#
+# See docs/RULE_AUTHORING.md.
+schema_version = 1
+
+[[rule]]
+id = "community.godot-import"
+version = 1
+artifact = "Godot import cache"
+ecosystem = "godot"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"                 # community rules are capped at S1 (restorable quarantine)
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".godot"]
+
+[rule.markers]
+all = ["../project.godot"]       # a project file beside the folder: required for community rules
+
+[rule.exclude]
+within = ["addons"]              # a plugin's own copy is not the project's cache
+
+[rule.activity]
+processes = ["godot", "Godot", "godot4"]
+
+[rule.regeneration]
+instructions = "Open the project in the Godot editor; it reimports the assets."
+network = false
+long_build = true
