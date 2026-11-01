@@ -666,6 +666,19 @@ fn agent_ran(id: &PlanId, op: &OperationId) -> ScullError {
     )
 }
 
+/// The agent's `execute_cleanup` spent the approval and holds the execution lock, but its
+/// operation isn't recorded yet.
+fn agent_claimed(id: &PlanId) -> ScullError {
+    ScullError::new(
+        Reason::ApprovalUsed.kind(),
+        format!(
+            "plan {id} is being run by the agent's execute_cleanup, which used its approval first \
+             (approvals are single use): see `scull history` when it finishes. Nothing was run \
+             here."
+        ),
+    )
+}
+
 /// `--run` did not start `plan` (error `e`, audited as `outcome`). Reports the agent's run if
 /// the agent's `execute_cleanup` spent the approval; otherwise revokes the approval if it is
 /// still unspent, so it is never left live for the agent after the human asked to run it
@@ -677,6 +690,30 @@ fn not_run(
     outcome: &str,
     e: ScullError,
 ) -> ScullError {
+    // The execution lock is held and the approval is spent (not revoked): the lock holder is
+    // the agent's `execute_cleanup`, which claims the approval before it records its
+    // operation. Give it a moment to record it, so the human is told the agent ran the plan
+    // rather than "another operation is running" (#118).
+    if e.kind == ErrorKind::LockHeld
+        && approval_spent(store, plan.id())
+        && !store.approval_revoked(plan.id()).unwrap_or(false)
+    {
+        let deadline = std::time::Instant::now() + LOCK_WAIT;
+        let op = loop {
+            if let Some(op) = ran_elsewhere(store, plan) {
+                break Some(op);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        audit_run(store, plan, Reason::ApprovalUsed.code(), who);
+        return match op {
+            Some(op) => agent_ran(plan.id(), &op),
+            None => agent_claimed(plan.id()),
+        };
+    }
     if let Some(op) = ran_elsewhere(store, plan) {
         audit_run(store, plan, Reason::ApprovalUsed.code(), who);
         return agent_ran(plan.id(), &op);
