@@ -446,7 +446,7 @@ fn cli_plans_need_no_broker_approval() {
 /// the plan presented, source `executor`), oldest first. Every one carries channel `mcp` and
 /// this account.
 fn gate_reasons(s: &Store, plan: &Plan) -> Vec<String> {
-    s.agent_events(0)
+    s.agent_events(0, 10_000)
         .unwrap()
         .into_iter()
         .filter(|e| {

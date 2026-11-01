@@ -85,6 +85,7 @@ pub(crate) fn audit_refusal(store: &mut Store, plan: &Plan, reason: &'static str
         channel: "mcp".into(),
         machine_id: plan.machine_id().to_owned(),
         user,
+        count: 1,
     });
 }
 

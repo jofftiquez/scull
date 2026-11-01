@@ -148,17 +148,20 @@ fn audit(
 }
 
 /// FX-MCP-08 refusals are audited too (an agent's shell tool trying `scull approve`), but
-/// only into a database that already exists: nothing is created for a refused attempt.
+/// only into a database and machine ID that already exist: nothing is created for a refused
+/// attempt (not even the machine ID file). Repeats fold into one entry (bounded).
 fn audit_without_terminal(id: &PlanId) {
     let Ok(dirs) = exec::dirs() else { return };
+    let Ok(Some(machine_id)) = scull_platform::existing_machine_id(&dirs.data) else {
+        return;
+    };
+    let Ok(user) = scull_platform::current_user() else {
+        return;
+    };
     let Ok(mut store) = crate::db::open_current(&crate::db::db_path(&dirs.data)) else {
         return;
     };
-    let Ok(who) = exec::who() else { return };
-    let principal = Principal {
-        machine_id: who.machine_id,
-        user: who.user,
-    };
+    let principal = Principal { machine_id, user };
     let hash = approval::recorded_hash(&store, id);
     audit(
         &mut store,

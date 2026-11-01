@@ -891,7 +891,7 @@ async fn no_tool_can_approve() {
 /// The agent audit events recorded so far: `(kind, source, reason, plan)`, oldest first.
 fn audited(env: &Env) -> Vec<(String, String, String, Option<String>)> {
     env.store()
-        .agent_events(0)
+        .agent_events(0, 10_000)
         .unwrap()
         .into_iter()
         .map(|e| {
@@ -1004,7 +1004,7 @@ async fn every_refused_execute_is_audited_without_touching_approvals() {
             refusal("approval_used", Some(&a)),
         ]
     );
-    let events = store.agent_events(0).unwrap();
+    let events = store.agent_events(0, 10_000).unwrap();
     // Plan hashes as recorded (none for an unknown or invalid plan); channel `mcp`.
     assert_eq!(events[2].content_hash.as_ref(), Some(plan_a.content_hash()));
     assert_eq!(events[6].content_hash.as_ref(), Some(plan_b.content_hash()));
@@ -1047,7 +1047,7 @@ async fn denials_are_audited_and_leave_the_plan_approvable() {
         .unwrap();
     }
     assert!(store.get_approval(&id).unwrap().is_none());
-    let events = store.agent_events(0).unwrap();
+    let events = store.agent_events(0, 10_000).unwrap();
     let got: Vec<(&str, &str, &str, &str)> = events
         .iter()
         .map(|e| {
@@ -1084,6 +1084,58 @@ async fn denials_are_audited_and_leave_the_plan_approvable() {
         .await,
     );
     assert_eq!(r["approved_via"], "terminal");
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// Audit flooding: an agent looping on `execute_cleanup` (250 refusals of one plan, plus 100
+/// made-up plan IDs) leaves a bounded number of audit rows, with the counts kept. (1000
+/// refusals through the broker are checked below, and 1000 + 1000 in scull-storage.)
+#[tokio::test(flavor = "multi_thread")]
+async fn looping_refused_executes_leave_bounded_audit_rows() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let id = id_of(&prepare(&client, &["app/target"]).await);
+    for _ in 0..250 {
+        let r = call(
+            &client,
+            "execute_cleanup",
+            json!({ "plan_id": id.as_str() }),
+        )
+        .await;
+        assert_eq!(error_code(&r), "not_approved");
+    }
+    for n in 0..100 {
+        let made_up = PlanId::from_suffix(&format!("01JFAKE{n}")).unwrap();
+        let r = call(
+            &client,
+            "execute_cleanup",
+            json!({ "plan_id": made_up.as_str() }),
+        )
+        .await;
+        assert_eq!(error_code(&r), "unknown_plan");
+    }
+    let store = env.store();
+    let rows = store.agent_event_rows(0).unwrap();
+    assert!(rows <= 4, "{rows} rows for 350 refusals");
+    let events = store.agent_events(0, 100).unwrap();
+    let total: u64 = events.iter().map(|e| e.count).sum();
+    assert_eq!(total, 350, "every refusal is counted");
+    // 1000 more through the broker's own recorder: still bounded.
+    let mut store = store;
+    for _ in 0..1000 {
+        approval::record_execute_refusal(
+            &mut store,
+            Some(&id),
+            None,
+            "not_approved",
+            &who(),
+            now_unix(),
+        )
+        .unwrap();
+    }
+    assert!(store.agent_event_rows(0).unwrap() <= rows + 1);
+    assert_eq!(env.calls(), 0);
     client.cancel().await.unwrap();
     env.invariants(&[]);
 }

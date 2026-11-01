@@ -487,6 +487,10 @@ pub struct HistoryArgs {
     /// Only operations started within AGE (90m, 12h, 30d, 2w).
     #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age, conflicts_with = "operation_id")]
     pub since: Option<u64>,
+    /// Most entries listed under "Refused to AI agents" (newest first; default 50). Without
+    /// --since they come from the last 30 days.
+    #[arg(long, value_name = "N", default_value_t = crate::cmd::history::AGENT_EVENTS_LIMIT, conflicts_with = "operation_id")]
+    pub limit: u32,
 }
 
 /// Arguments for `scull restore`.

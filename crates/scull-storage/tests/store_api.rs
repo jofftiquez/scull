@@ -579,3 +579,75 @@ fn open_read_only_reads_but_never_writes_or_creates() {
     assert_eq!(rejected_kind(e), ErrorKind::Config);
     assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
 }
+
+fn refusal_event(
+    at: i64,
+    reason: &str,
+    plan: Option<scull_core::PlanId>,
+) -> scull_storage::AgentAuditEvent {
+    scull_storage::AgentAuditEvent {
+        event_id: 0,
+        at,
+        kind: scull_storage::EventKind::ExecuteRefused,
+        source: "mcp".into(),
+        plan_id: plan,
+        content_hash: None,
+        reason: reason.into(),
+        channel: "mcp".into(),
+        machine_id: "machine-a".into(),
+        user: "dev".into(),
+        count: 1,
+    }
+}
+
+/// Audit flooding: 1000 identical refusals within the merge window are one row counting
+/// 1000; refusals naming 1000 made-up plan IDs fold together too; a recorded plan, another
+/// reason, or the next window gets its own row. Listing is capped and newest-first by limit.
+#[test]
+fn repeated_agent_refusals_fold_into_bounded_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    for i in 0..1000 {
+        s.record_agent_event(&refusal_event(
+            T0 + i % 30,
+            "not_approved",
+            Some(p.id().clone()),
+        ))
+        .unwrap();
+    }
+    for i in 0..1000u32 {
+        let made_up = scull_core::PlanId::from_suffix(&format!("fake{i}")).unwrap();
+        s.record_agent_event(&refusal_event(T0 + 5, "unknown_plan", Some(made_up)))
+            .unwrap();
+    }
+    s.record_agent_event(&refusal_event(T0 + 6, "invalid_arguments", None))
+        .unwrap();
+    s.record_agent_event(&refusal_event(T0 + 7, "invalid_arguments", None))
+        .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 3);
+    let rows = s.agent_events(0, 100).unwrap();
+    let got: Vec<(&str, u64)> = rows.iter().map(|e| (e.reason.as_str(), e.count)).collect();
+    assert_eq!(
+        got,
+        vec![
+            ("not_approved", 1000),
+            ("unknown_plan", 1000),
+            ("invalid_arguments", 2)
+        ]
+    );
+    // The next window starts a new row.
+    s.record_agent_event(&refusal_event(
+        T0 + scull_storage::AGENT_EVENT_MERGE_SECS + 1,
+        "not_approved",
+        Some(p.id().clone()),
+    ))
+    .unwrap();
+    assert_eq!(s.agent_event_rows(0).unwrap(), 4);
+    // Capped listing: the most recent ones, oldest first.
+    let last2 = s.agent_events(0, 2).unwrap();
+    assert_eq!(last2.len(), 2);
+    assert_eq!(last2[1].count, 1);
+    assert_eq!(last2[1].reason, "not_approved");
+}

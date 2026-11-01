@@ -886,6 +886,7 @@ pub fn record_denial(
             channel: channel_name(channel.method()).into(),
             machine_id: who.machine_id.clone(),
             user: who.user.clone(),
+            count: 1,
         })
         .map_err(store_err)
 }
@@ -913,6 +914,7 @@ pub fn record_execute_refusal(
             channel: "mcp".into(),
             machine_id: who.machine_id.clone(),
             user: who.user.clone(),
+            count: 1,
         })
         .map_err(store_err)
 }

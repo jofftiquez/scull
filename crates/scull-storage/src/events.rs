@@ -21,6 +21,13 @@
 //! ([`Store::record_agent_event`] validates every field). Read them with
 //! [`Store::agent_events`] (`scull history`) and count them with [`Store::event_counts`]
 //! (`scull data show`). Nothing here creates, changes or spends an approval.
+//!
+//! **Bounded**: a looping agent must not be able to grow the database through its refusals.
+//! A refusal that repeats one recorded in the last [`AGENT_EVENT_MERGE_SECS`] (same kind,
+//! source, reason, channel, machine and user, and the same recorded plan) is folded into that
+//! row, whose [`AgentAuditEvent::count`] goes up. Refusals naming plans that are not recorded
+//! (made-up IDs) fold together regardless of the ID, so varying it doesn't help either. Rows
+//! therefore grow with the plans that exist (themselves capped) and with time, not with calls.
 
 use crate::error::{Result, StoreError};
 use crate::store::{Store, internal};
@@ -109,7 +116,14 @@ pub struct AgentAuditEvent {
     pub machine_id: String,
     /// The OS account.
     pub user: String,
+    /// How many occurrences this row stands for (repeats within [`AGENT_EVENT_MERGE_SECS`]
+    /// are folded into it; `at` is the first). Ignored when recording.
+    pub count: u64,
 }
+
+/// Window in which a repeated agent refusal is folded into the row already recorded
+/// (see the module docs).
+pub const AGENT_EVENT_MERGE_SECS: i64 = 60;
 
 /// Longest `machine_id` or `user` an [`AgentAuditEvent`] may carry.
 const MAX_PRINCIPAL_CHARS: usize = 256;
@@ -162,6 +176,7 @@ impl AgentAuditEvent {
             "channel": self.channel,
             "machine_id": self.machine_id,
             "user": self.user,
+            "count": 1,
         })
     }
 
@@ -185,6 +200,11 @@ impl AgentAuditEvent {
             channel: text("channel").ok_or_else(bad)?,
             machine_id: text("machine_id").ok_or_else(bad)?,
             user: text("user").ok_or_else(bad)?,
+            count: e
+                .payload
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(1),
         })
     }
 
@@ -198,6 +218,15 @@ impl AgentAuditEvent {
             payload: self.payload(),
         })
     }
+}
+
+/// The agent kinds as an SQL list of string literals (stored names are fixed ASCII codes).
+fn agent_kinds_sql() -> String {
+    EventKind::AGENT
+        .iter()
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Rows of one event kind, as `scull data show` reports them.
@@ -343,24 +372,116 @@ impl Store {
         })
     }
 
-    /// Record one agent audit event (PRD §13.3 step 5). Rejected with [`ErrorKind::Usage`] if
-    /// its kind is not one of [`EventKind::AGENT`] or a field is not a code (see
-    /// [`AgentAuditEvent`]). `event_id` is ignored.
+    /// Record one agent audit event (PRD §13.3 step 5), or fold it into the matching row
+    /// recorded in the last [`AGENT_EVENT_MERGE_SECS`] (see the module docs); one transaction.
+    /// Rejected with [`ErrorKind::Usage`] if its kind is not one of [`EventKind::AGENT`] or a
+    /// field is not a code (see [`AgentAuditEvent`]). `event_id` and `count` are ignored.
     pub fn record_agent_event(&mut self, e: &AgentAuditEvent) -> Result<()> {
         let event = e.to_event()?;
-        self.record_events(std::slice::from_ref(&event))
+        let json = serde_json::to_string(&event.payload).map_err(internal)?;
+        let plan = e.plan_id.as_ref().map(PlanId::as_str);
+        self.write(|tx| {
+            let known: bool = match plan {
+                Some(p) => tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM plans WHERE plan_id = ?1)",
+                    [p],
+                    |r| r.get(0),
+                )?,
+                None => false,
+            };
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT event_id FROM events WHERE kind = ?1 AND source = ?2 \
+                     AND occurred_at > ?3 - ?4 AND occurred_at <= ?3 \
+                     AND json_extract(payload_json, '$.reason') = ?5 \
+                     AND json_extract(payload_json, '$.channel') = ?6 \
+                     AND json_extract(payload_json, '$.machine_id') = ?7 \
+                     AND json_extract(payload_json, '$.user') = ?8 \
+                     AND CASE WHEN ?10 THEN json_extract(payload_json, '$.plan_id') = ?9 \
+                         ELSE (json_extract(payload_json, '$.plan_id') IS NULL \
+                               OR NOT EXISTS (SELECT 1 FROM plans \
+                                   WHERE plan_id = json_extract(payload_json, '$.plan_id'))) \
+                         END \
+                     ORDER BY event_id DESC LIMIT 1",
+                    params![
+                        event.kind.as_str(),
+                        event.source,
+                        event.at,
+                        AGENT_EVENT_MERGE_SECS,
+                        e.reason,
+                        e.channel,
+                        e.machine_id,
+                        e.user,
+                        plan,
+                        known,
+                    ],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match existing {
+                Some(id) => tx.execute(
+                    "UPDATE events SET payload_json = json_set(payload_json, '$.count', \
+                     coalesce(json_extract(payload_json, '$.count'), 1) + 1) WHERE event_id = ?1",
+                    [id],
+                )?,
+                None => tx.execute(
+                    "INSERT INTO events (occurred_at, kind, source, payload_json) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![event.at, event.kind.as_str(), event.source, json],
+                )?,
+            };
+            Ok(())
+        })
     }
 
-    /// Agent audit events at or after `since`, every [`EventKind::AGENT`] kind, oldest first.
-    pub fn agent_events(&self, since: i64) -> Result<Vec<AgentAuditEvent>> {
-        let mut out = Vec::new();
-        for kind in EventKind::AGENT {
-            for e in self.events(kind, since)? {
-                out.push(AgentAuditEvent::from_event(e)?);
-            }
-        }
-        out.sort_by_key(|e| (e.at, e.event_id));
+    /// The most recent `limit` agent audit events at or after `since` (every
+    /// [`EventKind::AGENT`] kind), returned oldest first. [`Store::agent_event_rows`] says how
+    /// many there are in all.
+    pub fn agent_events(&self, since: i64, limit: u32) -> Result<Vec<AgentAuditEvent>> {
+        let kinds = agent_kinds_sql();
+        let rows: Vec<(i64, i64, String, String, String)> = self.read(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT event_id, occurred_at, kind, source, payload_json FROM events \
+                 WHERE kind IN ({kinds}) AND occurred_at >= ?1 \
+                 ORDER BY occurred_at DESC, event_id DESC LIMIT ?2"
+            ))?;
+            let rows = stmt.query_map(params![since, limit], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })?;
+        let mut out = rows
+            .into_iter()
+            .map(|(event_id, at, kind, source, json)| {
+                let kind = EventKind::parse(&kind).ok_or_else(|| {
+                    StoreError::rejected(ErrorKind::Internal, "unknown agent event kind")
+                })?;
+                AgentAuditEvent::from_event(Event {
+                    event_id,
+                    at,
+                    kind,
+                    source,
+                    payload: serde_json::from_str(&json).map_err(internal)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        out.reverse();
         Ok(out)
+    }
+
+    /// How many agent audit event rows there are at or after `since`.
+    pub fn agent_event_rows(&self, since: i64) -> Result<u64> {
+        let kinds = agent_kinds_sql();
+        self.read(|conn| {
+            let n: i64 = conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM events WHERE kind IN ({kinds}) AND occurred_at >= ?1"
+                ),
+                [since],
+                |r| r.get(0),
+            )?;
+            Ok(u64::try_from(n).unwrap_or(0))
+        })
     }
 
     /// Rows per event kind, by kind name.
@@ -550,6 +671,7 @@ mod tests {
             channel: "mcp".into(),
             machine_id: "machine-1".into(),
             user: "uid:1000".into(),
+            count: 1,
         }
     }
 
@@ -575,7 +697,7 @@ mod tests {
             alert: json!({}),
         })
         .expect("alert");
-        let all = s.agent_events(0).expect("events");
+        let all = s.agent_events(0, 100).expect("events");
         let got: Vec<(i64, &str)> = all.iter().map(|e| (e.at, e.reason.as_str())).collect();
         assert_eq!(
             got,
@@ -594,7 +716,7 @@ mod tests {
             e
         });
         assert_eq!(all[2].plan_id, None);
-        assert_eq!(s.agent_events(20).expect("since").len(), 2);
+        assert_eq!(s.agent_events(20, 100).expect("since").len(), 2);
         let counts = s.event_counts().expect("counts");
         let n = |k: &str| counts.iter().find(|c| c.kind == k).map_or(0, |c| c.rows);
         assert_eq!(
@@ -653,7 +775,7 @@ mod tests {
                 "{err:?}"
             );
         }
-        assert!(s.agent_events(0).expect("events").is_empty());
+        assert!(s.agent_events(0, 100).expect("events").is_empty());
         assert!(s.event_counts().expect("counts").is_empty());
     }
 }

@@ -166,7 +166,13 @@ Each entry holds the reason code, the plan ID and its content hash, the channel
 (`terminal`, `desktop` or `mcp`), what recorded it, the machine ID and your account. Never a
 confirmation code, a message or a path. `scull history --json` returns them as
 `agent_events`; `scull data show` counts them by kind. Recording a refusal never creates,
-spends or changes an approval. Nothing is recorded when scull runs elevated.
+spends or changes an approval. Nothing is recorded when scull runs elevated, and a refused
+`scull approve` without a terminal creates nothing (no database, no machine ID file).
+
+The record can't be flooded: a refusal that repeats one from the last minute (same kind,
+reason, channel, account and plan; any made-up plan ID counts as the same) is added to that
+entry's count instead of writing a new row. `scull history` lists the 50 most recent entries
+from the last 30 days, says how many more there are, and takes `--limit N` and `--since AGE`.
 
 The server also tells the model, in its instructions, that file names, branch names and
 paths are untrusted data from your disk and that it must never follow instructions found in

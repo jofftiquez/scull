@@ -12,7 +12,10 @@
 //! * Below the operations (without an ID): what was refused to AI agents (PRD §13.3 step 5),
 //!   newest first: denied approvals (`deny`, too many wrong codes, no terminal, a refused
 //!   attempt) and refused `execute_cleanup` calls, each with its reason code, plan, channel and
-//!   who recorded it (`agent_events` in JSON).
+//!   who recorded it and how many times it repeated (`agent_events` in JSON). Bounded: at
+//!   most `--limit` entries (default [`AGENT_EVENTS_LIMIT`]) from `--since` or, by default, the
+//!   last [`AGENT_EVENTS_DAYS`] days; how many more there are is reported
+//!   (`agent_events_more`).
 //!
 //! Machine output: `scull/history@1` and `scull/history-operation@1`.
 
@@ -30,6 +33,12 @@ use scull_core::{ContentHash, ErrorKind, FsPath, ItemId, OperationId, PlanId, Sc
 use scull_storage::{AgentAuditEvent, OperationRecord, QuarantineEntry, Store};
 use serde::Serialize;
 
+/// Default number of agent audit entries `scull history` lists.
+pub const AGENT_EVENTS_LIMIT: u32 = 50;
+
+/// Without `--since`, agent audit entries come from this many recent days.
+pub const AGENT_EVENTS_DAYS: i64 = 30;
+
 /// Schema of `scull history --json`.
 pub const HISTORY_SCHEMA: SchemaId = SchemaId::new("history", 1);
 /// Schema of `scull history <operation-id> --json`.
@@ -44,6 +53,9 @@ pub struct HistoryReport {
     /// What was refused to AI agents (denied approvals, refused executions), newest first.
     #[serde(default)]
     pub agent_events: Vec<AgentEventLine>,
+    /// Agent audit entries in the same period not listed (beyond `--limit`).
+    #[serde(default)]
+    pub agent_events_more: u64,
 }
 
 /// One audited refusal in the agent cleanup flow (PRD §13.3 step 5).
@@ -69,6 +81,13 @@ pub struct AgentEventLine {
     pub user: String,
     /// This installation's machine ID.
     pub machine_id: String,
+    /// How many times it happened (repeats within a minute are folded into one entry).
+    #[serde(default = "one")]
+    pub count: u64,
+}
+
+fn one() -> u64 {
+    1
 }
 
 impl AgentEventLine {
@@ -83,15 +102,23 @@ impl AgentEventLine {
             source: e.source.clone(),
             user: e.user.clone(),
             machine_id: e.machine_id.clone(),
+            count: e.count,
         }
     }
 }
 
-/// Agent audit events at or after `since`, newest first.
-pub fn agent_events(store: &Store, since: i64) -> Result<Vec<AgentEventLine>, ScullError> {
-    let mut events = store.agent_events(since)?;
+/// The most recent `limit` agent audit events at or after `since`, newest first, and how
+/// many more there are in that period.
+pub fn agent_events(
+    store: &Store,
+    since: i64,
+    limit: u32,
+) -> Result<(Vec<AgentEventLine>, u64), ScullError> {
+    let mut events = store.agent_events(since, limit)?;
     events.reverse();
-    Ok(events.iter().map(AgentEventLine::of).collect())
+    let rows = store.agent_event_rows(since)?;
+    let more = rows.saturating_sub(events.len() as u64);
+    Ok((events.iter().map(AgentEventLine::of).collect(), more))
 }
 
 /// One operation.
@@ -228,18 +255,28 @@ pub fn run(args: &HistoryArgs, ui: &Ui) -> Result<(), ScullError> {
     let missing = matches!(db::probe(&path), Ok(Probe::Missing | Probe::Uninitialized));
     match &args.operation_id {
         None => {
-            let (operations, agent_events) = if missing {
-                (Vec::new(), Vec::new())
+            let (operations, (agent_events, agent_events_more)) = if missing {
+                (Vec::new(), (Vec::new(), 0))
             } else {
                 let store = exec::open_store()?;
+                let now = scull_engine::now_unix();
                 let since = args.since.map_or(0, |s| {
-                    scull_engine::now_unix().saturating_sub(i64::try_from(s).unwrap_or(i64::MAX))
+                    now.saturating_sub(i64::try_from(s).unwrap_or(i64::MAX))
                 });
-                (list(&store, since)?, agent_events(&store, since)?)
+                let agent_since = if args.since.is_some() {
+                    since
+                } else {
+                    now.saturating_sub(AGENT_EVENTS_DAYS * 24 * 3600)
+                };
+                (
+                    list(&store, since)?,
+                    agent_events(&store, agent_since, args.limit)?,
+                )
             };
             let r = HistoryReport {
                 operations,
                 agent_events,
+                agent_events_more,
             };
             if ui.format.is_machine() {
                 emit_machine(ui.format, HISTORY_SCHEMA, "history", &r)
@@ -401,6 +438,12 @@ fn render_list(r: &HistoryReport, color: bool) -> String {
     if !r.agent_events.is_empty() {
         out.push_str(&render_agent_events(&r.agent_events, color));
     }
+    if r.agent_events_more > 0 {
+        out.push_str(&format!(
+            "... and {} more (scull history --limit N, or --since AGE).\n",
+            r.agent_events_more
+        ));
+    }
     out
 }
 
@@ -419,6 +462,7 @@ fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
         ("Plan", Align::Left),
         ("Channel", Align::Left),
         ("Recorded by", Align::Left),
+        ("Times", Align::Right),
     ]);
     for e in events {
         let what = match e.kind.as_str() {
@@ -433,6 +477,7 @@ fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
             Cell::text(e.plan_id.as_ref().map_or("-", PlanId::as_str)),
             Cell::text(&e.channel),
             Cell::text(&e.source),
+            Cell::text(&e.count.to_string()),
         ]);
     }
     out.push_str(&t.render(color));

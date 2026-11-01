@@ -24,6 +24,13 @@
           ],
           "description": "Its content hash, when known."
         },
+        "count": {
+          "default": 1,
+          "description": "How many times it happened (repeats within a minute are folded into one entry).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "kind": {
           "description": "`approval_denied` or `execute_refused`.",
           "type": "string"
@@ -83,6 +90,13 @@
             "$ref": "#/$defs/AgentEventLine"
           },
           "type": "array"
+        },
+        "agent_events_more": {
+          "default": 0,
+          "description": "Agent audit entries in the same period not listed (beyond `--limit`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "operations": {
           "description": "Operations, newest first.",
