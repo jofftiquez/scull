@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-configure-monitor"
+description = "Enables the configure_monitor command without any pre-configured scope."
+commands.allow = ["configure_monitor"]
+
+[[permission]]
+identifier = "deny-configure-monitor"
+description = "Denies the configure_monitor command without any pre-configured scope."
+commands.deny = ["configure_monitor"]

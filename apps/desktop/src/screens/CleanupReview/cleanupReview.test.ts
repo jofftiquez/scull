@@ -8,6 +8,8 @@ import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from
 import { cleanupBasket } from '../../components/overview/basket';
 import { DESIGN_CANDIDATES } from '../../components/overview/designScenario';
 import { routes } from '../../navigation';
+import { createTauriPlanBridge } from '../../bridge/tauriPlans';
+import type { TauriTransport } from '../../bridge/tauri';
 import CleanupReviewScreen from './CleanupReviewScreen.vue';
 
 async function mountAt(path: string, plans: PlanBridge = createMockPlanBridge()) {
@@ -212,5 +214,76 @@ describe('Cleanup Review (agent request mode)', () => {
   it('an unknown request says so', async () => {
     const w = await mountAt('/cleanup?request=nope');
     expect(w.get('[role="alert"]').text()).toContain('no agent request nope');
+  });
+});
+
+describe('Cleanup Review (agent request through the core broker, Tauri)', () => {
+  const PLAN = 'plan_01JTAURI';
+  const T = Math.floor(Date.now() / 1000);
+  const cand = (id: string) => ({
+    ...structuredClone(DESIGN_CANDIDATES.find((c) => c.tier === 'S0')!),
+    id,
+    path: `/home/dev/code/${id}/target`,
+  });
+
+  /** A transport answering like apps/desktop/src-tauri; `status` is what the core reports. */
+  function transport(status: () => Record<string, unknown>) {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    const t: TauriTransport = {
+      async invoke<R>(cmd: string, args?: Record<string, unknown>): Promise<R> {
+        calls.push({ cmd, args });
+        if (cmd === 'open_approval_request') {
+          return {
+            plan_id: PLAN, content_hash: 'b'.repeat(64), created_at: T - 60, expires_at: T + 840,
+            items: [{ candidate: cand('a1'), from_last_scan: true }, { candidate: cand('b2'), from_last_scan: false }],
+            code: 'XRT-7KP', attempts_left: 3,
+          } as R;
+        }
+        if (cmd === 'agent_plan_status') return status() as R;
+        if (cmd === 'approve_agent_plan') return { plan_id: PLAN, approved_at: T, approval_expires_at: T + 840 } as R;
+        throw { kind: 'internal', message: cmd };
+      },
+      listen: async () => () => undefined,
+    };
+    return { t, calls };
+  }
+  const base = { plan_id: PLAN, plan_expires_at: T + 840, approved_at: null, channel: null, used_at: null, denied_at: null, operation: null };
+
+  it('shows the plan as recorded, says the client is not recorded, and approves through the core', async () => {
+    const { t, calls } = transport(() => ({ ...base, state: 'awaiting_approval' }));
+    const w = await mountAt(`/cleanup?request=${PLAN}`, createTauriPlanBridge({ transport: t, pollMs: 60_000 }));
+    expect(w.get('[data-testid="code"]').text()).toBe('XRT-7KP');
+    expect(w.get('[data-testid="asker"]').text()).toContain("the plan doesn't record which client asked");
+    expect(w.text()).toContain('as recorded in the plan · not in your last scan');
+    for (const b of w.findAll('input[aria-label^="Reviewed "]')) await b.setValue(true);
+    await w.get('[data-testid="code-input"]').setValue('xrt7kp');
+    await w.get('[data-testid="approve"]').trigger('click');
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === 'approve_agent_plan')!.args).toEqual({ planId: PLAN, contentHash: 'b'.repeat(64), code: 'xrt7kp' });
+    expect(w.get('[data-state]').attributes('data-state')).toBe('approved');
+  });
+
+  it('an approval made in the terminal while the dialog is open shows as approved there', async () => {
+    let state: Record<string, unknown> = { ...base, state: 'awaiting_approval' };
+    const { t } = transport(() => state);
+    const w = await mountAt(`/cleanup?request=${PLAN}`, createTauriPlanBridge({ transport: t, pollMs: 10 }));
+    state = { ...base, state: 'approved', approved_at: T + 3, channel: 'terminal' };
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.get('[data-state]').attributes('data-state')).toBe('approved');
+    });
+    expect(w.text()).toContain('approved by you in your terminal');
+  });
+
+  it('a request closed elsewhere (denied, or too many wrong codes) closes the dialog', async () => {
+    let state: Record<string, unknown> = { ...base, state: 'awaiting_approval' };
+    const { t } = transport(() => state);
+    const w = await mountAt(`/cleanup?request=${PLAN}`, createTauriPlanBridge({ transport: t, pollMs: 10 }));
+    state = { ...base, state: 'denied', denied_at: T + 4 };
+    await vi.waitFor(async () => {
+      await flushPromises();
+      expect(w.get('[data-state]').attributes('data-state')).toBe('denied');
+    });
+    expect(w.find('[data-testid="approve"]').exists()).toBe(false);
   });
 });

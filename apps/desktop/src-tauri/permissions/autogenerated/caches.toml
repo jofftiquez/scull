@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-caches"
+description = "Enables the caches command without any pre-configured scope."
+commands.allow = ["caches"]
+
+[[permission]]
+identifier = "deny-caches"
+description = "Denies the caches command without any pre-configured scope."
+commands.deny = ["caches"]

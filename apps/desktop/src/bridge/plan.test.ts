@@ -1,17 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from './mock';
-import { createUnavailablePlanBridge, planBridgeFor } from './plan';
+import { createUnavailablePlanBridge, planBridgeFor, wantsAgentRequest } from './plan';
 import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from './planMock';
 import { DESIGN_CANDIDATES } from '../components/overview/designScenario';
 import { BridgeError } from './types';
 import { actionAllowed } from '../components/review/plan';
 
 describe('plan bridge stubs', () => {
-  it('goes with the core bridge: mock with mock, unavailable with Tauri', () => {
+  it('goes with the core bridge: mock with mock, the approval broker with Tauri', async () => {
     const m = createMockBridge();
     expect(planBridgeFor(m).kind).toBe('mock');
     expect(planBridgeFor(m)).toBe(planBridgeFor(m));
-    expect(planBridgeFor({ ...m, kind: 'tauri' }).kind).toBe('unavailable');
+    const t = planBridgeFor({ ...m, kind: 'tauri' });
+    expect(t.kind).toBe('tauri');
+    // Inside Tauri the desktop's own plans still refuse: the desktop never executes (SAFE-10).
+    await expect(t.preparePlan({})).rejects.toMatchObject({ kind: 'unsupported_platform' });
+    await expect(t.executePlan({ plan_id: 'x', hash: 'y', items: [] })).rejects.toMatchObject({ kind: 'unsupported_platform' });
+  });
+
+  it('the mock announces its agent request only when asked (?agent=request)', async () => {
+    expect(await createMockPlanBridge().approvalRequests()).toEqual([]);
+    const r = await createMockPlanBridge({ announceAgentRequest: true }).approvalRequests();
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ plan_id: MOCK_AGENT_PLAN_ID, client: 'Claude Code', item_count: 5 });
+    expect(wantsAgentRequest({ location: { search: '', hash: '#/?agent=request' } })).toBe(true);
+    expect(wantsAgentRequest({ location: { search: '?agent=request', hash: '#/' } })).toBe(true);
+    expect(wantsAgentRequest({ location: { search: '?agent=requests', hash: '' } })).toBe(false);
   });
 
   it('the unavailable bridge refuses everything (the desktop never deletes itself)', async () => {

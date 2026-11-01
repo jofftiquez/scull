@@ -2,20 +2,6 @@
 // Do not edit by hand.
 
 /**
- * Which bridge implementation answered.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "BridgeKind".
- */
-export type BridgeKind = "tauri" | "mock";
-/**
- * Operating system family.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Os".
- */
-export type Os = "macos" | "windows" | "linux" | "unknown";
-/**
  * The action proposed for a candidate.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -259,6 +245,36 @@ export type RegenerationCost =
  * via the `definition` "Confidence".
  */
 export type Confidence = "high" | "medium" | "low" | "unknown";
+/**
+ * What happened to one item when the agent executed the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentItemOutcome".
+ */
+export type AgentItemOutcome =
+  "removed" | "quarantined" | "moved_to_trash" | "tool_run" | "partial" | "failed" | "refused" | "skipped" | "unknown";
+/**
+ * Where an agent plan stands, as the desktop shows it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentPlanState".
+ */
+export type AgentPlanState =
+  "awaiting_approval" | "denied" | "approved" | "running" | "executed" | "voided" | "expired" | "revoked";
+/**
+ * Which bridge implementation answered.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "BridgeKind".
+ */
+export type BridgeKind = "tauri" | "mock";
+/**
+ * Operating system family.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Os".
+ */
+export type Os = "macos" | "windows" | "linux" | "unknown";
 /**
  * Kinds of [`Issue`].
  *
@@ -858,6 +874,12 @@ export type StatusState = "ok" | "no_scan" | "no_database" | "unavailable";
  * Every payload of the desktop bridge, by type name.
  */
 export interface BridgePayloads {
+  AgentApprovalRequest: AgentApprovalRequest;
+  AgentApproved: AgentApproved;
+  AgentDenied: AgentDenied;
+  AgentPlanStatus: AgentPlanStatus;
+  AgentRequests: AgentRequests;
+  AgentRevoked: AgentRevoked;
   AppInfo: AppInfo;
   CachesReport: CachesReport;
   CapabilitiesReport: CapabilitiesReport;
@@ -882,51 +904,57 @@ export interface BridgePayloads {
   WorktreesView: WorktreesView;
 }
 /**
- * Which bridge answers, and about what (`app_info` command).
+ * An agent plan opened for approval: the plan exactly as the broker verified it, and the
+ * code to show.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AppInfo".
+ * via the `definition` "AgentApprovalRequest".
  */
-export interface AppInfo {
-  bridge: BridgeKind;
-  os: Os;
+export interface AgentApprovalRequest {
   /**
-   * scull version of the core.
+   * Wrong codes still accepted before this opening closes.
    */
-  version: string;
+  attempts_left: number;
+  /**
+   * The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types
+   * it back. It is valid for this opening of the dialog only and never leaves this machine.
+   */
+  code: string;
+  /**
+   * Content hash (send it back with the approval).
+   */
+  content_hash: string;
+  /**
+   * When the agent prepared it (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires unapproved; an approval lapses at the same time (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * Every item, in plan order.
+   */
+  items: AgentPlanItem[];
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
 }
 /**
- * Result of locating package-manager caches (`scull caches`).
+ * One item of an agent plan as the human reviews it.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CachesReport".
+ * via the `definition` "AgentPlanItem".
  */
-export interface CachesReport {
+export interface AgentPlanItem {
+  candidate: Candidate;
   /**
-   * `true` when the user cancelled while sizing.
+   * `true`: evidence, reasons, flags and sizes come from this app's last scan, which found
+   * the same item (same ID, identity, path, tier, action and rule). `false`: only what the
+   * plan recorded is known; flags are unknown (never "no") and there is no evidence to show.
    */
-  cancelled: boolean;
-  /**
-   * One candidate per cache found (category `package_cache`).
-   */
-  candidates: Candidate[];
-  /**
-   * Places that could not be read.
-   */
-  issues: Issue[];
-  /**
-   * Unix time (seconds) of the measurement.
-   */
-  measured_at: number;
-  /**
-   * Tools whose cache location was refused (QC-05); nothing of them is offered.
-   */
-  refused: RefusedCacheReport[];
-  /**
-   * Signals this run could not observe.
-   */
-  signals_unavailable: SignalUnavailable[];
-  totals: Totals;
+  from_last_scan: boolean;
 }
 /**
  * A detected item with a risk tier and evidence. This is the unit the preview shows, plans
@@ -1101,6 +1129,247 @@ export interface Reclaimable {
    * this item will not free while the other links remain.
    */
   shared_bytes?: number;
+}
+/**
+ * The human approved the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentApproved".
+ */
+export interface AgentApproved {
+  /**
+   * When the unused approval lapses (Unix seconds).
+   */
+  approval_expires_at: number;
+  /**
+   * When (Unix seconds).
+   */
+  approved_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * The human denied the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentDenied".
+ */
+export interface AgentDenied {
+  /**
+   * When (Unix seconds).
+   */
+  denied_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * The status of an agent plan. Contains no code and nothing that can approve anything.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentPlanStatus".
+ */
+export interface AgentPlanStatus {
+  /**
+   * When it was approved.
+   */
+  approved_at?: number | null;
+  /**
+   * How it was approved: `terminal` or `desktop`.
+   */
+  channel?: string | null;
+  /**
+   * When a human denied it.
+   */
+  denied_at?: number | null;
+  /**
+   * The execution, once the agent started it.
+   */
+  operation?: AgentOperation | null;
+  /**
+   * When the plan expires (Unix seconds).
+   */
+  plan_expires_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+  state: AgentPlanState;
+  /**
+   * When the approval was used (executed, voided or revoked).
+   */
+  used_at?: number | null;
+}
+/**
+ * The agent's execution of the plan, as recorded by the Executor.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentOperation".
+ */
+export interface AgentOperation {
+  /**
+   * When it finished (Unix seconds); `None` while running.
+   */
+  finished_at?: number | null;
+  /**
+   * Bytes freed (sum of the items).
+   */
+  freed_bytes: number;
+  /**
+   * Item outcomes recorded so far, in order.
+   */
+  items: AgentItemResult[];
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * Bytes moved aside.
+   */
+  moved_bytes: number;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+  /**
+   * When it started (Unix seconds).
+   */
+  started_at: number;
+}
+/**
+ * One recorded item outcome of the agent's execution.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentItemResult".
+ */
+export interface AgentItemResult {
+  /**
+   * Bytes freed.
+   */
+  freed_bytes: number;
+  /**
+   * Plan item.
+   */
+  item_id: string;
+  /**
+   * Bytes moved aside (quarantine, Trash).
+   */
+  moved_bytes: number;
+  outcome: AgentItemOutcome;
+  /**
+   * Stable reason code (skipped, refused, failed).
+   */
+  reason?: string | null;
+}
+/**
+ * Agent plans waiting for the human, newest first.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRequests".
+ */
+export interface AgentRequests {
+  /**
+   * The requests (empty without a database or machine ID).
+   */
+  requests: AgentRequest[];
+}
+/**
+ * An agent plan waiting for the human, for the pending-requests notice.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRequest".
+ */
+export interface AgentRequest {
+  /**
+   * Content hash the approval will be bound to.
+   */
+  content_hash: string;
+  /**
+   * When the agent prepared it (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires unapproved (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * Items in the plan.
+   */
+  item_count: number;
+  /**
+   * Plan ID (open it with `open_approval_request`).
+   */
+  plan_id: string;
+  /**
+   * Bytes the plan predicts it frees.
+   */
+  reclaimable_bytes: number;
+}
+/**
+ * The human revoked the approval before the agent used it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRevoked".
+ */
+export interface AgentRevoked {
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+  /**
+   * When (Unix seconds).
+   */
+  revoked_at: number;
+}
+/**
+ * Which bridge answers, and about what (`app_info` command).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AppInfo".
+ */
+export interface AppInfo {
+  bridge: BridgeKind;
+  os: Os;
+  /**
+   * scull version of the core.
+   */
+  version: string;
+}
+/**
+ * Result of locating package-manager caches (`scull caches`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CachesReport".
+ */
+export interface CachesReport {
+  /**
+   * `true` when the user cancelled while sizing.
+   */
+  cancelled: boolean;
+  /**
+   * One candidate per cache found (category `package_cache`).
+   */
+  candidates: Candidate[];
+  /**
+   * Places that could not be read.
+   */
+  issues: Issue[];
+  /**
+   * Unix time (seconds) of the measurement.
+   */
+  measured_at: number;
+  /**
+   * Tools whose cache location was refused (QC-05); nothing of them is offered.
+   */
+  refused: RefusedCacheReport[];
+  /**
+   * Signals this run could not observe.
+   */
+  signals_unavailable: SignalUnavailable[];
+  totals: Totals;
 }
 /**
  * Something the scan could not read or did not descend into.

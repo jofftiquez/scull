@@ -5,6 +5,9 @@
 //! `tests/schemas.rs` fails when the committed files are stale. Regenerate them with
 //! `SCULL_UPDATE_SCHEMAS=1 cargo test -p scull-desktop-bridge --test schemas`.
 
+use crate::approvals::{
+    AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
+};
 use crate::forecasts::ForecastsView;
 use crate::history::HistoryView;
 use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
@@ -93,6 +96,30 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
         (
             "monitor-snapshot",
             schema::<MonitorSnapshot>("monitor-snapshot", "MonitorSnapshot"),
+        ),
+        (
+            "agent-requests",
+            schema::<AgentRequests>("agent-requests", "AgentRequests"),
+        ),
+        (
+            "agent-approval-request",
+            schema::<AgentApprovalRequest>("agent-approval-request", "AgentApprovalRequest"),
+        ),
+        (
+            "agent-approved",
+            schema::<AgentApproved>("agent-approved", "AgentApproved"),
+        ),
+        (
+            "agent-denied",
+            schema::<AgentDenied>("agent-denied", "AgentDenied"),
+        ),
+        (
+            "agent-revoked",
+            schema::<AgentRevoked>("agent-revoked", "AgentRevoked"),
+        ),
+        (
+            "agent-plan-status",
+            schema::<AgentPlanStatus>("agent-plan-status", "AgentPlanStatus"),
         ),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]

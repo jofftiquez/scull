@@ -1,0 +1,267 @@
+{
+  "$defs": {
+    "AgentItemOutcome": {
+      "description": "What happened to one item when the agent executed the plan.",
+      "oneOf": [
+        {
+          "const": "removed",
+          "description": "Deleted.",
+          "type": "string"
+        },
+        {
+          "const": "quarantined",
+          "description": "Moved to quarantine (restorable).",
+          "type": "string"
+        },
+        {
+          "const": "moved_to_trash",
+          "description": "Moved to the system Trash.",
+          "type": "string"
+        },
+        {
+          "const": "tool_run",
+          "description": "The ecosystem's own cleanup command ran.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "Only part of it was cleaned.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Cleaning it failed.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "The re-check refused it.",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "Skipped (changed since the plan, in use, ...).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "An outcome a newer scull recorded that this build doesn't know.",
+          "type": "string"
+        }
+      ]
+    },
+    "AgentItemResult": {
+      "additionalProperties": false,
+      "description": "One recorded item outcome of the agent's execution.",
+      "properties": {
+        "freed_bytes": {
+          "description": "Bytes freed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "item_id": {
+          "description": "Plan item.",
+          "type": "string"
+        },
+        "moved_bytes": {
+          "description": "Bytes moved aside (quarantine, Trash).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AgentItemOutcome",
+          "description": "What happened."
+        },
+        "reason": {
+          "description": "Stable reason code (skipped, refused, failed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item_id",
+        "outcome",
+        "freed_bytes",
+        "moved_bytes"
+      ],
+      "type": "object"
+    },
+    "AgentOperation": {
+      "additionalProperties": false,
+      "description": "The agent's execution of the plan, as recorded by the Executor.",
+      "properties": {
+        "finished_at": {
+          "description": "When it finished (Unix seconds); `None` while running.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "freed_bytes": {
+          "description": "Bytes freed (sum of the items).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items": {
+          "description": "Item outcomes recorded so far, in order.",
+          "items": {
+            "$ref": "#/$defs/AgentItemResult"
+          },
+          "type": "array"
+        },
+        "measured_delta_bytes": {
+          "description": "Free space after minus before, when measured.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "moved_bytes": {
+          "description": "Bytes moved aside.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "predicted_bytes": {
+          "description": "Bytes the plan predicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "description": "When it started (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "started_at",
+        "items",
+        "predicted_bytes",
+        "moved_bytes",
+        "freed_bytes"
+      ],
+      "type": "object"
+    },
+    "AgentPlanState": {
+      "description": "Where an agent plan stands, as the desktop shows it.",
+      "oneOf": [
+        {
+          "const": "awaiting_approval",
+          "description": "Waiting for the human.",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "description": "A human denied it (or typed the code wrong too many times): nothing will run.",
+          "type": "string"
+        },
+        {
+          "const": "approved",
+          "description": "Approved, not used yet.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "The agent is executing it (its operation started and hasn't finished).",
+          "type": "string"
+        },
+        {
+          "const": "executed",
+          "description": "The agent executed it; see `operation`.",
+          "type": "string"
+        },
+        {
+          "const": "voided",
+          "description": "A target changed on disk before it ran, so the whole plan is void (D-34).",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "The plan or its unused approval expired.",
+          "type": "string"
+        },
+        {
+          "const": "revoked",
+          "description": "The human revoked the approval before it was used.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/agent-plan-status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The status of an agent plan. Contains no code and nothing that can approve anything.",
+  "properties": {
+    "approved_at": {
+      "description": "When it was approved.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "channel": {
+      "description": "How it was approved: `terminal` or `desktop`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "denied_at": {
+      "description": "When a human denied it.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "operation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentOperation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The execution, once the agent started it."
+    },
+    "plan_expires_at": {
+      "description": "When the plan expires (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "plan_id": {
+      "description": "Plan ID.",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/AgentPlanState",
+      "description": "The state."
+    },
+    "used_at": {
+      "description": "When the approval was used (executed, voided or revoked).",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "plan_id",
+    "state",
+    "plan_expires_at"
+  ],
+  "title": "AgentPlanStatus",
+  "type": "object"
+}

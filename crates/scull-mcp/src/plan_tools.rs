@@ -569,9 +569,10 @@ fn plan_output(plan: &Plan, status: ApprovalStatus, r: &Redactor, next_step: Str
 
 fn approve_hint(id: &PlanId) -> String {
     format!(
-        "Ask the user to run `scull approve {id}` in their own terminal (or to review it in the \
-         scull desktop app). No tool can approve it. Then poll get_approval_status and call \
-         execute_cleanup once it is approved, within 15 minutes of preparing it."
+        "Ask the user to run `scull approve {id}` in their own terminal, or to review it in the \
+         scull desktop app (Cleanup Review; the link scull://approve/{id} opens it there). No tool \
+         can approve it, and opening the link approves nothing. Then poll get_approval_status and \
+         call execute_cleanup once it is approved, within 15 minutes of preparing it."
     )
 }
 

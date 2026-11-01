@@ -2,8 +2,9 @@
 //! (apps/desktop/src/bridge/types.ts) name the same commands, and every command is registered
 //! in the invoke handler. The menu bar widget's window commands (src-tauri/src/tray.rs) match
 //! `WINDOW_COMMANDS` in src/bridge/tauri.ts, and tray monitoring's (src-tauri/src/monitor.rs)
-//! match `COMMANDS.monitorStatus` plus `MONITOR_COMMANDS`. Reads sources only (the app crate
-//! needs WebKit to build on Linux).
+//! match `COMMANDS.monitorStatus` plus `MONITOR_COMMANDS`. The approval commands (P4-MCP-02)
+//! match `APPROVAL_COMMANDS` in src/bridge/tauriPlans.ts, and `approval_handler` registers
+//! exactly them. Reads sources only (the app crate needs WebKit to build on Linux).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -35,16 +36,31 @@ fn rust_commands(src: &str) -> BTreeSet<String> {
     out
 }
 
-/// Names inside `generate_handler![...]`.
+/// Names inside each `generate_handler![...]`, in source order.
+fn handlers(src: &str) -> Vec<BTreeSet<String>> {
+    let mut out = vec![];
+    let mut rest = src;
+    while let Some(i) = rest.find("generate_handler![") {
+        let start = i + "generate_handler![".len();
+        let end = start + rest[start..].find(']').unwrap();
+        out.push(
+            rest[start..end]
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+        rest = &rest[end..];
+    }
+    out
+}
+
+/// The app's invoke handler (the one registering `app_info`).
 fn registered(src: &str) -> BTreeSet<String> {
-    let start =
-        src.find("generate_handler![").expect("invoke handler") + "generate_handler![".len();
-    let end = start + src[start..].find(']').unwrap();
-    src[start..end]
-        .split(',')
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect()
+    handlers(src)
+        .into_iter()
+        .find(|h| h.contains("app_info"))
+        .expect("the app's invoke handler")
 }
 
 /// String values of `COMMANDS = { key: 'value', ... }` and `CANCEL_COMMAND = '...'`.
@@ -87,13 +103,18 @@ fn ts_table(src: &str, name: &str) -> BTreeSet<String> {
 fn frontend_and_app_name_the_same_commands() {
     let lib = read("src-tauri/src/lib.rs");
     let rust = rust_commands(&lib);
-    let ts = ts_commands(&read("src/bridge/types.ts"));
+    let approval = ts_table(&read("src/bridge/tauriPlans.ts"), "APPROVAL_COMMANDS");
+    let mut ts = ts_commands(&read("src/bridge/types.ts"));
+    ts.extend(approval.iter().cloned());
     assert!(rust.len() >= 9, "{rust:?}");
     // Tray monitoring: its read command is on ScullBridge, the rest in MONITOR_COMMANDS.
     let monitor = rust_commands(&read("src-tauri/src/monitor.rs"));
     let mut reads = rust.clone();
     reads.insert("monitor_status".to_owned());
-    assert_eq!(reads, ts, "Rust commands vs src/bridge/types.ts COMMANDS");
+    assert_eq!(
+        reads, ts,
+        "Rust commands vs src/bridge/types.ts COMMANDS and tauriPlans.ts APPROVAL_COMMANDS"
+    );
     let mut controls = monitor.clone();
     assert!(controls.remove("monitor_status"), "{monitor:?}");
     assert_eq!(
@@ -115,6 +136,31 @@ fn frontend_and_app_name_the_same_commands() {
         all,
         registered(&lib),
         "every command is registered, nothing else"
+    );
+    // `approval_handler` (mounted by the Tauri command tests) registers exactly the approval
+    // commands.
+    let approval_handler = handlers(&lib)
+        .into_iter()
+        .find(|h| h.contains("approve_agent_plan") && !h.contains("app_info"))
+        .expect("approval_handler");
+    assert_eq!(approval_handler, approval);
+}
+
+#[test]
+fn open_request_event_name_matches() {
+    let quoted = |src: &str, needle: &str| {
+        let line = src.lines().find(|l| l.contains(needle)).unwrap().to_owned();
+        line.split(['\'', '"']).nth(1).unwrap().to_owned()
+    };
+    assert_eq!(
+        quoted(
+            &read("src-tauri/src/lib.rs"),
+            "pub const OPEN_REQUEST_EVENT"
+        ),
+        quoted(
+            &read("src/bridge/tauriPlans.ts"),
+            "export const OPEN_REQUEST_EVENT"
+        )
     );
 }
 
@@ -168,7 +214,8 @@ fn progress_event_name_matches() {
 
 #[test]
 fn no_command_can_mutate() {
-    // SAFE-10: the command surface is read-only by name too.
+    // SAFE-10: no command mutates files, by name too. (The approval commands record the human's
+    // decision on an agent plan in scull's database; they execute nothing.)
     let mut names = rust_commands(&read("src-tauri/src/lib.rs"));
     names.extend(rust_commands(&read("src-tauri/src/tray.rs")));
     names.extend(rust_commands(&read("src-tauri/src/monitor.rs")));

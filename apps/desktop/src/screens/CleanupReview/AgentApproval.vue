@@ -50,7 +50,11 @@ function dispatch(a: ApprovalAction) {
 }
 
 function onEvent(e: ApprovalEvent) {
-  if (e.kind === 'agent_started') dispatch({ type: 'agent_started', at: Date.parse(e.at) });
+  if (e.kind === 'approved') dispatch({ type: 'approved_elsewhere', at: Date.parse(e.at), channel: e.channel });
+  else if (e.kind === 'denied') dispatch({ type: 'deny', at: Date.parse(e.at) });
+  else if (e.kind === 'revoked') dispatch({ type: 'revoke', at: Date.parse(e.at) });
+  else if (e.kind === 'expired') dispatch({ type: 'tick', now: Math.max(Date.parse(e.at), st.value?.expiresAt ?? 0) });
+  else if (e.kind === 'agent_started') dispatch({ type: 'agent_started', at: Date.parse(e.at) });
   else if (e.kind === 'item_started') dispatch({ type: 'item_started', id: e.item_id });
   else if (e.kind === 'item_finished') dispatch({ type: 'item_finished', outcome: e.outcome });
   else if (e.kind === 'finished') dispatch({ type: 'finished', result: e.result, at: Date.parse(e.result.finished_at) });
@@ -86,7 +90,9 @@ onBeforeUnmount(() => {
 
 const plan = computed(() => req.value?.plan ?? null);
 const src = computed(() => (plan.value?.source.kind === 'mcp' ? plan.value.source : null));
-const client = computed(() => src.value?.client ?? 'An agent');
+const client = computed(() => src.value?.client ?? 'The agent');
+/** "by you" here, or the other human channel it was approved on (e.g. your terminal). */
+const approvedBy = computed(() => (st.value?.approvedVia === 'terminal' ? 'by you in your terminal' : 'by you'));
 const items = computed(() => plan.value?.items ?? []);
 const totals = computed(() => planTotals(items.value, new Set(items.value.map((i) => i.candidate.id))));
 const n = computed(() => items.value.length);
@@ -109,9 +115,9 @@ const subline = computed(() => {
   if (!s || !plan.value) return 'loading the request…';
   switch (s.phase) {
     case 'approved':
-      return `${p} · approved by you at ${at(s.approvedAt)} · waiting for ${client.value} · single use`;
+      return `${p} · approved ${approvedBy.value} at ${at(s.approvedAt)} · waiting for ${client.value} · single use`;
     case 'running':
-      return `${p} · ${client.value} is running it · approved by you at ${at(s.approvedAt)}`;
+      return `${p} · ${client.value} is running it · approved ${approvedBy.value} at ${at(s.approvedAt)}`;
     case 'executed':
       return `${p} · done at ${at(s.closedAt)} · approval spent`;
     case 'expired':
@@ -292,7 +298,7 @@ const steps = computed(() => {
   const running = phase.value === 'running';
   return [
     { text: `Plan prepared by ${client.value}`, time: plan.value ? clock(plan.value.created_at) : '', state: 'done' },
-    { text: 'Approved by you in scull', time: at(s?.approvedAt), state: 'done' },
+    { text: s?.approvedVia === 'terminal' ? 'Approved by you in your terminal' : 'Approved by you in scull', time: at(s?.approvedAt), state: 'done' },
     {
       text: running ? `${client.value} is running it · ${doneCount.value} of ${n.value}` : `Waiting for ${client.value} to run it`,
       time: running ? at(s?.startedAt) : '',
@@ -410,9 +416,13 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
         </span>
         <div class="flex min-w-0 flex-col gap-0.5">
           <h2 class="m-0 text-h2 font-semibold tracking-[-0.01em]">{{ askTitle }}</h2>
-          <span v-if="src" class="text-label text-text-secondary">
+          <span v-if="src && src.pid != null && src.command && src.cwd" class="text-label text-text-secondary" data-testid="asker">
             Asked through MCP <span class="font-mono">{{ src.tool }}</span> at {{ clock(plan.created_at) }} · name reported by the client ·
             scull mcp serve, pid {{ src.pid }}, started by <span class="font-mono">{{ src.command }}</span> in {{ displayPath(src.cwd) }}
+          </span>
+          <span v-else-if="src" class="text-label text-text-secondary" data-testid="asker">
+            Asked through MCP <span class="font-mono">{{ src.tool }}</span> at {{ clock(plan.created_at) }} · prepared by an AI agent
+            through scull mcp serve on this computer, for your user · the plan doesn't record which client asked
           </span>
         </div>
       </div>
