@@ -826,7 +826,7 @@ fn agent_plan_cap_holds_under_concurrency() {
             std::thread::spawn(move || {
                 let mut c = open(&path);
                 barrier.wait();
-                c.insert_agent_plan(&plan(n), T0 + 1, 3).unwrap()
+                c.insert_agent_plan(&plan(n), T0 + 1, 3, None).unwrap()
             })
         })
         .collect();
@@ -859,8 +859,8 @@ fn agent_plan_cap_holds_under_concurrency() {
         s.pending_agent_plans("machine-a", "dev", T0 + 3).unwrap(),
         2
     );
-    assert!(s.insert_agent_plan(&plan(20), T0 + 3, 3).unwrap());
-    assert!(!s.insert_agent_plan(&plan(21), T0 + 3, 3).unwrap());
+    assert!(s.insert_agent_plan(&plan(20), T0 + 3, 3, None).unwrap());
+    assert!(!s.insert_agent_plan(&plan(21), T0 + 3, 3, None).unwrap());
     assert!(
         s.get_plan(&plan_id(21)).unwrap().is_none(),
         "nothing recorded"
@@ -909,10 +909,19 @@ fn denied_plans_stop_counting_as_pending() {
             .unwrap()
     };
     assert_eq!(pending(&s), 4);
-    s.record_agent_event(&denial(T0 + 1, &plan(1), "denied", "cli"))
-        .unwrap();
-    s.record_agent_event(&denial(T0 + 1, &plan(2), "wrong_code", "desktop"))
-        .unwrap();
+    // Final denials go through deny_plan only (#78).
+    assert!(
+        s.record_agent_event(&denial(T0 + 1, &plan(1), "denied", "cli"))
+            .is_err()
+    );
+    assert!(
+        s.deny_plan(&denial(T0 + 1, &plan(1), "denied", "cli"))
+            .unwrap()
+    );
+    assert!(
+        s.deny_plan(&denial(T0 + 1, &plan(2), "wrong_code", "desktop"))
+            .unwrap()
+    );
     s.record_agent_event(&denial(T0 + 1, &plan(3), "no_terminal", "cli"))
         .unwrap();
     s.record_agent_event(&denial(T0 + 1, &plan(4), "plan_expired", "cli"))
@@ -920,6 +929,153 @@ fn denied_plans_stop_counting_as_pending() {
     assert_eq!(pending(&s), 2);
     assert_eq!(listed(&s), vec![plan_id(4), plan_id(3)]);
     // The cap counts the same way.
-    assert!(s.insert_agent_plan(&plan(5), T0 + 5, 3).unwrap());
-    assert!(!s.insert_agent_plan(&plan(6), T0 + 5, 3).unwrap());
+    assert!(s.insert_agent_plan(&plan(5), T0 + 5, 3, None).unwrap());
+    assert!(!s.insert_agent_plan(&plan(6), T0 + 5, 3, None).unwrap());
+}
+
+/// #78: a human's denial is final. Once a plan is denied (`denied` or `wrong_code`, from the
+/// terminal or the desktop), no approval can be recorded for it; a denial after an approval
+/// is audited but the approval stands; a refused attempt (`no_terminal`) is not a denial.
+#[test]
+fn a_denied_plan_can_never_be_approved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for n in 1..=3 {
+        s.insert_plan(&plan(n)).unwrap();
+    }
+    // Denied, then an approval is refused (SafetyBlocked), whatever its time.
+    assert!(
+        s.deny_plan(&denial(T0 + 5, &plan(1), "denied", "cli"))
+            .unwrap()
+    );
+    let err = s
+        .insert_approval(&approval_for(&plan(1), T0 + 6, T0 + 600))
+        .unwrap_err();
+    assert_eq!(rejected_kind(err), ErrorKind::SafetyBlocked);
+    assert!(s.get_approval(&plan_id(1)).unwrap().is_none());
+    let d = s.plan_denial(&plan_id(1)).unwrap().unwrap();
+    assert_eq!((d.at, d.reason.as_str()), (T0 + 5, "denied"));
+    // Too many wrong codes on the desktop: final too.
+    assert!(
+        s.deny_plan(&denial(T0 + 5, &plan(2), "wrong_code", "desktop"))
+            .unwrap()
+    );
+    assert!(
+        s.insert_approval(&approval_for(&plan(2), T0 + 6, T0 + 600))
+            .is_err()
+    );
+    // Approved first: a later denial is audited, but the approval stands.
+    s.insert_approval(&approval_for(&plan(3), T0 + 6, T0 + 600))
+        .unwrap();
+    assert!(
+        !s.deny_plan(&denial(T0 + 7, &plan(3), "denied", "cli"))
+            .unwrap()
+    );
+    assert!(s.get_approval(&plan_id(3)).unwrap().is_some());
+    // deny_plan takes final denials only; refused attempts go through record_agent_event and
+    // never block an approval.
+    for (reason, source) in [("no_terminal", "cli"), ("denied", "mcp")] {
+        assert!(
+            s.deny_plan(&denial(T0 + 8, &plan(1), reason, source))
+                .is_err()
+        );
+    }
+    s.insert_plan(&plan(4)).unwrap();
+    s.record_agent_event(&denial(T0 + 8, &plan(4), "no_terminal", "cli"))
+        .unwrap();
+    assert!(s.plan_denial(&plan_id(4)).unwrap().is_none());
+    s.insert_approval(&approval_for(&plan(4), T0 + 9, T0 + 600))
+        .unwrap();
+}
+
+/// #78: a denial and a concurrent approval of the same plan, on two connections, never both
+/// win: either the plan is approved (and the denial was only audited) or it is denied and has
+/// no approval.
+#[test]
+fn denial_and_approval_race_with_exactly_one_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_in(&dir);
+    let s = open(&path);
+    let (mut approved_wins, mut denied_wins) = (0, 0);
+    for n in 1..=30u32 {
+        let p = plan(n);
+        open(&path).insert_plan(&p).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let (pa, pb) = (p.clone(), p.clone());
+        let (ba, bb) = (barrier.clone(), barrier);
+        let (path_a, path_b) = (path.clone(), path.clone());
+        let approve = std::thread::spawn(move || {
+            let mut c = open(&path_a);
+            ba.wait();
+            c.insert_approval(&approval_for(&pa, T0 + 10, T0 + 600))
+                .is_ok()
+        });
+        let deny = std::thread::spawn(move || {
+            let mut c = open(&path_b);
+            bb.wait();
+            c.deny_plan(&denial(T0 + 10, &pb, "denied", "desktop"))
+                .unwrap()
+        });
+        let (approved, denied) = (approve.join().unwrap(), deny.join().unwrap());
+        assert!(
+            approved ^ denied,
+            "plan {n}: approved={approved} denied={denied}"
+        );
+        assert_eq!(s.get_approval(p.id()).unwrap().is_some(), approved);
+        approved_wins += usize::from(approved);
+        denied_wins += usize::from(denied);
+    }
+    println!("approve won {approved_wins}, deny won {denied_wins}");
+}
+
+/// #78: the MCP client an agent plan came through is recorded with the plan, sanitized and
+/// length-capped, and read back re-sanitized.
+#[test]
+fn agent_plan_records_the_declared_mcp_client() {
+    use scull_storage::{AgentClient, MAX_CLIENT_NAME_CHARS, MAX_CLIENT_VERSION_CHARS};
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let client = AgentClient::new("claude-code", Some("2.1.0")).unwrap();
+    assert!(
+        s.insert_agent_plan(&plan(1), T0 + 1, 3, Some(&client))
+            .unwrap()
+    );
+    assert_eq!(s.plan_client(&plan_id(1)).unwrap(), Some(client));
+    assert!(s.insert_agent_plan(&plan(2), T0 + 1, 3, None).unwrap());
+    assert_eq!(s.plan_client(&plan_id(2)).unwrap(), None);
+    // Hostile names: escapes, bidi overrides, newlines and length are neutralized.
+    let hostile = AgentClient::new(
+        &format!("evil\u{1b}[31m\u{202e}name\nline2{}", "x".repeat(200)),
+        Some("1.0\u{7}\u{200b}"),
+    )
+    .unwrap();
+    assert!(hostile.name.chars().count() <= MAX_CLIENT_NAME_CHARS);
+    assert!(
+        hostile
+            .name
+            .chars()
+            .all(|c| c.is_ascii_graphic() || c == ' '),
+        "{:?}",
+        hostile.name
+    );
+    assert!(
+        hostile.name.starts_with("evil??31m?name?line2"),
+        "{:?}",
+        hostile.name
+    );
+    assert_eq!(hostile.version.as_deref(), Some("1.0??"));
+    assert!(
+        AgentClient::new("v", Some(&"9".repeat(100)))
+            .unwrap()
+            .version
+            .unwrap()
+            .len()
+            <= MAX_CLIENT_VERSION_CHARS
+    );
+    assert!(
+        AgentClient::new("\u{1b}\u{7}", None).is_none(),
+        "nothing usable"
+    );
+    assert!(AgentClient::new("   ", None).is_none());
+    assert_eq!(hostile.display(), format!("{} 1.0??", hostile.name));
 }

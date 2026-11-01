@@ -366,8 +366,9 @@ pub fn ask(
                 return Err(ScullError::new(
                     ErrorKind::SafetyBlocked,
                     format!(
-                        "the code was typed wrong {MAX_CODE_ATTEMPTS} times; nothing was \
-                         approved. Run `scull approve {}` again to retry.",
+                        "the code was typed wrong {MAX_CODE_ATTEMPTS} times, so plan {} is now \
+                         denied: it can never be approved, and the agent must prepare a new plan \
+                         if you still want the cleanup.",
                         plan.id()
                     ),
                 ));
@@ -393,7 +394,14 @@ pub fn render_plan(challenge: &Challenge, now: i64, color: bool) -> String {
     let s = PlanSummary::of(plan);
     let mut t = String::new();
     t.push_str(&Style::Bold.paint("An AI agent asks to clean up these items", color));
-    t.push_str(" (prepared through scull's MCP server; approving is up to you).\n\n");
+    t.push_str(" (prepared through scull's MCP server; approving is up to you).\n");
+    if let Some(c) = challenge.client() {
+        t.push_str(&format!(
+            "Prepared through the MCP client {} (the name it gave itself; not verified).\n",
+            Style::Bold.paint(&escape_for_terminal(&c.display()), color)
+        ));
+    }
+    t.push('\n');
     for (n, i) in plan.items().iter().enumerate() {
         let undo = match i.action.restorability() {
             Restorability::Restorable => "restorable with `scull restore`",
@@ -458,8 +466,13 @@ pub fn render_awaiting(list: &[PlanSummary], now: i64) -> String {
     }
     let mut t = format!("{} agent plan(s) awaiting approval:\n", list.len());
     for p in list {
+        let via = p
+            .client
+            .as_deref()
+            .map(|c| format!(", via {}", escape_for_terminal(c)))
+            .unwrap_or_default();
         t.push_str(&format!(
-            "  {}  {} item(s), {}, expires in {} min\n",
+            "  {}  {} item(s), {}, expires in {} min{via}\n",
             p.plan_id,
             p.item_count,
             format_bytes(p.reclaimable_bytes),

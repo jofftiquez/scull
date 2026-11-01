@@ -18,21 +18,17 @@ mod planning;
 
 use ops::*;
 use planning::*;
-#[cfg(unix)]
-use scull_cleaner::QUARANTINE_DIR_NAME;
 use scull_cleaner::{
     DEFAULT_RETENTION_SECS, DISK_MANIFEST, Executor, ItemOutcome, PurgeOutcome, PurgePolicy,
+    QUARANTINE_DIR_NAME,
 };
 use scull_core::{Action, ErrorKind, OperationId, Tier};
 use scull_engine::{CancelToken, now_unix};
 use scull_fixtures::{Fixture, NodeLock, TreeSnapshot};
-#[cfg(unix)]
-use scull_platform::ensure_owner_only;
-use scull_platform::{Native, Platform};
+use scull_platform::{Native, Platform, ensure_owner_only};
 use scull_storage::{ItemOutcome as AuditOutcome, OperationEnd};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
 use std::path::Path;
 
 /// FX-EXEC-02 (quarantine half): an S1 item is moved into the same-volume quarantine by a
@@ -111,7 +107,6 @@ fn fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical() {
 /// another account can't list or read them. (Reading as a second test user is the nightly
 /// half of this fixture.)
 #[test]
-#[cfg(unix)]
 fn fx_exec_16_quarantine_folder_is_owner_only() {
     let fx = fixture();
     let h = harness(false);
@@ -120,13 +115,150 @@ fn fx_exec_16_quarantine_folder_is_owner_only() {
     quarantined(&fx, &r, "web/node_modules");
     let root = fx.base().join(QUARANTINE_DIR_NAME);
     let dir = op_dir(&fx, "Q16");
+    // ensure_owner_only checks the mode on Unix and the DACL on Windows (only this user and
+    // SYSTEM; nothing inherited).
     for p in [&root, &dir] {
         ensure_owner_only(p).unwrap();
+        #[cfg(unix)]
         assert_eq!(mode(p), 0o700, "{}", p.display());
     }
     ensure_owner_only(&dir.join(DISK_MANIFEST)).unwrap();
+    #[cfg(unix)]
     assert_eq!(mode(&dir.join(DISK_MANIFEST)) & 0o077, 0);
     check(&fx, &plan, &r, &["web/node_modules"]);
+}
+
+/// FX-EXEC-16 (nightly half): **another account can't read the quarantine**. Unix: the
+/// fixture's temp dir is opened for traversal (0711) and a world-readable control file proves
+/// that `sudo -n -u nobody` reaches it; then `nobody` must fail to list the quarantine and
+/// operation folders and to read the manifest copy. Windows: the DACL of each, read
+/// independently of scull through PowerShell `Get-Acl`, grants no one but this user and
+/// SYSTEM, and nothing is inherited. Needs `SCULL_FIXTURES_ALLOW_SUDO=1` on Unix (nightly
+/// workflow); otherwise it prints `SKIPPED` (and fails with
+/// `SCULL_FIXTURES_REQUIRE_PRIVILEGED=1`).
+#[test]
+#[ignore = "nightly: reads the quarantine as a second account (sudo -u nobody)"]
+fn fx_exec_16_another_account_cannot_read_the_quarantine() {
+    let fx = fixture();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let (plan, r) = run(&fx, &h, &mut s, &["web/node_modules"], "Q16N");
+    quarantined(&fx, &r, "web/node_modules");
+    let root = fx.base().join(QUARANTINE_DIR_NAME);
+    let dir = op_dir(&fx, "Q16N");
+    let manifest = dir.join(DISK_MANIFEST);
+    if another_account_reads(&fx, &[&root, &dir, &manifest]) {
+        check(&fx, &plan, &r, &["web/node_modules"]);
+    } else {
+        fx.check_invariants(&scull_fixtures::InvariantInputs::new().allow("web"))
+            .assert_ok();
+    }
+}
+
+fn skipped(why: &str) -> bool {
+    let name = "fx_exec_16_another_account_cannot_read_the_quarantine";
+    if std::env::var("SCULL_FIXTURES_REQUIRE_PRIVILEGED").is_ok_and(|v| v == "1") {
+        panic!("{name} needs privileges: {why}");
+    }
+    println!("SKIPPED {name}: {why}");
+    false
+}
+
+/// Run the second-account checks on `paths`; false (after a SKIPPED line) when they can't run.
+#[cfg(unix)]
+fn another_account_reads(fx: &Fixture, paths: &[&Path]) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    if std::env::var("SCULL_FIXTURES_ALLOW_SUDO").map_or(true, |v| v != "1") {
+        return skipped("SCULL_FIXTURES_ALLOW_SUDO is not 1");
+    }
+    let as_nobody = |args: &[&std::ffi::OsStr]| {
+        Command::new("sudo")
+            .args(["-n", "-u", "nobody", "--"])
+            .args(args)
+            .output()
+            .map(|o| o.status.success())
+    };
+    let base = fx.base();
+    let old = std::fs::metadata(base).unwrap().permissions().mode();
+    std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o711)).unwrap();
+    let control = base.join("world-readable-control.txt");
+    std::fs::write(&control, b"readable by anyone").unwrap();
+    std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let reached = as_nobody(&["cat".as_ref(), control.as_os_str()]);
+    let mut results = Vec::new();
+    if reached.as_ref().is_ok_and(|ok| *ok) {
+        for p in paths {
+            let tool = if p.is_dir() { "ls" } else { "cat" };
+            results.push((p.to_path_buf(), as_nobody(&[tool.as_ref(), p.as_os_str()])));
+        }
+    }
+    std::fs::remove_file(&control).unwrap();
+    std::fs::set_permissions(base, std::fs::Permissions::from_mode(old)).unwrap();
+    match reached {
+        Ok(true) => {}
+        Ok(false) => {
+            return skipped("`sudo -n -u nobody` can't read a world-readable control file");
+        }
+        Err(e) => return skipped(&format!("sudo can't run: {e}")),
+    }
+    for (p, r) in results {
+        let readable = r.unwrap();
+        println!("nobody reads {}: {readable}", p.display());
+        assert!(!readable, "another account could read {}", p.display());
+    }
+    true
+}
+
+#[cfg(windows)]
+fn another_account_reads(_fx: &Fixture, paths: &[&Path]) -> bool {
+    use std::process::Command;
+    for p in paths {
+        // Every allow entry: identity and whether it is inherited.
+        let script = format!(
+            "(Get-Acl -LiteralPath '{}').Access | ForEach-Object {{ \"$($_.AccessControlType)|$($_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value)|$($_.IsInherited)\" }}",
+            p.display().to_string().replace('\'', "''")
+        );
+        let out = match Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                return skipped(&format!(
+                    "Get-Acl failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                ));
+            }
+            Err(e) => return skipped(&format!("powershell can't run: {e}")),
+        };
+        let me = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+            ])
+            .output()
+            .unwrap();
+        let me = String::from_utf8_lossy(&me.stdout).trim().to_owned();
+        let text = String::from_utf8_lossy(&out.stdout);
+        println!("{}:\n{text}", p.display());
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let f: Vec<&str> = line.trim().split('|').collect();
+            assert_eq!(f.len(), 3, "{line}");
+            assert_eq!(f[2], "False", "inherited entry on {}: {line}", p.display());
+            if f[0] == "Allow" {
+                assert!(
+                    f[1] == me || f[1] == "S-1-5-18",
+                    "{} grants {} access: {line}",
+                    p.display(),
+                    f[1]
+                );
+            }
+        }
+    }
+    true
 }
 
 /// FX-EXEC-03: quarantine is impossible (read-only parent) and the Trash fallback is not

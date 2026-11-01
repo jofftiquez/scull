@@ -167,6 +167,12 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     schemas.ndjson(&cli, &["rules", "list"], "rules-list");
     schemas.json(&cli, &["rules", "validate"], "rules-validate");
     schemas.ndjson(&cli, &["rules", "validate"], "rules-validate");
+    // `scull rules test` (#60, from main) on the shipped example rule and its cases.
+    let example_rule = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/rules/godot.toml");
+    let example_rule = example_rule.to_str().unwrap();
+    schemas.json(&cli, &["rules", "test", example_rule], "rules-test");
+    schemas.ndjson(&cli, &["rules", "test", example_rule], "rules-test");
     schemas.json(&cli, &["init", "--yes", "--roots", &r], "init");
     schemas.ndjson(&cli, &["init", "--yes", "--force", "--roots", &r], "init");
     // The config file `init` wrote validates against the published config schema.

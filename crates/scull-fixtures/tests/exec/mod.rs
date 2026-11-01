@@ -109,6 +109,12 @@ impl Measured {
 /// beside the root, measure free space, delete through the Executor, measure again and finish
 /// the operation with the measured delta.
 pub fn delete_measured(fx: &Fixture, rel: &str) -> Measured {
+    delete_measured_n(fx, rel, 1)
+}
+
+/// [`delete_measured`] as the `n`th operation in the same store (distinct plan, scan and
+/// operation IDs), for fixtures that measure several items one after another.
+pub fn delete_measured_n(fx: &Fixture, rel: &str, n: u32) -> Measured {
     let prediction = predict(fx, rel);
     let path = fx.root().join(rel);
     let identity = Native.metadata(&path).unwrap().identity.expect("identity");
@@ -132,8 +138,8 @@ pub fn delete_measured(fx: &Fixture, rel: &str) -> Measured {
     .unwrap();
     let plan = Plan::new(
         PlanParams {
-            id: PlanId::from_suffix("PFX1").unwrap(),
-            scan_id: ScanId::from_suffix("SFX1").unwrap(),
+            id: PlanId::from_suffix(&format!("PFX{n}")).unwrap(),
+            scan_id: ScanId::from_suffix(&format!("SFX{n}")).unwrap(),
             created_unix: T0,
             ttl_secs: None,
             machine_id: "machine-test".into(),
@@ -145,7 +151,7 @@ pub fn delete_measured(fx: &Fixture, rel: &str) -> Measured {
     )
     .unwrap();
     store.insert_plan(&plan).unwrap();
-    let op = OperationId::from_suffix("OFX1").unwrap();
+    let op = OperationId::from_suffix(&format!("OFX{n}")).unwrap();
     let mut audit = store
         .begin_operation(
             &OperationStart {
