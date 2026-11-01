@@ -611,8 +611,11 @@ fn fx_fs_03_root_reached_through_an_escaping_link_is_s3() {
     let escaping = fx.symlink("scan/projects", &outside).unwrap();
     let inside = fx.symlink("scan/alias", "real").unwrap();
     fx.checkpoint().unwrap();
-    if !escaping.is_created() || !inside.is_created() {
-        eprintln!("SKIPPED fx_fs_03: symlinks can't be created here ({escaping:?}, {inside:?})");
+    if !scull_fixtures::skip::require(
+        escaping.is_created() && inside.is_created(),
+        "fx_fs_03",
+        &format!("symlinks can't be created here ({escaping:?}, {inside:?})"),
+    ) {
         return;
     }
     let e = engine(Some(Tri::No), false, Config::default());

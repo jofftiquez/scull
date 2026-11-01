@@ -110,9 +110,12 @@ fn fx_fs_08_unreadable_directory_is_reported_and_scan_continues() -> TestResult 
     let locked = root.join("a/b");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
     if fs::read_dir(&locked).is_ok() {
-        // Running as root: permissions don't apply. Restore and skip.
+        // Running as root: permissions don't apply. Restore and skip (a failure in CI).
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))?;
-        eprintln!("skipped: running with privileges that bypass permissions");
+        scull_fixtures::skip::skip(
+            "fx_fs_08",
+            "running with privileges that bypass permissions (root)",
+        );
         return Ok(());
     }
     let result = run(&root, &opts());

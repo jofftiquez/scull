@@ -100,8 +100,11 @@ fn fx_race_01_candidate_replaced_by_symlink_skipped_canary_intact() {
     // The attacker moves `app/target` away and links the canary in its place.
     std::fs::rename(fx.root().join("app/target"), fx.root().join("app/moved")).unwrap();
     let canary = fx.canary().symlink_target_dir.clone();
-    if !fx.symlink("app/target", &canary).unwrap().is_created() {
-        eprintln!("symlinks unavailable on this host: FX-RACE-01 covered by the walker tests");
+    if !scull_fixtures::skip::require(
+        fx.symlink("app/target", &canary).unwrap().is_created(),
+        "fx_race_01",
+        "symlinks are not permitted here (covered by the walker tests)",
+    ) {
         return;
     }
     fx.checkpoint().unwrap();
@@ -158,8 +161,11 @@ fn replaced_directory_with_new_identity_is_skipped() {
 /// Git state raises its tier at revalidation; the item is skipped.
 #[test]
 fn fx_race_03_new_untracked_file_in_worktree_raises_tier_item_skipped() {
-    if !git_available() {
-        eprintln!("git not available: FX-RACE-03 needs a repository");
+    if !scull_fixtures::skip::require(
+        git_available(),
+        "fx_race_03",
+        "git is not installed (FX-RACE-03 needs a repository)",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();

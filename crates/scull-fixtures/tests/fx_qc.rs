@@ -347,7 +347,11 @@ fn quick(o: QuickCleanOptions) -> QuickClean {
 /// cache's size and the volume's free space are measured.
 #[test]
 fn fx_qc_01_npm_cache_native_prune_measured_all_invariants() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_01_npm_cache_native_prune_measured_all_invariants",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
@@ -374,7 +378,11 @@ fn fx_qc_01_npm_cache_native_prune_measured_all_invariants() {
 /// None of them runs (no sentinel, I-3 clean); the trusted one does, and I-7 holds.
 #[test]
 fn fx_qc_06_planted_npm_never_runs_all_invariants() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "fx_qc_06_planted_npm_never_runs_all_invariants",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();
