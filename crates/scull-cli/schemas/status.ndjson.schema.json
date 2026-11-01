@@ -1,5 +1,25 @@
 {
   "$defs": {
+    "FileIdentity": {
+      "additionalProperties": false,
+      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
+      "properties": {
+        "file": {
+          "description": "Inode / file ID as lowercase hex.",
+          "pattern": "^[0-9a-f]{1,32}$",
+          "type": "string"
+        },
+        "volume": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "volume",
+        "file"
+      ],
+      "type": "object"
+    },
     "ForecastConfidence": {
       "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
       "oneOf": [
@@ -24,26 +44,6 @@
           "type": "string"
         }
       ]
-    },
-    "FileIdentity": {
-      "additionalProperties": false,
-      "description": "Path-independent identity of a filesystem object (device/volume + inode/file ID).",
-      "properties": {
-        "file": {
-          "description": "Inode / file ID as lowercase hex.",
-          "pattern": "^[0-9a-f]{1,32}$",
-          "type": "string"
-        },
-        "volume": {
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "volume",
-        "file"
-      ],
-      "type": "object"
     },
     "ForecastReport": {
       "additionalProperties": false,
