@@ -14,12 +14,12 @@ async function settle() {
   await flushPromises();
 }
 
-async function mountScreen(plans: PlanBridge = createMockPlanBridge({ stepMs: 0 })) {
+async function mountScreen(plans: PlanBridge = createMockPlanBridge({ stepMs: 0 }), bridge = createMockBridge()) {
   const router = createRouter({ history: createMemoryHistory(), routes });
   router.push('/worktrees');
   await router.isReady();
   const w = mount(WorktreesScreen, {
-    global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: createMockBridge(), [PLAN_BRIDGE_KEY as symbol]: plans } },
+    global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: bridge, [PLAN_BRIDGE_KEY as symbol]: plans } },
   });
   await settle();
   return w;
@@ -29,6 +29,28 @@ const rowFor = (w: Awaited<ReturnType<typeof mountScreen>>, branch: string) =>
   w.findAll('button[data-row]').find((b) => b.text().includes(branch))!;
 
 describe('Git Worktrees screen', () => {
+  it('claims no counts while the worktrees are still being read', async () => {
+    const bridge = createMockBridge();
+    let resolve!: () => void;
+    const gate = new Promise<void>((r) => (resolve = r));
+    const real = bridge.worktrees.bind(bridge);
+    bridge.worktrees = async () => {
+      await gate;
+      return real();
+    };
+    const w = await mountScreen(undefined, bridge);
+    const summary = w.get('[data-testid="worktrees-summary"]');
+    expect(summary.text()).toBe('Reading worktrees…');
+    expect(summary.attributes('aria-busy')).toBe('true');
+    expect(w.findAll('[role="group"] button').map((b) => b.text())).toContain('All');
+    expect(w.findAll('button[data-row]')).toHaveLength(0);
+    resolve();
+    await settle();
+    expect(summary.text()).toMatch(/^8 worktrees across/);
+    expect(summary.attributes('aria-busy')).toBeUndefined();
+    expect(w.findAll('button[data-row]')).toHaveLength(8);
+  });
+
   it('lists every worktree with its verdict, the largest removable selected', async () => {
     const w = await mountScreen();
     expect(w.findAll('button[data-row]')).toHaveLength(8);

@@ -83,6 +83,15 @@ watch(
 // monitor (src/monitor), so they save inside Tauri too; everything else goes through the writer.
 const monitor = monitorControlFor(bridge);
 const monitorStatus = ref<MonitorStatus | null>(null);
+// Only the newest status request may land: a refresh started before a pause or resume (e.g. after
+// changing "Look every") must not overwrite the status that pause/resume returned.
+let statusSeq = 0;
+async function loadMonitorStatus(get: () => Promise<MonitorStatus>): Promise<MonitorStatus> {
+  const seq = ++statusSeq;
+  const st = await get();
+  if (seq === statusSeq) monitorStatus.value = st;
+  return st;
+}
 
 /** Values changed in this session (saved through the writer), and the stored monitor keys. */
 const changed = ref<Map<string, SettingValue>>(new Map(Object.entries(loadPrefs())));
@@ -106,7 +115,7 @@ onMounted(async () => {
   } catch (e) {
     loadError.value = toBridgeError(e).message;
   }
-  monitorStatus.value = await bridge.monitorStatus().catch(() => null);
+  await loadMonitorStatus(() => bridge.monitorStatus()).catch(() => undefined);
 });
 onBeforeUnmount(() => clearTimeout(savedTimer));
 
@@ -127,10 +136,7 @@ async function set(key: string, value: SettingValue) {
   try {
     if (isMonitorKey(key) && !Array.isArray(value)) {
       await saveMonitorPref(monitor, key, value);
-      void bridge.monitorStatus().then(
-        (st) => (monitorStatus.value = st),
-        () => undefined,
-      );
+      void loadMonitorStatus(() => bridge.monitorStatus()).catch(() => undefined);
     } else {
       await writer.save(key, value);
     }
@@ -222,8 +228,8 @@ async function pauseAlerts(secs: number | null) {
   saveError.value = '';
   notice.value = '';
   try {
-    monitorStatus.value = await monitor.pause(secs);
-    notice.value = secs == null ? 'Alerts resumed.' : `Alerts paused until ${formatWhen(monitorStatus.value.settings.paused_until ?? 0)}.`;
+    const st = await loadMonitorStatus(() => monitor.pause(secs));
+    notice.value = secs == null ? 'Alerts resumed.' : `Alerts paused until ${formatWhen(st.settings.paused_until ?? 0)}.`;
     flashSaved();
   } catch (e) {
     saveError.value = toBridgeError(e).message;
