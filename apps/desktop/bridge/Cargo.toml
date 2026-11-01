@@ -43,3 +43,8 @@ schemars.workspace = true
 scull-fixtures.workspace = true
 tempfile = "3"
 jsonschema = { version = "0.60", default-features = false }
+# tests/safe10.rs parses desktop sources to cut exactly the `#[cfg(test)]` items (with their
+# source positions) before its checks.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "visit"] }

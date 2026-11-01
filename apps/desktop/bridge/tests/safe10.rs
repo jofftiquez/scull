@@ -394,65 +394,190 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of `f` without its unit-test module. Only an inline `#[cfg(test)]` + `mod tests {`
-/// at column 0 that ends the file is cut: rustfmt (enforced in CI) indents everything inside
-/// it, so every line after it must be indented up to a final `}`. Anything else at column 0
-/// after it fails the check (code can't hide after or inside a fake test module), and a file
-/// test module (`mod tests;`) cuts nothing: its file is scanned like any other.
+/// The code of `f` without its test-only items. The file is parsed (`syn`) and exactly the
+/// source text of each item whose `#[cfg(..)]` is `test` or `all(.., test, ..)` is cut, at any
+/// depth (modules, impl and trait items). Everything else is checked, comments included: no
+/// brace, indentation or formatting trick can hide production code, and `cfg(not(test))` code
+/// is production code. A file that doesn't parse fails the check.
 fn code_of(f: &Path) -> String {
-    strip_test_module(&std::fs::read_to_string(f).unwrap())
+    strip_test_items(&std::fs::read_to_string(f).unwrap())
         .unwrap_or_else(|e| panic!("{}: {e}", f.display()))
 }
 
-fn strip_test_module(text: &str) -> Result<String, String> {
-    let lines: Vec<&str> = text.lines().collect();
-    let Some(start) = lines.windows(2).position(|w| {
-        w[0] == "#[cfg(test)]" && w[1].starts_with("mod tests") && w[1].trim_end().ends_with('{')
-    }) else {
-        return Ok(text.to_owned());
-    };
-    let rest: Vec<&str> = lines[start + 2..]
-        .iter()
-        .copied()
-        .filter(|l| !l.trim().is_empty())
+/// Whether `attrs` make the item exist only in test builds.
+fn test_only(attrs: &[syn::Attribute]) -> bool {
+    use syn::punctuated::Punctuated;
+    attrs.iter().any(|a| {
+        if !a.path().is_ident("cfg") {
+            return false;
+        }
+        match a.parse_args::<syn::Meta>() {
+            Ok(syn::Meta::Path(p)) => p.is_ident("test"),
+            Ok(syn::Meta::List(l)) if l.path.is_ident("all") => l
+                .parse_args_with(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+                .is_ok_and(|m| {
+                    m.iter()
+                        .any(|m| matches!(m, syn::Meta::Path(p) if p.is_ident("test")))
+                }),
+            _ => false,
+        }
+    })
+}
+
+fn item_attrs(i: &syn::Item) -> &[syn::Attribute] {
+    use syn::Item;
+    match i {
+        Item::Const(x) => &x.attrs,
+        Item::Enum(x) => &x.attrs,
+        Item::ExternCrate(x) => &x.attrs,
+        Item::Fn(x) => &x.attrs,
+        Item::ForeignMod(x) => &x.attrs,
+        Item::Impl(x) => &x.attrs,
+        Item::Macro(x) => &x.attrs,
+        Item::Mod(x) => &x.attrs,
+        Item::Static(x) => &x.attrs,
+        Item::Struct(x) => &x.attrs,
+        Item::Trait(x) => &x.attrs,
+        Item::TraitAlias(x) => &x.attrs,
+        Item::Type(x) => &x.attrs,
+        Item::Union(x) => &x.attrs,
+        Item::Use(x) => &x.attrs,
+        _ => &[],
+    }
+}
+
+fn impl_item_attrs(i: &syn::ImplItem) -> &[syn::Attribute] {
+    match i {
+        syn::ImplItem::Const(x) => &x.attrs,
+        syn::ImplItem::Fn(x) => &x.attrs,
+        syn::ImplItem::Type(x) => &x.attrs,
+        syn::ImplItem::Macro(x) => &x.attrs,
+        _ => &[],
+    }
+}
+
+fn trait_item_attrs(i: &syn::TraitItem) -> &[syn::Attribute] {
+    match i {
+        syn::TraitItem::Const(x) => &x.attrs,
+        syn::TraitItem::Fn(x) => &x.attrs,
+        syn::TraitItem::Type(x) => &x.attrs,
+        syn::TraitItem::Macro(x) => &x.attrs,
+        _ => &[],
+    }
+}
+
+type Extent = (proc_macro2::LineColumn, proc_macro2::LineColumn);
+
+#[derive(Default)]
+struct TestItems(Vec<Extent>);
+
+impl TestItems {
+    fn push(&mut self, tokens: proc_macro2::TokenStream) {
+        let tokens: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+        if let (Some(first), Some(last)) = (tokens.first(), tokens.last()) {
+            self.0.push((first.span().start(), last.span().end()));
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for TestItems {
+    fn visit_item(&mut self, i: &'ast syn::Item) {
+        if test_only(item_attrs(i)) {
+            self.push(quote::ToTokens::to_token_stream(i));
+        } else {
+            syn::visit::visit_item(self, i);
+        }
+    }
+    fn visit_impl_item(&mut self, i: &'ast syn::ImplItem) {
+        if test_only(impl_item_attrs(i)) {
+            self.push(quote::ToTokens::to_token_stream(i));
+        } else {
+            syn::visit::visit_impl_item(self, i);
+        }
+    }
+    fn visit_trait_item(&mut self, i: &'ast syn::TraitItem) {
+        if test_only(trait_item_attrs(i)) {
+            self.push(quote::ToTokens::to_token_stream(i));
+        } else {
+            syn::visit::visit_trait_item(self, i);
+        }
+    }
+}
+
+fn strip_test_items(text: &str) -> Result<String, String> {
+    let file = syn::parse_file(text).map_err(|e| format!("does not parse: {e}"))?;
+    let mut v = TestItems::default();
+    syn::visit::Visit::visit_file(&mut v, &file);
+    // Line/column (1-based line, column in chars) to a byte offset.
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
-    let Some((last, body)) = rest.split_last() else {
-        return Err("unterminated test module".into());
+    let byte = |lc: proc_macro2::LineColumn| -> usize {
+        let line_start = starts[lc.line - 1];
+        text[line_start..]
+            .char_indices()
+            .nth(lc.column)
+            .map_or(text.len(), |(i, _)| line_start + i)
     };
-    if *last != "}" {
-        return Err(format!("the test module must end the file, found {last:?}"));
+    let mut ranges: Vec<(usize, usize)> =
+        v.0.into_iter().map(|(s, e)| (byte(s), byte(e))).collect();
+    ranges.sort_unstable();
+    let mut out = String::new();
+    let mut at = 0;
+    for (s, e) in ranges {
+        if s >= at {
+            out.push_str(&text[at..s]);
+            at = e;
+        }
     }
-    if let Some(l) = body.iter().find(|l| !l.starts_with(char::is_whitespace)) {
-        return Err(format!(
-            "unindented line inside or after the test module: {l:?} (the test module must be \
-             the file's last item)"
-        ));
-    }
-    Ok(lines[..start].join("\n"))
+    out.push_str(&text[at..]);
+    Ok(out)
 }
 
 #[test]
-fn only_a_final_inline_test_module_is_cut() {
-    let ok = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() { remove_file(\"{\") }\n}\n";
-    let code = strip_test_module(ok).unwrap();
-    assert!(
-        code.contains("fn a()") && !code.contains("remove_file"),
-        "{code}"
+fn only_test_items_are_cut() {
+    let cut = |t: &str| strip_test_items(t).unwrap();
+    // A test module goes; code after it stays, whatever braces its strings hold.
+    let c = cut(
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() { remove_file(\"{\") }\n}\nfn b() { remove_tree(y) }\n",
     );
-    for bad in [
-        // Code after the module.
-        "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn b() { remove_tree(y) }\n",
-        // A file module followed by an item with braces.
-        "#[cfg(test)]\nmod tests_x;\nfn evil() { remove_tree(r) }\n",
-        // A brace in a string that would unbalance a counter.
-        "#[cfg(test)]\nmod tests {\n    const S: &str = \"{\";\n}\nfn evil() { remove_tree(r) }\n",
-    ] {
-        let kept = strip_test_module(bad);
-        assert!(
-            kept.as_ref().is_err() || kept.as_ref().unwrap().contains("remove_tree"),
-            "hidden: {bad}"
-        );
-    }
+    assert!(
+        c.contains("fn a()") && c.contains("remove_tree(y)") && !c.contains("remove_file"),
+        "{c}"
+    );
+    // Unformatted, one line: only the empty test module goes.
+    let c = cut("#[cfg(test)] mod tests {} pub fn evil() { remove_tree(r) } mod t2 {}\n");
+    assert!(c.contains("remove_tree(r)"), "{c}");
+    // A misleadingly indented closing brace: the sibling module is production code.
+    let c = cut(
+        "#[cfg(test)]\nmod tests {\n    fn t() {}\n    }\n    pub mod hidden {\n    pub fn evil() { remove_tree(r) }\n}\n",
+    );
+    assert!(c.contains("remove_tree(r)"), "{c}");
+    // A file module and cfg(not(test)) code are production code.
+    let c = cut(
+        "#[cfg(test)]\nmod tests_x;\nfn evil() { remove_tree(r) }\n#[cfg(not(test))]\nfn p() { move_to_trash(x) }\n",
+    );
+    assert!(
+        c.contains("remove_tree(r)") && c.contains("move_to_trash(x)"),
+        "{c}"
+    );
+    // all(test, ..) items and test-only impl items go; the rest of the impl stays.
+    let c = cut(
+        "#[cfg(all(test, unix))]\nmod t { fn x() { remove_file(a) } }\nimpl S {\n    #[cfg(test)]\n    fn t() { remove_dir(b) }\n    fn p() { remove_tree(c) }\n}\n",
+    );
+    assert!(
+        !c.contains("remove_file") && !c.contains("remove_dir") && c.contains("remove_tree(c)"),
+        "{c}"
+    );
+    // Unicode before an item doesn't shift the cut.
+    let c = cut(
+        "const E: &str = \"é—é\";\n#[cfg(test)]\nmod tests { fn t() { remove_file(a) } }\nfn z() { remove_tree(d) }\n",
+    );
+    assert!(
+        c.contains("const E") && !c.contains("remove_file") && c.contains("remove_tree(d)"),
+        "{c}"
+    );
+    assert!(strip_test_items("fn broken( {").is_err());
 }
 
 #[test]
