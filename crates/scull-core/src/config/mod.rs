@@ -20,6 +20,8 @@
 //!   launch flag is a separate, second switch checked by the MCP server (PRD §13.2). So are
 //!   the agent limits `mcp.max_pending_plans` and `mcp.prepare_per_minute` (#299): an agent
 //!   that can set its MCP server's environment or flags can't raise them.
+//! * `[auto]` (unattended auto-policies, D-11) is read **only** from the user config file; see
+//!   [`AutoConfig`].
 //!
 //! The user config file format is [`ConfigLayer`] in TOML (unknown keys are rejected with an
 //! [`ErrorKind::Config`](crate::ErrorKind::Config) error, exit code 2). Environment variables are
@@ -41,12 +43,18 @@
 //! flags filesystem roots, the home directory and its ancestors as needing explicit
 //! confirmation.
 
+mod auto;
 mod duration;
 mod layer;
 mod proactive;
 mod repo;
 mod roots;
 
+pub use auto::{
+    AutoConfig, AutoKind, AutoLayer, AutoPolicy, DEFAULT_MAX_GIB_PER_DAY, DEFAULT_MAX_GIB_PER_RUN,
+    DEFAULT_MAX_ITEMS_PER_RUN, MAX_GIB_PER_DAY_CEILING, MAX_GIB_PER_RUN_CEILING,
+    MAX_ITEMS_PER_RUN_CEILING, MIN_EVERY, MIN_IDLE,
+};
 pub use duration::DurationSpec;
 pub use layer::{
     ConfigLayer, ENV_VARS, EnvLayer, EnvVar, ForgeLayer, McpLayer, Origin, OutputLayer,
@@ -84,7 +92,7 @@ pub const DEFAULT_MCP_PREPARE_PER_MINUTE: u32 = 6;
 
 /// Every effective config field, as the dotted key used in TOML, [`ResolvedConfig::origins`]
 /// and `scull config show`.
-pub const FIELDS: [&str; 30] = [
+pub const FIELDS: [&str; 35] = [
     "scan.roots",
     "scan.exclude",
     "scan.protect",
@@ -115,6 +123,11 @@ pub const FIELDS: [&str; 30] = [
     "proactive.budgets",
     "quarantine.base",
     "quarantine.bases",
+    "auto.paused",
+    "auto.max_items_per_run",
+    "auto.max_gib_per_run",
+    "auto.max_gib_per_day",
+    "auto.policy",
 ];
 
 /// Environment variable that sets `quarantine.base` (see [`QuarantineConfig`]).
@@ -148,6 +161,8 @@ pub struct Config {
     pub proactive: ProactiveConfig,
     /// Where quarantined items are kept.
     pub quarantine: QuarantineConfig,
+    /// Opt-in unattended auto-policies (D-11). User config file only.
+    pub auto: AutoConfig,
 }
 
 /// Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).
@@ -362,6 +377,9 @@ impl Config {
             .iter()
             .map(|(k, v)| (expand_home(k, home), expand_home(v, home)))
             .collect();
+        for p in &mut c.auto.policy {
+            p.under = p.under.iter().map(|u| expand_home(u, home)).collect();
+        }
         c
     }
 

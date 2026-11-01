@@ -34,7 +34,15 @@ pub struct Revalidation<'e> {
     engine: &'e Engine,
     roots: Vec<Root>,
     request: ScanRequest,
+    condition: Option<Condition<'e>>,
 }
+
+/// An extra condition the freshly re-derived candidate must still meet for its item to run,
+/// on top of [`scull_core::narrow`]: `Err((code, message))` skips the item
+/// ([`Skip::Condition`]). Auto-policies (D-11) use it to re-check, right before each move, that
+/// the item still qualifies for the policy (still idle long enough, unflagged, ...).
+pub type Condition<'e> =
+    &'e (dyn Fn(&scull_core::Candidate) -> Result<(), (&'static str, String)> + Sync);
 
 /// A trusted scan root: canonical path and the identity it had when execution started.
 #[derive(Debug, Clone)]
@@ -48,6 +56,7 @@ impl fmt::Debug for Revalidation<'_> {
         f.debug_struct("Revalidation")
             .field("roots", &self.roots)
             .field("request", &self.request)
+            .field("condition", &self.condition.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -69,7 +78,15 @@ impl<'e> Revalidation<'e> {
             engine,
             roots,
             request: ScanRequest::full().history(false),
+            condition: None,
         }
+    }
+
+    /// Also require `condition` of every freshly re-derived candidate (see [`Condition`]).
+    #[must_use]
+    pub fn with_condition(mut self, condition: Condition<'e>) -> Self {
+        self.condition = Some(condition);
+        self
     }
 
     /// Use `request` for the re-derivation scans (e.g. a fixed clock in tests). History is
@@ -161,6 +178,27 @@ impl<'e> Revalidation<'e> {
             });
         }
 
+        // The run's own extra condition, once the item passed everything else (so the usual
+        // reasons, e.g. `now_protected`, take precedence).
+        // Fails closed: no fresh candidate to check means the item does not run.
+        if let Some(cond) = self.condition {
+            let verdict = report
+                .candidates
+                .iter()
+                .find(|c| c.id == item.item_id)
+                .map_or_else(
+                    || Err(("no_longer_qualifies", "not re-derived".to_owned())),
+                    cond,
+                );
+            if let Err((code, message)) = verdict {
+                return Err(Skip::Condition {
+                    code,
+                    message,
+                    fresh_tier,
+                });
+            }
+        }
+
         let fresh = kept.tier;
         let sizes = fresh_sizes.unwrap_or_else(|| crate::measure::planned_sizes(&kept));
         Ok(Revalidated {
@@ -227,6 +265,16 @@ pub enum Skip {
     },
     /// The operation was cancelled before the item was revalidated.
     Cancelled,
+    /// The fresh candidate no longer meets the run's extra condition ([`Condition`], e.g. an
+    /// auto-policy's idle window).
+    Condition {
+        /// Stable reason code (e.g. `no_longer_idle`).
+        code: &'static str,
+        /// Why.
+        message: String,
+        /// The fresh tier.
+        fresh_tier: Option<Tier>,
+    },
 }
 
 impl Skip {
@@ -238,13 +286,14 @@ impl Skip {
             Skip::OutsideRoots => "outside_scan_roots",
             Skip::Rederive { .. } => "rederive_failed",
             Skip::Cancelled => "cancelled",
+            Skip::Condition { code, .. } => code,
         }
     }
 
     /// The fresh tier observed at revalidation, if any.
     pub fn fresh_tier(&self) -> Option<Tier> {
         match self {
-            Skip::Dropped { fresh_tier, .. } => *fresh_tier,
+            Skip::Dropped { fresh_tier, .. } | Skip::Condition { fresh_tier, .. } => *fresh_tier,
             _ => None,
         }
     }
@@ -276,6 +325,7 @@ impl fmt::Display for Skip {
                 write!(f, "could not re-derive the item ({kind}): {message}")
             }
             Skip::Cancelled => f.write_str("cancelled before revalidation"),
+            Skip::Condition { message, .. } => f.write_str(message),
         }
     }
 }

@@ -1,4 +1,5 @@
-//! Executing approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01): the
+//! Executing approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01) and
+//! `scull approve <plan-id> --run`: the
 //! [`scull_mcp::CleanupRunner`] backed by `scull-cleaner`'s Executor. `scull-mcp` never
 //! depends on the cleaner (SAFE-10); the CLI binary wires the two together.
 //!
@@ -33,6 +34,9 @@ pub struct ExecutorRunner {
     pub quarantine: QuarantineSettings,
     /// The Trash fallback (the sandbox's under the test harness).
     pub trash: TrashLocations,
+    /// Audit a refusal to take the execution lock as an agent's refused `execute_cleanup`
+    /// (`scull mcp serve`). `scull approve --run` records its own outcome instead.
+    pub audit_lock_refusal: bool,
 }
 
 impl CleanupRunner for ExecutorRunner {
@@ -42,6 +46,9 @@ impl CleanupRunner for ExecutorRunner {
             Ok(e) => e,
             Err(e) => {
                 // Audited (PRD §13.3 step 5); the approval is not spent.
+                if !self.audit_lock_refusal {
+                    return Err(e);
+                }
                 let _ = scull_mcp::approval::record_execute_refusal(
                     req.store,
                     Some(req.plan.id()),

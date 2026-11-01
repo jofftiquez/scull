@@ -97,6 +97,85 @@
         }
       ]
     },
+    "AutoPolicyReport": {
+      "additionalProperties": false,
+      "description": "What the auto-policies did in this check.",
+      "properties": {
+        "caps": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Caps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The caps, when checked."
+        },
+        "day_used_bytes": {
+          "description": "Bytes auto-policies moved within the last 24 hours, before this run (from the audit\nlog), when checked.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "policies": {
+          "description": "One entry per configured policy, when checked.",
+          "items": {
+            "$ref": "#/$defs/PolicyReport"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Why, when stopped or refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/RunState",
+          "description": "Off, stopped by a kill switch, refused by a gate, or checked."
+        }
+      },
+      "required": [
+        "state",
+        "policies"
+      ],
+      "type": "object"
+    },
+    "Caps": {
+      "additionalProperties": false,
+      "description": "The caps of a run, in items and bytes (from `[auto]`).",
+      "properties": {
+        "bytes_per_day": {
+          "description": "Bytes within any 24 hours, all runs together.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bytes_per_run": {
+          "description": "Bytes per run, all policies together.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items_per_run": {
+          "description": "Items per run, all policies together.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items_per_run",
+        "bytes_per_run",
+        "bytes_per_day"
+      ],
+      "type": "object"
+    },
     "CheckReport": {
       "additionalProperties": false,
       "description": "`scull check` output.",
@@ -107,6 +186,10 @@
             "$ref": "#/$defs/Alert"
           },
           "type": "array"
+        },
+        "auto_policies": {
+          "$ref": "#/$defs/AutoPolicyReport",
+          "description": "Opt-in auto-policies (PRO-10, D-11): `off` unless the user enabled one."
         },
         "forecasts": {
           "description": "Disk-full forecast of every volume ever sampled, by volume id.",
@@ -156,7 +239,8 @@
         "sampled",
         "not_sampled",
         "forecasts",
-        "alerts"
+        "alerts",
+        "auto_policies"
       ],
       "type": "object"
     },
@@ -255,6 +339,78 @@
           "type": "object"
         }
       ]
+    },
+    "Excluded": {
+      "additionalProperties": false,
+      "description": "Why candidates of the policy's kind were not chosen, counted.",
+      "properties": {
+        "activity_unknown": {
+          "description": "Last activity unknown (never counted as idle).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flagged": {
+          "description": "In use, or flagged hardlinked, link, cloud placeholder or cross-mount (or not known\nnot to cross a mount).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "not_s0": {
+          "description": "Not S0 (S1–S3 are never cleaned unattended).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "other_action": {
+          "description": "S0, but its action is not the plain filesystem delete the policy turns into a\nquarantine, or its tier, reasons and action disagree.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outside": {
+          "description": "Outside the policy's `under` folders.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "project_active": {
+          "description": "Its project's own files changed within the idle window, or that could not be told.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recent": {
+          "description": "Active within the policy's idle window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recently_restored": {
+          "description": "The user restored it from quarantine within the policy's idle window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size_unknown": {
+          "description": "Its size is unknown or zero (nothing to charge to the caps honestly).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "not_s0",
+        "other_action",
+        "flagged",
+        "activity_unknown",
+        "recent",
+        "outside",
+        "size_unknown",
+        "recently_restored",
+        "project_active"
+      ],
+      "type": "object"
     },
     "ForecastConfidence": {
       "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
@@ -396,6 +552,11 @@
       "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
       "type": "string"
     },
+    "ItemId": {
+      "description": "Stable item ID: 128-bit truncated SHA-256 of identity + path, lowercase hex.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
     "NotSampled": {
       "additionalProperties": false,
       "description": "A volume known from history that was not sampled.",
@@ -412,6 +573,273 @@
       "required": [
         "volume_id",
         "reason"
+      ],
+      "type": "object"
+    },
+    "PolicyItem": {
+      "additionalProperties": false,
+      "description": "One item of a policy's preview or run.",
+      "properties": {
+        "bytes": {
+          "description": "Estimated bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "item_id": {
+          "$ref": "#/$defs/ItemId",
+          "description": "Stable item ID."
+        },
+        "outcome": {
+          "description": "`would_quarantine` (preview), `quarantined`, `trashed`, or the reason code it was left\nin place (e.g. `tier_raised`, `now_protected`, `identity_changed`, `in_use`).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Its path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "path",
+        "bytes",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "PolicyOutcome": {
+      "description": "What one policy did.",
+      "oneOf": [
+        {
+          "description": "Not enabled (`enabled = true` is missing).",
+          "properties": {
+            "state": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Its definition is invalid; it never runs until fixed.",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "state": {
+              "const": "invalid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Dry run (first time, or the definition changed): nothing was touched.",
+          "properties": {
+            "bytes": {
+              "description": "Their bytes.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "items": {
+              "description": "Items it would quarantine.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runs_after": {
+              "description": "The earliest check that may run it for real.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "state": {
+              "const": "previewed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "items",
+            "bytes",
+            "runs_after"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Ran recently; it may run again at `next_at`.",
+          "properties": {
+            "next_at": {
+              "description": "Unix seconds.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "state": {
+              "const": "not_due",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "next_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Due, but nothing qualifies (or the caps left no room: see `deferred`).",
+          "properties": {
+            "state": {
+              "const": "nothing_to_do",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planned by [`prepare`], not run yet (only seen between [`prepare`] and [`execute`]).",
+          "properties": {
+            "items": {
+              "description": "Items planned.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "const": "planned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Ran: one audited operation.",
+          "properties": {
+            "bytes": {
+              "description": "Bytes moved.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "not_done": {
+              "description": "Items left in place (skipped at revalidation, refused or blocked).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation_id": {
+              "description": "`scull history <id>`, `scull restore <id>`.",
+              "type": "string"
+            },
+            "quarantined": {
+              "description": "Items moved into quarantine.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "restore_command": {
+              "description": "How to undo it.",
+              "type": "string"
+            },
+            "state": {
+              "const": "ran",
+              "type": "string"
+            },
+            "trashed": {
+              "description": "Items moved to the Trash (quarantine impossible there).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "operation_id",
+            "quarantined",
+            "trashed",
+            "not_done",
+            "bytes",
+            "restore_command"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Could not run (e.g. another scull operation holds the execution lock); retried at the\nnext check. Nothing was touched unless an operation is named.",
+          "properties": {
+            "operation_id": {
+              "description": "The operation, if one was started.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "state": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PolicyReport": {
+      "additionalProperties": false,
+      "description": "One policy in this check.",
+      "properties": {
+        "deferred": {
+          "description": "Items it chose but the caps deferred to a later run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "excluded": {
+          "$ref": "#/$defs/Excluded",
+          "description": "Candidates of its kind it left out, by reason."
+        },
+        "items": {
+          "description": "Items it would clean (preview) or handled (run), oldest first, at most\n[`ITEMS_LISTED`].",
+          "items": {
+            "$ref": "#/$defs/PolicyItem"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "The policy's name.",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/PolicyOutcome",
+          "description": "What it did."
+        }
+      },
+      "required": [
+        "name",
+        "outcome",
+        "items",
+        "deferred",
+        "excluded"
       ],
       "type": "object"
     },
@@ -474,6 +902,31 @@
         "reused"
       ],
       "type": "object"
+    },
+    "RunState": {
+      "description": "The overall state of the auto-policies in this check.",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No policy is enabled in the user config file (the default). Nothing was read or written.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "A kill switch stopped every policy. Nothing was touched.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "A safety gate refused to run any policy. Nothing was touched.",
+          "type": "string"
+        },
+        {
+          "const": "checked",
+          "description": "The policies were evaluated (see each one's outcome).",
+          "type": "string"
+        }
+      ]
     },
     "ScanId": {
       "pattern": "^scan_[0-9A-Za-z]{1,64}$",

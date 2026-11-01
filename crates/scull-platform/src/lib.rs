@@ -93,7 +93,8 @@ pub use error::{ErrorKind, Operation, PlatformError};
 pub use identity::{MACHINE_ID_FILE, current_user, existing_machine_id, machine_id};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{
-    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, open_file_no_follow,
+    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, has_extended_acl,
+    open_file_no_follow,
 };
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 pub use volumes::{
