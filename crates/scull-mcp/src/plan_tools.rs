@@ -615,6 +615,12 @@ fn prepare(
     }
     let wanted: BTreeSet<&str> = a.item_ids.iter().map(String::as_str).collect();
     let roots = ctx.targets(allow, a.path.as_deref())?;
+    // SAFE-09: the last recorded operation before the scan starts; any later one invalidates
+    // the plan.
+    let mut store = open_store(plans)?;
+    let watermark = store
+        .operations_watermark()
+        .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
     let rep = fresh_scan(ctx, &roots, cancel)?;
     let r = &ctx.redactor;
     let mut items = Vec::new();
@@ -652,11 +658,11 @@ fn prepare(
             machine_id: plans.principal.machine_id.clone(),
             user: plans.principal.user.clone(),
             origin: PlanOrigin::Mcp,
+            operations_watermark: Some(watermark),
         },
         items,
     )
     .map_err(|e| ToolError::new("not_plannable", r.text(&e.message)))?;
-    let mut store = open_store(plans)?;
     // The cap again, atomically with the insert (another session may have prepared meanwhile).
     let inserted = store
         .insert_agent_plan(&plan, now, plans.limits.max_pending)

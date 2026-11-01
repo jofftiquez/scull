@@ -316,6 +316,7 @@ fn operation(s: &mut Store, n: u32, at: i64, rows: &[(Candidate, u64, Option<u64
             machine_id: "machine-a".into(),
             user: "dev".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )

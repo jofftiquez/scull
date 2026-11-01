@@ -309,6 +309,7 @@ fn docker_items_are_refused_with_the_docker_reason() {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )

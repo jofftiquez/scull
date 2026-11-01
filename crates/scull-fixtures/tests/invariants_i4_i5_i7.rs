@@ -82,6 +82,7 @@ impl Run {
                 machine_id: "machine-test".into(),
                 user: "tester".into(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: None,
             },
             items.clone(),
         )
@@ -455,6 +456,46 @@ fn i7_allowlists_quick_clean_tools_but_not_ollama() {
             "{tool}: {report}"
         );
     }
+}
+
+/// A tool installed the Homebrew way: the trusted folder holds a link (`bin/git` →
+/// `Cellar/git/<v>/bin/git`) and the hardened runner starts the link's real target. That target
+/// passes I-7; a sibling of it that no trusted entry links to does not.
+#[cfg(unix)]
+#[test]
+fn i7_accepts_the_real_target_of_a_link_in_a_trusted_folder_and_nothing_beside_it() {
+    let fx = fixture();
+    let t = tools(&fx);
+    let cellar = fx.base().join("Cellar/git/2.0/bin");
+    fs::create_dir_all(&cellar).unwrap();
+    let real = cellar.join("git");
+    let beside = cellar.join("npm");
+    for f in [&real, &beside] {
+        fs::write(f, "").unwrap();
+    }
+    std::os::unix::fs::symlink(&real, t.join("git")).unwrap();
+
+    let report = fx.check_invariants(
+        &InvariantInputs::new()
+            .spawned([SpawnRecord::new(&real, ["--version"])])
+            .trusted_dir(&t),
+    );
+    assert_eq!(
+        report.outcome(InvariantId::I7),
+        &Outcome::Passed,
+        "{report}"
+    );
+
+    let report = fx.check_invariants(
+        &InvariantInputs::new()
+            .spawned([SpawnRecord::new(&beside, ["cache", "clean"])])
+            .trusted_dir(&t),
+    );
+    assert_eq!(failures(&report), vec![InvariantId::I7], "{report}");
+    assert!(
+        failure_text(&report, InvariantId::I7).contains("not in a trusted directory"),
+        "{report}"
+    );
 }
 
 /// FX-QC-06's attack: a fake `npm` in a project's `node_modules/.bin` (inside the scanned

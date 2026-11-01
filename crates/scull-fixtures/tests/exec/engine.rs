@@ -117,8 +117,12 @@ pub fn ctx() -> PlanContext<'static> {
     }
 }
 
+/// `p` relative to the fixture root, with `/`: the root as scull canonicalizes it (scans) or
+/// as it was given on the command line (on Windows an 8.3 short temp path such as
+/// `C:\Users\RUNNER~1\...`).
 pub fn rel(fx: &Fixture, p: &Path) -> String {
     p.strip_prefix(canon(fx.root()))
+        .or_else(|_| p.strip_prefix(fx.root()))
         .unwrap_or(p)
         .to_string_lossy()
         .replace('\\', "/")
@@ -153,6 +157,7 @@ pub fn plan(fx: &Fixture, r: &ScanReport, rels: &[&str], id: &str) -> Plan {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )

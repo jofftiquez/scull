@@ -1518,6 +1518,7 @@ mod tests {
                 machine_id: "m".into(),
                 user: "u".into(),
                 origin: PlanOrigin::Mcp,
+                operations_watermark: None,
             },
             vec![PlanItem::from_candidate(c).unwrap()],
         )

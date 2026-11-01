@@ -125,8 +125,20 @@ fn outcome_of<'a>(fx: &Fixture, r: &'a ExecutionReport, rel_path: &str) -> &'a I
         .outcome
 }
 
+/// Where trashed items land in the fixture's home trash: Linux `files/`, macOS the trash
+/// directory itself. Canonical, like the locations the Trash reports (`/var` is
+/// `/private/var` on macOS).
+fn trash_items_dir(fx: &Fixture) -> PathBuf {
+    let trash = std::fs::canonicalize(fx.base()).unwrap().join("xdg/Trash");
+    if cfg!(target_os = "macos") {
+        trash
+    } else {
+        trash.join("files")
+    }
+}
+
 fn trash_files(fx: &Fixture) -> Vec<PathBuf> {
-    std::fs::read_dir(fx.base().join("xdg/Trash/files"))
+    std::fs::read_dir(trash_items_dir(fx))
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default()
 }
@@ -159,10 +171,7 @@ fn fx_exec_03_quarantine_impossible_falls_back_to_trash() {
         match outcome_of(&fx, &r, rel_path) {
             ItemOutcome::Trashed(t) => {
                 let loc = t.outcome.location.clone().unwrap();
-                assert!(
-                    loc.starts_with(fx.base().join("xdg/Trash/files")),
-                    "{loc:?}"
-                );
+                assert!(loc.starts_with(trash_items_dir(&fx)), "{loc:?}");
                 assert_eq!(t.freed_bytes(), 0, "Trash moves bytes, it frees none");
                 assert!(t.moved_bytes() > 0);
             }

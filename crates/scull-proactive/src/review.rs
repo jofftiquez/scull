@@ -189,6 +189,7 @@ mod tests {
             machine_id: "m".into(),
             user: "u".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         }
     }
 

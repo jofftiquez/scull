@@ -55,8 +55,10 @@ impl Env {
         self.fx.base().join("scull-home")
     }
 
+    /// The fixture root, canonical: the spelling scull records (on Windows the temp dir is an
+    /// 8.3 short path such as `C:\Users\RUNNER~1\...`, which scull spells out in full).
     fn root(&self) -> PathBuf {
-        self.fx.root().to_path_buf()
+        scull_engine::paths::canon(self.fx.root())
     }
 
     fn cmd(&self, args: &[&str]) -> Command {

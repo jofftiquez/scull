@@ -166,8 +166,9 @@ fn the_marker_is_random_and_recorded() {
 fn a_grown_or_shrunk_file_is_never_released() {
     let (_t, d) = data_dir();
     create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
+    // `write`, not `append`: a Windows append-only handle may not change the length.
     std::fs::OpenOptions::new()
-        .append(true)
+        .write(true)
         .open(reserve(&d))
         .unwrap()
         .set_len(3 * MIB)
