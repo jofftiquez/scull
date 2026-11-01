@@ -787,45 +787,52 @@ const ALLOWED_DEPS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The dependency keys of a manifest's normal, build and target sections (not dev).
-fn non_dev_dependencies(manifest: &str) -> Vec<String> {
-    let mut deps = Vec::new();
-    let mut in_deps = false;
-    for line in manifest.lines().map(str::trim) {
-        if line.starts_with('[') {
-            let h = line.trim_matches(|c| c == '[' || c == ']');
-            let dev = h.contains("dev-dependencies");
-            // `[dependencies.<name>]` / `[target.'x'.build-dependencies.<name>]` name one directly.
-            if !dev {
-                for kind in ["dependencies.", "build-dependencies."] {
-                    if let Some(i) = h.find(kind) {
-                        deps.push(h[i + kind.len()..].trim_matches('"').to_owned());
-                    }
-                }
-            }
-            in_deps = !dev && (h.ends_with("dependencies"));
-            continue;
-        }
-        if in_deps && !line.is_empty() && !line.starts_with('#') {
-            let key = line
-                .split(['=', '.'])
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches('"');
-            if !key.is_empty() {
-                deps.push(key.to_owned());
-            }
-        }
-    }
-    deps
+/// The package names of a desktop crate's normal and build dependencies, every target, from
+/// `cargo metadata` (renames, comments and spacing are Cargo's business, not a text parser's).
+fn non_dev_dependencies(dir: &str) -> Vec<String> {
+    let manifest = desktop().join(dir).join("Cargo.toml");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args([
+            "metadata",
+            "--offline",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pkg = v["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            p["manifest_path"]
+                .as_str()
+                .is_some_and(|m| Path::new(m) == manifest.canonicalize().unwrap())
+        })
+        .unwrap_or_else(|| panic!("{dir}: package not in cargo metadata"));
+    pkg["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["kind"].as_str() != Some("dev"))
+        .map(|d| d["name"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
 fn desktop_crates_depend_only_on_allowed_crates() {
     for (dir, allowed) in ALLOWED_DEPS {
-        let text = std::fs::read_to_string(desktop().join(dir).join("Cargo.toml")).unwrap();
-        let deps = non_dev_dependencies(&text);
+        let deps = non_dev_dependencies(dir);
         assert!(deps.iter().any(|d| d == "scull-core"), "{dir}: {deps:?}");
         for d in deps {
             assert!(
@@ -835,9 +842,48 @@ fn desktop_crates_depend_only_on_allowed_crates() {
             );
         }
     }
-    let probe = "[dependencies]\nlibc = \"0.2\"\n[target.'cfg(unix)'.dependencies]\nnix = \"1\"\n\
-                 [dependencies.fs-err]\nversion = \"3\"\n[dev-dependencies]\ntempfile = \"3\"\n";
-    assert_eq!(non_dev_dependencies(probe), ["libc", "nix", "fs-err"]);
+}
+
+/// Desktop sources can't reach the OS behind these checks: no `unsafe` at all (so no FFI call,
+/// not even through a `safe fn` in an `unsafe extern` block or an `allow(unsafe_code)`), no
+/// `extern` block, and no `macro_rules!` (a macro can paste the identifiers of a write call
+/// together, out of sight of the path checks). The bridge also forbids unsafe code at its root.
+#[test]
+fn desktop_sources_have_no_unsafe_ffi_or_macro_rules() {
+    for f in desktop_rust_files() {
+        let text = std::fs::read_to_string(&f).unwrap();
+        let file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        let rest = text.replace("#![forbid(unsafe_code)]", "");
+        assert!(
+            !words(&rest).any(|w| w == "unsafe" || w == "unsafe_code"),
+            "{} mentions unsafe",
+            f.display()
+        );
+        #[derive(Default)]
+        struct Items(Vec<String>);
+        impl<'ast> syn::visit::Visit<'ast> for Items {
+            fn visit_item_foreign_mod(&mut self, _: &'ast syn::ItemForeignMod) {
+                self.0.push("an extern block".into());
+            }
+            fn visit_item_macro(&mut self, m: &'ast syn::ItemMacro) {
+                if m.mac.path.is_ident("macro_rules") {
+                    self.0.push("macro_rules!".into());
+                }
+                syn::visit::visit_item_macro(self, m);
+            }
+            fn visit_macro(&mut self, m: &'ast syn::Macro) {
+                if m.path.is_ident("macro_rules") {
+                    self.0.push("macro_rules!".into());
+                }
+                syn::visit::visit_macro(self, m);
+            }
+        }
+        let mut items = Items::default();
+        syn::visit::Visit::visit_file(&mut items, &file);
+        assert!(items.0.is_empty(), "{}: {:?}", f.display(), items.0);
+    }
+    let lib = std::fs::read_to_string(desktop().join("bridge/src/lib.rs")).unwrap();
+    assert!(lib.contains("#![forbid(unsafe_code)]"), "bridge/src/lib.rs");
 }
 
 #[test]
