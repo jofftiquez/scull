@@ -1,7 +1,7 @@
 # scull — Fixture Matrix
 
 **Status:** v0.1 (Phase 0 deliverable) · **Updated:** October 31, 2026
-**Companion docs:** [PRD](./PRD.md) · [Threat model](./THREAT_MODEL.md)
+**Companion docs:** [Architecture](./ARCHITECTURE.md) · [CI](./CI.md)
 
 This is the list of scenarios scull must pass on every supported OS before release. Each fixture builds a small, realistic directory tree, runs scull, and checks both the specific expected outcome **and** the universal invariants in §1.
 

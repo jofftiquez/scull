@@ -7,3 +7,7 @@ scripts/evidence/node_modules/
 .evidence/
 apps/desktop/dist/
 apps/desktop/src-tauri/target/
+
+# Private planning docs and screenshots, kept locally only
+local/
+CLAUDE.local.md

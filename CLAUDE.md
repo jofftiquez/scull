@@ -1,9 +1,12 @@
 # scull — agent instructions
 
-Start with `HANDOVER.md` and follow it. In short:
-
-- Requirements: `docs/PRD.md` · Decisions: `docs/DECISIONS.md` · Safety: `docs/THREAT_MODEL.md`, `docs/FIXTURES.md` · Design: `design/html/index.html`, `design/tokens.json`.
-- First session only: run the setup in `HANDOVER.md` §4 (bootstrap commit, then `python3 scripts/github/bootstrap_issues.py`).
-- GitHub issues are the source of truth. Work one issue per branch/worktree; close only with an **Evidence** comment (HANDOVER §6).
-- Use parallel subagents, one per lane, per HANDOVER §7.
-- Never delete real user files in development or tests; deletion lives only in `scull-cleaner`; OS APIs only in `scull-platform`; no AGPL code.
+- If `CLAUDE.local.md` exists, read it first: it points to the maintainers' private planning docs
+  (requirements, decision log, threat model, design screenshots), which are kept outside git.
+- Public references: `docs/ARCHITECTURE.md`, `docs/FIXTURES.md`, `docs/CI.md`, `design/html/index.html`,
+  `design/tokens.json`, `CONTRIBUTING.md`, `SECURITY.md`.
+- GitHub issues are the source of truth. Work one issue per branch/worktree; close an issue only with an
+  `## Evidence` comment (screenshots attached with `gh issue comment --attach`, never committed).
+- Never delete real user files in development or tests; destructive tests run only in fixture temp trees
+  with canaries. Deletion lives only in `scull-cleaner`; OS APIs only in `scull-platform`; no AGPL or
+  other copyleft code.
+- Never commit private planning docs, screenshots or `local/` to this repository.

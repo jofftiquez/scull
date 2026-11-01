@@ -1,13 +1,12 @@
 # scull design reference (v0.6)
 
-Ink + magenta duotone · soft bento · rounded · no shadows · DM Sans / DM Mono. Decisions D-16…D-23 in `docs/DECISIONS.md`.
+Ink + magenta duotone · soft bento · rounded · no shadows · DM Sans / DM Mono.
 
 ## What's here
 
 | Folder | What | Use it for |
 |---|---|---|
 | `html/` | **Standalone, interactive HTML** for all 13 screens + `index.html` gallery. Open `html/index.html` in a browser. | The primary reference. Click through the sidebar, run Quick Clean, Rescan, drill into folders, switch Settings tabs. |
-| `screens/` | PNG screenshots: every screen plus key animation end-states and named states (`*b-*`, `*c-*`, ...). | Quick visual reference; evidence images for GitHub issues. |
 | `source/` | Original `.dc.html` artboards + `canvas.json` from the design canvas. All styling is inline; logic is in the `<script data-dc-script>` block. | Exact values (colors, spacing, copy, animation timings, mock data). |
 | `preview/` | `support.js` (tiny runtime that renders `.dc.html`) + `shoot.js` (Playwright screenshot script). | Re-rendering screenshots after design changes. |
 | `tokens.json` | Colors, tier fills, type scale, radii, spacing, motion. | Seed for the Tailwind theme / CSS variables in the Tauri app. |

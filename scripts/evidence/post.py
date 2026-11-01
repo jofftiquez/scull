@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post an `## Evidence` comment on an issue (HANDOVER.md §6) and add `evidence-posted`.
+"""Post an `## Evidence` comment on an issue and add `evidence-posted`.
 
     python3 scripts/evidence/post.py <issue> [--dir .evidence/<issue>] [--ci <run-url>] \
         [--pr <n>] [--sha <commit>] [--note "text"] [--criteria "criterion"]...
