@@ -5,6 +5,7 @@
 #![allow(dead_code, clippy::unwrap_used)]
 
 pub mod jvm_caches;
+pub mod tool_caches;
 
 use scull_core::{Candidate, Tier};
 use scull_detectors::{

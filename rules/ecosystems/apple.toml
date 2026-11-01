@@ -1,0 +1,77 @@
+# Apple package managers: SwiftPM and CocoaPods project folders. Format: rules/README.md.
+#
+# The global caches (SwiftPM's `org.swift.swiftpm` cache, CocoaPods' download cache) are
+# located by Rust code in `scull_detectors::caches` (rule IDs `swiftpm.cache`,
+# `cocoapods.cache`), not rules (CLS-02).
+#
+# Both folders are S1: they hold downloaded dependencies (and, for SwiftPM, a build that is
+# usually slow to redo). A `Pods/` folder that a team commits to Git is S3 through the
+# Git-tracked rule of the rubric.
+
+schema_version = 1
+
+[[rule]]
+id = "swiftpm.build"
+version = 1
+artifact = "Swift Package Manager build folder"
+ecosystem = "swiftpm"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".build"]
+
+[rule.markers]
+# The package manifest beside it, and what SwiftPM writes inside (resolved workspace state,
+# the build database and description files, dependency checkouts).
+all = ["../Package.swift"]
+any = ["workspace-state.json", "build.db", "debug.yaml", "release.yaml", "checkouts"]
+
+[rule.lockfiles]
+any = ["../Package.resolved"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["swift", "swift-build", "swift-frontend", "sourcekit-lsp"]
+
+[rule.regeneration]
+instructions = "Run `swift build` in the package: dependencies are fetched again (pinned by Package.resolved) and everything is rebuilt."
+network = true
+long_build = true
+
+[[rule]]
+id = "cocoapods.pods"
+version = 1
+artifact = "CocoaPods Pods folder"
+ecosystem = "cocoapods"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["Pods"]
+
+[rule.markers]
+# The Podfile beside it, and the copy of the lockfile CocoaPods writes inside.
+all = ["../Podfile", "Manifest.lock"]
+
+[rule.lockfiles]
+any = ["../Podfile.lock"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["pod", "Xcode", "xcodebuild"]
+
+[rule.regeneration]
+instructions = "Run `pod install` in the project: the pods pinned by Podfile.lock are installed again (from CocoaPods' cache when present)."
+network = true
+long_build = false
