@@ -859,6 +859,13 @@ fn desktop_sources_have_no_unsafe_ffi_or_macro_rules() {
             "{} mentions unsafe",
             f.display()
         );
+        // As a word, anywhere: a definition inside another macro's arguments (`vec![{ .. }]`)
+        // is invisible to the parser.
+        assert!(
+            !words(&text).any(|w| w == "macro_rules"),
+            "{} mentions macro_rules",
+            f.display()
+        );
         #[derive(Default)]
         struct Items(Vec<String>);
         impl<'ast> syn::visit::Visit<'ast> for Items {
