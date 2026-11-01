@@ -1,0 +1,68 @@
+# Zig rules. Format: rules/README.md.
+#
+# `.zig-cache/` (`zig-cache/` before Zig 0.13) and `zig-out/` sit beside `build.zig`: the
+# build system's local cache and its default install prefix. Both are rebuilt by `zig build`
+# from the project's sources (S0). The global cache is located by Rust code in
+# `scull_detectors::caches` (rule ID `zig.global-cache`, inspect-only).
+
+schema_version = 1
+
+[[rule]]
+id = "zig.cache"
+version = 1
+artifact = "Zig local build cache"
+ecosystem = "zig"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".zig-cache", "zig-cache"]
+
+[rule.markers]
+# `build.zig` beside it, and the cache's object/manifest folders inside.
+all = ["../build.zig"]
+any = ["o", "h", "z", "tmp"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["zig", "zls"]
+
+[rule.regeneration]
+instructions = "Run `zig build` in the project to rebuild."
+network = false
+long_build = false
+
+[[rule]]
+id = "zig.out"
+version = 1
+artifact = "Zig build output (zig-out)"
+ecosystem = "zig"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["zig-out"]
+
+[rule.markers]
+# `build.zig` beside it, and the install prefix's standard folders inside.
+all = ["../build.zig"]
+any = ["bin", "lib", "include", "share", "doc"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["zig", "zls"]
+
+[rule.regeneration]
+instructions = "Run `zig build` (its install step) in the project to recreate it."
+network = false
+long_build = false

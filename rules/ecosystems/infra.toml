@@ -1,0 +1,129 @@
+# Infrastructure tools and local clusters: Terraform/OpenTofu, Bazel, Podman, minikube.
+# Format: rules/README.md.
+#
+# `scull_detectors::long_tail` adds to these rules, never loosens them:
+# * `terraform.dir`: a `.terraform/` that records a backend (`terraform.tfstate`) or a selected
+#   workspace (`environment`) is S2. Re-initializing may need backend settings that were given
+#   on the command line, and losing the workspace selection silently switches the next run to
+#   the `default` workspace.
+# * `bazel.output-base`: the folder must sit in Bazel's `_bazel_<user>` folder with a 32-digit
+#   hexadecimal name. The workspace it belongs to is read from `DO_NOT_BUILD_HERE` (as data); a
+#   note says when it no longer exists. Inspect-only: Bazel's own `bazel clean --expunge` has to
+#   run inside that workspace, and scull never removes Bazel's read-only output trees itself.
+# * `podman.storage`, `minikube.cache`: the folder must sit in `containers/` or `.minikube/`.
+#   Inspect-only: Podman's storage also holds containers and volumes (user data), and
+#   minikube's only cleanup (`minikube delete --purge`) removes clusters too.
+#
+# kind keeps its node images inside Docker; they are covered by the Docker detector.
+
+schema_version = 1
+
+[[rule]]
+id = "terraform.dir"
+version = 1
+artifact = "Terraform working folder (.terraform)"
+ecosystem = "terraform"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = [".terraform"]
+
+[rule.markers]
+# Downloaded providers or modules inside, and Terraform configuration beside it.
+all = ["{providers,modules,plugins}"]
+any = ["../*.tf", "../*.tf.json"]
+
+[rule.lockfiles]
+# Without the dependency lock file, `terraform init` may pick other provider versions.
+any = ["../.terraform.lock.hcl"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["terraform", "tofu", "terraform-ls", "terragrunt"]
+
+[rule.regeneration]
+instructions = "Run `terraform init` (or `tofu init`) in the folder: providers and modules are downloaded again (pinned by .terraform.lock.hcl). Remote state is not stored here."
+network = true
+long_build = false
+
+[[rule]]
+id = "bazel.output-base"
+version = 1
+artifact = "Bazel output base"
+ecosystem = "bazel"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "inspect_only"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# Bazel names each output base after the MD5 of its workspace path.
+names = ["????????????????????????????????"]
+
+[rule.markers]
+all = ["DO_NOT_BUILD_HERE"]
+any = ["execroot", "external", "server"]
+
+[rule.activity]
+processes = ["bazel", "bazelisk", "java"]
+
+[rule.regeneration]
+instructions = "Run `bazel clean --expunge` inside the workspace to remove it with Bazel's own command; the next build recreates it (slowly, and dependencies are downloaded again)."
+network = true
+long_build = true
+
+[[rule]]
+id = "podman.storage"
+version = 1
+artifact = "Podman container storage"
+ecosystem = "containers"
+category = "container"
+platforms = ["linux"]
+base_tier = "S2"
+strategy = "inspect_only"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["storage"]
+
+[rule.markers]
+all = ["libpod"]
+any = ["overlay", "overlay-images", "overlay-layers", "vfs", "btrfs"]
+
+[rule.activity]
+processes = ["podman", "conmon", "crun", "runc", "buildah"]
+
+[rule.regeneration]
+instructions = "Holds images, containers and volumes. Free space with Podman's own commands (`podman image prune`, `podman system prune`, never `--volumes` unless the volumes are disposable)."
+
+[[rule]]
+id = "minikube.cache"
+version = 1
+artifact = "minikube download cache"
+ecosystem = "containers"
+category = "container"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "inspect_only"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["cache"]
+
+[rule.markers]
+any = ["iso", "kic", "preloaded-tarball", "images"]
+
+[rule.activity]
+processes = ["minikube"]
+
+[rule.regeneration]
+instructions = "minikube downloads its ISO, base images and preloaded images again when a cluster is next started. minikube has no command that clears only this cache (`minikube delete --purge` also deletes every cluster)."
+network = true
+long_build = false

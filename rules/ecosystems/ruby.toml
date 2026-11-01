@@ -1,0 +1,39 @@
+# Ruby (Bundler) rules. Format: rules/README.md.
+#
+# `vendor/bundle` is where `bundle install --path vendor/bundle` (or `BUNDLE_PATH`) installs a
+# project's gems. `scull_detectors::long_tail` requires the folder to sit in `vendor/`, with the
+# Gemfile two levels up. S1: the gems are downloaded again, and native extensions rebuilt.
+
+schema_version = 1
+
+[[rule]]
+id = "bundler.vendor-bundle"
+version = 1
+artifact = "Bundler vendored gems (vendor/bundle)"
+ecosystem = "ruby"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["bundle"]
+
+[rule.markers]
+# The Gemfile of the project (`<project>/vendor/bundle`), and Bundler's `ruby/<version>/` tree.
+all = ["../../Gemfile", "ruby"]
+
+[rule.lockfiles]
+any = ["../../Gemfile.lock"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["ruby", "bundle", "bundler", "rails", "puma", "ruby-lsp", "solargraph"]
+
+[rule.regeneration]
+instructions = "Run `bundle install` in the project: the gems pinned by Gemfile.lock are installed again into vendor/bundle (native extensions are compiled again)."
+network = true
+long_build = false

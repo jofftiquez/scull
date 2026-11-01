@@ -1,0 +1,109 @@
+# C / C++ / embedded rules. Format: rules/README.md.
+#
+# Build folders are often named arbitrarily, so a name is never enough (CLS-03, FX-CLS-10): a
+# CMake build folder needs `CMakeCache.txt` and `CMakeFiles/` inside it, a Meson build folder
+# `meson-private/` and `build.ninja`. A `build/` with only `CMakeLists.txt` beside it is not a
+# candidate. Only the usual build folder names are considered (`build`, `builddir`, `_build`,
+# `build-*`, `build_*`, CLion's `cmake-build-*`); other build folders are left alone.
+#
+# `scull_detectors::long_tail` adds to `cmake.build`: the source folder recorded in
+# `CMakeCache.txt` (`CMAKE_HOME_DIRECTORY`) becomes the project, and an in-source build (the
+# source folder is the candidate itself) is never a candidate.
+#
+# Both are S1: the folder also holds the configure options the user chose (`-D…`, `-Doption=`),
+# and rebuilding a C/C++ project is usually a long build. They are quarantined (restorable),
+# never deleted outright.
+#
+# Global caches (ccache, Conan, vcpkg, PlatformIO, Arduino, ESP-IDF) are located by Rust code in
+# `scull_detectors::caches`, not rules (CLS-02).
+
+schema_version = 1
+
+[[rule]]
+id = "cmake.build"
+version = 1
+artifact = "CMake build folder"
+ecosystem = "cmake"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["build", "builddir", "_build", "build-*", "build_*", "cmake-build-*"]
+
+[rule.markers]
+# What `cmake` writes when it configures a build folder.
+all = ["CMakeCache.txt", "CMakeFiles"]
+
+[rule.exclude]
+# An in-source build: the folder holds the project's own sources (FX-CLS-10).
+markers = ["CMakeLists.txt"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["cmake", "ninja", "make", "gmake", "ctest", "clangd"]
+
+[rule.regeneration]
+instructions = "Configure and build again (`cmake -S <source> -B <build>` with the same options, then `cmake --build <build>`). The options chosen at configure time are stored in this folder's CMakeCache.txt."
+network = false
+long_build = true
+
+[[rule]]
+id = "meson.build"
+version = 1
+artifact = "Meson build folder"
+ecosystem = "meson"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["build", "builddir", "_build", "build-*", "build_*"]
+
+[rule.markers]
+all = ["meson-private", "build.ninja"]
+
+[rule.exclude]
+markers = ["meson.build"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["meson", "ninja", "samu"]
+
+[rule.regeneration]
+instructions = "Run `meson setup <build>` with the same options, then `meson compile -C <build>`. The options chosen at setup are stored in this folder (meson-private/cmd_line.txt)."
+network = false
+long_build = true
+
+[[rule]]
+id = "platformio.pio"
+version = 1
+artifact = "PlatformIO project build folder"
+ecosystem = "platformio"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".pio"]
+
+[rule.markers]
+all = ["../platformio.ini"]
+any = ["build", "libdeps"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["pio", "platformio"]
+
+[rule.regeneration]
+instructions = "Run `pio run` in the project: it downloads the library dependencies (libdeps/) again and rebuilds."
+network = true
+long_build = false
