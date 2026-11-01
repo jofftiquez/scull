@@ -491,10 +491,10 @@ fn platform_delete_modules() -> std::collections::BTreeSet<String> {
     let lines: Vec<&str> = lib.lines().map(str::trim).collect();
     let mut mods = std::collections::BTreeSet::new();
     for w in lines.windows(2) {
-        if w[0] == "#[cfg(feature = \"delete\")]" {
-            if let Some(m) = w[1].strip_prefix("pub mod ") {
-                mods.insert(m.trim_end_matches(';').trim().to_string());
-            }
+        if w[0] == "#[cfg(feature = \"delete\")]"
+            && let Some(m) = w[1].strip_prefix("pub mod ")
+        {
+            mods.insert(m.trim_end_matches(';').trim().to_string());
         }
     }
     assert!(
