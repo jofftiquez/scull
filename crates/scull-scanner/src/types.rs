@@ -28,17 +28,39 @@ pub struct ScanOptions {
     pub emit_listings: bool,
     /// Minimum time between [`ScanEvent::Progress`] events (default 200 ms).
     pub progress_interval: Duration,
-    /// Give up on a single directory listing that takes longer than this (default 60 s), e.g.
-    /// on a stalled network or FUSE mount (T-53). The directory is reported as a
-    /// [`IssueKind::TimedOut`] error, its subtree is marked incomplete, and a replacement
-    /// worker keeps the scan going. `None` disables the watchdog.
+    /// Give up on a single directory listing, or on the metadata of a single entry, that
+    /// takes longer than this (default 60 s), e.g. on a stalled network or FUSE mount (T-53).
+    ///
+    /// * One entry whose metadata call hangs (a frozen mount point inside a healthy
+    ///   directory) costs only itself: it is reported as an [`IssueKind::TimedOut`] issue for
+    ///   that entry, the directory is listed again without it, and its siblings are counted,
+    ///   listed and descended as usual. At most
+    ///   [`ScanOptions::MAX_ENTRY_TIMEOUTS_PER_DIR`] entries of one directory are skipped
+    ///   this way; one more gives up the whole directory.
+    /// * A listing that hangs outside any one entry's metadata (the directory itself is on
+    ///   the stalled mount) gives up the directory: it is reported as an
+    ///   [`IssueKind::TimedOut`] issue and its subtree is marked incomplete.
+    ///
+    /// Either way a replacement worker keeps the scan going. `None` disables the watchdog.
     pub dir_timeout: Option<Duration>,
+    /// Mount points that are never touched, not even with `lstat` (default: none). Each one
+    /// met in a listing is counted as an entry of unknown size and reported as a
+    /// [`BoundaryReason::OtherVolume`] boundary straight from this list, without a system
+    /// call, so a stale network or FUSE mount can't stall the listing of the directory that
+    /// holds it (T-53). Callers pass the network mounts of the OS mount table, in the same
+    /// (canonical) form as the scan root. Matching costs one lookup per listed directory, and
+    /// a name comparison per entry only in directories that hold one of these mount points.
+    pub skip_mounts: Vec<PathBuf>,
 }
 
 impl ScanOptions {
     /// Upper bound for the automatic thread count: beyond this the filesystem, not the CPU,
     /// is the bottleneck.
     pub const MAX_AUTO_THREADS: usize = 16;
+
+    /// Entries of one directory whose metadata may time out (each skipped and reported on its
+    /// own, see [`ScanOptions::dir_timeout`]) before the whole directory is given up.
+    pub const MAX_ENTRY_TIMEOUTS_PER_DIR: usize = 4;
 
     /// The thread count a scan with these options uses.
     pub fn effective_threads(&self) -> usize {
@@ -61,6 +83,7 @@ impl Default for ScanOptions {
             emit_listings: false,
             progress_interval: Duration::from_millis(200),
             dir_timeout: Some(Duration::from_secs(60)),
+            skip_mounts: Vec::new(),
         }
     }
 }
@@ -182,13 +205,7 @@ pub struct Totals {
 impl Totals {
     /// Count an entry (kind counters, unknown allocation, link flag) without its bytes.
     pub(crate) fn add_counts(&mut self, md: &Metadata) {
-        self.entries += 1;
-        match md.kind {
-            EntryKind::File => self.files += 1,
-            EntryKind::Dir => self.dirs += 1,
-            k if k.is_link() => self.links += 1,
-            _ => self.specials += 1,
-        }
+        self.count_kind(md.kind);
         if md.allocated_size.is_none() {
             self.allocated_unknown += 1;
         }
@@ -197,6 +214,24 @@ impl Totals {
         }
         if is_cloud_placeholder(md) {
             self.cloud_placeholders += 1;
+        }
+    }
+
+    /// Count an entry that was deliberately not `lstat`ed (a mount point from
+    /// [`ScanOptions::skip_mounts`]): its kind comes from the listing, its size is unknown.
+    pub(crate) fn add_unstatted(&mut self, kind: EntryKind) {
+        self.count_kind(kind);
+        self.allocated_unknown += 1;
+    }
+
+    /// One more entry, in the counter of its kind.
+    fn count_kind(&mut self, kind: EntryKind) {
+        self.entries += 1;
+        match kind {
+            EntryKind::File => self.files += 1,
+            EntryKind::Dir => self.dirs += 1,
+            k if k.is_link() => self.links += 1,
+            _ => self.specials += 1,
         }
     }
 
@@ -277,6 +312,21 @@ pub struct EntryInfo {
 }
 
 impl EntryInfo {
+    /// An entry that was deliberately not `lstat`ed (see [`ScanOptions::skip_mounts`]): kind
+    /// from the listing, everything else unknown.
+    pub(crate) fn unstatted(name: OsString, kind: EntryKind) -> Self {
+        Self {
+            name,
+            kind,
+            identity: None,
+            logical: 0,
+            allocated: None,
+            nlink: None,
+            mtime: None,
+            cloud_placeholder: false,
+        }
+    }
+
     pub(crate) fn new(name: OsString, md: &Metadata) -> Self {
         Self {
             name,
@@ -366,7 +416,8 @@ impl DirSummary {
 pub enum BoundaryReason {
     /// Below [`ScanOptions::max_depth`].
     MaxDepth,
-    /// On a different volume than the root (a mount point; full mount detection is #33).
+    /// On a different volume than the root (a mount point; full mount detection is #33), or
+    /// one of [`ScanOptions::skip_mounts`] (then never `lstat`ed and without identity).
     OtherVolume,
     /// Same identity as one of its ancestors (e.g. a bind mount of a parent): descending
     /// would loop forever (T-53, FX-FS-02).
@@ -413,7 +464,8 @@ pub enum IssueKind {
     PermissionDenied,
     /// The entry vanished during the scan.
     NotFound,
-    /// The listing exceeded [`ScanOptions::dir_timeout`].
+    /// A listing, or one entry's metadata, exceeded [`ScanOptions::dir_timeout`]
+    /// ([`ScanIssue::op`] says which).
     TimedOut,
     /// Any other error.
     Other,
@@ -459,6 +511,22 @@ impl ScanIssue {
         Self {
             path,
             op: IssueOp::ListDir,
+            kind: IssueKind::TimedOut,
+            message,
+        }
+    }
+
+    /// One entry's metadata call hung: the entry is skipped, its siblings are not.
+    pub(crate) fn entry_timed_out(path: PathBuf, after: Duration) -> Self {
+        let message = format!(
+            "reading the metadata of {} took longer than {} ms (a stalled mount?); skipped, \
+             the rest of its directory was scanned",
+            path.display(),
+            after.as_millis()
+        );
+        Self {
+            path,
+            op: IssueOp::Metadata,
             kind: IssueKind::TimedOut,
             message,
         }
