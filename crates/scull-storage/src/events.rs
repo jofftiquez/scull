@@ -61,17 +61,22 @@ pub enum EventKind {
     /// expired, another account's plan, lost the race to the execution). An
     /// [`AgentAuditEvent`].
     RevokeRefused,
+    /// Recorded trends were forgotten (`scull insights purge`): written in the same
+    /// transaction as the deletion by [`Store::purge_insights_recorded`], with the cutoff and
+    /// the rows deleted per stream. Never deleted by the purge itself.
+    InsightsPurged,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 6] = [
+    pub const ALL: [EventKind; 7] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
         EventKind::ApprovalRevoked,
         EventKind::RevokeRefused,
+        EventKind::InsightsPurged,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
@@ -83,7 +88,7 @@ impl EventKind {
     ];
 
     /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
-    /// `approval_revoked`, `revoke_refused`.
+    /// `approval_revoked`, `revoke_refused`, `insights_purged`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
@@ -92,6 +97,7 @@ impl EventKind {
             EventKind::ExecuteRefused => "execute_refused",
             EventKind::ApprovalRevoked => "approval_revoked",
             EventKind::RevokeRefused => "revoke_refused",
+            EventKind::InsightsPurged => "insights_purged",
         }
     }
 

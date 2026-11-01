@@ -603,7 +603,6 @@ pub enum InsightsAction {
         since: Option<crate::cmd::insights::When>,
     },
     /// Forget recorded trends (history rows only; scans, plans, audit and files are kept).
-    /// Refused in the inspect-only alpha (#266).
     Purge {
         /// Only delete history older than this: a duration (90d, 12w) or a UTC date.
         #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
