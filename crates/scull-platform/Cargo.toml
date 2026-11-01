@@ -25,6 +25,10 @@ delete = [
   "windows-sys/Win32_System_IO",
 ]
 
+# Test support only, never enabled by a shipped crate: deliver a console Ctrl-C to another
+# process on Windows (`scull_platform::console`), for the FX-OUT-02 exit-130 fixture.
+test-support = ["windows-sys/Win32_System_Console"]
+
 [dependencies]
 scull-core.workspace = true
 serde.workspace = true

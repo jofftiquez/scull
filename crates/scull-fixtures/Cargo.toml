@@ -24,7 +24,8 @@ tempfile = "3"
 # End-to-end fixtures (tests/) drive the real pipeline pieces. Dev-dependencies only, so crates
 # that dev-depend on scull-fixtures get no cycle.
 [dev-dependencies]
-scull-platform.workspace = true
+# `test-support`: a real console Ctrl-C to a child process on Windows (FX-OUT-02).
+scull-platform = { workspace = true, features = ["test-support"] }
 scull-scanner.workspace = true
 scull-detectors.workspace = true
 scull-git.workspace = true
