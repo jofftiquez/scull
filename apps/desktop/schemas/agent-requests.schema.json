@@ -4,6 +4,13 @@
       "additionalProperties": false,
       "description": "An agent plan waiting for the human, for the pending-requests notice.",
       "properties": {
+        "client": {
+          "description": "The MCP client the plan came through, as it named itself (`name version`; sanitized,\n**unverified**, display only). `None` when unknown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "content_hash": {
           "description": "Content hash the approval will be bound to.",
           "type": "string"

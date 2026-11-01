@@ -636,6 +636,40 @@ fn each_new_request_is_announced_once_and_names_no_client() {
 }
 
 #[test]
+fn the_client_the_agent_named_is_shown_and_a_denial_says_why() {
+    // #78: the MCP client's declared name is recorded with the plan (sanitized, unverified).
+    let p = mcp_plan();
+    let env = Env::with(&[]);
+    let client = scull_storage::AgentClient::new("Claude Code\u{202e}", Some("2.1")).unwrap();
+    assert!(
+        env.store()
+            .insert_agent_plan(&p, NOW - 60, 5, Some(&client))
+            .unwrap()
+    );
+    let id = p.id().as_str();
+    let listed = env.desk.awaiting(NOW).unwrap();
+    validate("agent-requests", &listed);
+    let shown = listed.requests[0].client.clone().unwrap();
+    assert!(
+        shown.starts_with("Claude Code") && shown.ends_with("2.1"),
+        "{shown}"
+    );
+    assert!(!shown.contains('\u{202e}'), "sanitized: {shown}");
+    let req = env.desk.open(id, None, NOW).unwrap();
+    validate("agent-approval-request", &req);
+    assert_eq!(req.client.as_deref(), Some(shown.as_str()));
+    env.desk.deny(id, NOW + 1).unwrap();
+    let s = env.desk.status(id, NOW + 2).unwrap();
+    validate("agent-plan-status", &s);
+    assert_eq!(s.state, AgentPlanState::Denied);
+    assert_eq!(s.denial_reason.as_deref(), Some("denied"));
+    // A plan without a recorded client says so.
+    let q = plan("01JNOCLIENT", PlanOrigin::Mcp, USER, NOW - 30, &cands());
+    let env = Env::with(std::slice::from_ref(&q));
+    assert_eq!(env.desk.awaiting(NOW).unwrap().requests[0].client, None);
+}
+
+#[test]
 fn invalid_plan_ids_are_refused() {
     let env = Env::with(&[]);
     for id in ["", "not-a-plan", "plan_../../x"] {

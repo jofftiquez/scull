@@ -916,6 +916,11 @@ export interface AgentApprovalRequest {
    */
   attempts_left: number;
   /**
+   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
+   * **unverified**, display only). `None` when unknown.
+   */
+  client?: string | null;
+  /**
    * The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types
    * it back. It is valid for this opening of the dialog only and never leaves this machine.
    */
@@ -1182,6 +1187,10 @@ export interface AgentPlanStatus {
    */
   channel?: string | null;
   /**
+   * How, when denied: `denied` (the human said no) or `wrong_code` (typed wrong too often).
+   */
+  denial_reason?: string | null;
+  /**
    * When a human denied it.
    */
   denied_at?: number | null;
@@ -1283,6 +1292,11 @@ export interface AgentRequests {
  * via the `definition` "AgentRequest".
  */
 export interface AgentRequest {
+  /**
+   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
+   * **unverified**, display only). `None` when unknown.
+   */
+  client?: string | null;
   /**
    * Content hash the approval will be bound to.
    */

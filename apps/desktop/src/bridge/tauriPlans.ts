@@ -104,8 +104,11 @@ export function approvalRequestOf(r: AgentApprovalRequest): ApprovalRequest {
     hash: r.content_hash,
     created_at: iso(r.created_at),
     expires_at: iso(r.expires_at),
-    // The core's plans don't record which client asked (yet): no name, process or note.
-    source: { kind: 'mcp', tool: 'prepare_cleanup' },
+    // The client's name as it gave itself (sanitized by the core, unverified, #78); the core
+    // records no process or note.
+    source: r.client
+      ? { kind: 'mcp', tool: 'prepare_cleanup', client: r.client, initials: initialsOf(r.client) }
+      : { kind: 'mcp', tool: 'prepare_cleanup' },
     items: r.items.map((i) => ({
       candidate: i.candidate,
       from_last_scan: i.from_last_scan,
@@ -126,7 +129,15 @@ export function requestSummaryOf(r: AgentRequests['requests'][number]): AgentReq
     expires_at: iso(r.expires_at),
     item_count: r.item_count,
     reclaimable_bytes: r.reclaimable_bytes,
+    ...(r.client ? { client: r.client } : {}),
   };
+}
+
+/** Two letters for the avatar: "Claude Code 2.1" → "CC". */
+export function initialsOf(client: string): string {
+  const words = client.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w));
+  const letters = (words.length > 1 ? words.slice(0, 2).map((w) => w[0]) : [client.slice(0, 2)]).join('');
+  return letters.toUpperCase() || 'AI';
 }
 
 /** What a status poll adds to what the dialog was already told. */

@@ -188,8 +188,7 @@ const fingerprint = computed(() => {
         ? {
             text: 'Closed',
             cls: 'bg-surface-raised text-text-strong-muted',
-            // A denial closes the request here; only a spent or expired plan can never be approved.
-            sub: phase.value === 'denied' ? "scull won't offer this fingerprint again." : 'This fingerprint can never be approved again.',
+            sub: 'This fingerprint can never be approved again.',
           }
         : { text: 'Matches', cls: 'bg-violet-tint text-violet-text', sub: `Same as the plan ID ${client.value} showed you. Any change voids approval.` };
   return { cells, lines: [`${h.slice(0, 4)} ${h.slice(4, 8)}`, `${h.slice(8, 12)} ${h.slice(12, 16)}`], tag };
@@ -331,9 +330,9 @@ const closedInfo = computed(() => {
     case 'denied':
       return {
         title: 'You denied this request · nothing changed',
-        // The broker doesn't report denials to the agent (yet): it sees "awaiting approval" until
-        // the plan expires. Say exactly that.
-        text: `scull won't offer this plan again. ${Client.value} isn't told it was denied: it sees the plan waiting until it expires at ${expiresClock.value}, then expired. A new request needs a new plan and a new review.`,
+        // A human's denial is final (#78): no channel can approve the plan, and the agent's
+        // status check says `denied`.
+        text: `This plan can never be approved now. ${Client.value} is told it was denied the next time it checks; a new request needs a new plan and a new review.`,
         log: `audit · ${at(s.closedAt)} · plan ${p} · denied via desktop · 0 items touched`,
         icon: '✕', iconCls: 'bg-ink text-on-ink text-[20px]',
       };
@@ -430,9 +429,13 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             Asked through MCP <span class="font-mono">{{ src.tool }}</span> at {{ clock(plan.created_at) }} · name reported by the client ·
             scull mcp serve, pid {{ src.pid }}, started by <span class="font-mono">{{ src.command }}</span> in {{ displayPath(src.cwd) }}
           </span>
+          <span v-else-if="src && src.client" class="text-label text-text-secondary" data-testid="asker">
+            Asked through MCP <span class="font-mono">{{ src.tool }}</span> at {{ clock(plan.created_at) }} · name reported by the client,
+            not verified · through scull mcp serve on this computer, for your user
+          </span>
           <span v-else-if="src" class="text-label text-text-secondary" data-testid="asker">
             Asked through MCP <span class="font-mono">{{ src.tool }}</span> at {{ clock(plan.created_at) }} · prepared by an AI agent
-            through scull mcp serve on this computer, for your user · the plan doesn't record which client asked
+            through scull mcp serve on this computer, for your user · the client didn't name itself
           </span>
         </div>
       </div>

@@ -1036,6 +1036,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "client": {
+      "description": "The MCP client the plan came through, as it named itself (`name version`; sanitized,\n**unverified**, display only). `None` when unknown.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "code": {
       "description": "The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types\nit back. It is valid for this opening of the dialog only and never leaves this machine.",
       "type": "string"

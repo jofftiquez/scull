@@ -216,6 +216,13 @@
         "null"
       ]
     },
+    "denial_reason": {
+      "description": "How, when denied: `denied` (the human said no) or `wrong_code` (typed wrong too often).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "denied_at": {
       "description": "When a human denied it.",
       "format": "int64",

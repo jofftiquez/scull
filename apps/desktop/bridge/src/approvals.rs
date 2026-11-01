@@ -31,8 +31,9 @@
 //!   approval.
 //!
 //! A plan a human closed (denied, or too many wrong codes; in the app or in `scull approve`)
-//! is no longer listed or opened here and reports [`AgentPlanState::Denied`]: the denial is
-//! read back from the agent audit events.
+//! is denied for good (the broker refuses to approve it on any channel, and the agent sees
+//! `denied`, #78): it is no longer listed or opened here and reports
+//! [`AgentPlanState::Denied`] with its reason.
 //!
 //! Without scull's database, or without this installation's machine ID, there are no agent
 //! plans for this machine: [`ApprovalDesk::awaiting`] is empty and nothing is created.
@@ -69,6 +70,9 @@ pub struct AgentRequest {
     pub item_count: u64,
     /// Bytes the plan predicts it frees.
     pub reclaimable_bytes: u64,
+    /// The MCP client the plan came through, as it named itself (`name version`; sanitized,
+    /// **unverified**, display only). `None` when unknown.
+    pub client: Option<String>,
 }
 
 /// Agent plans waiting for the human, newest first.
@@ -105,6 +109,9 @@ pub struct AgentApprovalRequest {
     pub created_at: i64,
     /// When it expires unapproved; an approval lapses at the same time (Unix seconds).
     pub expires_at: i64,
+    /// The MCP client the plan came through, as it named itself (`name version`; sanitized,
+    /// **unverified**, display only). `None` when unknown.
+    pub client: Option<String>,
     /// Every item, in plan order.
     pub items: Vec<AgentPlanItem>,
     /// The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types
@@ -262,6 +269,8 @@ pub struct AgentPlanStatus {
     pub used_at: Option<i64>,
     /// When a human denied it.
     pub denied_at: Option<i64>,
+    /// How, when denied: `denied` (the human said no) or `wrong_code` (typed wrong too often).
+    pub denial_reason: Option<String>,
     /// The execution, once the agent started it.
     pub operation: Option<AgentOperation>,
 }
@@ -435,6 +444,7 @@ impl ApprovalDesk {
                     expires_at: p.expires_at,
                     item_count: p.item_count,
                     reclaimable_bytes: p.reclaimable_bytes,
+                    client: p.client,
                 })
                 .collect(),
         })
@@ -469,6 +479,7 @@ impl ApprovalDesk {
             content_hash: plan.content_hash().as_str().to_owned(),
             created_at: plan.created_unix(),
             expires_at: plan.expires_unix(),
+            client: challenge.client().map(|c| c.display()),
             items: review_items(challenge.plan(), last_scan),
             code: challenge.code().display(),
             attempts_left: MAX_CODE_ATTEMPTS,
@@ -650,6 +661,12 @@ impl ApprovalDesk {
                     (None, _) => AgentPlanState::Expired,
                 }
             }
+            ApprovalState::Denied => {
+                denied_at = denials(&store, &who, plan.created_unix())?
+                    .get(id.as_str())
+                    .copied();
+                AgentPlanState::Denied
+            }
             ApprovalState::AwaitingApproval => AgentPlanState::AwaitingApproval,
             ApprovalState::Approved => AgentPlanState::Approved,
             ApprovalState::Expired => AgentPlanState::Expired,
@@ -671,6 +688,7 @@ impl ApprovalDesk {
             channel: s.channel,
             used_at: s.used_at,
             denied_at,
+            denial_reason: s.denial_reason,
             operation,
         })
     }

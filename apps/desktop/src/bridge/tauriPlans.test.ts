@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentApprovalRequest, AgentPlanStatus, Candidate } from './generated';
 import type { ApprovalEvent } from './plan';
 import type { TauriTransport } from './tauri';
-import { APPROVAL_COMMANDS, OPEN_REQUEST_EVENT, createTauriPlanBridge, eventsFor } from './tauriPlans';
+import { APPROVAL_COMMANDS, OPEN_REQUEST_EVENT, createTauriPlanBridge, eventsFor, initialsOf } from './tauriPlans';
 import { BridgeError } from './types';
 
 const T0 = 1_900_000_000; // Unix seconds
@@ -109,6 +109,19 @@ describe('Tauri plan bridge: commands', () => {
       ['a1', true, undefined],
       ['b2', false, 'as recorded in the plan · not in your last scan'],
     ]);
+  });
+
+  it("shows the client's own name (unverified) when the core recorded one", async () => {
+    const t = fake();
+    t.answers.set(APPROVAL_COMMANDS.open, () => ({ ...opened, client: 'Claude Code 2.1' }));
+    t.answers.set(APPROVAL_COMMANDS.requests, () => ({
+      requests: [{ plan_id: PLAN, content_hash: HASH, created_at: T0, expires_at: T0 + 900, item_count: 1, reclaimable_bytes: 1, client: 'Claude Code 2.1' }],
+    }));
+    const b = createTauriPlanBridge({ transport: t });
+    const r = (await b.approvalRequest(PLAN))!;
+    expect(r.plan.source).toEqual({ kind: 'mcp', tool: 'prepare_cleanup', client: 'Claude Code 2.1', initials: 'CC' });
+    expect((await b.approvalRequests())[0]!.client).toBe('Claude Code 2.1');
+    expect(initialsOf('cursor')).toBe('CU');
   });
 
   it('an unknown plan opens as "no request"; other refusals are errors', async () => {
