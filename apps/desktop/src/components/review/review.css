@@ -66,10 +66,10 @@
   animation: scull-collapse 520ms ease-in forwards;
 }
 .row-changed {
-  background: repeating-linear-gradient(135deg, #fff3dd 0 10px, #fffaf0 10px 20px) !important;
+  background: repeating-linear-gradient(135deg, var(--color-amber-tint) 0 10px, var(--color-amber-tint-subtle) 10px 20px) !important;
 }
 .striped-fill {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, #9c78ff 12px 24px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
   background-size: 48px 100%;
   animation: scull-shimmer 600ms linear infinite;
 }

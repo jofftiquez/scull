@@ -6,7 +6,8 @@ import { TIERS, TIER_KEYS, type TierFilter } from './tiers';
 defineProps<{ modelValue: TierFilter }>();
 const emit = defineEmits<{ 'update:modelValue': [TierFilter]; clear: [] }>();
 
-const ALL_SWATCH = 'conic-gradient(#7C4DFF 0 25%, #DCCBFF 0 50%, #FFB547 0 75%, #5A4772 0)';
+const ALL_SWATCH =
+  'conic-gradient(var(--color-tier-s0-swatch) 0 25%, var(--color-tier-s1-swatch) 0 50%, var(--color-tier-s2-swatch) 0 75%, var(--color-tier-s3-swatch) 0)';
 const options: { id: TierFilter; label: string; swatch: string }[] = [
   { id: 'all', label: 'All', swatch: ALL_SWATCH },
   ...TIER_KEYS.map((t) => ({ id: t, label: TIERS[t].label, swatch: TIERS[t].swatch })),

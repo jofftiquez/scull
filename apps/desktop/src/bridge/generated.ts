@@ -805,6 +805,27 @@ export type Origin =
       source: "cli";
     };
 /**
+ * What an alert is about.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AlertKind".
+ */
+export type AlertKind =
+  | "disk_full_forecast"
+  | "low_space"
+  | "stale"
+  | "worktree_ttl_expired"
+  | "budget_exceeded"
+  | "growth_spike"
+  | "free_space_drop";
+/**
+ * How urgent an alert is. Ordered: `Info < Warning < Critical`.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Severity".
+ */
+export type Severity = "info" | "warning" | "critical";
+/**
  * Whether there is a scan to show.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -2527,6 +2548,11 @@ export interface OwnFile {
  */
 export interface DesktopStatus {
   /**
+   * Alerts `scull check` raised in the last [`RECENT_ALERTS_SECS`], one per key (the newest),
+   * most severe first, at most [`MAX_STATUS_ALERTS`]. Alerts never act (PRO-08).
+   */
+  alerts: Alert[];
+  /**
    * Why the status is unavailable, when it is.
    */
   detail?: string | null;
@@ -2538,11 +2564,50 @@ export interface DesktopStatus {
    * When this report was produced (Unix seconds).
    */
   now: number;
+  /**
+   * The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.
+   * Never executed from here: reviewing it is `scull clean --plan <file>`.
+   */
+  review_plan?: ReviewPlanView | null;
   state: StatusState;
   /**
    * Latest free-space sample of every volume ever sampled.
    */
   volumes: VolumeSampleView[];
+}
+/**
+ * One alert.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Alert".
+ */
+export interface Alert {
+  /**
+   * The bytes concerned (stale total, budget usage, growth), when there is such a number.
+   */
+  bytes?: number | null;
+  /**
+   * Stable identity for de-duplication and responses: `<kind>:<subject>`.
+   */
+  key: string;
+  kind: AlertKind;
+  /**
+   * One plain sentence for people (not terminal-escaped: callers escape on output).
+   */
+  message: string;
+  /**
+   * The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.
+   */
+  paths: string[];
+  /**
+   * When it was raised (Unix seconds).
+   */
+  raised_at: number;
+  severity: Severity;
+  /**
+   * The volume, category or path it concerns.
+   */
+  subject: string;
 }
 /**
  * The latest usable scan.
@@ -2587,6 +2652,46 @@ export interface LastScan {
    * `completed`, `partial` or `cancelled`.
    */
   status: string;
+}
+/**
+ * A ready-to-review cleanup plan, as `scull status --json` reports it (`review_plan`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ReviewPlanView".
+ */
+export interface ReviewPlanView {
+  /**
+   * When it was prepared (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * The plan file.
+   */
+  file: string;
+  /**
+   * Whether S1 (costly to recreate) items were included (opt-in).
+   */
+  includes_s1: boolean;
+  /**
+   * Items in the plan.
+   */
+  items: number;
+  /**
+   * The plan's ID (in the history database's `plans` table).
+   */
+  plan_id: string;
+  /**
+   * Estimated reclaimable bytes of all items.
+   */
+  reclaimable_bytes: number;
+  /**
+   * The command that reviews it (`scull clean --plan <file>`).
+   */
+  review_command: string;
 }
 /**
  * `worktrees`: the Git worktrees of the last scan. Same shape as `scull worktrees --json`.

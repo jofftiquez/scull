@@ -15,7 +15,7 @@ defineProps<{ text: string; amount: string }>();
       <path
         d="M28 45 l11 11 l21 -23"
         fill="none"
-        stroke="#FFFFFF"
+        stroke="var(--color-on-fill)"
         stroke-width="9"
         stroke-linecap="round"
         stroke-linejoin="round"
@@ -25,6 +25,6 @@ defineProps<{ text: string; amount: string }>();
       />
     </svg>
     <span class="flex-1 text-label">{{ text }}</span>
-    <span class="font-mono text-label text-[#C9B2FF]">{{ amount }}</span>
+    <span class="font-mono text-label text-on-ink-violet">{{ amount }}</span>
   </div>
 </template>

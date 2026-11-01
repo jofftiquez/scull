@@ -14,7 +14,7 @@ const CHIP: Record<string, string> = {
   S2: 'var(--tier-s2-fill)',
   S3: 'var(--color-tier-s3)',
 };
-const BAR: Record<string, string> = { S0: '#7C4DFF', S1: '#DCCBFF', S2: '#FFB547', S3: '#3B2A4F' };
+const BAR: Record<string, string> = { S0: 'var(--color-tier-s0)', S1: 'var(--color-tier-s1)', S2: 'var(--color-tier-s2)', S3: 'var(--color-tier-s3)' };
 
 const total = computed(() => (props.model ? TIER_KEYS.reduce((a, t) => a + props.model!.byTier[t].bytes, 0) : 0));
 const pct = (t: (typeof TIER_KEYS)[number]) =>

@@ -138,11 +138,11 @@ const captions = computed(() => {
       @pointerleave="focus = null"
       @blur="focus = null"
     >
-      <line v-for="gy in grid" :key="gy" x1="0" :x2="width" :y1="gy" :y2="gy" stroke="#EEEAE4" />
+      <line v-for="gy in grid" :key="gy" x1="0" :x2="width" :y1="gy" :y2="gy" stroke="var(--color-chart-grid)" />
       <line x1="0" :x2="width" :y1="floorY" :y2="floorY" stroke="var(--color-text-hint)" stroke-dasharray="4 4" />
-      <path v-if="fc.length" :d="bandPath" fill="#7C4DFF" fill-opacity="0.12" data-testid="forecast-band" />
+      <path v-if="fc.length" :d="bandPath" fill="var(--color-violet-figure)" fill-opacity="0.12" data-testid="forecast-band" />
       <path :d="measuredPath" fill="none" stroke="var(--color-ink)" stroke-width="2.5" stroke-linejoin="round" />
-      <path v-if="fc.length" :d="forecastPath" fill="none" stroke="#7C4DFF" stroke-width="2.5" stroke-dasharray="8 6" data-testid="forecast-line" />
+      <path v-if="fc.length" :d="forecastPath" fill="none" stroke="var(--color-violet-figure)" stroke-width="2.5" stroke-dasharray="8 6" data-testid="forecast-line" />
       <rect
         v-for="c in model.cleanups"
         :key="c.at"
@@ -150,13 +150,13 @@ const captions = computed(() => {
         :y="y(c.free) - 6"
         width="12"
         height="12"
-        fill="#7C4DFF"
+        fill="var(--color-violet-figure)"
         data-testid="cleanup-marker"
       />
       <rect v-if="today" :x="x(today.at) - 6" :y="y(today.free) - 6" width="12" height="12" fill="var(--color-ink)" />
       <g v-if="focused" aria-hidden="true">
         <line :x1="x(focused.at)" :x2="x(focused.at)" y1="0" :y2="H" stroke="var(--color-text-hint)" />
-        <circle :cx="x(focused.at)" :cy="y(focused.free)" r="5" fill="var(--color-ink)" stroke="#FFFFFF" stroke-width="2" />
+        <circle :cx="x(focused.at)" :cy="y(focused.free)" r="5" fill="var(--color-ink)" stroke="var(--color-surface)" stroke-width="2" />
       </g>
     </svg>
     <div

@@ -73,7 +73,7 @@ const statusText = computed(() => {
   animation: scull-rise 320ms ease-out;
 }
 .scan-fill {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, #9c78ff 12px 24px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
   background-size: 48px 100%;
   animation: scull-shimmer 600ms linear infinite;
   transition: width 120ms linear;

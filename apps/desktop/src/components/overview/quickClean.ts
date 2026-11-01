@@ -137,6 +137,12 @@ export async function quickCleanPreview(bridge: ScullBridge, tools: readonly Qui
 export const PARTICLES = Array.from({ length: 20 }, (_, i) => ({
   size: [8, 10, 12, 9][i % 4]!,
   radius: i % 3 === 0 ? '3px' : '50%',
-  color: ['#D6268A', '#FFFFFF', '#9C78FF', '#FFB547', '#DCCBFF'][i % 5]!,
+  color: [
+    'var(--color-accent)',
+    'var(--color-on-fill)',
+    'var(--color-violet-light)',
+    'var(--color-tier-s2)',
+    'var(--color-tier-s1)',
+  ][i % 5]!,
   animation: `scull-b${i % 10} ${700 + (i % 5) * 90}ms ${i >= 10 ? 120 : 0}ms cubic-bezier(.15,.7,.3,1) both`,
 }));

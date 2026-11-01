@@ -106,17 +106,17 @@ const found = computed(() => {
     <div v-if="toast" role="status" class="toast flex items-center gap-3 rounded-chip bg-ink px-4 py-3 text-on-ink" data-testid="toast">
       <svg width="26" height="26" viewBox="0 0 88 88" aria-hidden="true" class="flex-none">
         <circle cx="44" cy="44" r="40" fill="var(--color-tier-s0)" />
-        <path class="check" d="M28 45 l11 11 l21 -23" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
+        <path class="check" d="M28 45 l11 11 l21 -23" fill="none" stroke="var(--color-on-fill)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <span class="flex-1 text-label">{{ toast.text }}</span>
-      <span class="font-mono text-label text-[#C9B2FF]">+{{ formatBytes(toast.bytes) }}</span>
+      <span class="font-mono text-label text-on-ink-violet">+{{ formatBytes(toast.bytes) }}</span>
     </div>
   </section>
 </template>
 
 <style scoped>
 .clean-fill {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, #9c78ff 12px 24px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
   background-size: 48px 100%;
   animation: scull-shimmer 600ms linear infinite;
   transition: width 120ms linear;

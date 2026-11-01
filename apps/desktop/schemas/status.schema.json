@@ -1,5 +1,102 @@
 {
   "$defs": {
+    "Alert": {
+      "additionalProperties": false,
+      "description": "One alert.",
+      "properties": {
+        "bytes": {
+          "description": "The bytes concerned (stale total, budget usage, growth), when there is such a number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Stable identity for de-duplication and responses: `<kind>:<subject>`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AlertKind",
+          "description": "What it is about."
+        },
+        "message": {
+          "description": "One plain sentence for people (not terminal-escaped: callers escape on output).",
+          "type": "string"
+        },
+        "paths": {
+          "description": "The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "raised_at": {
+          "description": "When it was raised (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "How urgent it is."
+        },
+        "subject": {
+          "description": "The volume, category or path it concerns.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "severity",
+        "key",
+        "subject",
+        "message",
+        "raised_at",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "AlertKind": {
+      "description": "What an alert is about.",
+      "oneOf": [
+        {
+          "const": "disk_full_forecast",
+          "description": "A volume is forecast to drop below its reserve soon (PRO-01: time-based, default\nwithin 14 days).",
+          "type": "string"
+        },
+        {
+          "const": "low_space",
+          "description": "A volume is already below its reserve (measured).",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "Worktrees, build outputs or caches idle longer than their staleness window (PRO-02).",
+          "type": "string"
+        },
+        {
+          "const": "worktree_ttl_expired",
+          "description": "An agent or script worktree is past its registered TTL (PRO-08).",
+          "type": "string"
+        },
+        {
+          "const": "budget_exceeded",
+          "description": "A category, ecosystem or path is over its size budget (PRO-03).",
+          "type": "string"
+        },
+        {
+          "const": "growth_spike",
+          "description": "A category grew faster than the spike threshold (PRO-04).",
+          "type": "string"
+        },
+        {
+          "const": "free_space_drop",
+          "description": "A volume lost free space faster than the spike threshold (PRO-04).",
+          "type": "string"
+        }
+      ]
+    },
     "LastScan": {
       "additionalProperties": false,
       "description": "The latest usable scan.",
@@ -68,6 +165,81 @@
       ],
       "type": "object"
     },
+    "ReviewPlanView": {
+      "additionalProperties": false,
+      "description": "A ready-to-review cleanup plan, as `scull status --json` reports it (`review_plan`).",
+      "properties": {
+        "created_at": {
+          "description": "When it was prepared (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "description": "When it expires (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "file": {
+          "description": "The plan file.",
+          "type": "string"
+        },
+        "includes_s1": {
+          "description": "Whether S1 (costly to recreate) items were included (opt-in).",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "Items in the plan.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_id": {
+          "description": "The plan's ID (in the history database's `plans` table).",
+          "type": "string"
+        },
+        "reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes of all items.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "review_command": {
+          "description": "The command that reviews it (`scull clean --plan <file>`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "file",
+        "items",
+        "reclaimable_bytes",
+        "created_at",
+        "expires_at",
+        "includes_s1",
+        "review_command"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "description": "How urgent an alert is. Ordered: `Info < Warning < Critical`.",
+      "oneOf": [
+        {
+          "const": "info",
+          "description": "Worth knowing.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "Act within days.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "Act now.",
+          "type": "string"
+        }
+      ]
+    },
     "StatusState": {
       "description": "Whether there is a scan to show.",
       "oneOf": [
@@ -133,6 +305,13 @@
   "additionalProperties": false,
   "description": "`status`: the header's freshness line and the nav figures come from here.",
   "properties": {
+    "alerts": {
+      "description": "Alerts `scull check` raised in the last [`RECENT_ALERTS_SECS`], one per key (the newest),\nmost severe first, at most [`MAX_STATUS_ALERTS`]. Alerts never act (PRO-08).",
+      "items": {
+        "$ref": "#/$defs/Alert"
+      },
+      "type": "array"
+    },
     "detail": {
       "description": "Why the status is unavailable, when it is.",
       "type": [
@@ -156,6 +335,17 @@
       "format": "int64",
       "type": "integer"
     },
+    "review_plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReviewPlanView"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.\nNever executed from here: reviewing it is `scull clean --plan <file>`."
+    },
     "state": {
       "$ref": "#/$defs/StatusState",
       "description": "Whether there is something to show."
@@ -171,7 +361,8 @@
   "required": [
     "state",
     "now",
-    "volumes"
+    "volumes",
+    "alerts"
   ],
   "title": "DesktopStatus",
   "type": "object"

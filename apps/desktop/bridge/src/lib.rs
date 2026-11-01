@@ -22,6 +22,10 @@
 //! | `regrowth` | [`Session::regrowth`] | [`RegrowthHistory`] |
 //! | `footprint_history` | [`Session::footprint_history`] | [`FootprintHistory`] |
 //!
+//! The menu bar widget's window logic (where it opens, which main-window routes it may show)
+//! is in [`menubar`]; its data is `status` (free space, review plan, alerts), `drives`,
+//! `caches`, `worktrees` and `free_space_history`.
+//!
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
 //!
@@ -36,6 +40,7 @@ pub mod db;
 pub mod drives;
 pub mod history;
 pub mod insights;
+pub mod menubar;
 pub mod schemas;
 pub mod session;
 pub mod settings;
@@ -49,7 +54,8 @@ pub use scull_engine::{CachesReport, ScanReport, now_unix};
 pub use session::{Session, Setup};
 pub use settings::SettingsView;
 pub use views::{
-    CapabilitiesReport, DesktopStatus, OpId, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
+    CapabilitiesReport, DesktopStatus, OpId, ProgressEvent, ProjectsView, ReviewPlanView,
+    ScanParams, WorktreesView,
 };
 
 use schemars::JsonSchema;

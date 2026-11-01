@@ -1320,6 +1320,7 @@ dependencies = [
  "scull-fixtures",
  "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-storage",
  "serde",
@@ -1338,6 +1339,8 @@ dependencies = [
  "scull-scanner",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "toml",
 ]
 

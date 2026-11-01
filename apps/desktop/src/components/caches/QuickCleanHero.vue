@@ -29,14 +29,14 @@ const label = computed(() => {
 <template>
   <section aria-label="Quick Clean" class="relative flex flex-wrap items-center gap-x-8 gap-y-5 overflow-hidden rounded-tile bg-ink p-tile-padding text-on-ink" data-testid="hero">
     <div class="flex flex-[1_1_260px] flex-col gap-1">
-      <span class="text-label font-medium text-[#C9C2CF]">Selected for Quick Clean</span>
+      <span class="text-label font-medium text-on-ink-muted">Selected for Quick Clean</span>
       <span class="text-[52px] leading-none font-bold tracking-[-0.03em] tabular-nums" data-testid="hero-bytes">{{ formatBytes(running ? remaining : bytes) }}</span>
-      <span class="text-label text-[#C9C2CF]">{{ count }} cache{{ count === 1 ? '' : 's' }} · each tool's own cleanup command · not undoable</span>
+      <span class="text-label text-on-ink-muted">{{ count }} cache{{ count === 1 ? '' : 's' }} · each tool's own cleanup command · not undoable</span>
     </div>
     <button
       type="button"
       class="relative min-h-[52px] min-w-[240px] overflow-hidden rounded-button-lg border-0 px-6 font-[inherit] text-[15px] font-bold"
-      :class="running ? 'bg-[#2A2530] text-on-ink' : count && !disabledReason ? 'cursor-pointer bg-surface text-ink' : 'bg-surface/70 text-ink'"
+      :class="running ? 'bg-ink-raised text-on-ink' : count && !disabledReason ? 'cursor-pointer bg-surface text-ink' : 'bg-surface/70 text-ink'"
       :disabled="running || count === 0 || !!disabledReason || phase === 'done'"
       :title="disabledReason ?? undefined"
       data-testid="start"
@@ -45,7 +45,7 @@ const label = computed(() => {
       <span class="fill absolute inset-y-0 left-0 rounded-button-lg" :style="{ width: `${running ? Math.round(progress * 100) : 0}%` }"></span>
       <span class="relative">{{ label }}</span>
     </button>
-    <p v-if="disabledReason" class="m-0 basis-full text-caption text-[#C9C2CF]" data-testid="unavailable">{{ disabledReason }}</p>
+    <p v-if="disabledReason" class="m-0 basis-full text-caption text-on-ink-muted" data-testid="unavailable">{{ disabledReason }}</p>
 
     <div
       v-if="phase === 'done' && done"
@@ -64,7 +64,7 @@ const label = computed(() => {
       <span class="bounce text-[52px] font-bold tracking-[-0.03em]">+{{ formatBytes(done.planned) }}</span>
       <span class="rise1 flex flex-col">
         <span class="font-semibold">freed from {{ done.count }} cache{{ done.count === 1 ? '' : 's' }}</span>
-        <span class="text-label text-[#C9C2CF]">measured {{ formatBytes(done.measured) }}</span>
+        <span class="text-label text-on-ink-muted">measured {{ formatBytes(done.measured) }}</span>
       </span>
       <button type="button" class="rise2 min-h-touch cursor-pointer rounded-chip border-0 bg-surface px-5 font-[inherit] font-semibold text-ink" @click="$emit('reset')">
         Nice
@@ -75,7 +75,7 @@ const label = computed(() => {
 
 <style scoped>
 .fill {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, #9c78ff 12px 24px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
   background-size: 48px 100%;
   animation: scull-shimmer 600ms linear infinite;
   transition: width 120ms linear;

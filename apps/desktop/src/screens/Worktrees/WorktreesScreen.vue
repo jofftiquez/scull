@@ -72,12 +72,12 @@ const FILTERS: { key: Filter; label: string }[] = [
 const BAR: Record<Verdict, string> = {
   removable: 'var(--tier-s1-fill)',
   review: 'var(--tier-s2-fill)',
-  protected: 'repeating-linear-gradient(135deg, #3B2A4F 0 3px, #5A4772 3px 5px)',
+  protected: 'repeating-linear-gradient(135deg, var(--color-tier-s3) 0 3px, var(--color-tier-s3-stripe) 3px 5px)',
 };
 const VERDICT_BOX: Record<Verdict, string> = {
-  removable: 'bg-[#F1EBFF] text-ink',
-  review: 'bg-[#FFF1DC] text-ink',
-  protected: 'bg-tier-s3 text-on-ink',
+  removable: 'bg-violet-tint text-ink',
+  review: 'bg-amber-tint text-ink',
+  protected: 'bg-tier-s3 text-tier-s3-text',
 };
 
 function pick(w: WorktreeReport) {

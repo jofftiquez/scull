@@ -334,7 +334,7 @@ const closedInfo = computed(() => {
         title: 'This plan changed since it was prepared',
         text: `${it ? itemTitle(it) : 'A target'} was modified after ${client.value} made the plan, so the plan no longer matches the disk and can't be approved. Nothing was changed. ${client.value} is told the plan was invalidated and can prepare a fresh one.`,
         log: `audit · ${at(s.closedAt)} · plan ${p} · invalidated (target changed) · 0 items touched`,
-        icon: '≠', iconCls: 'bg-tier-s2 text-ink text-[22px]',
+        icon: '≠', iconCls: 'bg-tier-s2 text-tier-s2-text text-[22px]',
       };
     }
     default:
@@ -544,7 +544,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
                         : undefined
                   "
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" :style="{ opacity: itemStatus(it.candidate.id) === 'done' ? 1 : 0 }">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-on-fill)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" :style="{ opacity: itemStatus(it.candidate.id) === 'done' ? 1 : 0 }">
                     <path d="M5 12l5 5 9-10" />
                   </svg>
                 </span>
@@ -661,7 +661,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
         </label>
         <div id="approve-status" aria-live="polite" class="flex flex-[1_1_260px] flex-col gap-1.5 pb-1 text-label">
           <span class="flex items-center gap-2" :class="allReviewed(st) ? 'text-ink' : 'text-text-strong-muted'">
-            <span aria-hidden="true" class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip text-[11px] font-bold text-on-ink" :class="allReviewed(st) ? 'bg-tier-s0' : 'bg-text-hint'">
+            <span aria-hidden="true" class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip text-[11px] font-bold" :class="allReviewed(st) ? 'bg-tier-s0 text-tier-s0-text' : 'bg-text-hint text-on-ink'">
               {{ allReviewed(st) ? '✓' : remaining }}
             </span>
             {{ allReviewed(st) ? `All ${n} items reviewed` : `Review ${remaining} more item${remaining === 1 ? '' : 's'} in the list above` }}
@@ -672,8 +672,8 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
           >
             <span
               aria-hidden="true"
-              class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip text-[11px] font-bold text-on-ink"
-              :class="code === 'match' ? 'bg-tier-s0' : code === 'mismatch' ? 'bg-accent-text' : 'bg-text-hint'"
+              class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip text-[11px] font-bold"
+              :class="code === 'match' ? 'bg-tier-s0 text-tier-s0-text' : code === 'mismatch' ? 'bg-accent-text text-on-ink' : 'bg-text-hint text-on-ink'"
             >{{ code === 'match' ? '✓' : code === 'mismatch' ? '!' : code === 'typing' ? '…' : '·' }}</span>
             {{
               code === 'match'
@@ -713,7 +713,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
         <li v-for="s in steps" :key="s.text" class="grid grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2.5 text-label" :class="s.state === 'todo' ? 'text-text-secondary' : 'text-ink'">
           <span
             aria-hidden="true"
-            class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip border-2 text-[10px] font-bold text-on-ink"
+            class="inline-flex h-[18px] w-[18px] items-center justify-center rounded-chip border-2 text-[10px] font-bold text-tier-s0-text"
             :class="s.state === 'done' ? 'border-tier-s0 bg-tier-s0' : s.state === 'active' ? 'border-accent bg-surface' : 'border-border bg-surface'"
             :style="s.state === 'active' ? 'animation: scull-pulse 1000ms ease-in-out infinite' : undefined"
           >{{ s.state === 'done' ? '✓' : '' }}</span>

@@ -19,11 +19,11 @@ use super::{emit_machine, emit_text};
 use crate::cli::{ExportFormat, InsightsAction};
 use crate::commands::{Planned, not_implemented};
 use crate::db::{self, NotOpened, Probe};
-use crate::output::Ui;
 use crate::output::bytes::format_bytes;
 use crate::output::escape::escape_for_terminal;
 use crate::output::json::{SchemaId, write_document};
 use crate::output::style::Style;
+use crate::output::{Format, Ui};
 use scull_core::{ErrorKind, ScullError};
 use scull_insights::time::{DAY, iso_date, unix_of};
 use scull_insights::{InsightsInput, InsightsReport};
@@ -133,6 +133,10 @@ pub fn run(
             }
             let report = collect(now, export_since.or(since))?;
             match format {
+                // `--ndjson`: the one `insights` record, like `scull insights --ndjson` (#247).
+                ExportFormat::Json if ui.format == Format::Ndjson => {
+                    emit_machine(ui.format, INSIGHTS_SCHEMA, "insights", &report)
+                }
                 ExportFormat::Json => {
                     let out = io::stdout().lock();
                     write_document(out, INSIGHTS_SCHEMA, &report)

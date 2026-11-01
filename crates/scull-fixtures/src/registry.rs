@@ -229,6 +229,8 @@ const GIT_STATE: &str = "crates/scull-git/tests/state.rs";
 const GIT_DISC: &str = "crates/scull-git/tests/discovery.rs";
 const GIT_HARD: &str = "crates/scull-git/tests/hardened.rs";
 const E2E_FS: &str = "crates/scull-fixtures/tests/fx_fs.rs";
+/// Nightly FX-FS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`).
+const E2E_FS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_fs_nightly.rs";
 const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
 const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
@@ -257,7 +259,7 @@ const AUDIT: &str = "crates/scull-storage/tests/audit.rs";
 const E2E_WIN: &str = "crates/scull-fixtures/tests/fx_win.rs";
 const E2E_MAC: &str = "crates/scull-fixtures/tests/fx_mac.rs";
 const E2E_LNX: &str = "crates/scull-fixtures/tests/fx_lnx.rs";
-/// Nightly OS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`, job `fx-os`).
+/// Nightly OS fixtures (`#[ignore]`d; `.github/workflows/nightly-os-fixtures.yml`, job `fx-os`).
 const E2E_OS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_os_nightly.rs";
 const E2E_DATA: &str = "crates/scull-fixtures/tests/fx_data.rs";
 const E2E_OUT: &str = "crates/scull-fixtures/tests/fx_out.rs";
@@ -281,6 +283,7 @@ const WINDOWS_PENDING: &str = "W";
 /// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
 /// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
 const MACOS_PENDING: &str = "M";
+const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
     id: &'static str,
@@ -515,7 +518,22 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(ML_DET, "fx_cls_13_ollama_models_s1_with_ollama_rm"),
         ]),
     ),
-    fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-14",
+        Gate::V1x,
+        "MW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                GAME_DET,
+                "fx_cls_14_unity_library_and_unreal_ddc_are_s1_saved_is_s2",
+            ),
+            t(
+                "crates/scull-detectors/tests/jvm_dotnet_detector.rs",
+                "fx_cls_14_unity_and_unreal_folders_are_not_claimed_as_dotnet_or_gradle",
+            ),
+        ]),
+    ),
     // §3.2 Git worktrees (FX-GIT)
     fx(
         "FX-GIT-01",
@@ -840,14 +858,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "L (M via disk image)",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet. The Executor walker's abort at a mount point runs where an unprivileged mount namespace exists (skipped with the reason elsewhere) and is simulated in scull-platform's walker unit tests",
-            partial: &[t(
-                EXEC_UNIX,
-                "fx_fs_04_mount_inside_candidate_is_never_crossed",
-            )],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_FS_NIGHTLY,
+                "fx_fs_04_mount_inside_candidate_is_s3_and_mounted_content_untouched",
+            ),
+            t(EXEC_UNIX, "fx_fs_04_mount_inside_candidate_is_never_crossed"),
+        ]),
     ),
     fx(
         "FX-FS-05",
@@ -1032,11 +1049,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "a 1M-entry tree takes minutes; it belongs in the nightly job, which doesn't exist yet",
-            partial: &[],
-        },
+        Status::Implemented(&[t(
+            E2E_FS_NIGHTLY,
+            "fx_fs_15_one_million_entries_within_time_and_memory_targets",
+        )]),
     ),
     // §3.4 Races and crash recovery (FX-RACE)
     fx(

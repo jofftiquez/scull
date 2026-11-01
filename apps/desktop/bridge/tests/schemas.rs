@@ -108,8 +108,19 @@ fn scan_report_is_the_cli_scan_payload() {
 #[test]
 fn caches_report_is_the_cli_caches_payload() {
     let desk = desktop_schema("caches-report");
-    let cli = cli_schema("caches");
-    assert_root_equals_cli_def(&desk, &cli, "CachesReport", "caches-report");
+    let mut cli = cli_schema("caches");
+    // The CLI's `--json` data is the engine's report plus the CLI-only `commands` lines
+    // (#286, additive and optional); everything else is the same payload.
+    let doc = &mut cli["$defs"]["CachesDocument"];
+    let extra = doc["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("commands");
+    assert!(
+        extra.is_some(),
+        "the CLI's CachesDocument has no `commands`"
+    );
+    assert_root_equals_cli_def(&desk, &cli, "CachesDocument", "caches-report");
     assert_shared_defs_equal(&desk, &cli, "caches-report");
 }
 

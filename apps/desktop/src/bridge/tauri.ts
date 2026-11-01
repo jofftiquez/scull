@@ -81,3 +81,39 @@ export function createTauriBridge(t: TauriTransport = realTransport): ScullBridg
     footprintHistory: (since) => call(COMMANDS.footprintHistory, { since }),
   };
 }
+
+/**
+ * The menu bar widget's window commands (apps/desktop/src-tauri/src/tray.rs). They move windows,
+ * not data, so they are not on ScullBridge; none of them reaches the filesystem.
+ */
+export const WINDOW_COMMANDS = {
+  /** Show and focus the main window on one of the allowed routes, and hide the widget. */
+  openMain: 'open_main_window',
+  /** Hide the widget window. */
+  hideWidget: 'hide_menu_bar',
+} as const;
+
+/** The event the main window receives with the route to show. */
+export const NAVIGATE_EVENT = 'scull://navigate';
+
+export interface TauriWindowCommands {
+  openMain(route: string): Promise<void>;
+  hideWidget(): Promise<void>;
+  /** Main window: follow `open_main_window` requests. Resolves to the unsubscribe function. */
+  onNavigate(handler: (route: string) => void): Promise<UnlistenFn>;
+}
+
+export function createTauriWindowCommands(t: TauriTransport = realTransport): TauriWindowCommands {
+  const call = async (cmd: string, args?: Record<string, unknown>): Promise<void> => {
+    try {
+      await t.invoke<void>(cmd, args);
+    } catch (e) {
+      throw toBridgeError(e);
+    }
+  };
+  return {
+    openMain: (route) => call(WINDOW_COMMANDS.openMain, { route }),
+    hideWidget: () => call(WINDOW_COMMANDS.hideWidget),
+    onNavigate: (handler) => t.listen<string>(NAVIGATE_EVENT, handler),
+  };
+}

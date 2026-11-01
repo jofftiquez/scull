@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{ size?: number; animate?: boolean; burst
   label: 'Done',
 });
 
-const COLORS = ['#D6268A', '#15121A', '#7C4DFF', '#FFB547', '#DCCBFF'];
+const COLORS = ['var(--color-accent)', 'var(--color-ink)', 'var(--color-tier-s0)', 'var(--color-tier-s2)', 'var(--color-tier-s1)'];
 const particles = computed(() =>
   props.burst && props.animate
     ? Array.from({ length: 20 }, (_, i) => ({

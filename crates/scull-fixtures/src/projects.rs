@@ -1,6 +1,6 @@
 //! Project markers and lockfiles for Cargo, npm and pnpm projects, and their build artifacts.
 
-use crate::error::Result;
+use crate::error::{FixtureError, Result};
 use crate::fixture::Fixture;
 use std::path::Path;
 
@@ -139,5 +139,277 @@ impl Fixture {
             self.npm_project(rel.join("packages").join(p), p, NodeLock::None)?;
         }
         Ok(self)
+    }
+}
+
+/// What [`Fixture::wide_tree`] built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WideTree {
+    /// Entries created (directories and files), including the tree's own top directory.
+    pub entries: u64,
+    /// Projects created (the last one may be cut short to hit the entry count exactly).
+    pub projects: u64,
+    /// The artifact directory of every project that got one (`node_modules` or `target`),
+    /// relative to the fixture root, `/`-separated.
+    pub artifacts: Vec<String>,
+}
+
+/// Entries in one complete [`Fixture::wide_tree`] project: 12 project entries (directory,
+/// manifest, lockfile, `src/` and 8 sources), 3 artifact entries, and 100 units of 20.
+pub const WIDE_PROJECT_ENTRIES: u64 = 2015;
+/// Entries of a project up to and including its artifact directory.
+const WIDE_TO_ARTIFACT: u64 = 13;
+const WIDE_UNITS: u64 = 100;
+const WIDE_UNIT_FILES: u64 = 18;
+const WIDE_SRC_FILES: u64 = 8;
+
+impl Fixture {
+    /// A deterministic, developer-shaped tree of exactly `entries` entries (directories and
+    /// files, counting `rel` itself) at `rel`, for scale fixtures (FX-FS-15, PRD §21.2).
+    ///
+    /// Shape: projects `p00000`, `p00001`, ... alternating npm (`package.json`,
+    /// `package-lock.json`, `src/`, `node_modules/` with 100 packages) and Cargo (`Cargo.toml`,
+    /// `Cargo.lock`, `src/`, `target/debug/` with 100 build units), [`WIDE_PROJECT_ENTRIES`]
+    /// entries each; the last project is cut short to hit `entries` exactly. Artifact files
+    /// are empty, so a 1M-entry tree needs inodes but little disk space (directories only).
+    /// Projects are written in parallel; the result doesn't depend on thread scheduling.
+    pub fn wide_tree(&mut self, rel: impl AsRef<Path>, entries: u64) -> Result<WideTree> {
+        let rel = rel.as_ref();
+        self.dir(rel)?;
+        // `dir` refused any path through a link, and `top` is new: plain `std::fs` calls
+        // below it stay inside the temporary directory.
+        let top = self.path(rel)?;
+        let body = entries.saturating_sub(1);
+        let full = body / WIDE_PROJECT_ENTRIES;
+        let rest = body % WIDE_PROJECT_ENTRIES;
+        let projects = full + u64::from(rest > 0);
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4)
+            .clamp(1, 16);
+        let made: Vec<Result<u64>> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let top = &top;
+                    s.spawn(move || {
+                        let mut n = 0;
+                        let mut p = t;
+                        while p < projects {
+                            let budget = if p < full { WIDE_PROJECT_ENTRIES } else { rest };
+                            n += wide_project(top, p, budget)?;
+                            p += threads;
+                        }
+                        Ok(n)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("wide_tree worker panicked"))
+                .collect()
+        });
+        let mut total = 1;
+        for m in made {
+            total += m?;
+        }
+        let rel_s = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let artifacts = (0..projects)
+            .filter(|&p| p < full || rest >= WIDE_TO_ARTIFACT)
+            .map(|p| format!("{rel_s}/p{p:05}/{}", wide_artifact(p)))
+            .collect();
+        Ok(WideTree {
+            entries: total,
+            projects,
+            artifacts,
+        })
+    }
+}
+
+fn wide_artifact(p: u64) -> &'static str {
+    if p.is_multiple_of(2) {
+        "node_modules"
+    } else {
+        "target"
+    }
+}
+
+/// Writes entries in a fixed order until the budget is spent.
+struct Budget {
+    left: u64,
+    made: u64,
+}
+
+impl Budget {
+    fn take(&mut self) -> bool {
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        self.made += 1;
+        true
+    }
+
+    fn dir(&mut self, p: &Path) -> Result<bool> {
+        if !self.take() {
+            return Ok(false);
+        }
+        std::fs::create_dir(p).map_err(|e| FixtureError::io("create dir", p, e))?;
+        Ok(true)
+    }
+
+    fn file(&mut self, p: &Path, contents: &[u8]) -> Result<bool> {
+        if !self.take() {
+            return Ok(false);
+        }
+        std::fs::write(p, contents).map_err(|e| FixtureError::io("write file", p, e))?;
+        Ok(true)
+    }
+}
+
+/// One [`Fixture::wide_tree`] project (index `p`) of at most `budget` entries, below `top`;
+/// returns how many entries it made.
+fn wide_project(top: &Path, p: u64, budget: u64) -> Result<u64> {
+    let mut b = Budget {
+        left: budget,
+        made: 0,
+    };
+    let name = format!("p{p:05}");
+    let d = top.join(&name);
+    let npm = p.is_multiple_of(2);
+    b.dir(&d)?;
+    let (manifest, lock) = if npm {
+        (
+            (
+                "package.json",
+                format!("{{\"name\":\"{name}\",\"version\":\"1.0.0\",\"private\":true}}\n"),
+            ),
+            (
+                "package-lock.json",
+                format!("{{\"name\":\"{name}\",\"lockfileVersion\":3,\"packages\":{{}}}}\n"),
+            ),
+        )
+    } else {
+        (
+            (
+                "Cargo.toml",
+                format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+            ),
+            (
+                "Cargo.lock",
+                format!("version = 4\n\n[[package]]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+            ),
+        )
+    };
+    b.file(&d.join(manifest.0), manifest.1.as_bytes())?;
+    b.file(&d.join(lock.0), lock.1.as_bytes())?;
+    let src = d.join("src");
+    if b.dir(&src)? {
+        let ext = if npm { "js" } else { "rs" };
+        for i in 0..WIDE_SRC_FILES {
+            b.file(
+                &src.join(format!("m{i}.{ext}")),
+                format!("// {name} module {i}\n").as_bytes(),
+            )?;
+        }
+    }
+    let art = d.join(wide_artifact(p));
+    let units = if npm {
+        if b.dir(&art)? {
+            b.file(&art.join(".package-lock.json"), b"{}\n")?;
+            b.dir(&art.join(".bin"))?;
+        }
+        art
+    } else {
+        let debug = art.join("debug");
+        if b.dir(&art)? {
+            b.file(&art.join("CACHEDIR.TAG"), CACHEDIR_TAG.as_bytes())?;
+            b.dir(&debug)?;
+        }
+        debug
+    };
+    let (unit_files, inner_name) = if npm {
+        (["package.json", "index.js"], "lib")
+    } else {
+        (["output", "stderr"], "out")
+    };
+    for u in 0..WIDE_UNITS {
+        let unit = if npm {
+            units.join(format!("pkg{u:03}"))
+        } else {
+            units.join(format!("unit{u:03}-0123456789abcdef"))
+        };
+        if !b.dir(&unit)? {
+            break;
+        }
+        for f in unit_files {
+            b.file(&unit.join(f), b"")?;
+        }
+        let inner = unit.join(inner_name);
+        if b.dir(&inner)? {
+            for f in 0..WIDE_UNIT_FILES - unit_files.len() as u64 {
+                b.file(&inner.join(format!("f{f:02}")), b"")?;
+            }
+        }
+    }
+    Ok(b.made)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::InvariantInputs;
+
+    fn count(p: &Path) -> u64 {
+        let mut n = 1;
+        if std::fs::symlink_metadata(p).unwrap().is_dir() {
+            for e in std::fs::read_dir(p).unwrap() {
+                n += count(&e.unwrap().path());
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn wide_tree_has_exactly_the_requested_entries() {
+        for entries in [
+            1,
+            13,
+            WIDE_PROJECT_ENTRIES + 1,
+            3 * WIDE_PROJECT_ENTRIES + 500,
+        ] {
+            let mut fx = Fixture::new().unwrap();
+            let t = fx.wide_tree("big", entries).unwrap();
+            fx.checkpoint().unwrap();
+            assert_eq!(t.entries, entries);
+            assert_eq!(count(&fx.root().join("big")), entries, "{entries}");
+            for a in &t.artifacts {
+                assert!(fx.root().join(a).is_dir(), "{a}");
+            }
+            fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        }
+    }
+
+    #[test]
+    fn wide_tree_projects_alternate_npm_and_cargo() {
+        let mut fx = Fixture::new().unwrap();
+        let t = fx.wide_tree("big", 2 * WIDE_PROJECT_ENTRIES + 1).unwrap();
+        fx.checkpoint().unwrap();
+        assert_eq!(t.projects, 2);
+        assert_eq!(
+            t.artifacts,
+            ["big/p00000/node_modules", "big/p00001/target"]
+        );
+        assert!(fx.root().join("big/p00000/package-lock.json").is_file());
+        assert!(fx.root().join("big/p00001/target/CACHEDIR.TAG").is_file());
+        assert!(
+            fx.root()
+                .join("big/p00001/target/debug/unit099-0123456789abcdef/out/f15")
+                .is_file()
+        );
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
     }
 }

@@ -38,7 +38,8 @@ Screens with several states take a URL hash, so each state can be opened directl
 - **Tier encoding must never rely on color alone:** keep the stripe and hatch patterns.
 - **Accessibility:** real `<button>`, `<a>`, `<input>` + labels; 44px targets; WCAG 2.2 AA contrast (checked for the main text/fill pairs); `prefers-reduced-motion` disables animation.
 - **State tones** (`States`): neutral white for empty states; magenta tint for things you can fix (permissions, disconnected drive); amber stripes for missing evidence ("signals unavailable", same pattern as the Uncertain tier); plum hatch when cleaning is blocked (running elevated, same pattern as Protected). Unknown sizes are always written as "size unknown", never 0, and partial results carry a "partial" tag.
-- **Not designed yet:** Overview drive switcher, dark theme, Windows-specific chrome.
+- **Dark theme** (P5-UI-01): `tokens.json` `dark` holds the dark values, merged over the light ones. Neutral warm charcoal (never the rejected dark purple, D-16); paper and ink swap, so ink buttons turn light with dark text; magenta and the data purples stay; the protected hatch is lighter so it stands out on the dark ground. The app follows the system unless Settings > General > Appearance forces light or dark.
+- **Not designed yet:** Overview drive switcher, Windows-specific chrome.
 
 ## Re-rendering screenshots
 

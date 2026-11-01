@@ -12,7 +12,7 @@ const parts = computed(() => splitBytes(props.bytes));
 
 <template>
   <section aria-label="Safe to reclaim" class="flex flex-col gap-2.5 rounded-tile-lg bg-surface p-tile-padding" data-testid="hero">
-    <div class="flex items-baseline gap-2 text-[#7C4DFF]">
+    <div class="flex items-baseline gap-2 text-violet-figure">
       <span class="text-stat-xl leading-none font-bold tracking-[-0.04em] tabular-nums">{{ scanned ? parts[0] : '—' }}</span>
       <span v-if="scanned" class="text-[22px] font-semibold">{{ parts[1] }}</span>
     </div>
