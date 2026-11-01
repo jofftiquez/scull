@@ -751,3 +751,91 @@ fn history_lists_a_bounded_number_of_agent_events() {
     assert_eq!(text.matches("reason_").count(), 3, "{text}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
+
+/// #298 through the binary: `scull approve --revoke` refuses without an interactive terminal
+/// (exit 5, nothing revoked) and with `--json` (exit 2); `--revoke` and a plan ID together are
+/// a usage error. The terminal path (`cmd::approve::revoke`) withdraws the approval: the
+/// agent's `execute_cleanup` is refused through the Executor-backed server, nothing on disk
+/// changes, and `scull history` shows the revocation and the refusal.
+#[test]
+fn revoke_through_the_cli_stops_the_agent() {
+    let env = Env::new(true);
+    let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
+    let (_, cands) = s.call("get_cleanup_candidates", json!({}));
+    let pick = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| matches!(c["action"].as_str(), Some("delete" | "quarantine")))
+        .unwrap_or_else(|| panic!("something is cleanable: {cands:#}"))
+        .clone();
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": [pick["id"]] }));
+    assert!(!err, "{plan:#}");
+    let id = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    let args = json!({ "plan_id": id.as_str() });
+    env.human_approves(&id);
+
+    let o = env.run(&["approve", "--revoke", id.as_str()]);
+    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("interactive terminal"),
+        "{}",
+        stderr(&o)
+    );
+    let o = env.run(&["approve", "--revoke", id.as_str(), "--json"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    let o = env.run(&["approve", id.as_str(), "--revoke", id.as_str()]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(
+        env.store().get_approval(&id).unwrap().unwrap().used_at,
+        None,
+        "nothing revoked"
+    );
+
+    let text = scull_cli::cmd::approve::revoke(
+        &mut env.store(),
+        &id,
+        &env.who(),
+        scull_engine::now_unix(),
+    )
+    .unwrap();
+    assert!(text.contains("Revoked the approval"), "{text}");
+    let e = scull_cli::cmd::approve::revoke(
+        &mut env.store(),
+        &id,
+        &env.who(),
+        scull_engine::now_unix(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.kind,
+        scull_core::ErrorKind::SafetyBlocked,
+        "{}",
+        e.message
+    );
+
+    let (err, r) = s.call("execute_cleanup", args.clone());
+    assert!(err);
+    assert_eq!(r["error"]["code"], "approval_revoked", "{r:#}");
+    let (_, st) = s.call("get_cleanup_status", args);
+    assert_eq!(st["state"], "revoked", "{st:#}");
+    s.finish();
+    assert!(env.store().operations(0).unwrap().is_empty(), "nothing ran");
+
+    let o = env.run(&["history", "--json"]);
+    let h: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let listed: Vec<(&str, &str)> = h["data"]["agent_events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["kind"].as_str().unwrap(), e["reason"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("execute_refused", "approval_revoked"),
+            ("approval_revoked", "revoked"),
+        ]
+    );
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}

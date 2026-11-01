@@ -14,8 +14,10 @@
 //!
 //! "Every agent request, approval, denial and result is audited." Plans, approvals and
 //! operations have their own append-only tables; what an agent was **refused** is recorded
-//! here as an [`AgentAuditEvent`]: a human denying an approval, and a refused
-//! `execute_cleanup` ([`EventKind::ApprovalDenied`], [`EventKind::ExecuteRefused`]). Each
+//! here as an [`AgentAuditEvent`]: a human denying an approval, a refused `execute_cleanup`,
+//! and a human revoking an approval before it was used ([`EventKind::ApprovalDenied`],
+//! [`EventKind::ExecuteRefused`], [`EventKind::ApprovalRevoked`]; a revocation is recorded
+//! in the same transaction that spends the approval, [`Store::revoke_approval`]). Each
 //! carries only stable codes and identifiers (reason, plan ID, plan hash, channel, machine
 //! and user), never free text, so it can never hold a confirmation code or a secret
 //! ([`Store::record_agent_event`] validates every field). Read them with
@@ -52,27 +54,37 @@ pub enum EventKind {
     /// An `execute_cleanup` of an agent plan was refused (no approval, used, expired, void
     /// under D-34, refused by the Executor's gate, ...). An [`AgentAuditEvent`].
     ExecuteRefused,
+    /// A human revoked an agent plan's approval before it was used
+    /// ([`Store::revoke_approval`]). An [`AgentAuditEvent`].
+    ApprovalRevoked,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 4] = [
+    pub const ALL: [EventKind; 5] = [
         EventKind::Alert,
         EventKind::ReviewPlan,
         EventKind::ApprovalDenied,
         EventKind::ExecuteRefused,
+        EventKind::ApprovalRevoked,
     ];
 
     /// The kinds recorded as [`AgentAuditEvent`]s.
-    pub const AGENT: [EventKind; 2] = [EventKind::ApprovalDenied, EventKind::ExecuteRefused];
+    pub const AGENT: [EventKind; 3] = [
+        EventKind::ApprovalDenied,
+        EventKind::ExecuteRefused,
+        EventKind::ApprovalRevoked,
+    ];
 
-    /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`.
+    /// The stored name: `alert`, `review_plan`, `approval_denied`, `execute_refused`,
+    /// `approval_revoked`.
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::Alert => "alert",
             EventKind::ReviewPlan => "review_plan",
             EventKind::ApprovalDenied => "approval_denied",
             EventKind::ExecuteRefused => "execute_refused",
+            EventKind::ApprovalRevoked => "approval_revoked",
         }
     }
 
@@ -481,6 +493,59 @@ impl Store {
                 |r| r.get(0),
             )?;
             Ok(u64::try_from(n).unwrap_or(0))
+        })
+    }
+
+    /// Revoke the approval of `plan_id` (#298): **in one transaction**, mark it used at `now`
+    /// (the same single-use marker the Executor's atomic consumption sets, so a revocation and
+    /// a concurrent `Executor::begin_operation` can't both win: exactly one update changes the
+    /// row) and record `audit` ([`EventKind::ApprovalRevoked`]). Returns `true` only if a
+    /// matching approval (hash `hash`) existed that was unused, already given and unexpired
+    /// at `now`; otherwise nothing is written and it returns `false` (it was used, expired,
+    /// bound to other content, or never given). Never creates an approval.
+    pub fn revoke_approval(
+        &mut self,
+        plan_id: &PlanId,
+        hash: &ContentHash,
+        now: i64,
+        audit: &AgentAuditEvent,
+    ) -> Result<bool> {
+        if audit.kind != EventKind::ApprovalRevoked || audit.plan_id.as_ref() != Some(plan_id) {
+            return Err(StoreError::rejected(
+                ErrorKind::Usage,
+                "a revocation is audited as approval_revoked for the same plan",
+            ));
+        }
+        let event = audit.to_event()?;
+        let json = serde_json::to_string(&event.payload).map_err(internal)?;
+        self.write(|tx| {
+            let changed = tx.execute(
+                "UPDATE approvals SET used_at = ?3 \
+                 WHERE plan_id = ?1 AND content_hash = ?2 AND used_at IS NULL \
+                   AND approved_at <= ?3 AND ?3 < expires_at",
+                params![plan_id.as_str(), hash.as_str(), now],
+            )?;
+            if changed != 1 {
+                return Ok(false);
+            }
+            tx.execute(
+                "INSERT INTO events (occurred_at, kind, source, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![event.at, event.kind.as_str(), event.source, json],
+            )?;
+            Ok(true)
+        })
+    }
+
+    /// Whether the approval of `plan_id` was revoked ([`Store::revoke_approval`]).
+    pub fn approval_revoked(&self, plan_id: &PlanId) -> Result<bool> {
+        self.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM events WHERE kind = ?1 \
+                 AND json_extract(payload_json, '$.plan_id') = ?2)",
+                params![EventKind::ApprovalRevoked.as_str(), plan_id.as_str()],
+                |r| r.get(0),
+            )?)
         })
     }
 

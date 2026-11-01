@@ -1,5 +1,6 @@
 //! `scull approve [<plan-id>]` (P4-MCP-01, MCP-04, PRD §13.3): the human approves, in their
 //! own terminal, a cleanup plan an AI agent prepared through the MCP server.
+//! `scull approve --revoke <plan-id>` (#298) withdraws an approval before the agent uses it.
 //!
 //! * **Interactive terminal only** (FX-MCP-08, T-41): stdin, stdout and stderr must all be
 //!   terminals, and the output format human. Anything without a terminal (an agent's shell
@@ -26,6 +27,12 @@
 //!   was given and scull's database already exists; nothing is created for it), and a
 //!   refused attempt (expired, foreign or unknown plan, already approved). `scull history`
 //!   lists them. Not when elevated: an elevated process never writes the user's database.
+//! * **`--revoke <plan-id>`**: the same checks (interactive terminal, never elevated, an agent
+//!   plan of this machine and user, approved by this user), then
+//!   [`approval::revoke`]: the approval is spent in the same atomic update the Executor uses,
+//!   so if the agent's execution already started the revocation is refused (`approval_used`)
+//!   and if the revocation wins the execution is refused (`approval_revoked`). Audited.
+//!   No code to type: revoking only takes a permission away.
 
 use super::clean::utc_datetime;
 use super::exec;
@@ -85,7 +92,10 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
     let color = ui.color_out;
     let Some(id) = plan_id else {
         let list = approval::awaiting(&store, &principal, now).map_err(ScullError::from)?;
-        return super::emit_text(&render_awaiting(&list, now));
+        let approved = approval::revocable(&store, &principal, now).map_err(ScullError::from)?;
+        let mut text = render_awaiting(&list, now);
+        text.push_str(&render_revocable(&approved, now));
+        return super::emit_text(&text);
     };
     let id = PlanId::try_from(id.to_owned()).map_err(|_| {
         ScullError::new(
@@ -119,6 +129,52 @@ pub fn run(plan_id: Option<&str>, ui: &Ui) -> Result<(), ScullError> {
             "not approved; the agent's plan will expire unused",
         )),
     }
+}
+
+/// `scull approve --revoke <plan-id>` (#298).
+pub fn run_revoke(plan_id: &str, ui: &Ui) -> Result<(), ScullError> {
+    require_interactive(
+        ui.format.is_machine(),
+        io::stdin().is_terminal(),
+        io::stdout().is_terminal(),
+        io::stderr().is_terminal(),
+    )?;
+    if exec::elevation().blocks_destructive() {
+        return Err(ScullError::new(
+            ErrorKind::SafetyBlocked,
+            "scull approve --revoke refuses to run as root/administrator (or when that can't be \
+             told): run it as your normal user. Nothing was changed.",
+        ));
+    }
+    let id = PlanId::try_from(plan_id.to_owned()).map_err(|_| {
+        ScullError::new(
+            ErrorKind::Usage,
+            format!("{} is not a scull plan ID", escape_for_terminal(plan_id)),
+        )
+    })?;
+    let who = exec::who()?;
+    let principal = Principal {
+        machine_id: who.machine_id,
+        user: who.user,
+    };
+    let mut store = exec::open_store()?;
+    let text = revoke(&mut store, &id, &principal, now_unix())?;
+    super::emit_text(&text)
+}
+
+/// Revoke the approval of `id` through the terminal channel; the message to show.
+pub fn revoke(
+    store: &mut Store,
+    id: &PlanId,
+    who: &Principal,
+    now: i64,
+) -> Result<String, ScullError> {
+    let r = approval::revoke(store, id, HumanChannel::Terminal, who, now)?;
+    Ok(format!(
+        "Revoked the approval of plan {}. The agent can't run it; nothing was changed. See \
+         `scull history`.\n",
+        r.plan_id
+    ))
 }
 
 /// Record a denied approval attempt through the terminal (best effort: the outcome stands
@@ -336,6 +392,25 @@ pub fn render_plan(challenge: &Challenge, now: i64, color: bool) -> String {
         utc_datetime(plan.expires_unix()),
     ));
     t.push_str("Approve only if you asked your agent for this cleanup.\n\n");
+    t
+}
+
+/// Approved agent plans not yet run (empty when there are none).
+pub fn render_revocable(list: &[PlanSummary], now: i64) -> String {
+    if list.is_empty() {
+        return String::new();
+    }
+    let mut t = format!("\n{} approved agent plan(s) not yet run:\n", list.len());
+    for p in list {
+        t.push_str(&format!(
+            "  {}  {} item(s), {}, approval lapses in {} min\n",
+            p.plan_id,
+            p.item_count,
+            format_bytes(p.reclaimable_bytes),
+            (p.expires_at - now).max(0) / 60
+        ));
+    }
+    t.push_str("Withdraw an approval with `scull approve --revoke <plan-id>`.\n");
     t
 }
 

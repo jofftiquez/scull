@@ -32,7 +32,7 @@
           "type": "integer"
         },
         "kind": {
-          "description": "`approval_denied` or `execute_refused`.",
+          "description": "`approval_denied`, `execute_refused` or `approval_revoked`.",
           "type": "string"
         },
         "machine_id": {

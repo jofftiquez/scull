@@ -21,10 +21,16 @@ use scull_core::{
 };
 use scull_engine::{CancelToken, PlatformOwnerOnly, ScanReport, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs};
-use scull_storage::{ApprovalMethod, EventKind, NewApproval, OperationEnd, OperationStart, Store};
+use scull_storage::{
+    AgentAuditEvent, ApprovalMethod, EventKind, NewApproval, OperationEnd, OperationStart, Store,
+};
+
+fn db_path(fx: &Fixture) -> std::path::PathBuf {
+    fx.base().join("data").join("scull.db")
+}
 
 fn store(fx: &Fixture) -> Store {
-    Store::open(&fx.base().join("data").join("scull.db"), &PlatformOwnerOnly).unwrap()
+    Store::open(&db_path(fx), &PlatformOwnerOnly).unwrap()
 }
 
 /// An agent plan of the candidates at `rels`, created at `created`.
@@ -450,11 +456,11 @@ fn gate_reasons(s: &Store, plan: &Plan) -> Vec<String> {
         .unwrap()
         .into_iter()
         .filter(|e| {
-            e.plan_id.as_ref() == Some(plan.id())
+            e.kind == EventKind::ExecuteRefused
+                && e.plan_id.as_ref() == Some(plan.id())
                 && e.content_hash.as_ref() == Some(plan.content_hash())
         })
         .map(|e| {
-            assert_eq!(e.kind, EventKind::ExecuteRefused);
             assert_eq!(e.source, "executor");
             assert_eq!(e.channel, "mcp");
             assert_eq!(e.user, me());
@@ -701,4 +707,125 @@ fn touched_targets_and_foreign_operations_are_audited() {
     assert_eq!(s.get_approval(agent.id()).unwrap().unwrap().used_at, None);
     assert!(fx.root().join("app/target").exists());
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+fn revocation(plan: &Plan) -> AgentAuditEvent {
+    AgentAuditEvent {
+        event_id: 0,
+        at: now_unix(),
+        kind: EventKind::ApprovalRevoked,
+        source: "cli".into(),
+        plan_id: Some(plan.id().clone()),
+        content_hash: Some(plan.content_hash().clone()),
+        reason: "revoked".into(),
+        channel: "terminal".into(),
+        machine_id: MACHINE.into(),
+        user: me(),
+    }
+}
+
+/// #298: an approval revoked before execution is refused by the Executor's gate (audited as
+/// `approval_revoked`), and nothing runs.
+#[test]
+fn revoked_approval_is_refused_by_the_gate() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let scan = h.scan(&fx);
+    let now = now_unix();
+    let plan = mcp_plan(&fx, &scan, &["app/target"], "01JREVOKED", now);
+    s.insert_plan(&plan).unwrap();
+    approve(
+        &mut s,
+        &plan,
+        ApprovalMethod::CliTty,
+        now,
+        plan.expires_unix(),
+    );
+    assert!(
+        s.revoke_approval(
+            plan.id(),
+            plan.content_hash(),
+            now_unix(),
+            &revocation(&plan)
+        )
+        .unwrap()
+    );
+    let exec = locked(&fx);
+    let e = refused(
+        run(&fx, &h, &mut s, &exec, &plan, "01JREVOKED"),
+        ErrorKind::SafetyBlocked,
+    );
+    assert!(e.message.contains("revoked"), "{}", e.message);
+    assert_eq!(gate_reasons(&s, &plan), ["approval_revoked"]);
+    nothing_happened(&fx, &s);
+}
+
+/// #298: a revocation racing `Executor::begin_operation` for the same approval, each on its
+/// own database connection and released at the same instant: exactly one wins, every round.
+/// When the operation wins, the revocation is refused and the operation runs; when the
+/// revocation wins, nothing runs and no operation is recorded.
+#[test]
+fn revocation_racing_begin_operation_has_exactly_one_winner() {
+    let (mut ops, mut revs) = (0, 0);
+    for round in 0..8 {
+        let fx = two_cargo_projects();
+        let h = harness(false);
+        let mut s = store(&fx);
+        let scan = h.scan(&fx);
+        let now = now_unix();
+        let id = format!("01JRACE{round}");
+        let plan = mcp_plan(&fx, &scan, &["app/target"], &id, now);
+        s.insert_plan(&plan).unwrap();
+        approve(
+            &mut s,
+            &plan,
+            ApprovalMethod::CliTty,
+            now,
+            plan.expires_unix(),
+        );
+        let exec = locked(&fx);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let starter = {
+            let (barrier, plan, db) = (barrier.clone(), plan.clone(), db_path(&fx));
+            std::thread::spawn(move || {
+                let mut s = Store::open(&db, &PlatformOwnerOnly).unwrap();
+                barrier.wait();
+                let started = exec
+                    .begin_operation(&mut s, &plan, &start(&plan, &id, ApprovalMethod::CliTty))
+                    .map(|op| op.finish(OperationEnd::Cancelled, now_unix()).unwrap());
+                started.is_ok()
+            })
+        };
+        let revoker = {
+            let (barrier, plan, db) = (barrier, plan.clone(), db_path(&fx));
+            std::thread::spawn(move || {
+                let mut s = Store::open(&db, &PlatformOwnerOnly).unwrap();
+                barrier.wait();
+                s.revoke_approval(
+                    plan.id(),
+                    plan.content_hash(),
+                    now_unix(),
+                    &revocation(&plan),
+                )
+                .unwrap()
+            })
+        };
+        let (started, revoked) = (starter.join().unwrap(), revoker.join().unwrap());
+        assert!(
+            started ^ revoked,
+            "round {round}: started={started} revoked={revoked}"
+        );
+        let recorded = s.operations(0).unwrap().len();
+        assert_eq!(recorded, usize::from(started), "round {round}");
+        assert_eq!(s.approval_revoked(plan.id()).unwrap(), revoked);
+        if revoked {
+            assert_eq!(gate_reasons(&s, &plan), ["approval_revoked"]);
+        }
+        ops += usize::from(started);
+        revs += usize::from(revoked);
+        assert!(fx.root().join("app/target").exists(), "nothing executed");
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+    }
+    println!("operation won {ops}, revocation won {revs}");
 }

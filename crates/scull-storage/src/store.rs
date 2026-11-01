@@ -524,6 +524,32 @@ impl Store {
             .collect()
     }
 
+    /// Plans made by `origin` with an approval that is unused and unexpired at `now`
+    /// (approved, not yet executed or revoked; #298). Newest first, at most `limit`.
+    pub fn plans_with_live_approval(
+        &self,
+        origin: PlanOrigin,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<PlanId>> {
+        let origin = serde_name(&origin)?;
+        let ids: Vec<String> = self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT p.plan_id FROM plans p JOIN approvals a ON a.plan_id = p.plan_id \
+                 WHERE p.origin = ?1 AND ?2 < p.expires_at AND a.used_at IS NULL \
+                 AND a.approved_at <= ?2 AND ?2 < a.expires_at \
+                 ORDER BY p.created_at DESC, p.plan_id DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![origin, now, limit], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })?;
+        ids.into_iter()
+            .map(|id| {
+                PlanId::try_from(id).map_err(|e| StoreError::rejected(ErrorKind::Internal, e))
+            })
+            .collect()
+    }
+
     /// Run `f` in a `BEGIN IMMEDIATE` transaction (waits up to the busy timeout for the write
     /// lock up front, so it never fails half-way on lock upgrade) and commit if it succeeds.
     pub(crate) fn write<T>(

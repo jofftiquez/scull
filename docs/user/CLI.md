@@ -600,6 +600,33 @@ as such and, with `--confirm`, makes the exit code 3.
 JSON: `scull/clean-caches@1` (`mode` = `preview` or `run`, `tools[]`, `skipped[]`,
 `results[]`, `orphaned[]`, `orphaned_results[]`, `orphaned_unmatched[]`).
 
+### `scull approve`
+
+```text
+scull approve [PLAN_ID]
+scull approve --revoke PLAN_ID
+```
+
+Approve, in your own terminal, a cleanup plan an AI agent prepared through scull's MCP
+server (destructive mode, see [MCP.md](MCP.md#agent-cleanups-destructive-mode)), or withdraw
+an approval before the agent uses it. Interactive terminal only: with a pipe, a script or an
+agent's shell tool it exits 5 and changes nothing; with `--json` it exits 2. Never as root.
+
+* Without a plan ID it lists the agent plans awaiting approval and the approved ones not yet
+  run.
+* With one, it shows the full plan and a short code. Type the code to approve (single use,
+  lapses with the plan, at most 15 minutes after the agent prepared it), or `deny`.
+* `--revoke PLAN_ID` withdraws an approval the agent has not used yet. If the agent's
+  `execute_cleanup` already started, the revocation is refused (`approval_used`); otherwise
+  the agent's execution is refused (`approval_revoked`) and nothing runs.
+
+Denials, refused attempts and revocations are recorded (`scull history`).
+
+```console
+$ scull approve --revoke plan_6b4b2f1c8e0d9a7b3c2d1e0f
+Revoked the approval of plan plan_6b4b2f1c8e0d9a7b3c2d1e0f. The agent can't run it; nothing was changed. See `scull history`.
+```
+
 ### `scull history`
 
 ```text
@@ -611,9 +638,10 @@ items still restorable, and whether the audit chain is intact. With an ID it sho
 operation in full.
 
 Below the operations it lists what was refused to AI agents (MCP destructive mode), newest
-first: denied approvals and refused `execute_cleanup` calls, each with its reason code, plan,
-channel, what recorded it and how many times it repeated within a minute (repeats share one
-entry), at most `--limit` of them and a count of the rest (`agent_events` in JSON; see
+first: denied approvals, refused `execute_cleanup` calls and revoked approvals, each with its
+reason code, plan, channel, what recorded it and how many times it repeated within a minute
+(repeats share one entry), at most `--limit` of them and a count of the rest
+(`agent_events` in JSON; see
 [MCP.md](MCP.md#what-is-recorded)).
 
 ```console
@@ -940,7 +968,7 @@ These commands are built; `scull <command> --help` describes their options:
 
 | Command | Purpose |
 |---|---|
-| `scull approve PLAN_ID` | Approve a plan an AI agent prepared, in your own terminal (interactive only) |
+| `scull approve [PLAN_ID]`, `scull approve --revoke PLAN_ID` | Approve a plan an AI agent prepared, or revoke an approval, in your own terminal (interactive only; see above) |
 | `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
 | `scull check` | Light scan, forecast and alerts, for the OS scheduler |
 | `scull schedule enable\|disable\|status` | Register periodic checks |
