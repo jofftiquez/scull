@@ -1,56 +1,43 @@
-//! Test support (feature `test-support`, Windows): deliver a real console Ctrl-C to another
-//! process, so a fixture can check what `scull` does when the user presses Ctrl-C (FX-OUT-02:
-//! exit 130, nothing half-done).
+//! Test support (feature `test-support`, Windows): deliver a real console control event to
+//! another process, so a fixture can check what `scull` does when the user interrupts it
+//! (FX-OUT-02: exit 130, nothing half-done).
 //!
-//! Windows has no per-process Ctrl-C: `GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)` reaches
-//! every process attached to the caller's console. So the target is started with a console of
-//! its own (`CREATE_NEW_CONSOLE`), and a **helper process** detaches from its console, attaches
-//! to the target's, ignores the event itself and generates it. Never call this from a test
-//! runner that shares its console with other tests: it gives up the caller's console.
+//! The event is `CTRL_BREAK_EVENT`, sent to the target's own process group. `CTRL_C_EVENT`
+//! can't be used from a test: it can only be sent to *every* process on a console (a group ID
+//! makes Windows drop it), and a process started below a CI job, whose process group ignores
+//! Ctrl-C, keeps ignoring it even when its parent re-enables Ctrl-C (the attribute is not
+//! re-inherited; CPython skips its own `CTRL_C_EVENT` test for this reason). scull's handler
+//! (the `ctrlc` crate) treats Ctrl-C and Ctrl-Break alike, so the cancel path is the same.
+//!
+//! The target is started with [`TARGET_CREATION_FLAGS`] (a console and a process group of its
+//! own); a **helper process** attaches to the target's console and generates the event for the
+//! target's group. Never call [`send_ctrl_break`] from a test runner that shares its console
+//! with other tests: it gives up the caller's console.
 #![allow(unsafe_code)]
 
 use std::io;
 use std::time::Duration;
 use windows_sys::Win32::System::Console::{
-    AttachConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+    AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
 };
 
-/// `CREATE_NEW_CONSOLE`: the process creation flag that gives the target its own console.
-pub const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+/// `CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`: the process creation flags for the target,
+/// a console of its own and a process group whose ID is its process ID.
+pub const TARGET_CREATION_FLAGS: u32 = 0x0000_0010 | 0x0000_0200;
 
-/// Make this process, and the children it starts from now on, process Ctrl-C again.
-///
-/// A process started in a new process group (`CREATE_NEW_PROCESS_GROUP`, which CI runners use
-/// for their jobs) ignores Ctrl-C, and the ignore flag is inherited by every child: a child
-/// would then never see the Ctrl-C a test sends, whatever handler it installs. Call this
-/// before starting the child.
-pub fn process_ctrl_c_again() -> io::Result<()> {
-    // SAFETY: a null handler with FALSE restores normal Ctrl-C processing (documented).
-    if unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Deliver `CTRL_C_EVENT` to every process attached to the console of process `pid` (started
-/// with [`CREATE_NEW_CONSOLE`]). The calling process leaves its own console for good and
-/// ignores the event; run it in a helper process that does nothing else afterwards.
-pub fn send_ctrl_c_to_console_of(pid: u32) -> io::Result<()> {
+/// Deliver `CTRL_BREAK_EVENT` to the process group of `pid` (a process started with
+/// [`TARGET_CREATION_FLAGS`]). The calling process leaves its own console for good; run it in
+/// a helper process that does nothing else afterwards.
+pub fn send_ctrl_break(pid: u32) -> io::Result<()> {
     // SAFETY: FreeConsole takes no arguments; failing (no console) is fine.
     unsafe { FreeConsole() };
     // SAFETY: plain call with a process ID; on failure nothing was changed.
     if unsafe { AttachConsole(pid) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: a null handler with TRUE makes this process ignore Ctrl-C (documented).
-    if unsafe { SetConsoleCtrlHandler(None, 1) } == 0 {
-        let e = io::Error::last_os_error();
-        // SAFETY: detaches from the console attached above.
-        unsafe { FreeConsole() };
-        return Err(e);
-    }
-    // SAFETY: process group 0 = every process on the (target's) console we are attached to.
-    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) };
+    // SAFETY: plain call; the group is the target's own (its process ID), so no other process,
+    // this one included, receives the event.
+    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) };
     let error = io::Error::last_os_error();
     // The event is delivered asynchronously, by the console host: stay attached meanwhile.
     std::thread::sleep(Duration::from_millis(500));

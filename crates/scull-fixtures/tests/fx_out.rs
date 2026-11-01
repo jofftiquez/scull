@@ -8,7 +8,7 @@
 //!   scan validates against `schemas/v1/plan.schema.json`.
 //! * **FX-OUT-02**: the documented exit-code table (`docs/user/CLI.md`, CLI-05) is exactly `scull_core::ExitCode`,
 //!   and the binary returns the documented code for each condition: 0, 1, 2, 3, 4, 5, 6 (the
-//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (SIGINT on Unix, a console Ctrl-C on Windows).
+//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 //!
 //! `scull clean`, `history` and `restore` run on fixture trees only, against items the fixture
 //! created; the audited operation is checked against the disk (I-4).
@@ -734,7 +734,7 @@ fn expect(
 
 /// FX-OUT-02 (end to end): every documented exit condition returns the documented code,
 /// from the real binary: 0, 1, 2 (usage and config), 3 (an item skipped during `scull clean`),
-/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and 130 (SIGINT on Unix, a console Ctrl-C on Windows).
+/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 #[test]
 fn fx_out_02_binary_returns_the_documented_exit_codes() {
     let fx = tree(false);
@@ -829,14 +829,15 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
             .or_default()
             .push("SIGINT to scull mcp serve (after the MCP handshake)".into());
     }
-    // 130 on Windows: a real console Ctrl-C to `scull mcp serve`, started with a console of its
-    // own, sent by a helper process (`fx_out_02_ctrl_c_sender`).
+    // 130 on Windows: a real console interrupt (Ctrl-Break: Ctrl-C can't be aimed at one
+    // child, see scull_platform::console) to `scull mcp serve`, started with a console and
+    // process group of its own, sent by a helper process (`fx_out_02_ctrl_c_sender`).
     #[cfg(windows)]
     {
         windows_ctrl_c_exits_130(&fx);
         seen.entry(130)
             .or_default()
-            .push("console Ctrl-C to scull mcp serve (after the MCP handshake)".into());
+            .push("console Ctrl-Break to scull mcp serve (after the MCP handshake)".into());
     }
     println!("--- exit codes observed (docs/user/CLI.md) ---");
     for (n, meaning) in &doc {
@@ -1166,7 +1167,8 @@ fn fx_out_03_cli_and_mcp_give_identical_classifications() {
 const CTRL_C_PID_ENV: &str = "SCULL_TEST_CTRL_C_PID";
 
 /// Helper process for [`windows_ctrl_c_exits_130`] (run by it, not directly): delivers a
-/// console Ctrl-C to the process in `SCULL_TEST_CTRL_C_PID`, giving up its own console.
+/// console interrupt (Ctrl-Break) to the process group in `SCULL_TEST_CTRL_C_PID`, giving up
+/// its own console.
 #[cfg(windows)]
 #[test]
 #[ignore = "helper process for fx_out_02 (run by it, not directly)"]
@@ -1177,23 +1179,22 @@ fn fx_out_02_ctrl_c_sender() {
     else {
         return;
     };
-    scull_platform::console::send_ctrl_c_to_console_of(pid).expect("send Ctrl-C");
+    scull_platform::console::send_ctrl_break(pid).expect("send Ctrl-Break");
 }
 
 /// FX-OUT-02 on Windows: `scull mcp serve`, after the MCP handshake, gets a real console
-/// Ctrl-C and exits 130 promptly (CLI-05), with stdin still open. It never changed anything
-/// (the caller checks the invariants).
+/// interrupt and exits 130 promptly (CLI-05), with stdin still open. It never changed anything
+/// (the caller checks the invariants). The interrupt is Ctrl-Break, which reaches scull's
+/// Ctrl-C handler (`ctrlc` handles both); `CTRL_C_EVENT` can't be aimed at one process and
+/// stays ignored below a CI job (see `scull_platform::console`).
 #[cfg(windows)]
 fn windows_ctrl_c_exits_130(fx: &Fixture) {
     use std::os::windows::process::CommandExt;
     use std::time::{Duration, Instant};
 
     let mcp = mcp_cli(&[fx.root()]);
-    // CI runners start the job with Ctrl-C ignored, and children inherit that: undo it so the
-    // server processes Ctrl-C like it does in a user's terminal.
-    scull_platform::console::process_ctrl_c_again().expect("re-enable Ctrl-C");
     let mut command = mcp.command(&["mcp", "serve"]);
-    command.creation_flags(scull_platform::console::CREATE_NEW_CONSOLE);
+    command.creation_flags(scull_platform::console::TARGET_CREATION_FLAGS);
     let mut m = Mcp::start_command(command);
     let pid = m.child.id();
     let sender = Command::new(std::env::current_exe().unwrap())
@@ -1221,7 +1222,7 @@ fn windows_ctrl_c_exits_130(fx: &Fixture) {
         }
         if Instant::now() > deadline {
             let _ = m.child.kill();
-            panic!("scull mcp serve did not exit within 20 s of a console Ctrl-C");
+            panic!("scull mcp serve did not exit within 20 s of a console interrupt");
         }
         std::thread::sleep(Duration::from_millis(100));
     };
