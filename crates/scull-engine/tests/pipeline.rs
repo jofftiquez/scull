@@ -257,8 +257,13 @@ fn fx_cls_fixture_tiers_with_idle_signals() {
     assert_eq!(app_project.ecosystems, ["rust"]);
     assert_eq!(app_project.candidates, 1);
     assert_eq!(app_project.badge, Some(Tier::S0));
+    // Every signal was available for this tree. On Windows a built-in protected root that
+    // refuses even an attribute-only open (`C:\System Volume Information`) is still disclosed
+    // run-wide, but its location is decided, so it affects no candidate here.
     assert!(
-        r.signals_unavailable.is_empty(),
+        r.signals_unavailable
+            .iter()
+            .all(|g| cfg!(windows) && g.signal == "protection" && g.affected == 0),
         "{:#?}",
         r.signals_unavailable
     );

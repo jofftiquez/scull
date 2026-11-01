@@ -1238,7 +1238,7 @@ async fn hashed_names_are_stable_and_never_reveal_the_salt() {
         .unwrap()
         .iter()
         .map(|c| c["path"].as_str().unwrap().to_owned())
-        .find(|p| p.ends_with("/target"))
+        .find(|p| p.ends_with(&format!("{}target", std::path::MAIN_SEPARATOR)))
         .expect("well-known names stay readable");
     assert!(target.starts_with(&tilde("root/h-")), "{target}");
     for s in result_strings(&scan) {
@@ -1490,7 +1490,8 @@ async fn fx_mcp_10_expired_ttl_is_a_review_suggestion_and_nothing_is_deleted() {
     }
 
     // FX-MCP-10: the TTL runs out (recorded as if registered two days ago with a 1-day TTL).
-    let canonical = std::fs::canonicalize(&wt).unwrap();
+    // As the server records it: canonical, without Windows' `\\?\` prefix.
+    let canonical = scull_engine::paths::canon(&wt);
     let now = scull_engine::now_unix();
     scull_mcp::registry::Registry::in_data_dir(data.path())
         .record(

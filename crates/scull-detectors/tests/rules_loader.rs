@@ -769,21 +769,30 @@ fn platform_current_is_supported_on_ci_targets() {
     }
     let set = RuleSet::bundled().unwrap();
     if let Some(p) = Platform::current() {
-        // Every bundled rule applies everywhere except the macOS-only Xcode rules.
-        let macos_only = set
-            .all()
-            .filter(|r| r.platforms() == [Platform::Macos])
-            .count();
-        assert!(
+        // Every bundled rule applies everywhere except a few single-OS ones: the macOS-only
+        // Xcode rules and Linux-only Podman storage.
+        let single_os = |os: Platform| {
             set.all()
-                .filter(|r| r.platforms() == [Platform::Macos])
-                .all(|r| r.id().starts_with("xcode."))
-        );
-        let want = if p == Platform::Macos {
-            set.len()
-        } else {
-            set.len() - macos_only
+                .filter(move |r| r.platforms() == [os])
+                .map(|r| r.id().to_owned())
+                .collect::<Vec<_>>()
         };
+        assert!(
+            single_os(Platform::Macos)
+                .iter()
+                .all(|id| id.starts_with("xcode.")),
+            "{:?}",
+            single_os(Platform::Macos)
+        );
+        assert_eq!(single_os(Platform::Linux), ["podman.storage"]);
+        assert!(single_os(Platform::Windows).is_empty());
+        let want = set.all().filter(|r| r.platforms().contains(&p)).count();
         assert_eq!(set.enabled_for(p).count(), want);
+        let elsewhere_only = [Platform::Linux, Platform::Macos, Platform::Windows]
+            .into_iter()
+            .filter(|os| *os != p)
+            .map(|os| single_os(os).len())
+            .sum::<usize>();
+        assert_eq!(want, set.len() - elsewhere_only);
     }
 }
