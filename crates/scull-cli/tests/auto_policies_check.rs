@@ -427,6 +427,29 @@ fn rerun_in_pid_namespace(test: &str) {
     );
 }
 
+/// Set by CI's standard-user run of this test binary on Windows
+/// (`scripts/ci/run-as-standard-user.ps1`): an elevated process then fails instead of skipping.
+const REQUIRE_NOT_ELEVATED_ENV: &str = "SCULL_TEST_REQUIRE_NOT_ELEVATED";
+
+/// Elevated, scull refuses (SAFE-14), so `test`'s non-elevated part stops here. GitHub's Windows
+/// runners are elevated; CI runs this binary again as a standard user with
+/// [`REQUIRE_NOT_ELEVATED_ENV`] set, where the skip is a failure and a `RUN` marker is printed.
+fn skip_if_elevated(test: &str, why: &str) -> bool {
+    let required = std::env::var_os(REQUIRE_NOT_ELEVATED_ENV).is_some_and(|v| !v.is_empty());
+    if scull_platform::is_elevated().blocks_destructive() {
+        assert!(
+            !required,
+            "{test}: {REQUIRE_NOT_ELEVATED_ENV} is set but this process runs elevated"
+        );
+        eprintln!("SKIP {test}: running elevated, {why} (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
+}
+
 /// Whether this machine's in-use probe lets the fixture's build outputs be S0.
 fn has_s0(env: &Env) -> bool {
     let o = env.run(&["scan", "--no-history", "--json", &env.root()]);
@@ -455,6 +478,12 @@ fn fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it() {
         rerun_in_pid_namespace("fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it");
         return;
     }
+    if skip_if_elevated(
+        "fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it",
+        "so auto-policies refuse",
+    ) {
+        return;
+    }
     let env = Env::new(POLICY);
     let a = env.check(&[]);
     assert_eq!(a["state"], "checked", "{a:#}");
@@ -469,10 +498,6 @@ fn fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it() {
         "{text}"
     );
 
-    if scull_platform::is_elevated().blocks_destructive() {
-        eprintln!("running elevated: auto-policies refuse (SAFE-14); run checks skipped");
-        return;
-    }
     if !has_s0(&env) {
         // This machine can't prove the build outputs idle (an uninspectable process makes
         // "in use" unknown, hence S2): nothing qualifies. `tests/auto_policies.rs` runs the
