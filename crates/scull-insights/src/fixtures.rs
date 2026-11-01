@@ -162,6 +162,7 @@ pub fn record_cleanup(
             machine_id: "demo-machine".into(),
             user: "dev".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )

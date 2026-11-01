@@ -653,6 +653,7 @@ fn params_like(plan: &Plan, id: PlanId, created_unix: i64) -> PlanParams {
         machine_id: plan.machine_id().to_owned(),
         user: plan.user().to_owned(),
         origin: PlanOrigin::Cli,
+        operations_watermark: None,
     }
 }
 

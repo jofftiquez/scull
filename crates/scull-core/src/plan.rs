@@ -232,6 +232,11 @@ pub struct PlanParams {
     pub user: String,
     /// Which surface created the plan.
     pub origin: PlanOrigin,
+    /// SAFE-09: `scull_storage::Store::operations_watermark`, read **before** the scan the
+    /// items come from started: every operation recorded after it invalidates the plan.
+    /// Required for a plan built from a scan; `None` only for a plan that comes from no scan,
+    /// which then falls back to its creation time (operations started at or after it).
+    pub operations_watermark: Option<u64>,
 }
 
 /// An immutable cleanup plan (PRD §10.4, SAFE-11).
@@ -270,6 +275,7 @@ pub struct PlanParams {
 ///     machine_id: "machine-a".into(),
 ///     user: "me".into(),
 ///     origin: PlanOrigin::Cli,
+///     operations_watermark: Some(0),
 /// };
 /// let plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();
 /// assert!(plan.verify(1_800_000_060, "machine-a", "me").is_ok());
@@ -351,21 +357,12 @@ impl Plan {
             machine_id: params.machine_id,
             user: params.user,
             origin: params.origin,
-            operations_watermark: None,
+            operations_watermark: params.operations_watermark,
             items,
             content_hash: ContentHash("0".repeat(ContentHash::HEX_LEN)),
         };
         plan.content_hash = plan.compute_hash()?;
         Ok(plan)
-    }
-
-    /// The same plan bound to the operations watermark taken when its scan started (see
-    /// [`Plan::operations_watermark`]); the content hash is recomputed, so the watermark can't
-    /// be edited afterwards.
-    pub fn with_operations_watermark(mut self, watermark: u64) -> Result<Self, ScullError> {
-        self.operations_watermark = Some(watermark);
-        self.content_hash = self.compute_hash()?;
-        Ok(self)
     }
 
     /// SAFE-09: the last recorded operation's position in scull's database when the scan the
@@ -822,6 +819,7 @@ mod tests {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin,
+            operations_watermark: None,
         }
     }
 

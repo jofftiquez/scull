@@ -221,6 +221,7 @@ fn delete_64_mib_measured_matches_predicted() {
             machine_id: "machine".into(),
             user: "dev".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         vec![r.item.clone()],
     )

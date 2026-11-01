@@ -7,15 +7,15 @@ mod common;
 use common::*;
 use scull_core::{ErrorKind, FileIdentity, FsPath, OperationId, Plan};
 use scull_storage::{
-    ApprovalMethod, NewQuarantineEntry, OperationStart, Store, StoreError, identity_key,
-    parse_identity_key,
+    ApprovalMethod, NewQuarantineEntry, OperationAudit, OperationEnd, OperationFinish,
+    OperationStart, Store, StoreError, identity_key, parse_identity_key,
 };
 
 fn op_id(s: &str) -> OperationId {
     OperationId::from_suffix(s).unwrap()
 }
 
-fn begin(s: &mut Store, p: &Plan, op: &str, at: i64) {
+fn begin(s: &mut Store, p: &Plan, op: &str, at: i64) -> OperationAudit {
     s.begin_operation(
         &OperationStart {
             operation_id: op_id(op),
@@ -26,6 +26,19 @@ fn begin(s: &mut Store, p: &Plan, op: &str, at: i64) {
             started_at: at,
         },
         &TestPerms::default(),
+    )
+    .unwrap()
+}
+
+/// Ends an operation (cancelled: its items need no outcome).
+fn finish(s: &mut Store, audit: &mut OperationAudit, at: i64) {
+    s.finish_operation(
+        audit,
+        &OperationFinish {
+            finished_at: at,
+            end: OperationEnd::Cancelled,
+            measured_delta_bytes: None,
+        },
     )
     .unwrap();
 }
@@ -153,10 +166,12 @@ fn operations_touching_with_a_watermark_counts_every_operation_recorded_after_th
     let p = plan(1); // created at T0
     s.insert_plan(&p).unwrap();
     let item = p.items()[0].item_id.clone();
+    // Each operation runs to its end (a still-running one is the next test).
     let target = |s: &mut Store, op: &str, id: FileIdentity, at: i64| {
-        begin(s, &p, op, at);
+        let mut audit = begin(s, &p, op, at);
         s.record_operation_targets(&op_id(op), &[(item.clone(), id)], at)
             .unwrap();
+        finish(s, &mut audit, at);
     };
     let ids: Vec<FileIdentity> = (1..=5).map(|n| FileIdentity::new(9, n)).collect();
 
@@ -188,6 +203,46 @@ fn operations_touching_with_a_watermark_counts_every_operation_recorded_after_th
             .unwrap()
             .is_empty()
     );
+}
+
+/// SAFE-09: an operation that began before the scan but is still running when the
+/// watermark is read may change its targets after the scan observed them. The watermark stops
+/// below it, so it invalidates the plan (here: it later touches item Y).
+#[test]
+fn an_operation_still_running_when_the_scan_starts_counts_as_touching() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    let p = plan(1);
+    s.insert_plan(&p).unwrap();
+    let item = p.items()[0].item_id.clone();
+    let (x, y) = (FileIdentity::new(9, 1), FileIdentity::new(9, 2));
+
+    // DONE finished before the scan; RUNNING began before it and is still running.
+    let mut done = begin(&mut s, &p, "DONE", T0);
+    s.record_operation_targets(&op_id("DONE"), &[(item.clone(), x)], T0)
+        .unwrap();
+    finish(&mut s, &mut done, T0);
+    let mut running = begin(&mut s, &p, "RUNNING", T0);
+    s.record_operation_targets(&op_id("RUNNING"), &[(item.clone(), y)], T0)
+        .unwrap();
+
+    let watermark = s.operations_watermark().unwrap(); // the scan starts
+    // ... the scan observes Y, RUNNING then changes it and finishes.
+    finish(&mut s, &mut running, T0 + 5);
+    assert_eq!(
+        s.operations_touching(&[y], T0 + 10, Some(watermark), None)
+            .unwrap(),
+        [op_id("RUNNING")],
+        "a running operation is never below the watermark"
+    );
+    assert!(
+        s.operations_touching(&[x], T0 + 10, Some(watermark), None)
+            .unwrap()
+            .is_empty(),
+        "a finished one before the scan is"
+    );
+    // With nothing running, the watermark is the last operation again.
+    assert!(s.operations_watermark().unwrap() > watermark);
 }
 
 #[test]

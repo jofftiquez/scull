@@ -215,6 +215,7 @@ fn different_plan_under_same_id_is_rejected() {
             machine_id: "machine-a".into(),
             user: "dev".into(),
             origin: scull_core::PlanOrigin::Mcp,
+            operations_watermark: None,
         },
         items,
     )

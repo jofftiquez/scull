@@ -645,6 +645,7 @@ fn run_report_with_observable_activity() {
                 machine_id: "qc-machine".into(),
                 user: "tester".into(),
                 origin: scull_core::PlanOrigin::Cli,
+                operations_watermark: None,
             },
         )
         .unwrap();
@@ -875,6 +876,7 @@ fn orphaned_caches_removed_only_per_confirmed_tool() {
                 machine_id: "qc-machine".into(),
                 user: "tester".into(),
                 origin: scull_core::PlanOrigin::Cli,
+                operations_watermark: None,
             },
         )
         .unwrap();

@@ -118,7 +118,7 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     let loaded = load_config(&[])?;
     let (scan_state, scanned) = light_scan(&loaded, args, ui)?;
     let (scanned, watermark) = match scanned {
-        Some((r, w)) => (Some(r), w),
+        Some((r, w)) => (Some(r), Some(w)),
         None => (None, None),
     };
     let now = scull_engine::now_unix();
@@ -181,28 +181,42 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     if let Err(e) = store.record_alerts(&alert_events(&alerts)) {
         pipeline::warn(ui, &format!("alerts were not recorded in history: {e}"));
     }
-    let review_plan = match &scanned {
-        Some(r) => match review_plan::Binding::current(&dirs.data).and_then(|binding| {
-            review_plan::refresh(
-                &mut store,
-                &dirs.data,
-                &review_plan::ReviewScan {
-                    id: &r.scan_id,
-                    candidates: &r.candidates,
-                    operations_watermark: watermark,
-                },
-                args.include_s1,
-                &binding,
-                now,
-            )
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                pipeline::warn(ui, &format!("no cleanup plan was prepared: {}", e.message));
-                None
+    let review_plan = match (&scanned, watermark) {
+        // SAFE-09 needs to know which operations ran after the scan started: without the
+        // watermark no plan is prepared from this scan (a previous one stays announced).
+        (Some(_), Some(Err(why))) => {
+            pipeline::warn(
+                ui,
+                &format!(
+                    "no cleanup plan was prepared: scull's database could not be read before \
+                     the scan, so later changes to the items could not be detected ({why})"
+                ),
+            );
+            review_plan::current(&store, now)
+        }
+        (Some(r), Some(Ok(watermark))) => {
+            match review_plan::Binding::current(&dirs.data).and_then(|binding| {
+                review_plan::refresh(
+                    &mut store,
+                    &dirs.data,
+                    &review_plan::ReviewScan {
+                        id: &r.scan_id,
+                        candidates: &r.candidates,
+                        operations_watermark: watermark,
+                    },
+                    args.include_s1,
+                    &binding,
+                    now,
+                )
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    pipeline::warn(ui, &format!("no cleanup plan was prepared: {}", e.message));
+                    None
+                }
             }
-        },
-        None => review_plan::current(&store, now),
+        }
+        _ => review_plan::current(&store, now),
     };
     let report = CheckReport {
         now,
@@ -249,8 +263,9 @@ pub fn alert_events(alerts: &[Alert]) -> Vec<AlertEvent> {
         .collect()
 }
 
-/// A check's scan and the SAFE-09 operations watermark taken before it started.
-type Scanned = (ScanReport, Option<u64>);
+/// A check's scan and the SAFE-09 operations watermark taken before it started (or why it
+/// could not be read).
+type Scanned = (ScanReport, Result<u64, String>);
 
 /// Scan the configured roots for the check (step 1 in the module docs). A root `scull scan`
 /// would refuse without a flag, or a scan that fails, is reported as skipped; Ctrl-C stops the
@@ -276,11 +291,11 @@ fn light_scan(
         Err(e) => return Ok((skipped(e), None)),
     };
     // SAFE-09: the last recorded operation before the scan starts, for the review plan built
-    // from it. Without the database the plan falls back to its creation time.
+    // from it. If it can't be read, no review plan is prepared from this scan.
     let watermark = scull_platform::app_dirs()
-        .ok()
-        .and_then(|d| scull_engine::open_history(&d.data).ok())
-        .and_then(|s| s.operations_watermark().ok());
+        .map_err(|e| e.to_string())
+        .and_then(|d| scull_engine::open_history(&d.data).map_err(|e| e.to_string()))
+        .and_then(|s| s.operations_watermark().map_err(|e| e.to_string()));
     let bridge = CancelBridge::start();
     let mut req = ScanRequest::full().history(true);
     req.threads = loaded.config.scan.threads as usize;

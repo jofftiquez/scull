@@ -108,9 +108,9 @@ pub struct ReviewScan<'a> {
     pub id: &'a ScanId,
     /// Its candidates.
     pub candidates: &'a [Candidate],
-    /// SAFE-09: the last operation recorded before it started (`Store::operations_watermark`),
-    /// when the database could be read then.
-    pub operations_watermark: Option<u64>,
+    /// SAFE-09: the last operation recorded before it started (`Store::operations_watermark`).
+    /// A review plan is only prepared when it could be read.
+    pub operations_watermark: u64,
 }
 
 /// Refresh the review plan from the candidates of scan `scan_id` (see the module docs). Returns the current plan, or
@@ -161,14 +161,11 @@ pub fn refresh(
             machine_id: binding.machine_id.clone(),
             user: binding.user.clone(),
             origin: PlanOrigin::Cli,
+            // SAFE-09: the last operation recorded before its scan started.
+            operations_watermark: Some(scan.operations_watermark),
         },
         items,
     )?;
-    // SAFE-09: bound to the last operation recorded before its scan started, when known.
-    let plan = match scan.operations_watermark {
-        Some(w) => plan.with_operations_watermark(w)?,
-        None => plan,
-    };
     store.insert_plan(&plan).map_err(ScullError::from)?;
     let file = write_plan_file(data_dir, &plan)?;
     let summary = ReviewPlanSummary::of(&plan, file.to_string_lossy(), include_s1);
@@ -261,7 +258,7 @@ mod tests {
         ReviewScan {
             id,
             candidates,
-            operations_watermark: None,
+            operations_watermark: 0,
         }
     }
 

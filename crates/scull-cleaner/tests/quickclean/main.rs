@@ -865,6 +865,7 @@ fn in_operation<R>(
                 machine_id: "qc-machine".into(),
                 user: "tester".into(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: None,
             },
         )
         .unwrap();

@@ -948,6 +948,7 @@ async fn every_refused_execute_is_audited_without_touching_approvals() {
                 machine_id: MACHINE.into(),
                 user: user.into(),
                 origin: PlanOrigin::Mcp,
+                operations_watermark: None,
             },
             plan_a.items().to_vec(),
         )

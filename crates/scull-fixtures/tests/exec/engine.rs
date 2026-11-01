@@ -157,6 +157,7 @@ pub fn plan(fx: &Fixture, r: &ScanReport, rels: &[&str], id: &str) -> Plan {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )

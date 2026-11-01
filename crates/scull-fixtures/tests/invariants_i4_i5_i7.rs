@@ -82,6 +82,7 @@ impl Run {
                 machine_id: "machine-test".into(),
                 user: "tester".into(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: None,
             },
             items.clone(),
         )

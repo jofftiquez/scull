@@ -443,21 +443,19 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
             .iter()
             .map(|c| PlanItem::from_candidate(c))
             .collect::<Result<Vec<_>, _>>()?;
-        Some(
-            Plan::new(
-                PlanParams {
-                    id: exec::new_plan_id(now)?,
-                    scan_id: scan.scan_id.clone(),
-                    created_unix: now,
-                    ttl_secs: None,
-                    machine_id: who.machine_id.clone(),
-                    user: who.user.clone(),
-                    origin: PlanOrigin::Cli,
-                },
-                items,
-            )?
-            .with_operations_watermark(watermark)?,
-        )
+        Some(Plan::new(
+            PlanParams {
+                id: exec::new_plan_id(now)?,
+                scan_id: scan.scan_id.clone(),
+                created_unix: now,
+                ttl_secs: None,
+                machine_id: who.machine_id.clone(),
+                user: who.user.clone(),
+                origin: PlanOrigin::Cli,
+                operations_watermark: Some(watermark),
+            },
+            items,
+        )?)
     };
     let mut plan_file = None;
     if let Some(p) = &plan {

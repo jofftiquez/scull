@@ -658,10 +658,10 @@ fn prepare(
             machine_id: plans.principal.machine_id.clone(),
             user: plans.principal.user.clone(),
             origin: PlanOrigin::Mcp,
+            operations_watermark: Some(watermark),
         },
         items,
     )
-    .and_then(|p| p.with_operations_watermark(watermark))
     .map_err(|e| ToolError::new("not_plannable", r.text(&e.message)))?;
     // The cap again, atomically with the insert (another session may have prepared meanwhile).
     let inserted = store

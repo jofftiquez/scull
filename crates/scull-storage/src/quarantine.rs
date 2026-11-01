@@ -373,16 +373,28 @@ impl Store {
         })
     }
 
-    /// The position of the last recorded operation (0 when there is none): the SAFE-09
-    /// watermark a scan takes before it starts. `operations` is append-only (rows are never
-    /// deleted), so positions only grow and every later operation is above it.
+    /// The SAFE-09 watermark a scan takes before it starts: the position of the last recorded
+    /// operation (0 when there is none), but never past an operation that is still running
+    /// (no `finished` audit row). Such an operation was recorded before the scan yet may keep
+    /// changing its targets after the scan observed them, so the watermark stops just below the
+    /// oldest unfinished one and it counts as touching. `operations` is append-only (rows are
+    /// never deleted, and the database is never `VACUUM`ed), so positions only grow and every
+    /// later operation is above it.
     pub fn operations_watermark(&self) -> Result<u64> {
         self.read(|c| {
-            let n: i64 =
-                c.query_row("SELECT coalesce(max(rowid), 0) FROM operations", [], |r| {
-                    r.get(0)
-                })?;
-            u64::try_from(n).map_err(|_| bad("operation position"))
+            let (last, oldest_running): (i64, Option<i64>) = c.query_row(
+                "SELECT coalesce((SELECT max(rowid) FROM operations), 0), \
+                        (SELECT min(o.rowid) FROM operations o WHERE NOT EXISTS (\
+                           SELECT 1 FROM audit a WHERE a.operation_id = o.operation_id \
+                           AND a.kind IN ('finished', 'legacy')))",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let watermark = match oldest_running {
+                Some(rowid) => last.min(rowid - 1),
+                None => last,
+            };
+            u64::try_from(watermark.max(0)).map_err(|_| bad("operation position"))
         })
     }
 
