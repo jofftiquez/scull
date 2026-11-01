@@ -218,6 +218,13 @@ fn p(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A home-redacted path as results show it: `~` and `rel`, with this OS's separator (`~\x`
+/// on Windows). Arguments may use `~/` on every OS.
+fn tilde(rel: &str) -> String {
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    format!("~{sep}{}", rel.replace('/', sep))
+}
+
 /// Every string anywhere in `v`.
 fn strings(v: &Value, out: &mut Vec<String>) {
     match v {
@@ -273,7 +280,10 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
 
     let status = assert_ok("get_status", &call(&client, "get_status", json!({})).await);
     assert_eq!(status["server"]["read_only"], true);
-    assert_eq!(status["server"]["allowlisted_roots"], json!(["~/root"]));
+    assert_eq!(
+        status["server"]["allowlisted_roots"],
+        json!([tilde("root")])
+    );
     assert_eq!(status["state"], "no_database");
     all.push(("get_status", status));
 
@@ -281,7 +291,7 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
         "get_storage_overview",
         &call(&client, "get_storage_overview", json!({})).await,
     );
-    assert_eq!(overview["roots"][0]["path"], "~/root");
+    assert_eq!(overview["roots"][0]["path"], tilde("root"));
     assert!(overview["projects"].as_u64().unwrap() >= 2, "{overview}");
     all.push(("get_storage_overview", overview));
 
@@ -292,12 +302,14 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
     let cands = scan["candidates"].as_array().unwrap();
     let target = cands
         .iter()
-        .find(|c| c["path"] == "~/root/app/target")
+        .find(|c| c["path"] == tilde("root/app/target"))
         .unwrap_or_else(|| panic!("app/target found: {scan}"));
     assert_eq!(target["tier"], "S0", "{target}");
     assert_eq!(target["category"], "project_artifact");
     assert!(
-        cands.iter().any(|c| c["path"] == "~/root/web/node_modules"),
+        cands
+            .iter()
+            .any(|c| c["path"] == tilde("root/web/node_modules")),
         "{scan}"
     );
     assert_eq!(scan["truncated"], false);
@@ -312,7 +324,7 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|x| x["root"] == "~/root/app" && x["name"] == "app"),
+            .any(|x| x["root"] == tilde("root/app") && x["name"] == "app"),
         "{projects}"
     );
     all.push(("list_projects", projects));
@@ -327,7 +339,7 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
         .await,
     );
     assert_eq!(project["project"]["name"], "app");
-    assert_eq!(project["candidates"][0]["path"], "~/root/app/target");
+    assert_eq!(project["candidates"][0]["path"], tilde("root/app/target"));
     all.push(("inspect_project", project));
 
     let worktrees = assert_ok(
@@ -338,7 +350,7 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
         let wts = worktrees["worktrees"].as_array().unwrap();
         let linked = wts
             .iter()
-            .find(|w| w["path"] == "~/root/repo-wt")
+            .find(|w| w["path"] == tilde("root/repo-wt"))
             .unwrap_or_else(|| panic!("linked worktree listed: {worktrees}"));
         assert_eq!(linked["branch"], "feature");
         assert_eq!(linked["kind"], "linked");
@@ -372,7 +384,11 @@ async fn every_tool_works_on_an_allowlisted_fixture_and_writes_nothing() {
         )
         .await,
     );
-    assert_eq!(large["files"][0]["path"], "~/root/media/big.bin", "{large}");
+    assert_eq!(
+        large["files"][0]["path"],
+        tilde("root/media/big.bin"),
+        "{large}"
+    );
     assert_eq!(large["files"][0]["tier"], "S2");
     assert_eq!(large["files"][0]["action"], "none");
     all.push(("find_large_files", large));
@@ -562,7 +578,7 @@ async fn results_are_capped() {
     assert_eq!(scan["candidates_total"], 5);
     assert_eq!(scan["truncated"], true);
     // Largest reclaimable first.
-    assert_eq!(scan["candidates"][0]["path"], "~/root/p4/target");
+    assert_eq!(scan["candidates"][0]["path"], tilde("root/p4/target"));
 
     let one = assert_ok(
         "get_cleanup_candidates",
@@ -693,7 +709,7 @@ async fn client_roots_narrow_the_allowlist() {
     // it contributes the configured root itself: the intersection is the whole root).
     let status = assert_ok("get_status", &call(&client, "get_status", json!({})).await);
     let roots = status["server"]["allowlisted_roots"].as_array().unwrap();
-    assert!(roots.contains(&json!("~/root/app")), "{status}");
+    assert!(roots.contains(&json!(tilde("root/app"))), "{status}");
     client.cancel().await.unwrap();
 
     let only_app = connect(
@@ -959,7 +975,7 @@ async fn list_caches_reports_package_caches() {
         assert_eq!(caches["total"], 1, "{caches}");
         let c = &caches["caches"][0];
         assert_eq!(c["category"], "package_cache");
-        assert_eq!(c["path"], "~/root/home/.npm/_cacache", "{c}");
+        assert_eq!(c["path"], tilde("root/home/.npm/_cacache"), "{c}");
         assert_ne!(c["tier"], "S0");
     }
     assert!(!caches.to_string().contains(CONTENT_MARKER));
@@ -1175,7 +1191,8 @@ async fn fx_mcp_09_home_prefix_is_redacted_in_all_results() {
             for h in &homes {
                 assert!(!leaks_home(&s, h), "{tool}: home leaked in {s:?}");
             }
-            tildes += usize::from(s.starts_with("~/") || s.contains(" ~/"));
+            tildes +=
+                usize::from(s.starts_with(&tilde("")) || s.contains(&format!(" {}", tilde(""))));
         }
     }
     assert!(tildes > 10, "paths are shown with `~` ({tildes})");
@@ -1213,7 +1230,7 @@ async fn hashed_names_are_stable_and_never_reveal_the_salt() {
     assert!(!a.is_empty());
     for (name, root) in &a {
         assert!(name.starts_with(scull_mcp::HASH_PREFIX), "{name}");
-        assert!(root.starts_with("~/root/h-"), "{root}");
+        assert!(root.starts_with(&tilde("root/h-")), "{root}");
         assert!(!root.contains("app") && !root.contains("web"), "{root}");
     }
     let target = structured(&scan)["candidates"]
@@ -1223,7 +1240,7 @@ async fn hashed_names_are_stable_and_never_reveal_the_salt() {
         .map(|c| c["path"].as_str().unwrap().to_owned())
         .find(|p| p.ends_with("/target"))
         .expect("well-known names stay readable");
-    assert!(target.starts_with("~/root/h-"), "{target}");
+    assert!(target.starts_with(&tilde("root/h-")), "{target}");
     for s in result_strings(&scan) {
         assert!(
             !s.contains("/app/") && !s.contains("/web/"),
@@ -1275,7 +1292,7 @@ async fn check_capacity_reports_free_space_reclaimable_and_verdicts() {
     );
     validate_output(&client, "check_capacity", &cap).await;
     assert_eq!(cap["read_only"], true);
-    assert_eq!(cap["roots"], json!(["~/root"]));
+    assert_eq!(cap["roots"], json!([tilde("root")]));
     assert!(cap["request"].is_null());
     let vol = &cap["volumes"][0];
     assert!(vol["free_bytes"].as_u64().is_some(), "{cap}");
@@ -1433,7 +1450,7 @@ async fn fx_mcp_10_expired_ttl_is_a_review_suggestion_and_nothing_is_deleted() {
     validate_output(&client, "register_worktree", &reg).await;
     assert_eq!(reg["metadata_only"], true);
     assert_eq!(reg["ttl"], "7d");
-    assert_eq!(reg["registration"]["path"], "~/root/repo-wt", "{reg}");
+    assert_eq!(reg["registration"]["path"], tilde("root/repo-wt"), "{reg}");
     assert_eq!(reg["registration"]["ttl_secs"], 7 * 86_400);
     assert_eq!(reg["registration"]["expired"], false);
     assert_eq!(reg["registration"]["source"], "mcp");
@@ -1489,7 +1506,7 @@ async fn fx_mcp_10_expired_ttl_is_a_review_suggestion_and_nothing_is_deleted() {
     );
     let sugg = cap["review_suggestions"].as_array().unwrap();
     assert_eq!(sugg.len(), 1, "{cap}");
-    assert_eq!(sugg[0]["registration"]["path"], "~/root/repo-wt");
+    assert_eq!(sugg[0]["registration"]["path"], tilde("root/repo-wt"));
     assert_eq!(sugg[0]["registration"]["expired"], true);
     let reason = sugg[0]["reason"].as_str().unwrap();
     assert!(

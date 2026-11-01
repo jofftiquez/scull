@@ -523,6 +523,57 @@ fn gap5_undecidable_unresolved_entry_makes_every_candidate_at_least_s2() {
     assert_read_only(&fx, &r.candidates);
 }
 
+/// An entry that can't be opened or resolved, whose parent can still be listed (Windows'
+/// built-in `C:\System Volume Information` is like this: even an attribute-only open is
+/// refused). Simulated with a readable but unsearchable parent (`r--`). Listed as a plain
+/// folder it isn't a link, so where it is is decided and candidates elsewhere are left alone;
+/// listed as a link it stays undecided and every candidate is at least S2.
+#[cfg(unix)]
+#[test]
+fn gap5_unopenable_entry_is_decided_by_its_parents_listing_unless_a_link() {
+    use std::os::unix::fs::PermissionsExt;
+    for link in [false, true] {
+        let mut fx = Fixture::new().unwrap();
+        fx.cargo_project("app", "app")
+            .unwrap()
+            .cargo_target("app", "app", 1024)
+            .unwrap();
+        fx.checkpoint().unwrap();
+        let root = canon(fx.root());
+        let outside = tempfile::tempdir().unwrap();
+        let listable = outside.path().join("listable");
+        std::fs::create_dir(&listable).unwrap();
+        let inner = listable.join("inner");
+        if link {
+            // It could point anywhere, the scanned tree included.
+            std::os::unix::fs::symlink(&root, &inner).unwrap();
+        } else {
+            std::fs::create_dir(&inner).unwrap();
+        }
+        std::fs::set_permissions(&listable, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let bypass = std::fs::symlink_metadata(&inner).is_ok();
+        let mut config = Config::default();
+        config.scan.protect.insert(inner.clone());
+        let r = (!bypass).then(|| scan(&engine(native(), config, false), &root));
+        std::fs::set_permissions(&listable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let Some(r) = r else {
+            eprintln!("skipping: running with permission override (root)");
+            return;
+        };
+        // Disclosed either way: the entry itself could not be resolved.
+        assert!(disclosed(&r, "protection"), "{:#?}", r.signals_unavailable);
+        let t = at(&r, &root, "app/target");
+        if link {
+            at_least(t, Tier::S2);
+            assert!(unavailable(t, "protection"), "{t:#?}");
+        } else {
+            assert_eq!(t.tier, Tier::S0, "{t:#?}");
+            assert!(!unavailable(t, "protection"), "{t:#?}");
+        }
+        assert_read_only(&fx, &r.candidates);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Gap 6: a package cache with an unmeasured subtree is S2 without a tool command
 // ---------------------------------------------------------------------------------------------

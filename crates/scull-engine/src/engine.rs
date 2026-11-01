@@ -1091,6 +1091,33 @@ impl UnresolvedEntry {
     }
 }
 
+/// Where an unresolvable protection entry really is, if that can be known for sure: its real
+/// path, or else its parent's real path plus its name when the parent's listing shows it as a
+/// plain folder or file. Not a link, it can't stand for any other location.
+///
+/// The second form is for entries that refuse even an attribute-only open, which Windows'
+/// own `C:\System Volume Information` does: neither its metadata nor its real path can be
+/// read, but the listing of `C:\` (no open of the entry) says it is an ordinary folder. A
+/// link, an unknown kind, or a name the listing doesn't show as spelled (e.g. a short 8.3
+/// name) leaves the location undecided, which keeps every candidate at least S2.
+fn real_location(platform: &dyn Platform, path: &Path) -> Option<PathBuf> {
+    if let Some(real) = canon_exact(path) {
+        return Some(real);
+    }
+    let name = path.file_name()?;
+    let parent = canon_exact(path.parent()?)?;
+    let listed = platform
+        .read_dir(&parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|e| e.file_name == name)?;
+    matches!(
+        listed.kind,
+        scull_platform::EntryKind::Dir | scull_platform::EntryKind::File
+    )
+    .then(|| parent.join(name))
+}
+
 /// Classification context after the walk.
 struct Post<'a> {
     engine: &'a Engine,
@@ -1127,7 +1154,7 @@ impl<'a> Post<'a> {
             .unresolved()
             .iter()
             .map(|u| {
-                let real = canon_exact(&u.path);
+                let real = real_location(platform, &u.path);
                 let mut forms = vec![u.path.clone(), canon(&u.path)];
                 forms.extend(real.clone());
                 UnresolvedEntry {
