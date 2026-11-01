@@ -1,4 +1,4 @@
-//! Nothing is created outside the fixture (P2-EXEC-13, HANDOVER rule 2).
+//! Nothing is created outside the fixture (P2-EXEC-13).
 //!
 //! The places scull would put things on its own, above a fixture's temp dir, are snapshotted
 //! when the fixture is created and compared by [`check_invariants`](crate::check_invariants)

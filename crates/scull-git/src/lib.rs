@@ -21,7 +21,7 @@
 //!   artifact-only cleanup is allowed. A present worktree is never S0 (GIT-04); branches are
 //!   never deleted.
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` for responsibilities and boundaries.
 
 mod activity;
 mod classify;

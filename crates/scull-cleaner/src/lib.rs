@@ -1,6 +1,6 @@
 //! The Executor: the only code path in scull that deletes anything (SAFE-10).
 //!
-//! See `docs/PRD.md` §10 and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` and `docs/user/SAFETY.md` for responsibilities and boundaries.
 //!
 //! * [`Executor`]: takes one already verified and narrowed plan item
 //!   ([`scull_core::narrow`]) and deletes it through the platform's handle-relative, no-follow
@@ -68,7 +68,11 @@
 //! P2-EXEC-11 / #77. The Trash fallback (P2-EXEC-07, #73) and the measured free-space delta
 //! (P2-EXEC-10, #76) are in this crate.
 //!
-//! The desktop app and the MCP server do not call the Executor yet. The inspect-only release
+//! Agent plans (P4-MCP-01): `scull mcp serve --allow-destructive` executes plans an AI agent
+//! prepared through the same path, only after the user approved them out of band
+//! (`scull approve`); [`Executor::begin_operation`] consumes that approval atomically and
+//! refuses an MCP plan without it, and [`Executor::execute_plan`] refuses an MCP plan outside
+//! that operation (MCP-04). The desktop app does not call the Executor yet. The inspect-only release
 //! gate (`packaging/check_inspect_only.py`) applies to `main`, where this wiring does not exist;
 //! on `phase2` it is expected to fail.
 //!

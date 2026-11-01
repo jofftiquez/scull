@@ -206,7 +206,7 @@ fn serves_read_only_tools_over_stdio() {
             .exists()
     );
 
-    // Second start: no disclosure; --allow-destructive changes nothing.
+    // Second start: no disclosure; --allow-destructive alone changes nothing (FX-MCP-07).
     let mut s = Session::start(env.command(home, &["--allow-destructive"]));
     s.initialize();
     let list = s.request("tools/list", json!({}));
@@ -217,7 +217,7 @@ fn serves_read_only_tools_over_stdio() {
     let (code, err) = s.finish();
     assert_eq!(code, Some(0), "{err}");
     assert!(!err.contains("privacy notice"), "{err}");
-    assert!(err.contains("no destructive MCP tools"), "{err}");
+    assert!(err.contains("both are required"), "{err}");
     // No history database: MCP calls record nothing.
     assert!(!env.scull_home.path().join("data").join("scull.db").exists());
     fx.check_invariants(&InvariantInputs::new()).assert_ok();

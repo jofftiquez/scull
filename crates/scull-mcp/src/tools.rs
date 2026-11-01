@@ -78,7 +78,7 @@ pub struct ToolError {
 }
 
 impl ToolError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -111,7 +111,7 @@ pub struct Output {
     pub summary: String,
 }
 
-fn output<T: Serialize>(data: &T, summary: String) -> Result<Output, ToolError> {
+pub(crate) fn output<T: Serialize>(data: &T, summary: String) -> Result<Output, ToolError> {
     let structured = serde_json::to_value(data)
         .map_err(|e| ToolError::new("internal", format!("serialization failed: {e}")))?;
     Ok(Output {
@@ -205,7 +205,11 @@ impl Ctx {
     }
 
     /// The roots to scan: the checked `path`, or every allowlisted root.
-    fn targets(&self, allow: &Allowlist, path: Option<&str>) -> Result<Vec<PathBuf>, ToolError> {
+    pub(crate) fn targets(
+        &self,
+        allow: &Allowlist,
+        path: Option<&str>,
+    ) -> Result<Vec<PathBuf>, ToolError> {
         match path {
             Some(p) => Ok(vec![allow.check(p)?]),
             None if allow.is_empty() => Err(Refusal::NoRoots.into()),
@@ -325,7 +329,7 @@ pub struct RegisterArgs {
     pub ttl: String,
 }
 
-fn parse<T: DeserializeOwned>(args: JsonObject) -> Result<T, ToolError> {
+pub(crate) fn parse<T: DeserializeOwned>(args: JsonObject) -> Result<T, ToolError> {
     serde_json::from_value(Value::Object(args))
         .map_err(|e| ToolError::new("invalid_arguments", e.to_string()))
 }

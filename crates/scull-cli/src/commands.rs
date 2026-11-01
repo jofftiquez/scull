@@ -23,13 +23,6 @@ pub struct Planned {
     pub issue: Option<u32>,
 }
 
-const fn planned(name: &'static str, issue: u32) -> Option<Planned> {
-    Some(Planned {
-        name,
-        issue: Some(issue),
-    })
-}
-
 /// The tracking issue for a command that is not implemented yet, or `None` if the command is
 /// implemented in this build.
 pub fn planned_for(cmd: &Command) -> Option<Planned> {
@@ -49,7 +42,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         },
         Command::LargeFiles { .. } => None,
         Command::History(_) | Command::Restore(_) => None,
-        Command::Approve { .. } => planned("approve", 108),
+        Command::Approve { .. } => None,
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
@@ -134,6 +127,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Approve { plan_id } => crate::cmd::approve::run(plan_id.as_deref(), ui)?,
         Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
@@ -215,7 +209,6 @@ mod tests {
     #[test]
     fn every_planned_command_names_its_issue() {
         let table: &[(&[&str], &str, Option<u32>)] = &[
-            (&["approve", "plan-1"], "approve", Some(108)),
             (&["insights", "purge"], "insights purge", Some(266)),
             (
                 &["insights", "purge", "--older-than", "90d", "--confirm"],
@@ -255,6 +248,8 @@ mod tests {
             &["restore", "op_1"],
             &["clean", "--purge-quarantine"],
             &["clean", "caches", "--confirm", "--wipe"],
+            &["approve"],
+            &["approve", "plan-1"],
             &["schedule", "enable"],
             &["schedule", "disable"],
             &["schedule", "status"],
