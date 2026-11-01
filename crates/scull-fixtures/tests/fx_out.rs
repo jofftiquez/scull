@@ -1008,6 +1008,25 @@ fn fx_out_03_cli_and_mcp_plan_identical_contents() {
     let r = s(fx.root());
 
     let mut m = Mcp::start_with(&cli, &["mcp", "serve", "--allow-destructive"]);
+    if scull_platform::is_elevated().blocks_destructive() {
+        // SAFE-14: elevated (GitHub's Windows runners), the server never offers the plan tools,
+        // so there is no MCP plan to compare; the non-elevated Windows run is #65.
+        let tools = m.request("tools/list", json!({}));
+        let names: Vec<&str> = tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"prepare_cleanup"), "{names:?}");
+        assert_eq!(m.finish(), Some(0));
+        eprintln!(
+            "SKIP fx_out_03_cli_and_mcp_plan_identical_contents: running elevated, so scull mcp \
+             serves read-only tools (SAFE-14)"
+        );
+        check(&fx);
+        return;
+    }
     let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));
     let ids: Vec<String> = cands["candidates"]
         .as_array()
