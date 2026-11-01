@@ -178,10 +178,15 @@ pub enum Command {
     /// Restore quarantined items of a past operation to where they were (never overwriting).
     Restore(RestoreArgs),
 
-    /// Approve a cleanup plan an AI agent prepared through MCP (interactive terminal only).
+    /// Approve a cleanup plan an AI agent prepared through MCP, or revoke an approval before
+    /// the agent uses it (interactive terminal only).
     Approve {
-        /// Plan ID to approve; omit to list the agent plans awaiting approval.
+        /// Plan ID to approve; omit to list the agent plans awaiting approval (and the approved
+        /// ones not yet run).
         plan_id: Option<String>,
+        /// Revoke the approval of this plan before the agent executes it.
+        #[arg(long, value_name = "PLAN_ID", conflicts_with = "plan_id")]
+        revoke: Option<String>,
     },
 
     /// List or validate detection rules.

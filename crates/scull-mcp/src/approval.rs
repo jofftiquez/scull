@@ -36,6 +36,11 @@
 //!    `execute_cleanup` ([`record_execute_refusal`]; the Executor's gate records its own).
 //!    They hold codes and identifiers only, never a confirmation code, and recording one
 //!    never creates, changes or spends an approval.
+//! 6. Until the agent executes it, the human can **revoke** the approval ([`revoke`]:
+//!    `scull approve --revoke <plan-id>` in their terminal, or the desktop dialog). Revoking
+//!    spends the approval in the same atomic update the Executor uses to consume it, so a
+//!    revocation and a concurrent execution can't both win: exactly one does. It is audited
+//!    in the same transaction, and the plan reports [`ApprovalState::Revoked`].
 //!
 //! # What the confirmation code is for, and what it is not
 //!
@@ -60,7 +65,9 @@
 //! [`awaiting`] (pending MCP plans, newest first, as [`PlanSummary`]), [`begin`] (a
 //! [`Challenge`] holding the plan as reviewed and the code to show; keep it in memory, never
 //! send it to the agent), [`approve`] (with [`HumanChannel::Desktop`] and the typed code) and
-//! [`status`]; when the human cancels the dialog, [`record_denial`] with [`Denial::Denied`].
+//! [`status`]; when the human cancels the dialog, [`record_denial`] with [`Denial::Denied`];
+//! [`revocable`] lists approved plans not yet run and [`revoke`] (with
+//! [`HumanChannel::Desktop`]) withdraws one.
 //! Each takes the store, the [`Principal`] (this machine's ID and the current user) and the
 //! current time; nothing here touches the disk beyond the store.
 
@@ -159,6 +166,8 @@ pub enum Reason {
     Store,
     /// The OS random number generator failed (no confirmation code could be drawn).
     RandomUnavailable,
+    /// The human revoked the approval before it was used (#298).
+    ApprovalRevoked,
 }
 
 impl Reason {
@@ -180,6 +189,7 @@ impl Reason {
             Reason::ReviewedPlanDiffers => "reviewed_plan_differs",
             Reason::Store => "store",
             Reason::RandomUnavailable => "random_unavailable",
+            Reason::ApprovalRevoked => "approval_revoked",
         }
     }
 
@@ -198,7 +208,8 @@ impl Reason {
             | Reason::AlreadyApproved
             | Reason::ApprovalUsed
             | Reason::NotHuman
-            | Reason::WrongCode => ErrorKind::SafetyBlocked,
+            | Reason::WrongCode
+            | Reason::ApprovalRevoked => ErrorKind::SafetyBlocked,
             Reason::Store | Reason::RandomUnavailable => ErrorKind::Io,
         }
     }
@@ -555,6 +566,8 @@ pub enum ApprovalState {
     Used,
     /// The plan or its approval expired unused.
     Expired,
+    /// The human revoked the approval before it was used: nothing will run.
+    Revoked,
 }
 
 /// The approval status of a plan. Contains no token and no code: nothing in it can approve
@@ -597,9 +610,12 @@ pub fn status(
     }
     let approval = store.get_approval(id).map_err(store_err)?;
     let plan_live = now < plan.expires_unix();
+    let revoked = approval.as_ref().is_some_and(|a| a.used_at.is_some())
+        && store.approval_revoked(id).map_err(store_err)?;
     let state = match &approval {
         None if plan_live => ApprovalState::AwaitingApproval,
         None => ApprovalState::Expired,
+        Some(_) if revoked => ApprovalState::Revoked,
         Some(a) if a.used_at.is_some() => ApprovalState::Used,
         Some(a) if plan_live && now < a.expires_at => ApprovalState::Approved,
         Some(_) => ApprovalState::Expired,
@@ -655,7 +671,7 @@ pub fn authorize(
             if let Ok(Some(a)) = store.get_approval(id)
                 && a.used_at.is_some()
             {
-                return Err(used(id));
+                return Err(spent(store, id));
             }
             return Err(r);
         }
@@ -684,7 +700,7 @@ pub fn authorize(
         ));
     }
     if approval.used_at.is_some() {
-        return Err(used(id));
+        return Err(spent(store, id));
     }
     if now < approval.approved_at || now >= approval.expires_at {
         return Err(Refused::new(
@@ -696,6 +712,24 @@ pub fn authorize(
         ));
     }
     Ok(Authorized { plan, approval })
+}
+
+/// The refusal for a spent approval: revoked by the human, or used.
+fn spent(store: &Store, id: &PlanId) -> Refused {
+    if store.approval_revoked(id).unwrap_or(false) {
+        return revoked(id);
+    }
+    used(id)
+}
+
+fn revoked(id: &PlanId) -> Refused {
+    Refused::new(
+        Reason::ApprovalRevoked,
+        format!(
+            "the user revoked the approval of plan {id}: it will not run. Nothing was changed; \
+             prepare a new plan only if the user still wants this cleanup"
+        ),
+    )
 }
 
 fn used(id: &PlanId) -> Refused {
@@ -824,6 +858,160 @@ pub fn void(store: &mut Store, plan: &Plan, now: i64) -> Result<bool, Refused> {
     store
         .consume_approval(plan.id(), plan.content_hash(), now)
         .map_err(store_err)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Revoking an approval (#298)
+// ---------------------------------------------------------------------------------------------
+
+/// A revoked approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct Revoked {
+    /// The plan whose approval was revoked.
+    pub plan_id: String,
+    /// Its content hash.
+    pub content_hash: String,
+    /// When (Unix seconds).
+    pub revoked_at: i64,
+    /// How: `terminal` or `desktop`.
+    pub channel: String,
+}
+
+/// Revoke the human approval of MCP plan `id` before the agent uses it (#298), through
+/// `channel` (the `scull approve --revoke` terminal or the desktop dialog). Same principal
+/// checks as approving: an agent plan of this machine and user, approved by this user. The
+/// approval is spent in the same atomic update the Executor uses to consume it, and the
+/// revocation is audited ([`scull_storage::EventKind::ApprovalRevoked`]) in that
+/// transaction: if the agent's execution started first, the revocation is refused with
+/// [`Reason::ApprovalUsed`] and nothing is written. Refused with [`Reason::NotApproved`]
+/// when there is no approval (the plan just expires unused), [`Reason::ApprovalRevoked`]
+/// when already revoked, [`Reason::ApprovalExpired`] when it lapsed. Never creates an
+/// approval. Every refusal is audited as `revoke_refused` with its reason code (that
+/// event says nothing about the approval itself).
+pub fn revoke(
+    store: &mut Store,
+    id: &PlanId,
+    channel: HumanChannel,
+    who: &Principal,
+    now: i64,
+) -> Result<Revoked, Refused> {
+    let r = revoke_checked(store, id, channel, who, now);
+    if let Err(refusal) = &r {
+        // Audited (bounded like every refusal); the outcome stands either way.
+        let _ = store.record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::RevokeRefused,
+            source: channel_source(channel).into(),
+            plan_id: Some(id.clone()),
+            content_hash: recorded_hash(store, id),
+            reason: refusal.reason.code().into(),
+            channel: channel_name(channel.method()).into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            count: 1,
+        });
+    }
+    r
+}
+
+fn channel_source(channel: HumanChannel) -> &'static str {
+    match channel {
+        HumanChannel::Terminal => "cli",
+        HumanChannel::Desktop => "desktop",
+    }
+}
+
+fn revoke_checked(
+    store: &mut Store,
+    id: &PlanId,
+    channel: HumanChannel,
+    who: &Principal,
+    now: i64,
+) -> Result<Revoked, Refused> {
+    let plan = recorded_plan(store, id)?;
+    if plan.machine_id() != who.machine_id || plan.user() != who.user {
+        return Err(Refused::new(
+            Reason::PlanForeign,
+            format!("plan {id} was prepared for another machine or user"),
+        ));
+    }
+    let Some(approval) = store.get_approval(id).map_err(store_err)? else {
+        return Err(Refused::new(
+            Reason::NotApproved,
+            format!("plan {id} has no approval to revoke; unapproved, it expires unused"),
+        ));
+    };
+    if approval.approver != who.user {
+        return Err(Refused::new(
+            Reason::PlanForeign,
+            format!("plan {id} was approved by another account"),
+        ));
+    }
+    let refusal = |store: &Store, approval: &Approval| {
+        if approval.used_at.is_some() {
+            spent(store, id)
+        } else {
+            Refused::new(
+                Reason::ApprovalExpired,
+                format!("the approval of plan {id} already expired; nothing can run it"),
+            )
+        }
+    };
+    if approval.used_at.is_some() || now < approval.approved_at || now >= approval.expires_at {
+        return Err(refusal(store, &approval));
+    }
+    let source = match channel {
+        HumanChannel::Terminal => "cli",
+        HumanChannel::Desktop => "desktop",
+    };
+    let audit = AgentAuditEvent {
+        event_id: 0,
+        at: now,
+        kind: EventKind::ApprovalRevoked,
+        source: source.into(),
+        plan_id: Some(id.clone()),
+        content_hash: Some(approval.content_hash.clone()),
+        reason: "revoked".into(),
+        channel: channel_name(channel.method()).into(),
+        machine_id: who.machine_id.clone(),
+        user: who.user.clone(),
+        count: 1,
+    };
+    let done = store
+        .revoke_approval(id, &approval.content_hash, now, &audit)
+        .map_err(store_err)?;
+    if !done {
+        // Lost the race (the Executor consumed it first) or it lapsed meanwhile.
+        let now_approval = store
+            .get_approval(id)
+            .map_err(store_err)?
+            .unwrap_or(approval);
+        return Err(refusal(store, &now_approval));
+    }
+    Ok(Revoked {
+        plan_id: id.as_str().to_owned(),
+        content_hash: plan.content_hash().as_str().to_owned(),
+        revoked_at: now,
+        channel: channel_name(channel.method()).to_owned(),
+    })
+}
+
+/// MCP plans of `who` with an approval that is unused and unexpired at `now` (approved, not
+/// yet run): what [`revoke`] can withdraw, newest first (at most [`AWAITING_LIMIT`]).
+pub fn revocable(store: &Store, who: &Principal, now: i64) -> Result<Vec<PlanSummary>, Refused> {
+    let ids = store
+        .plans_with_live_approval(PlanOrigin::Mcp, now, AWAITING_LIMIT)
+        .map_err(store_err)?;
+    let mut out = Vec::new();
+    for id in ids {
+        if let Ok(Some(plan)) = store.get_plan(&id)
+            && plan.verify(now, &who.machine_id, &who.user).is_ok()
+        {
+            out.push(PlanSummary::of(&plan));
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------------------------

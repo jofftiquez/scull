@@ -132,7 +132,7 @@ It is never offered when scull runs as root or administrator.
 |---|---|
 | `prepare_cleanup` | Records a plan of exact item IDs from `get_cleanup_candidates`. Changes nothing. Plans expire after 15 minutes. |
 | `get_cleanup_plan` | The plan's items, tiers, actions and approval state |
-| `get_approval_status` | `awaiting_approval`, `approved`, `used` or `expired`. Never reveals or creates an approval. |
+| `get_approval_status` | `awaiting_approval`, `approved`, `used`, `revoked` or `expired`. Never reveals or creates an approval. |
 | `execute_cleanup` | Runs an approved plan once, through the same Executor as `scull clean` |
 | `get_cleanup_status` | Not yet run, voided, or the recorded outcome per item |
 
@@ -148,6 +148,13 @@ How a cleanup goes:
    right before it is touched; S0 items are deleted, S1/S2 items quarantined (`scull restore`
    puts them back).
 
+Changed your mind after approving? Run `scull approve --revoke <plan-id>` in your terminal
+before the agent executes it (`scull approve` with no plan ID lists approved plans not yet
+run). The approval is withdrawn in the same atomic step that execution uses to claim it, so
+exactly one of the two happens: either the revocation is refused because the cleanup already
+started, or `execute_cleanup` is refused with `approval_revoked` and nothing runs. The plan
+then reports `revoked`.
+
 ### What is recorded
 
 The plan, your approval (channel and account) and the operation with every item's outcome
@@ -159,8 +166,10 @@ Everything that was **refused** is recorded too, and `scull history` lists it un
 | Recorded as | When | Reason codes |
 |---|---|---|
 | `approval_denied` | `scull approve` ended without an approval | `denied` (you typed `deny`, an empty line, or closed the input), `wrong_code` (three wrong codes), `no_terminal` (run without a terminal, when scull's database already exists), or why the attempt was refused (`plan_expired`, `plan_foreign`, `unknown_plan`, `already_approved`, `reviewed_plan_differs`, ...) |
-| `execute_refused` by `mcp` | The server refused `execute_cleanup` | `invalid_arguments` (including any attempt to pass a code), `unknown_plan`, `plan_foreign`, `plan_expired`, `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `plan_changed` (void), `outside_allowlist`, `lock_held` |
-| `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
+| `execute_refused` by `mcp` | The server refused `execute_cleanup` | `invalid_arguments` (including any attempt to pass a code), `unknown_plan`, `plan_foreign`, `plan_expired`, `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `plan_changed` (void), `outside_allowlist`, `lock_held` |
+| `approval_revoked` | You revoked an approval before it was used (recorded in the same transaction; nothing else can write this entry) | `revoked` |
+| `revoke_refused` | A revocation was refused | `not_approved`, `approval_used` (the cleanup already started), `approval_revoked`, `approval_expired`, `plan_foreign`, `unknown_plan` |
+| `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
 
 Each entry holds the reason code, the plan ID and its content hash, the channel
 (`terminal`, `desktop` or `mcp`), what recorded it, the machine ID and your account. Never a

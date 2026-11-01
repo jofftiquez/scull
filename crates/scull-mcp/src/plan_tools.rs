@@ -262,8 +262,8 @@ pub struct OperationView {
 pub struct CleanupStatusOutput {
     /// Plan ID.
     pub plan_id: String,
-    /// `awaiting_approval`, `approved`, `executed`, `voided` (items changed, D-34) or
-    /// `expired`.
+    /// `awaiting_approval`, `approved`, `executed`, `voided` (items changed, D-34),
+    /// `revoked` (the user withdrew the approval) or `expired`.
     pub state: String,
     /// Where the approval stands.
     pub approval: ApprovalStatus,
@@ -319,7 +319,7 @@ pub fn definitions() -> Vec<Tool> {
         tool::<PlanIdArgs, ApprovalStatus>(
             "get_approval_status",
             "Get approval status",
-            "Whether the user has approved a plan yet (awaiting_approval, approved, used, \
+            "Whether the user has approved a plan yet (awaiting_approval, approved, used, revoked, \
              expired). Read-only; it never reveals or creates an approval.",
             true,
             false,
@@ -553,6 +553,7 @@ fn state_name(s: ApprovalState) -> &'static str {
         ApprovalState::Approved => "approved",
         ApprovalState::Used => "approval used",
         ApprovalState::Expired => "expired",
+        ApprovalState::Revoked => "approval revoked by the user",
     }
 }
 
@@ -566,6 +567,9 @@ fn next_step(id: &PlanId, s: &ApprovalStatus) -> String {
         ApprovalState::Expired => {
             "Expired: prepare a new plan if a cleanup is still wanted.".into()
         }
+        ApprovalState::Revoked => "The user revoked the approval: this plan will not run. Do \
+             not prepare it again unless the user asks."
+            .into(),
     }
 }
 
@@ -804,6 +808,7 @@ fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output,
         (None, ApprovalState::AwaitingApproval) => "awaiting_approval",
         (None, ApprovalState::Approved) => "approved",
         (None, ApprovalState::Expired) => "expired",
+        (None, ApprovalState::Revoked) => "revoked",
     };
     let out = CleanupStatusOutput {
         plan_id: id.as_str().to_owned(),
