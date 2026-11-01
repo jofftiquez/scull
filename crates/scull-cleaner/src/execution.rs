@@ -10,7 +10,9 @@ use crate::operation::Operation;
 use crate::quarantine::{QuarantineRefusal, Quarantined};
 use crate::revalidate::{Revalidated, Revalidation, Skip};
 use crate::trash::TrashReport;
-use scull_core::{Action, ErrorKind, FsPath, ItemId, Plan, PlanId, ScullError, Sizes, Tier};
+use scull_core::{
+    Action, ErrorKind, FsPath, ItemId, Plan, PlanId, PlanOrigin, ScullError, Sizes, Tier,
+};
 use scull_engine::{CancelToken, now_unix};
 use scull_platform::remove::{RemoveOutcome, RemoveReport, WalkEvent};
 use scull_platform::{Native, Platform};
@@ -224,6 +226,11 @@ impl Executor {
     /// then execute it. An item that fails revalidation is skipped and reported; the others
     /// continue (SAFE-05).
     ///
+    /// A plan prepared by the MCP server ([`PlanOrigin::Mcp`]) is refused
+    /// ([`ErrorKind::SafetyBlocked`]) unless `operation` is the one
+    /// [`Executor::begin_operation`] started for it, which consumed its human approval
+    /// (MCP-04).
+    ///
     /// With an `operation` ([`Executor::begin_operation`]), every mutating step is announced
     /// first in the operation's write-ahead journal and closed after it (SAFE-19, see
     /// [`crate::journal`]; [`Executor::recover`] reconciles what a crash left open), every
@@ -265,6 +272,20 @@ impl Executor {
             ));
         }
         plan.verify(ctx.now_unix, ctx.machine_id, ctx.user)?;
+        // MCP-04: an agent's plan runs only inside the operation that consumed its human
+        // approval (`begin_operation`), never on its own.
+        if plan.origin() == PlanOrigin::Mcp
+            && !operation.as_deref().is_some_and(|op| op.is_for(plan))
+        {
+            return Err(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                format!(
+                    "plan {} was prepared by an AI agent: it runs only inside the operation that \
+                     consumed its human approval (MCP-04); nothing was changed",
+                    plan.id()
+                ),
+            ));
+        }
         let mut report = ExecutionReport {
             plan_id: plan.id().clone(),
             items: Vec::with_capacity(plan.items().len()),

@@ -6,7 +6,7 @@ use crate::migrate::{MIGRATIONS, Migration, check_compatible, migrate, user_vers
 use crate::perms::OwnerOnly;
 use crate::records::{Approval, ApprovalMethod, NewApproval, ScanFinish, ScanStart};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
-use scull_core::{Candidate, ContentHash, ErrorKind, Plan, PlanId};
+use scull_core::{Candidate, ContentHash, ErrorKind, Plan, PlanId, PlanOrigin};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -427,6 +427,32 @@ impl Store {
             )?;
             Ok(changed == 1)
         })
+    }
+
+    /// Plans made by `origin` that are still awaiting an approval at `now`: unexpired
+    /// (`now < expires_at`) and without any approval record. Newest first, at most `limit`.
+    /// Used to list what a human can approve (`scull approve`, the desktop dialog; §13.3).
+    pub fn plans_awaiting_approval(
+        &self,
+        origin: PlanOrigin,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<PlanId>> {
+        let origin = serde_name(&origin)?;
+        let ids: Vec<String> = self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT plan_id FROM plans p WHERE p.origin = ?1 AND ?2 < p.expires_at \
+                 AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.plan_id = p.plan_id) \
+                 ORDER BY p.created_at DESC, p.plan_id DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![origin, now, limit], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })?;
+        ids.into_iter()
+            .map(|id| {
+                PlanId::try_from(id).map_err(|e| StoreError::rejected(ErrorKind::Internal, e))
+            })
+            .collect()
     }
 
     /// Run `f` in a `BEGIN IMMEDIATE` transaction (waits up to the busy timeout for the write

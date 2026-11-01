@@ -3,10 +3,19 @@
 //! `scull mcp serve` runs [`ScullMcp`] over stdin/stdout with the official Rust SDK (`rmcp`,
 //! pinned exactly). There is no network listener (MCP-01).
 //!
-//! * **Read-only tools only** ([`TOOL_NAMES`]): `get_storage_overview`, `scan_directory`,
-//!   `list_projects`, `inspect_project`, `list_worktrees`, `inspect_worktree`, `list_caches`,
-//!   `find_large_files`, `get_cleanup_candidates`, `get_cleanup_history`, `get_status`. No
-//!   plan or execute tools exist in this version, whatever the configuration says.
+//! * **Read-only tools by default** ([`TOOL_NAMES`]): `get_storage_overview`,
+//!   `scan_directory`, `list_projects`, `inspect_project`, `list_worktrees`,
+//!   `inspect_worktree`, `list_caches`, `find_large_files`, `get_cleanup_candidates`,
+//!   `get_cleanup_history`, `get_status`.
+//! * **Plan and execute tools only in destructive mode** ([`PLAN_TOOL_NAMES`], MCP-04):
+//!   `prepare_cleanup`, `get_cleanup_plan`, `get_approval_status`, `execute_cleanup`,
+//!   `get_cleanup_status`, offered only when `[mcp] destructive = true` is in the user config
+//!   file **and** the server was launched with `--allow-destructive`
+//!   ([`ScullMcp::with_plan_tools`], FX-MCP-07). The agent can prepare a plan but never approve
+//!   it: the human approves it outside the model with `scull approve <plan-id>` in their own
+//!   terminal or in the desktop app ([`approval`], the approval broker). Execution runs through
+//!   a [`CleanupRunner`] the CLI implements with `scull-cleaner`'s Executor, which consumes the
+//!   approval and revalidates every item.
 //! * **Allowlisted roots** ([`Allowlist`], MCP-03): the configured scan roots, narrowed to the
 //!   client's MCP roots when it offers them. Every path argument is checked by shape, lexical
 //!   containment and canonical (symlink-resolved) containment before anything else sees it;
@@ -22,8 +31,9 @@
 //! * **Privacy** (MCP-05, T-44): the home folder prefix is shown as `~` by default
 //!   (`mcp.redact_home`); `mcp.hash_names` hashes project and folder names with a per-machine
 //!   salt that is never returned. The CLI prints [`DISCLOSURE`] when MCP is first enabled.
-//! * **Nothing is written**: scans run without a history store and the history database is
-//!   opened read-only. This crate never depends on `scull-cleaner` (SAFE-10).
+//! * **Nothing is written** by the read-only tools: scans run without a history store and the
+//!   history database is opened read-only. In destructive mode, `prepare_cleanup` records the
+//!   plan in scull's database. This crate never depends on `scull-cleaner` (SAFE-10).
 //!
 //! # Connecting a client
 //!
@@ -36,8 +46,10 @@
 //!   `[mcp_servers.scull]` / `command = "scull"` / `args = ["mcp", "serve"]`
 
 mod allowlist;
+pub mod approval;
 mod escape;
 mod history;
+mod plan_tools;
 mod redact;
 mod server;
 mod tools;
@@ -45,6 +57,11 @@ mod views;
 
 pub use allowlist::{Allowlist, MAX_PATH_ARG_BYTES, Refusal, Root, path_from_file_uri};
 pub use escape::{Suspicion, TRUNCATION_MARKER, escape, needs_escape, suspicion};
+pub use plan_tools::{
+    CleanupRunner, CleanupStatusOutput, ExecuteOutput, ItemOutcomeView, MAX_PLAN_ITEMS,
+    OperationView, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanIdArgs, PlanItemView, PlanOutput,
+    PrepareArgs, RunItem, RunRequest, RunSummary,
+};
 pub use redact::{
     HASH_PREFIX, MAX_NAME_CHARS, MAX_PATH_CHARS, MAX_STRING_CHARS, MAX_TEXT_CHARS, NameFlag,
     NameSalt, OMITTED_TEXT, Redactor, SALT_FILE,
@@ -64,6 +81,9 @@ scull MCP server: privacy notice
   AI client that started the server, and possibly to that client's cloud model provider. This
   is the one exception to scull keeping everything on your machine.
   * Tools are read-only: they cannot delete, move or change anything, or approve a cleanup.
+    (Cleanup tools exist only if you set mcp.destructive = true and start the server with
+    --allow-destructive; even then nothing runs until you approve the plan yourself with
+    `scull approve` in your own terminal.)
   * Only folders under your configured scan roots (scan.roots) can be inspected.
   * Your home folder is shown as `~` (mcp.redact_home = true). Set mcp.hash_names = true to
     hide project and folder names, and mcp.max_results to limit result sizes.

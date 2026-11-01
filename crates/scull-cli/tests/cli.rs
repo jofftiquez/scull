@@ -146,7 +146,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
             &["worktrees", "register", ".", "--ttl", "7d"],
             "(tracked in #111)",
         ),
-        (&["approve", "p"], "(tracked in #108)"),
         (&["check"], "(tracked in #114)"),
         (&["insights"], "(tracked in #116)"),
         (&["agent", "install", "codex"], "(tracked in #110)"),

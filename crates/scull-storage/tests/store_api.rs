@@ -269,6 +269,37 @@ fn approval_is_single_use() {
     assert_eq!(rejected_kind(err), ErrorKind::Usage);
 }
 
+/// What a human can approve (§13.3): unexpired plans of one origin without an approval
+/// record, newest first; approved, expired and other-origin plans are left out.
+#[test]
+fn plans_awaiting_approval_lists_unapproved_unexpired_plans_of_one_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = open(&db_in(&dir));
+    for n in 1..=3 {
+        s.insert_plan(&plan(n)).unwrap();
+    }
+    let ids = |s: &scull_storage::Store, now| {
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, now, 10)
+            .unwrap()
+    };
+    assert_eq!(ids(&s, T0 + 1), vec![plan_id(3), plan_id(2), plan_id(1)]);
+    assert_eq!(
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Mcp, T0 + 1, 1)
+            .unwrap(),
+        vec![plan_id(3)]
+    );
+    assert!(
+        s.plans_awaiting_approval(scull_core::PlanOrigin::Cli, T0 + 1, 10)
+            .unwrap()
+            .is_empty()
+    );
+    s.insert_approval(&approval_for(&plan(2), T0 + 10, T0 + 600))
+        .unwrap();
+    assert_eq!(ids(&s, T0 + 20), vec![plan_id(3), plan_id(1)]);
+    // MCP plans expire after 15 minutes.
+    assert!(ids(&s, T0 + 15 * 60).is_empty());
+}
+
 #[test]
 fn approval_expiry_and_hash_binding_fail_closed() {
     let dir = tempfile::tempdir().unwrap();

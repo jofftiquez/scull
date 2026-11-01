@@ -123,12 +123,14 @@ fn interface_crates_do_not_enable_the_delete_feature() {
 }
 
 /// The CLI modules that may use `scull-cleaner`: `scull data purge`, `scull clean` and the
-/// shared setup of destructive commands (execution lock, P2-CLI-01).
+/// shared setup of destructive commands (execution lock, P2-CLI-01), and the runner that
+/// executes approved agent plans for `scull mcp serve --allow-destructive` (P4-MCP-01).
 const CLI_CLEANER_MODULES: &[&str] = &[
     "cmd/data.rs",
     "cmd/clean.rs",
     "cmd/clean_caches.rs",
     "cmd/exec.rs",
+    "cmd/mcp_runner.rs",
     "cmd/restore.rs",
 ];
 

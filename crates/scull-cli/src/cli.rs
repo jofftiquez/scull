@@ -178,10 +178,10 @@ pub enum Command {
     /// Restore quarantined items of a past operation to where they were (never overwriting).
     Restore(RestoreArgs),
 
-    /// Approve a plan prepared by an MCP client (interactive terminal only).
+    /// Approve a cleanup plan an AI agent prepared through MCP (interactive terminal only).
     Approve {
-        /// Plan ID to approve.
-        plan_id: String,
+        /// Plan ID to approve; omit to list the agent plans awaiting approval.
+        plan_id: Option<String>,
     },
 
     /// List or validate detection rules.

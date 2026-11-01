@@ -1,6 +1,7 @@
 //! Implemented commands. Each module builds a serializable report, renders it for people,
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
+pub mod approve;
 pub mod caches;
 pub mod clean;
 pub mod clean_caches;
@@ -10,6 +11,7 @@ pub mod exec;
 pub mod history;
 pub mod init;
 pub mod mcp;
+pub mod mcp_runner;
 pub mod pipeline;
 pub mod projects;
 pub mod render;

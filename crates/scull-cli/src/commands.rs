@@ -49,7 +49,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         },
         Command::LargeFiles { .. } => None,
         Command::History(_) | Command::Restore(_) => None,
-        Command::Approve { .. } => planned("approve", 108),
+        Command::Approve { .. } => None,
         Command::Rules { .. } => None,
         Command::Init(_) => None,
         Command::Status { .. } => None,
@@ -135,6 +135,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        Command::Approve { plan_id } => crate::cmd::approve::run(plan_id.as_deref(), ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
             action: RulesAction::List,
@@ -215,7 +216,6 @@ mod tests {
                 "worktrees register",
                 Some(111),
             ),
-            (&["approve", "plan-1"], "approve", Some(108)),
             (&["check"], "check", Some(114)),
             (&["insights"], "insights", Some(116)),
             (&["insights", "export"], "insights export", Some(116)),
@@ -255,6 +255,8 @@ mod tests {
             &["restore", "op_1"],
             &["clean", "--purge-quarantine"],
             &["clean", "caches", "--confirm", "--wipe"],
+            &["approve"],
+            &["approve", "plan-1"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }
