@@ -70,6 +70,7 @@ mod error;
 #[cfg(feature = "delete")]
 pub mod exec_lock;
 pub mod identity;
+pub mod interrupt;
 mod native;
 pub mod owner_only;
 #[cfg(feature = "delete")]

@@ -3,11 +3,13 @@
 //! (FX-OUT-02: exit 130, nothing half-done).
 //!
 //! The event is `CTRL_BREAK_EVENT`, sent to the target's own process group. `CTRL_C_EVENT`
-//! can't be used from a test: it can only be sent to *every* process on a console (a group ID
-//! makes Windows drop it), and a process started below a CI job, whose process group ignores
-//! Ctrl-C, keeps ignoring it even when its parent re-enables Ctrl-C (the attribute is not
-//! re-inherited; CPython skips its own `CTRL_C_EVENT` test for this reason). scull's handler
-//! (the `ctrlc` crate) treats Ctrl-C and Ctrl-Break alike, so the cancel path is the same.
+//! can only be sent to *every* process on a console (with a group ID Windows drops it), so a
+//! test can't aim it at one child. Below a CI job, whose process group ignores Ctrl-C, a child
+//! also keeps ignoring it even when its parent re-enables Ctrl-C (the attribute is not
+//! re-inherited; CPython skips its own `CTRL_C_EVENT` test for this reason). scull re-enables
+//! Ctrl-C for itself when it installs its handler ([`crate::interrupt::accept_ctrl_c`]), and
+//! that handler (the `ctrlc` crate) treats Ctrl-C and Ctrl-Break alike, so the cancel path
+//! the test drives is the one a user's Ctrl-C takes.
 //!
 //! The target is started with [`TARGET_CREATION_FLAGS`] (a console and a process group of its
 //! own); a **helper process** attaches to the target's console and generates the event for the

@@ -27,7 +27,7 @@ delete = [
 
 # Test support only, never enabled by a shipped crate: deliver a console interrupt to another
 # process on Windows (`scull_platform::console`), for the FX-OUT-02 exit-130 fixture.
-test-support = ["windows-sys/Win32_System_Console"]
+test-support = []
 
 [dependencies]
 scull-core.workspace = true
@@ -48,6 +48,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_SystemServices",
   "Win32_System_Threading",
+  # Ctrl-C processing (`interrupt`), and the test-support console helpers
+  "Win32_System_Console",
   "Win32_UI_Shell",
   # activity (process cwd from the PEB, Restart Manager): P1-SAFE-02
   "Wdk_System_Threading",
