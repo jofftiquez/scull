@@ -1,5 +1,8 @@
 # Detector rules
 
+Writing your own rule, testing it with `scull rules test`, and proposing it: see
+[docs/RULE_AUTHORING.md](../docs/RULE_AUTHORING.md).
+
 Declarative, **data-only** rules for simple detection cases (PRD §8.1, CLS-01…05). Complex cases
 (Git worktrees, the pnpm store, shared `CARGO_TARGET_DIR`, package caches) are Rust detectors
 in `crates/scull-detectors/`, not rules (CLS-02).
@@ -190,10 +193,15 @@ containing marker Y" is written `names = ["X"]`, `markers.all = ["../Y"]`.
    `cmd`, `exec`, `shell` or `spawn`, and keys with a token `script(s)`, `run`, `args`, `argv`,
    `program`, `hook(s)`, `invoke`, `binary`, `sh`, `bash`, `pwsh`, `powershell` (split on `_`,
    `-`, `.` and camelCase). `regeneration.instructions` is display text only.
-3. **User and community rules are untrusted (CLS-04, FX-CFG-05).** A non-bundled rule that
-   assigns `S0` or uses `tool_native` is rejected. Non-bundled rules load **disabled** and only
-   run after the user enables them in config (`RuleSet::enable`); a rule file can't enable
-   itself. Community S0 rules backed by passing fixture tests are a v1.x feature.
+3. **User and community rules are untrusted (CLS-04, FX-CFG-05, P6-COM-01).** A non-bundled
+   rule that assigns `S0` or uses `tool_native` is rejected. So is one whose `match.names` can
+   match a folder holding people's work, settings or secrets (`PROTECTED_FOLDER_NAMES`: `src`,
+   `lib`, `data`, `Documents`, `Library`, `.ssh`, ...; `user_work_folder`), one with a name
+   pattern of fewer than two literal characters (`wildcard_name`), and one without a marker
+   beside or above the candidate (`no_project_marker`): community rules only ever apply inside
+   a recognizable project. Non-bundled rules load **disabled** and only run after the user
+   enables them in config (`RuleSet::enable`); a rule file can't enable itself. Community S0
+   rules backed by passing fixture tests are a v1.x feature.
 4. **Bundled only, no network (CLS-05).**
 
 ## Marker evaluation (no I/O)

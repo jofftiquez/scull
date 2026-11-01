@@ -1,0 +1,69 @@
+name: New detector rule
+description: Propose a rule so scull recognizes another tool's build output or cache.
+title: "[rule] <tool>: <folder>"
+labels: ["area:detectors", "type:feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Rules are data-only TOML files; see docs/RULE_AUTHORING.md. scull deletes
+        files, so we need the evidence below before a rule can be bundled.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool and version(s)
+      placeholder: "Godot 4.2"
+    validations:
+      required: true
+  - type: input
+    id: folder
+    attributes:
+      label: Folder name(s) the rule would claim
+      placeholder: ".godot"
+    validations:
+      required: true
+  - type: textarea
+    id: markers
+    attributes:
+      label: What proves it
+      description: The project file the tool always leaves beside (or above) the folder, and what it writes inside it. A folder name alone is never enough.
+      placeholder: "`project.godot` beside it; `.godot/imported/` inside"
+    validations:
+      required: true
+  - type: textarea
+    id: regeneration
+    attributes:
+      label: How it comes back
+      description: The command or action that regenerates it, how long that takes, and whether it needs the network or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: user-work
+    attributes:
+      label: Could people keep their own files there?
+      description: On any OS. Look-alike folders of other tools with the same name?
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Proposed tier
+      options:
+        - "S1 (costly to recreate: quarantined, restorable)"
+        - "S2 (uncertain: quarantined, reviewed)"
+        - "S0 (bundled only: quick, local, credential-free regeneration)"
+    validations:
+      required: true
+  - type: textarea
+    id: rule
+    attributes:
+      label: Draft rule and cases file (optional)
+      description: Output of `scull rules validate FILE` and `scull rules test FILE` helps.
+      render: toml
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The rule passes `scull rules validate` and `scull rules test` as a community rule.
+        - label: I read the review checklist in CONTRIBUTING.md.

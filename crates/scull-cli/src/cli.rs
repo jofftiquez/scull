@@ -485,6 +485,15 @@ pub enum RulesAction {
         /// Rule files to validate (default: the bundled rules).
         paths: Vec<PathBuf>,
     },
+    /// Test rule files against their cases files (`foo.toml` → `foo.cases.toml`): trees of
+    /// names, never read from or written to disk.
+    Test {
+        /// Rule files to test.
+        paths: Vec<PathBuf>,
+        /// Write a starter cases file beside each rule file (never overwrites one).
+        #[arg(long)]
+        init: bool,
+    },
 }
 
 /// `scull insights` subcommands.

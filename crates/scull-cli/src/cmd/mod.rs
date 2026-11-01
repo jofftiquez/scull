@@ -16,6 +16,7 @@ pub mod projects;
 pub mod render;
 pub mod review_plan;
 pub mod rules;
+pub mod rules_test;
 pub mod scan;
 pub mod schedule;
 pub mod schemas;
