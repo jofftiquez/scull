@@ -1,0 +1,31 @@
+# Test cases for godot.toml: `scull rules test docs/examples/rules/godot.toml`.
+# Trees are names only: nothing is created on disk. A trailing `/` is an empty folder.
+schema_version = 1
+
+[[case]]
+name = "import cache next to project.godot"
+rule = "community.godot-import"
+tree = ["game/project.godot", "game/.godot/imported/icon.svg-1234.ctex", "game/scenes/main.tscn"]
+candidate = "game/.godot"
+expect = "match"
+
+[[case]]
+name = "a .godot folder without a project file is left alone"
+rule = "community.godot-import"
+tree = ["downloads/.godot/imported/x.ctex"]
+candidate = "downloads/.godot"
+expect = "missing_marker"
+
+[[case]]
+name = "a plugin's own copy under addons/ is excluded"
+rule = "community.godot-import"
+tree = ["game/project.godot", "game/addons/plugin/project.godot", "game/addons/plugin/.godot/"]
+candidate = "game/addons/plugin/.godot"
+expect = "excluded"
+
+[[case]]
+name = "the project folder itself is never the candidate"
+rule = "community.godot-import"
+tree = ["game/project.godot"]
+candidate = "game"
+expect = "no_match"

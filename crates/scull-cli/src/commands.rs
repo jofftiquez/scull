@@ -136,6 +136,9 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Rules {
             action: RulesAction::Validate { paths },
         } => crate::cmd::rules::run_validate(ui, paths)?,
+        Command::Rules {
+            action: RulesAction::Test { paths, init },
+        } => crate::cmd::rules_test::run(ui, paths, *init)?,
         Command::Mcp {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
