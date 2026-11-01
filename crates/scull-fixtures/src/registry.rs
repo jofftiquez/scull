@@ -151,6 +151,8 @@ const GIT_STATE: &str = "crates/scull-git/tests/state.rs";
 const GIT_DISC: &str = "crates/scull-git/tests/discovery.rs";
 const GIT_HARD: &str = "crates/scull-git/tests/hardened.rs";
 const E2E_FS: &str = "crates/scull-fixtures/tests/fx_fs.rs";
+/// Nightly FX-FS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`).
+const E2E_FS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_fs_nightly.rs";
 const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
 const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
@@ -684,11 +686,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "L (M via disk image)",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet",
-            partial: &[],
-        },
+        Status::Implemented(&[t(
+            E2E_FS_NIGHTLY,
+            "fx_fs_04_mount_inside_candidate_is_s3_and_mounted_content_untouched",
+        )]),
     ),
     fx(
         "FX-FS-05",
@@ -849,11 +850,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "a 1M-entry tree takes minutes; it belongs in the nightly job, which doesn't exist yet",
-            partial: &[],
-        },
+        Status::Implemented(&[t(
+            E2E_FS_NIGHTLY,
+            "fx_fs_15_one_million_entries_within_time_and_memory_targets",
+        )]),
     ),
 ];
 

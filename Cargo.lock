@@ -1359,6 +1359,7 @@ dependencies = [
  "scull-cli",
  "scull-core",
  "scull-detectors",
+ "scull-engine",
  "scull-git",
  "scull-platform",
  "scull-safety",
