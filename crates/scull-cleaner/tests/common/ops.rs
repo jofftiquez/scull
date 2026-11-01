@@ -121,3 +121,20 @@ pub fn op_dir(fx: &Fixture, op: &str) -> PathBuf {
 pub fn mode(p: &Path) -> u32 {
     std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777
 }
+
+/// `p` in one spelling for comparisons across OSs: canonical (long names, not 8.3 aliases; the
+/// OS's separators), without Windows' verbatim prefix. For a path that doesn't exist, its
+/// parent is canonicalized and the last component appended.
+pub fn canon(p: &std::path::Path) -> PathBuf {
+    let c = std::fs::canonicalize(p).unwrap_or_else(|_| {
+        let parent = p.parent().expect("a parent");
+        std::fs::canonicalize(parent)
+            .unwrap_or_else(|_| canon(parent))
+            .join(p.file_name().expect("a name"))
+    });
+    let s = c.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => c,
+    }
+}

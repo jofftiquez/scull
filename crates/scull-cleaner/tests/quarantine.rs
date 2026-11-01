@@ -73,8 +73,8 @@ fn fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical() {
     let e = &entries[0];
     assert_eq!(e.entry_id, q.entry_id);
     assert_eq!(
-        e.entry.original_path.to_path_buf(),
-        fx.root().join("app/target")
+        canon(&e.entry.original_path.to_path_buf()),
+        canon(&fx.root().join("app").join("target"))
     );
     assert_eq!(e.entry.entry_kind, "dir");
     assert_eq!(

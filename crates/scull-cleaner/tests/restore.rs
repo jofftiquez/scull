@@ -59,19 +59,16 @@ fn fx_exec_02_quarantined_item_restored_tree_identical_and_idempotent() {
     let r = exec.restore(&mut s, id, now_unix());
     print("restore", &r);
     let r = r.unwrap();
-    assert_eq!(
-        r.outcome,
-        RestoreOutcome::Restored {
-            to: fx.root().join("app/target"),
-            sibling: false
-        }
-    );
+    assert_restored(r.outcome, &fx.root().join("app").join("target"), false);
     let after = TreeSnapshot::capture(fx.root().join("app/target")).unwrap();
     assert!(before.diff(&after).is_empty(), "{}", before.diff(&after));
     let entry = s.quarantine_entry(id).unwrap().unwrap();
     assert_eq!(
-        entry.restored.as_ref().map(|(_, to)| to.to_path_buf()),
-        Some(fx.root().join("app/target"))
+        entry
+            .restored
+            .as_ref()
+            .map(|(_, to)| canon(&to.to_path_buf())),
+        Some(canon(&fx.root().join("app").join("target")))
     );
 
     let again = exec.restore(&mut s, id, now_unix());
@@ -104,13 +101,7 @@ fn fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten() {
     let r = locked(&fx).restore(&mut s, id, now_unix());
     print("restore", &r);
     let to = fx.root().join("app/target.scull-restored-2");
-    assert_eq!(
-        r.unwrap().outcome,
-        RestoreOutcome::Restored {
-            to: to.clone(),
-            sibling: true
-        }
-    );
+    assert_restored(r.unwrap().outcome, &to.clone(), true);
     assert_eq!(
         std::fs::read(fx.root().join("app/target/debug/app")).unwrap(),
         b"new build"
@@ -186,12 +177,10 @@ fn fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative()
     fx.checkpoint().unwrap();
     let ok = exec.restore(&mut s, id, now_unix());
     print("restore (database manifest)", &ok);
-    assert_eq!(
+    assert_restored(
         ok.unwrap().outcome,
-        RestoreOutcome::Restored {
-            to: fx.root().join("app/target"),
-            sibling: false
-        }
+        &fx.root().join("app").join("target"),
+        false,
     );
     assert!(
         TreeSnapshot::capture(&ssh)
@@ -246,13 +235,7 @@ fn restore_after_an_unrecorded_move_is_recorded_idempotently() {
     std::fs::rename(&q, fx.root().join("app/target")).unwrap();
     fx.checkpoint().unwrap();
     let r = locked(&fx).restore(&mut s, id, now_unix()).unwrap();
-    assert_eq!(
-        r.outcome,
-        RestoreOutcome::Restored {
-            to: fx.root().join("app/target"),
-            sibling: false
-        }
-    );
+    assert_restored(r.outcome, &fx.root().join("app").join("target"), false);
     assert!(!s.quarantine_entry(id).unwrap().unwrap().is_held());
     check_fs(&fx, &[]);
 }
@@ -292,6 +275,20 @@ fn purged_entry_or_missing_lock_is_refused() {
     );
     // The quarantine (outside the root) was purged; inside the root only the item left.
     check_fs(&fx, &["app/target"]);
+}
+
+/// `outcome` is `Restored` to `to` (compared in one spelling, [`canon`]) as a sibling or not.
+fn assert_restored(outcome: RestoreOutcome, to: &std::path::Path, sibling: bool) {
+    match outcome {
+        RestoreOutcome::Restored {
+            to: got,
+            sibling: s,
+        } => {
+            assert_eq!(canon(&got), canon(to), "restored to");
+            assert_eq!(s, sibling, "sibling");
+        }
+        other => panic!("expected restored to {}: {other:?}", to.display()),
+    }
 }
 
 /// A directory link at `link` to `target`: a symlink on Unix, a junction on Windows (no
