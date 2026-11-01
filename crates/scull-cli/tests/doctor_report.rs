@@ -93,6 +93,43 @@ fn assert_clean(what: &str, text: &str, home: &Path) {
     );
 }
 
+/// The value planted in `SCULL_MCP_MAX_RESULTS` (a number, so the config accepts it).
+const ENV_NUMBER: &str = "4417";
+
+/// Whether `text` (a report) contains `value` as a whole token: not glued to a letter or
+/// digit on either side. A raw substring search would also match inside a `--hash-names` hash
+/// of a random temp-dir name (`h-143b3404417c`) or inside an unrelated number such as a
+/// timestamp, which made this test flaky (#37). A leaked setting is written as its own JSON
+/// number or string, so it is still caught.
+fn leaks(text: &str, value: &str) -> bool {
+    let glued = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    text.match_indices(value).any(|(i, m)| {
+        !glued(text[..i].chars().next_back()) && !glued(text[i + m.len()..].chars().next())
+    })
+}
+
+/// #37: the leak check ignores name hashes and longer numbers that happen to contain the
+/// digits, and still catches the value written on its own.
+#[test]
+fn leak_check_ignores_name_hashes_but_not_the_value() {
+    for clean in [
+        r#"{"path":"~/h-6aa916426c0c/h-c161de117007/h-143b3404417c"}"#,
+        r#"{"path":"~/h-4417aaaaaaaa"}"#,
+        r#"{"generated_unix":1761994417,"bytes":44170}"#,
+    ] {
+        assert!(!leaks(clean, ENV_NUMBER), "{clean}");
+    }
+    for leaked in [
+        r#"{"value":4417}"#,
+        r#"{"value":"4417"}"#,
+        r#"{"value":"max 4417 results"}"#,
+        r#"{"path":"~/h-143b3404417c/4417"}"#,
+        "4417",
+    ] {
+        assert!(leaks(leaked, ENV_NUMBER), "{leaked}");
+    }
+}
+
 /// FX-DATA-07: the report never contains file contents (a config parse error quoting the
 /// file), environment values (an invalid `SCULL_*` value, an unrelated token) or user names,
 /// in any output format, although plain `scull doctor` shows the first two to the local user.
@@ -172,9 +209,15 @@ fn fx_data_07_doctor_report_preview_then_consent_to_write() {
     std::fs::create_dir_all(&root).expect("mkdir");
     let root_toml = root.to_string_lossy().replace('\\', "\\\\");
     write_config(home, &format!("[scan]\nroots = [\"{root_toml}\"]\n"));
-    let env = [("SCULL_MCP_MAX_RESULTS", "4417")];
+    let env = [("SCULL_MCP_MAX_RESULTS", ENV_NUMBER)];
     let out_file = home.join("report.json");
     let out_arg = out_file.to_string_lossy().into_owned();
+
+    // Positive control for the leak check: plain `scull doctor` shows the value to the local
+    // user, so the check below must find it there.
+    let plain = scull(home, &["doctor", "--json"], &env);
+    let plain = String::from_utf8(plain.stdout).expect("utf-8");
+    assert!(leaks(&plain, ENV_NUMBER), "{plain}");
 
     // Without a terminal and without --yes: the preview, then a refusal; nothing written.
     let o = scull(
@@ -229,7 +272,11 @@ fn fx_data_07_doctor_report_preview_then_consent_to_write() {
     let printed: Value = serde_json::from_slice(&o.stdout).expect("JSON");
     let text = std::fs::read_to_string(&out_file).expect("report file");
     assert_clean("report file", &text, home);
-    assert!(!text.contains("4417"), "environment value leaked:\n{text}");
+    assert!(
+        !leaks(&text, ENV_NUMBER),
+        "environment value leaked:\n{text}"
+    );
+    assert!(!leaks(&String::from_utf8_lossy(&o.stdout), ENV_NUMBER));
     let written: Value = serde_json::from_str(&text).expect("JSON file");
     assert_valid(&written);
     assert_eq!(written["data"]["redaction"], printed["data"]["redaction"]);
