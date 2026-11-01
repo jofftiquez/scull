@@ -141,6 +141,10 @@ pub struct DirEntry {
     /// [`Platform::entry_metadata`](crate::Platform) to stat the entry without opening it.
     #[cfg(windows)]
     pub(crate) listed: Option<Listed>,
+    /// macOS: a plain file's metadata as the listing (`getattrlistbulk`) reported it, for
+    /// [`Platform::entry_metadata`](crate::Platform) to return without another call (#91).
+    #[cfg(target_os = "macos")]
+    pub(crate) listed: Option<Metadata>,
 }
 
 /// What a Windows directory listing reported about one entry (#71).
