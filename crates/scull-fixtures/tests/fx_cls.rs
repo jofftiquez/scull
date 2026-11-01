@@ -285,11 +285,10 @@ fn fx_cls_05_node_modules_with_lockfile_s0_without_lockfile_s2() {
     assert!(matches!(c.action, Action::Quarantine | Action::Trash));
 }
 
-/// FX-CLS-06: `node_modules` containing `npm link` / workspace symlinks to sibling source
-/// folders → removing `node_modules` removes the links only; linked sources intact.
-///
-/// The removal half uses `std::fs::remove_dir_all` (which never follows links) as a stand-in
-/// until the Executor exists (#67/#68); the registry tracks that under #83.
+/// FX-CLS-06 (classification half): `node_modules` containing `npm link` / workspace symlinks
+/// to sibling source folders is one S0 candidate whose links are counted, never followed.
+/// The deletion half (removing it removes the links only; linked sources intact) runs through
+/// the real Executor in `fx_exec.rs::fx_cls_06_executor_deletes_node_modules_links_only_sources_intact`.
 #[test]
 fn fx_cls_06_linked_workspace_sources_survive_node_modules_removal() {
     let mut fx = Fixture::new().unwrap();
@@ -345,14 +344,6 @@ fn fx_cls_06_linked_workspace_sources_survive_node_modules_removal() {
     let c = item.candidate.clone();
     assert_eq!(c.tier, Tier::S0, "{:?}", c.reasons);
     assert_eq!(scan.plan().len(), 1);
-
-    // Execute the plan (stand-in): only the links go; the targets stay.
-    fs::remove_dir_all(&nm).unwrap();
-    assert!(fx.root().join("web/packages/ui/src/index.js").is_file());
-    assert!(fx.root().join("linked-lib/src/index.js").is_file());
-    let after = Pipeline::new(fx.root()).run();
-    assert!(after.items.is_empty());
-    check_all(&fx, &scan, &revalidated, &["web/node_modules"]);
 }
 
 /// FX-CLS-08: pnpm monorepo with 30 packages, each with `node_modules` → every candidate found
