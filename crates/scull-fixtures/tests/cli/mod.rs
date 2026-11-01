@@ -147,7 +147,7 @@ impl Cli {
                 .extra_env
                 .iter()
                 .any(|(k, _)| k == "SCULL_TEST_ASSUME_ELEVATED")
-            && scull_platform::is_elevated().blocks_destructive()
+            && needs_allow_root()
         {
             c.arg("--allow-root");
         }
@@ -311,4 +311,26 @@ impl Schemas {
 /// TOML basic string content for a path (backslashes escaped for Windows).
 pub fn toml_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "\\\\")
+}
+
+/// Set by CI's standard-user run on Windows (`scripts/ci/run-as-standard-user.ps1`, #65): the
+/// test process must then be non-elevated, so `--allow-root` is never added and the refusal
+/// paths of a normal user run for real; an elevated process fails instead of quietly passing
+/// the flag.
+fn needs_allow_root() -> bool {
+    let elevated = scull_platform::is_elevated().blocks_destructive();
+    if std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_some_and(|v| !v.is_empty()) {
+        assert!(
+            !elevated,
+            "SCULL_TEST_REQUIRE_NOT_ELEVATED is set but this process runs elevated"
+        );
+        static MARK: std::sync::Once = std::sync::Once::new();
+        MARK.call_once(|| {
+            eprintln!(
+                "RUN {}: not elevated, no --allow-root (standard user)",
+                env!("CARGO_CRATE_NAME")
+            );
+        });
+    }
+    elevated
 }
