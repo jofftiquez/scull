@@ -4,8 +4,10 @@ on:
   pull_request:
     paths-ignore: ["design/**", "docs/**", "tasks/**", "**/*.md"]
   push:
-    branches: [main]
+    branches: [main, phase2]
     paths-ignore: ["design/**", "docs/**", "tasks/**", "**/*.md"]
+  schedule:
+    - cron: "41 2 * * *" # nightly full 3-OS run on the default branch
   workflow_dispatch:
 
 concurrency:
@@ -32,13 +34,13 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    # D-10 / PLT-07…11: macOS, Linux and Windows are first-class from the first commit.
-    # Pull requests run all three. Pushes to main re-check Linux only to save runner minutes:
-    # the identical tree already passed all three OSs on its PR (squash merges).
+    # D-10 / PLT-07…11: macOS, Linux and Windows are first-class. To keep pull requests fast,
+    # PRs run Linux only; every push to main/phase2, the nightly schedule and manual runs test
+    # all three OSs, so a platform regression shows up on the branch within one merge.
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -52,7 +54,7 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/phase2' || github.event_name == 'pull_request' }}
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
