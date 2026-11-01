@@ -138,6 +138,12 @@ pub trait Platform: Send + Sync {
     /// metadata of a regular file with one link that is neither compressed nor dataless, as it
     /// was when the listing read it (checked against `fstatat` once per listing); everything
     /// else is stat'ed as above. The default is [`Platform::metadata`] of the path.
+    ///
+    /// **Scan only.** The result may describe the entry as it was listed, so an entry removed
+    /// or replaced since can still be reported. Never use it to decide whether something may
+    /// be changed: revalidation, the executor, quarantine/restore and purges re-check with
+    /// [`Platform::metadata`] or handle-based checks. `scripts/ci/platform_boundary.py` fails
+    /// on calls outside `scull-scanner`.
     fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
         self.metadata(&entry.path)
     }
