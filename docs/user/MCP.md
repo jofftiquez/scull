@@ -227,8 +227,8 @@ Everything that was **refused** is recorded too, and `scull history` lists it un
 | `prepare_refused` | A `prepare_cleanup` hit a limit (above) | `rate_limited`, `too_many_pending_plans` (no plan ID) |
 | `approval_revoked` | You revoked an approval before it was used (recorded in the same transaction; nothing else can write this entry) | `revoked` |
 | `revoke_refused` | A revocation was refused | `not_approved`, `approval_used` (the cleanup already started), `approval_revoked`, `approval_expired`, `plan_foreign`, `unknown_plan` |
-| `approve_run` by `cli` | You approved a plan with `scull approve <plan-id> --run`; how that run ended | `executed`, `plan_changed` (void), `approval_used` (the agent ran it first), `lock_held` (the approval was then revoked), `outside_allowlist`, `cancelled`, ... |
-| `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
+| `approve_run` by `cli` | You approved a plan with `scull approve <plan-id> --run`; how that run ended | `executed`, `failed_partway` (it started and stopped; see the operation in `scull history`), `plan_changed` (void), `approval_used` (the agent ran it first), `lock_held` (the approval was then revoked), `outside_allowlist`, `cancelled`, ... |
+| `execute_refused` by `executor` | The Executor's own check refused to start the plan (by `cli`, channel `terminal`, when the run came from `scull approve --run`) | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
 
 Each entry holds the reason code, the plan ID and its content hash, the channel
 (`terminal`, `desktop` or `mcp`), what recorded it, the machine ID and your account. Never a

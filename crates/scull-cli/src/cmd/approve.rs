@@ -48,27 +48,31 @@
 //!   Executor runs it under the execution lock with per-item revalidation and consumes the
 //!   approval atomically. So if the agent calls `execute_cleanup` at the same moment, exactly
 //!   one of the two runs it. When it does not run (another operation holds the lock, the
-//!   rescan failed, ...), the approval is revoked rather than left for the agent. How it ended
-//!   is audited ([`approval::record_approve_run`], `approve_run` in `scull history`), next to
-//!   the approval (channel `terminal`) and the operation. There is no MCP tool, environment
+//!   rescan failed, the confirmation could not be written, ...), an approval still unspent is
+//!   revoked rather than left for the agent; when the agent's run won, that is what is
+//!   reported; when this run started and then failed, it says so, with the items handled and
+//!   the operation to review. How it ended is audited ([`approval::record_approve_run`],
+//!   `approve_run` in `scull history`: `executed`, `failed_partway`, `approval_used`,
+//!   `plan_changed`, `lock_held`, ...), next to the approval (channel `terminal`) and the
+//!   operation; the Executor's own refusals during it are attributed to `cli` too. There is no MCP tool, environment
 //!   variable or configuration for this: only the flag, typed by the human.
 
 use super::clean::utc_datetime;
 use super::exec;
-use super::mcp_runner::ExecutorRunner;
+use super::mcp_runner::{ExecutorRunner, RunCaller, RunFailure};
 use super::pipeline::{self, CancelBridge, Loaded};
 use super::render::action_label;
 use crate::output::Ui;
 use crate::output::bytes::format_bytes;
 use crate::output::escape::escape_for_terminal;
 use crate::output::style::{Style, tier_style, tier_text};
-use scull_core::{ErrorKind, Plan, PlanId, Restorability, ScullError};
+use scull_core::{ErrorKind, OperationId, Plan, PlanId, Restorability, ScullError};
 use scull_engine::paths::is_within;
 use scull_engine::{ScanRequest, now_unix};
 use scull_mcp::approval::{
     self, Challenge, Denial, HumanChannel, MAX_CODE_ATTEMPTS, PlanSummary, Principal, Reason,
 };
-use scull_mcp::{CleanupRunner, RunRequest, RunSummary};
+use scull_mcp::{RunRequest, RunSummary};
 use scull_storage::{Approval, Store};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -160,11 +164,28 @@ pub fn run(plan_id: Option<&str>, then_run: bool, ui: &Ui) -> Result<(), ScullEr
     let mut out = io::stdout().lock();
     let answer = ask_to(
         &mut store, &challenge, &principal, &mut input, &mut out, color, then_run,
-    )?;
+    );
     drop(out);
+    let answer = match answer {
+        Ok(a) => a,
+        // `--run`: an approval recorded before the error (the confirmation could not be
+        // written) is never left live for the agent.
+        Err(e) if then_run && store.get_approval(&id).ok().flatten().is_some() => {
+            let code = super::json_name(&e.kind);
+            return Err(not_run(&mut store, challenge.plan(), &principal, &code, e));
+        }
+        Err(e) => return Err(e),
+    };
     match answer {
         Answer::Approved(_) => match setup {
-            Some((loaded, roots)) => run_now(&mut store, &id, &principal, &loaded, &roots, ui),
+            Some((loaded, roots)) => run_now(
+                &mut store,
+                challenge.plan(),
+                &principal,
+                &loaded,
+                &roots,
+                ui,
+            ),
             None => Ok(()),
         },
         Answer::Denied => Err(ScullError::new(
@@ -444,59 +465,42 @@ pub fn ask_to(
     Ok(Answer::Denied)
 }
 
-/// `scull approve <plan-id> --run`, after the human approved plan `id` in this terminal: run
-/// it now, exactly as the agent's `execute_cleanup` would (`scull_mcp`'s execute path): the
+/// `scull approve <plan-id> --run`, after the human approved `plan` in this terminal: run it
+/// now, exactly as the agent's `execute_cleanup` would (`scull_mcp`'s execute path): the
 /// approval is checked again, the plan's items must lie in the allowlisted `roots`, a fresh
 /// scan must find every item unchanged (D-34: otherwise the plan is void and its approval
 /// spent), then [`ExecutorRunner`] runs it under the execution lock and consumes the approval
-/// atomically, so a concurrent `execute_cleanup` and this run can't both execute it. If it
-/// does not run and the approval is still unspent, the approval is revoked: the human asked
-/// to run it here, not to hand it to the agent. How it ended is audited
-/// ([`approval::record_approve_run`]).
+/// atomically, so a concurrent `execute_cleanup` and this run can't both execute it.
+///
+/// What it reports is what happened: run here (`executed`); started here and stopped
+/// part-way (`failed_partway`, with the items handled and the operation to review); run by
+/// the agent first (`approval_used`); or not run at all, in which case an approval still
+/// unspent is revoked (the human asked to run it here, not to hand it to the agent). Each is
+/// audited ([`approval::record_approve_run`]).
 pub fn run_now(
     store: &mut Store,
-    id: &PlanId,
+    plan: &Plan,
     who: &Principal,
     loaded: &Loaded,
     roots: &[PathBuf],
     ui: &Ui,
 ) -> Result<(), ScullError> {
+    let id = plan.id();
     let auth = match approval::authorize(store, id, who, now_unix()) {
         Ok(a) => a,
         Err(r) => {
-            // Only the agent can have spent it in the moment since the approval.
-            let message = format!(
-                "{} The agent's execute_cleanup may have run it first: see `scull history`. \
-                 Nothing was run here.",
-                r.message
-            );
-            return Err(ScullError::new(r.reason.kind(), message));
+            let e = ScullError::new(r.reason.kind(), r.message);
+            return Err(not_run(store, plan, who, r.reason.code(), e));
         }
     };
     let plan = &auth.plan;
-    let fail = |store: &mut Store, outcome: &str, e: ScullError| {
-        let revoked = withdraw(store, plan, who);
-        audit_run(store, plan, outcome, who);
-        ScullError::new(
-            e.kind,
-            format!(
-                "{}. Nothing was run{}.",
-                e.message.trim_end_matches('.'),
-                if revoked {
-                    "; the approval was revoked, so the agent can't use it either"
-                } else {
-                    ""
-                }
-            ),
-        )
-    };
     let exec_roots = match plan_roots(roots, plan) {
         Ok(r) => r,
-        Err(e) => return Err(fail(store, "outside_allowlist", e)),
+        Err(e) => return Err(not_run(store, plan, who, "outside_allowlist", e)),
     };
     let engine = match pipeline::engine(loaded, roots, false, ui) {
         Ok(e) => e,
-        Err(e) => return Err(fail(store, &super::json_name(&e.kind), e)),
+        Err(e) => return Err(not_run(store, plan, who, &super::json_name(&e.kind), e)),
     };
     let bridge = CancelBridge::start();
     let mut req = ScanRequest::full().history(false);
@@ -504,14 +508,22 @@ pub fn run_now(
     let rep = match engine.scan(&exec_roots, &req, bridge.token(), |_| {}) {
         Ok(r) if r.cancelled => {
             let e = ScullError::new(ErrorKind::Cancelled, "cancelled during the re-check");
-            return Err(fail(store, "cancelled", e));
+            return Err(not_run(store, plan, who, "cancelled", e));
         }
         Ok(r) => r,
-        Err(e) => return Err(fail(store, &super::json_name(&e.kind), e)),
+        Err(e) => return Err(not_run(store, plan, who, &super::json_name(&e.kind), e)),
     };
     // D-34: any changed item voids the whole agent plan.
     if let Err(changed) = approval::check_unchanged(plan, &rep.candidates) {
-        let voided = approval::void(store, plan, now_unix()).map_err(ScullError::from)?;
+        let voided = match approval::void(store, plan, now_unix()) {
+            Ok(v) => v,
+            Err(r) => return Err(not_run(store, plan, who, "store", r.into())),
+        };
+        // Already spent: the agent may have run it while this rescanned.
+        if !voided && let Some(op) = ran_elsewhere(store, plan) {
+            audit_run(store, plan, Reason::ApprovalUsed.code(), who);
+            return Err(agent_ran(id, &op));
+        }
         audit_run(store, plan, Reason::PlanChanged.code(), who);
         let list: Vec<String> = changed
             .iter()
@@ -536,14 +548,16 @@ pub fn run_now(
     let runner = ExecutorRunner {
         quarantine: exec::quarantine_settings(&loaded.config.quarantine),
         trash: exec::trash_locations(),
-        audit_lock_refusal: false,
+        caller: RunCaller::HumanRun,
     };
     // Another operation holding the execution lock may be the agent's `execute_cleanup`
     // between taking the lock and claiming this approval: wait briefly for it to settle
-    // rather than revoke the approval under it (then neither would run).
+    // rather than revoke the approval under it. If the wait ends first, the revocation and
+    // the agent's claim are one atomic update apart: exactly one of them wins, and
+    // `not_run` reports which.
     let deadline = std::time::Instant::now() + LOCK_WAIT;
-    let summary = loop {
-        let r = runner.run(RunRequest {
+    let result = loop {
+        let r = runner.run_tracked(RunRequest {
             store,
             plan,
             approval: &auth.approval,
@@ -553,8 +567,9 @@ pub fn run_now(
             cancel: bridge.token(),
         });
         match r {
-            Err(e)
-                if e.kind == ErrorKind::LockHeld
+            Err(f)
+                if f.operation_id.is_none()
+                    && f.error.kind == ErrorKind::LockHeld
                     && std::time::Instant::now() < deadline
                     && !crate::cancel::is_cancelled()
                     && !approval_spent(store, id) =>
@@ -565,23 +580,35 @@ pub fn run_now(
         }
     };
     drop(bridge);
-    let summary = match summary {
+    let summary = match result {
         Ok(s) => s,
-        Err(e) => {
-            let code = super::json_name(&e.kind);
-            let ops = approval::operations_of(store, plan).unwrap_or_default();
-            if let (true, Some(op)) = (approval_spent(store, id), ops.first()) {
-                audit_run(store, plan, Reason::ApprovalUsed.code(), who);
-                return Err(ScullError::new(
-                    Reason::ApprovalUsed.kind(),
-                    format!(
-                        "plan {id} was run by the agent's execute_cleanup first, as operation {0} \
-                         (approvals are single use): see `scull history {0}`. Nothing was run here.",
-                        op.operation_id
-                    ),
-                ));
-            }
-            return Err(fail(store, &code, e));
+        Err(RunFailure {
+            error,
+            operation_id: Some(op),
+        }) => {
+            // This run started the operation (its approval consumed here) and then failed:
+            // items may have been handled.
+            let handled = store
+                .audit_items(&op)
+                .map(|a| a.iter().filter(|i| i.outcome.is_done()).count())
+                .unwrap_or(0);
+            audit_run(store, plan, "failed_partway", who);
+            return Err(ScullError::new(
+                error.kind,
+                format!(
+                    "the run of plan {id} started here as operation {op} and stopped part-way: {}. \
+                     {handled} item(s) were handled before it stopped; see `scull history {op}` \
+                     (quarantined items can be put back with `scull restore {op}`).",
+                    error.message.trim_end_matches('.')
+                ),
+            ));
+        }
+        Err(RunFailure {
+            error,
+            operation_id: None,
+        }) => {
+            let code = super::json_name(&error.kind);
+            return Err(not_run(store, plan, who, &code, error));
         }
     };
     audit_run(store, plan, "executed", who);
@@ -617,6 +644,75 @@ fn approval_spent(store: &Store, id: &PlanId) -> bool {
         .is_some_and(|a| a.used_at.is_some())
 }
 
+/// The operation that ran `plan` when its approval was spent by one (called only where this
+/// `--run` started none: the agent's `execute_cleanup`).
+fn ran_elsewhere(store: &Store, plan: &Plan) -> Option<OperationId> {
+    if !approval_spent(store, plan.id()) {
+        return None;
+    }
+    approval::operations_of(store, plan)
+        .ok()?
+        .first()
+        .map(|o| o.operation_id.clone())
+}
+
+fn agent_ran(id: &PlanId, op: &OperationId) -> ScullError {
+    ScullError::new(
+        Reason::ApprovalUsed.kind(),
+        format!(
+            "plan {id} was run by the agent's execute_cleanup first, as operation {op} (approvals \
+             are single use): see `scull history {op}`. Nothing was run here."
+        ),
+    )
+}
+
+/// `--run` did not start `plan` (error `e`, audited as `outcome`). Reports the agent's run if
+/// the agent's `execute_cleanup` spent the approval; otherwise revokes the approval if it is
+/// still unspent, so it is never left live for the agent after the human asked to run it
+/// here (the revocation and an agent's claim are atomic: if the claim won, that is reported).
+fn not_run(
+    store: &mut Store,
+    plan: &Plan,
+    who: &Principal,
+    outcome: &str,
+    e: ScullError,
+) -> ScullError {
+    if let Some(op) = ran_elsewhere(store, plan) {
+        audit_run(store, plan, Reason::ApprovalUsed.code(), who);
+        return agent_ran(plan.id(), &op);
+    }
+    let unspent =
+        store.get_approval(plan.id()).ok().flatten().is_some() && !approval_spent(store, plan.id());
+    let revoked = unspent
+        && approval::revoke(store, plan.id(), HumanChannel::Terminal, who, now_unix()).is_ok();
+    if unspent
+        && !revoked
+        && let Some(op) = ran_elsewhere(store, plan)
+    {
+        audit_run(store, plan, Reason::ApprovalUsed.code(), who);
+        return agent_ran(plan.id(), &op);
+    }
+    audit_run(store, plan, outcome, who);
+    let tail = if revoked {
+        "; the approval was revoked, so the agent can't use it either".to_owned()
+    } else if unspent {
+        format!(
+            "; the approval could not be revoked: run `scull approve --revoke {}` before the \
+             agent uses it",
+            plan.id()
+        )
+    } else {
+        String::new()
+    };
+    ScullError::new(
+        e.kind,
+        format!(
+            "{}. Nothing was run{tail}.",
+            e.message.trim_end_matches('.')
+        ),
+    )
+}
+
 /// The allowlisted roots holding `plan`'s items (each item must lie in one), like the MCP
 /// server's own check before `execute_cleanup`.
 fn plan_roots(roots: &[PathBuf], plan: &Plan) -> Result<Vec<PathBuf>, ScullError> {
@@ -638,13 +734,6 @@ fn plan_roots(roots: &[PathBuf], plan: &Plan) -> Result<Vec<PathBuf>, ScullError
         }
     }
     Ok(used)
-}
-
-/// Revoke `plan`'s approval if it is still unspent (best effort); whether it was revoked.
-fn withdraw(store: &mut Store, plan: &Plan, who: &Principal) -> bool {
-    let unspent =
-        store.get_approval(plan.id()).ok().flatten().is_some() && !approval_spent(store, plan.id());
-    unspent && approval::revoke(store, plan.id(), HumanChannel::Terminal, who, now_unix()).is_ok()
 }
 
 /// Record how `--run` ended (best effort, reported on stderr if it can't be recorded).

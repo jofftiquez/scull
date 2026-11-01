@@ -128,7 +128,7 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull clean` | Plan a cleanup (dry run), review a plan, or run it | Only with `--plan` and confirmation |
 | `scull clean caches` | Quick Clean: run package managers' own cache commands | Only with confirmation |
 | `scull clean --purge-quarantine` | Permanently delete expired quarantine | Only with elevated confirmation |
-| `scull approve [PLAN_ID]` | Approve (or `--revoke`) a cleanup plan an AI agent prepared | Records the approval; the agent's run changes the disk |
+| `scull approve [PLAN_ID] [--run]` | Approve (or `--revoke`) a cleanup plan an AI agent prepared; `--run` also runs it | Records the approval; the agent's run, or `--run`, changes the disk |
 | `scull history [OPERATION]` | Show past cleanups | No |
 | `scull restore OPERATION` | Put quarantined items back | Only with confirmation |
 | `scull init` | First-run setup: scan roots and profile | Writes scull's config |
@@ -641,7 +641,8 @@ agent's shell tool it exits 5 and changes nothing; with `--json` it exits 2. Nev
   quarantined, every item checked again right before it is touched). The approval is spent
   by the run, so if the agent calls `execute_cleanup` at the same moment, only one of the
   two runs it. If nothing could run (another cleanup holds the lock, exit 6), the approval
-  is revoked. Only you can do this: there is no MCP tool, setting or environment variable
+  is revoked. If the run started and then failed (for example the disk filled up), scull says
+  so, with how many items were handled and the operation to review with `scull history`. Only you can do this: there is no MCP tool, setting or environment variable
   for it.
 * `--revoke PLAN_ID` withdraws an approval the agent has not used yet. If the agent's
   `execute_cleanup` already started, the revocation is refused (`approval_used`); otherwise
@@ -1112,16 +1113,17 @@ until you turn it on.
 * **Preparing a plan (opt-in).** With `[mcp] destructive = true` in `config.toml` (the same
   switch as the MCP server's destructive mode; never when scull runs elevated), the model may
   also prepare a cleanup plan when you ask it to free space. Preparing changes nothing. After
-  the answer, scull itself prints the plan ID and the command to review and approve it:
+  the answer, scull itself prints the plan ID and the command to review, approve and run it:
 
   ```console
   The assistant prepared a cleanup plan; nothing has been changed. It runs only after you review and approve it yourself:
     plan plan_01JC…: 1 item(s), 4.0 KiB reclaimable
-      scull approve plan_01JC…
+      scull approve plan_01JC… --run
   ```
 
-  `scull ask` cannot run the plan: after you approve it, an AI agent connected to
-  `scull mcp serve` in destructive mode can run it. The same limits as for agents apply
+  `scull ask` cannot run the plan itself. `scull approve <plan-id> --run` shows it, asks for
+  the code and runs it through the Executor (see [`scull approve`](#scull-approve)); without
+  `--run`, the approval is for an AI agent connected to `scull mcp serve` in destructive mode. The same limits as for agents apply
   (`mcp.max_pending_plans`, `mcp.prepare_per_minute`), and consent given while the assistant
   was read-only is asked again.
 

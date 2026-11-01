@@ -290,8 +290,8 @@ code into the app) is described in [APPROVAL_HARDENING.md](../APPROVAL_HARDENING
 off until you configure it. Before the first question to a provider, scull shows what will be
 sent and asks for your consent. The model calls scull's read-only tools, so it can't change
 files or approve or run a cleanup. Only if you set `[mcp] destructive = true` (and scull isn't
-elevated) may it prepare a plan, which changes nothing and runs only after you approve it
-yourself with `scull approve <plan-id>`. See [the CLI reference](CLI.md#scull-ask).
+elevated) may it prepare a plan, which changes nothing and runs only after you approve and
+run it yourself with `scull approve <plan-id> --run`. See [the CLI reference](CLI.md#scull-ask).
 
 ## Unattended cleanup
 
