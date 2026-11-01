@@ -44,8 +44,8 @@ The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
 
 ### Not in this release yet
 
-- Opt-in auto-policies (#20), the desktop approval dialog (#77), and plan preparation from
-  `scull ask` (#22).
+- Opt-in auto-policies (#20), the desktop approval dialog (#77), approve-and-run in one
+  terminal step (`scull approve --run`, #97), and plan preparation from `scull ask` (#22).
 
 ## 0.1.0-alpha.1
 

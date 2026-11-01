@@ -639,6 +639,9 @@ agent's shell tool it exits 5 and changes nothing; with `--json` it exits 2. Nev
 
 Denials, refused attempts and revocations are recorded (`scull history`).
 
+Approving and running a plan in one terminal step (`scull approve <plan-id> --run`) is coming
+(#97); today the agent runs an approved plan with `execute_cleanup`.
+
 ```console
 $ scull approve --revoke plan_6b4b2f1c8e0d9a7b3c2d1e0f
 Revoked the approval of plan plan_6b4b2f1c8e0d9a7b3c2d1e0f. The agent can't run it; nothing was changed. See `scull history`.
