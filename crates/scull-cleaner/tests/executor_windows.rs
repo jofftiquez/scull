@@ -186,6 +186,33 @@ fn fx_win_02_symlinks_inside_candidate_removed_targets_intact() {
     check(&fx, &[&item], &["cand"]);
 }
 
+/// FX-FS-01 on Windows: a directory symlink inside a candidate pointing at the canary
+/// directory → the link is removed as a link, the canary is intact (I-2).
+#[test]
+fn fx_fs_01_symlink_to_canary_inside_candidate_link_removed_canary_intact() {
+    let mut fx = Fixture::new().unwrap();
+    small_tree(&mut fx);
+    let canary_dir = fx.canary().symlink_target_dir.clone();
+    let link = fx.symlink("cand/sub/to-canary", &canary_dir).unwrap();
+    if !link.is_created() {
+        eprintln!(
+            "SKIP FX-FS-01: symlinks are not permitted here (needs admin or Developer Mode): {:?}",
+            fx.skipped()
+        );
+        fx.checkpoint().unwrap();
+        check(&fx, &[], &[]);
+        return;
+    }
+    fx.checkpoint().unwrap();
+    let item = s0_delete(&fx, "cand");
+    let r = delete(&fx, &item, "cand").unwrap();
+    assert_complete(&r);
+    assert_eq!(r.report.removed.symlinks, 1, "{:#?}", r.report);
+    assert!(!fx.root().join("cand").exists());
+    assert_canary_files(&fx);
+    check(&fx, &[&item], &["cand"]);
+}
+
 /// FX-WIN-02: the item itself is a directory symlink to the canary → only the link goes.
 #[test]
 fn fx_win_02_symlink_item_removes_only_the_link() {
@@ -604,6 +631,52 @@ fn fx_win_11_read_only_attribute_entries_are_kept_and_reported() {
     check(&fx, &[&item], &["cand"]);
     // The test (not the walker) clears the attribute so the temp dir can be cleaned up.
     for p in [&ro_file, &ro_dir] {
+        set_readonly(p, false);
+    }
+}
+
+/// FX-FS-07 on Windows: read-only entries inside a candidate are kept and reported (the
+/// attribute is never cleared), everything else in it is deleted, and a read-only file outside
+/// the candidate keeps its attribute and content.
+#[test]
+fn fx_fs_07_read_only_entries_deleted_if_permitted_or_reported() {
+    let mut fx = Fixture::new().unwrap();
+    small_tree(&mut fx);
+    fx.file("cand/ro.txt", b"read-only inside").unwrap();
+    fx.file("keep/ro-outside.txt", b"read-only outside")
+        .unwrap();
+    let inside = fx.root().join("cand/ro.txt");
+    let outside = fx.root().join("keep/ro-outside.txt");
+    for p in [&inside, &outside] {
+        set_readonly(p, true);
+    }
+    fx.checkpoint().unwrap();
+    let item = s0_delete(&fx, "cand");
+    let r = delete(&fx, &item, "cand").unwrap();
+    assert_eq!(
+        r.report.outcome,
+        RemoveOutcome::Incomplete,
+        "{:#?}",
+        r.report
+    );
+    let kept: Vec<_> = r
+        .report
+        .skipped
+        .iter()
+        .map(|s| (s.relative.clone(), s.reason))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![(PathBuf::from("ro.txt"), SkipReason::ReadOnlyAttribute)],
+        "{:#?}",
+        r.report
+    );
+    assert!(fs::metadata(&inside).unwrap().permissions().readonly());
+    assert!(!fx.root().join("cand/sub").exists(), "the rest is deleted");
+    assert!(fs::metadata(&outside).unwrap().permissions().readonly());
+    assert_eq!(fs::read(&outside).unwrap(), b"read-only outside");
+    check(&fx, &[&item], &["cand"]);
+    for p in [&inside, &outside] {
         set_readonly(p, false);
     }
 }
