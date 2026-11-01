@@ -370,10 +370,12 @@ async fn prepare_refuses_protected_and_unknown_items() {
             "{code}"
         );
     }
+    // An absolute path outside the allowlist (`/etc` is not absolute on Windows).
+    let outside = if cfg!(windows) { r"C:\Windows" } else { "/etc" };
     let r = call(
         &client,
         "prepare_cleanup",
-        json!({ "item_ids": [good["id"]], "path": "/etc" }),
+        json!({ "item_ids": [good["id"]], "path": outside }),
     )
     .await;
     assert_eq!(error_code(&r), "outside_allowlist");
@@ -946,6 +948,7 @@ async fn every_refused_execute_is_audited_without_touching_approvals() {
                 machine_id: MACHINE.into(),
                 user: user.into(),
                 origin: PlanOrigin::Mcp,
+                operations_watermark: None,
             },
             plan_a.items().to_vec(),
         )
@@ -1024,30 +1027,26 @@ async fn every_refused_execute_is_audited_without_touching_approvals() {
 }
 
 /// The broker's denial API (what `scull approve` and the desktop dialog call): one
-/// `approval_denied` event per denial with its reason, channel and source, and nothing about
-/// the approval changes; a later approval still works.
+/// `approval_denied` event per denial with its reason, channel and source. A refused attempt
+/// (`no_terminal`, an expired plan) leaves the plan approvable; a human's denial is final
+/// (#78, next test).
 #[tokio::test(flavor = "multi_thread")]
-async fn denials_are_audited_and_leave_the_plan_approvable() {
+async fn refused_attempts_are_audited_and_leave_the_plan_approvable() {
     let env = Env::new();
     let client = connect(env.server(true, true)).await;
     let id = id_of(&prepare(&client, &["app/target"]).await);
     let mut store = env.store();
     let hash = approval::recorded_hash(&store, &id).unwrap();
-    for (denial, channel) in [
-        (approval::Denial::Denied, HumanChannel::Terminal),
-        (approval::Denial::WrongCode, HumanChannel::Desktop),
-        (approval::Denial::NoTerminal, HumanChannel::Terminal),
-        (
-            approval::Denial::Refused(Reason::PlanExpired),
-            HumanChannel::Terminal,
-        ),
+    for denial in [
+        approval::Denial::NoTerminal,
+        approval::Denial::Refused(Reason::PlanExpired),
     ] {
         approval::record_denial(
             &mut store,
             &id,
             Some(&hash),
             denial,
-            channel,
+            HumanChannel::Terminal,
             &who(),
             now_unix(),
         )
@@ -1069,8 +1068,6 @@ async fn denials_are_audited_and_leave_the_plan_approvable() {
     assert_eq!(
         got,
         vec![
-            ("approval_denied", "cli", "terminal", "denied"),
-            ("approval_denied", "desktop", "desktop", "wrong_code"),
             ("approval_denied", "cli", "terminal", "no_terminal"),
             ("approval_denied", "cli", "terminal", "plan_expired"),
         ]
@@ -1091,6 +1088,212 @@ async fn denials_are_audited_and_leave_the_plan_approvable() {
         .await,
     );
     assert_eq!(r["approved_via"], "terminal");
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// #78: a human's denial is final and visible to the agent. After `deny` in the terminal (or
+/// the code typed wrong too often in the desktop dialog), `get_approval_status` reports
+/// `denied` with the reason and tells the agent to prepare a new plan; the plan can't be
+/// approved afterwards on either channel, not even through a challenge begun before the
+/// denial; `execute_cleanup` is refused; and the denial is audited. The MCP client's declared
+/// name (hostile here) is recorded with the plan, sanitized, and listed for the approver.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_human_denial_is_final_and_reported_to_the_agent() {
+    use rmcp::model::{ClientConfig, Implementation};
+    let env = Env::new();
+    let (srv, cli) = tokio::io::duplex(1 << 20);
+    let server = env.server(true, true);
+    tokio::spawn(async move {
+        let _ = scull_mcp::serve(server, srv).await;
+    });
+    let mut info = ClientConfig::default();
+    info.client_info = Implementation::new("evil\u{1b}[2J\u{202e}agent", "1.2\nrm -rf");
+    let client = info.serve(cli).await.expect("client connects");
+    let tool = |name: &str, a: Value| {
+        let client = &client;
+        let name = name.to_owned();
+        async move {
+            client
+                .call_tool(CallToolRequestParams::new(name.clone()).with_arguments(args(a)))
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+        }
+    };
+    let cands = ok(
+        "candidates",
+        &tool(
+            "get_cleanup_candidates",
+            json!({ "tiers": ["S0", "S1", "S2", "S3"] }),
+        )
+        .await,
+    );
+    let pick = |suffix: &str| {
+        cands["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| {
+                c["path"]
+                    .as_str()
+                    .unwrap()
+                    .replace('\\', "/")
+                    .ends_with(suffix)
+            })
+            .unwrap()["id"]
+            .clone()
+    };
+    let mut store = env.store();
+    for (suffix, denial, channel) in [
+        (
+            "app/target",
+            approval::Denial::Denied,
+            HumanChannel::Terminal,
+        ),
+        (
+            "web/node_modules",
+            approval::Denial::WrongCode,
+            HumanChannel::Desktop,
+        ),
+    ] {
+        let plan = ok(
+            "prepare",
+            &tool("prepare_cleanup", json!({ "item_ids": [pick(suffix)] })).await,
+        );
+        let id = id_of(&plan);
+        // The declared client is recorded, sanitized, and shown in the approval list.
+        let client_info = store.plan_client(&id).unwrap().expect("client recorded");
+        assert_eq!(client_info.name, "evil??2J?agent", "{client_info:?}");
+        assert_eq!(client_info.version.as_deref(), Some("1.2?rm -rf"));
+        let listed = approval::awaiting(&store, &who(), now_unix()).unwrap();
+        let summary = listed.iter().find(|p| p.plan_id == id.as_str()).unwrap();
+        assert_eq!(summary.client.as_deref(), Some("evil??2J?agent 1.2?rm -rf"));
+        // A challenge begun before the denial (an approving surface still open).
+        let early = approval::begin(&store, &id, &who(), now_unix())
+            .unwrap()
+            .with_code(ConfirmationCode::parse("HJK-MNP").unwrap());
+        assert_eq!(early.client(), Some(&client_info));
+        let hash = approval::recorded_hash(&store, &id).unwrap();
+        approval::record_denial(
+            &mut store,
+            &id,
+            Some(&hash),
+            denial,
+            channel,
+            &who(),
+            now_unix(),
+        )
+        .unwrap();
+
+        // The agent sees it.
+        let status = ok(
+            "status",
+            &tool("get_approval_status", json!({ "plan_id": id.as_str() })).await,
+        );
+        assert_eq!(status["state"], "denied", "{status:#}");
+        assert_eq!(status["denial_reason"], denial.code(), "{status:#}");
+        assert_eq!(status["executable"], false);
+        let r = tool("get_approval_status", json!({ "plan_id": id.as_str() })).await;
+        assert!(
+            text_of(&r).contains("prepare a new plan"),
+            "{}",
+            text_of(&r)
+        );
+        assert!(
+            approval::awaiting(&store, &who(), now_unix())
+                .unwrap()
+                .iter()
+                .all(|p| p.plan_id != id.as_str())
+        );
+
+        // Never approvable: a new challenge, or the early one on either channel.
+        let e = approval::begin(&store, &id, &who(), now_unix()).unwrap_err();
+        assert_eq!(e.reason, Reason::PlanDenied, "{e}");
+        for ch in [HumanChannel::Terminal, HumanChannel::Desktop] {
+            let e = approval::approve(&mut store, &early, "hjk mnp", ch, &who(), now_unix())
+                .unwrap_err();
+            assert_eq!(e.reason, Reason::PlanDenied, "{e}");
+        }
+        assert!(store.get_approval(&id).unwrap().is_none());
+        let r = tool("execute_cleanup", json!({ "plan_id": id.as_str() })).await;
+        assert_eq!(error_code(&r), "not_approved");
+        // Audited: the denial, from the channel that gave it.
+        let d = store.plan_denial(&id).unwrap().unwrap();
+        assert_eq!(d.reason, denial.code());
+        assert_eq!(d.channel, approval::channel_name(channel.method()));
+    }
+    client.cancel().await.unwrap();
+    env.invariants(&[]);
+}
+
+/// #78: a denial and an approval of the same plan racing through the broker (two store
+/// connections, as `scull approve` and the desktop app would have) never both win.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denial_racing_an_approval_has_exactly_one_winner() {
+    let env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let (mut approved_wins, mut denied_wins) = (0, 0);
+    for _ in 0..8 {
+        let id = id_of(&prepare(&client, &["app/target"]).await);
+        let store = env.store();
+        let ch = approval::begin(&store, &id, &who(), now_unix())
+            .unwrap()
+            .with_code(ConfirmationCode::parse("HJK-MNP").unwrap());
+        let hash = approval::recorded_hash(&store, &id).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let (b1, b2) = (barrier.clone(), barrier);
+        let (mut s1, mut s2) = (env.store(), env.store());
+        let id2 = id.clone();
+        let approving = std::thread::spawn(move || {
+            b1.wait();
+            approval::approve(
+                &mut s1,
+                &ch,
+                "hjk mnp",
+                HumanChannel::Desktop,
+                &who(),
+                now_unix(),
+            )
+            .map_err(|e| e.reason)
+        });
+        let denying = std::thread::spawn(move || {
+            b2.wait();
+            approval::record_denial(
+                &mut s2,
+                &id2,
+                Some(&hash),
+                approval::Denial::Denied,
+                HumanChannel::Terminal,
+                &who(),
+                now_unix(),
+            )
+            .unwrap();
+        });
+        let approved = approving.join().unwrap();
+        denying.join().unwrap();
+        let status = approval::status(&store, &id, &who(), now_unix()).unwrap();
+        match approved {
+            Ok(_) => {
+                approved_wins += 1;
+                assert_eq!(status.state, ApprovalState::Approved);
+            }
+            Err(r) => {
+                denied_wins += 1;
+                assert_eq!(r, Reason::PlanDenied);
+                assert_eq!(status.state, ApprovalState::Denied);
+                assert!(store.get_approval(&id).unwrap().is_none());
+            }
+        }
+        // Each plan used once: void it so the pending cap never fills.
+        if let Some(a) = store.get_approval(&id).unwrap() {
+            let mut s = env.store();
+            assert!(
+                s.consume_approval(&id, &a.content_hash, now_unix())
+                    .unwrap()
+            );
+        }
+    }
+    println!("approve won {approved_wins}, deny won {denied_wins}");
     client.cancel().await.unwrap();
     env.invariants(&[]);
 }

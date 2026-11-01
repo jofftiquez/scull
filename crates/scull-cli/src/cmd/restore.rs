@@ -142,17 +142,23 @@ fn base_line(e: &QuarantineEntry) -> RestoreLine {
     }
 }
 
-/// Whether `e` is what `--item w` names: the entry number, item ID or original path.
+/// Whether `e` is what `--item w` names: the entry number, item ID or original path. A path
+/// matches however it is spelled: through a link, or on Windows with `/` or an 8.3 short name
+/// (`C:\Users\RUNNER~1\...` for `C:\Users\runneradmin\...`); both sides are compared in
+/// canonical form, resolved through their nearest existing ancestor (the item itself is in
+/// quarantine).
 fn matches(e: &QuarantineEntry, w: &str, cwd: &Path) -> bool {
     let p = if Path::new(w).is_absolute() {
         Path::new(w).to_path_buf()
     } else {
         cwd.join(w)
     };
+    let original = e.entry.original_path.to_path_buf();
     e.entry_id.to_string() == w
         || e.entry.item_id.as_str() == w
         || e.entry.original_path.as_str() == w
-        || e.entry.original_path.to_path_buf() == p
+        || original == p
+        || scull_engine::paths::canon(&original) == scull_engine::paths::canon(&p)
 }
 
 /// Run `scull restore`.

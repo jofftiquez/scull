@@ -309,6 +309,43 @@ impl Engine {
         keep
     }
 
+    /// The canonical form of every root in `roots` that is reached through a link pointing
+    /// outside the folder holding it (PRD §8.3, SAFE-04, FX-FS-03): some component of the path
+    /// as given is a symlink or junction whose real location is not inside the real location of
+    /// the folder that contains the link. Everything found below such a root is S3
+    /// (`link_escape`). Links that stay inside their own folder, and system aliases such as
+    /// macOS's `/tmp` → `/private/tmp` (a link in `/` that points inside `/`), don't count.
+    fn link_escaped_roots(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let platform = self.platform.as_ref();
+        roots
+            .iter()
+            .filter(|r| {
+                let abs = if r.is_absolute() {
+                    (*r).clone()
+                } else {
+                    match std::env::current_dir() {
+                        Ok(cwd) => cwd.join(r),
+                        Err(_) => return false,
+                    }
+                };
+                abs.ancestors().any(|prefix| {
+                    let Some(parent) = prefix.parent() else {
+                        return false;
+                    };
+                    let is_link = platform.metadata(prefix).is_ok_and(|md| {
+                        matches!(
+                            md.kind,
+                            scull_platform::EntryKind::Symlink
+                                | scull_platform::EntryKind::Junction
+                        )
+                    });
+                    is_link && !is_within(&canon(prefix), &canon(parent))
+                })
+            })
+            .map(|r| canon(r))
+            .collect()
+    }
+
     /// Scan `roots` and classify everything found. Read-only: nothing on disk changes except
     /// the history database when a store is attached and `req.record_history` is set.
     ///
@@ -324,6 +361,8 @@ impl Engine {
         let progress: ProgressFn = Arc::new(progress);
         let started_at = req.now.unwrap_or_else(now_unix);
         let scan_id = new_scan_id(started_at);
+        // Before canonicalizing: which roots the caller reached through an escaping link.
+        let link_roots = self.link_escaped_roots(roots);
         let roots = self.prepare_roots(roots)?;
         self.refresh_volumes();
         let mut history_err = None;
@@ -416,7 +455,7 @@ impl Engine {
         let now = started_at.max(req.now.unwrap_or_else(now_unix));
         let policies = self.repo_policies(&st);
         let probe = self.run_probe();
-        let mut post = Post::new(self, &st, &policies.0, now);
+        let mut post = Post::new(self, &st, &policies.0, now).with_link_roots(link_roots);
         let mut candidates = Vec::new();
         let mut unmeasured = Vec::new();
         for a in found {
@@ -1029,6 +1068,9 @@ struct Protect {
     protect_marker: bool,
     /// Crosses a mount, or the mount table is unreadable (the protective answer).
     crosses_mount: bool,
+    /// Reached through a link pointing outside the folder holding it (the scan root it lies
+    /// under, as the caller gave it).
+    link_escape: bool,
     /// Cloud provider (or placeholder description) when synced or holding a placeholder.
     cloud: Option<String>,
     evidence: Vec<Evidence>,
@@ -1051,7 +1093,7 @@ impl Protect {
             protect_marker: self.protect_marker,
             in_use: Tri::No,
             crosses_mount: self.crosses_mount,
-            link_escape: false,
+            link_escape: self.link_escape,
             cloud_sync: self.cloud.is_some(),
             marker_present: true,
             lockfile_present: true,
@@ -1134,9 +1176,18 @@ struct Post<'a> {
     policies: &'a BTreeMap<PathBuf, RepoPolicy>,
     tracking: Tracking<'a>,
     now: i64,
+    /// Canonical scan roots the caller reached through an escaping link
+    /// ([`Engine::link_escaped_roots`]): everything below them is `link_escape` (S3).
+    link_roots: Vec<PathBuf>,
 }
 
 impl<'a> Post<'a> {
+    /// Mark everything below `roots` as reached through an escaping link.
+    fn with_link_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.link_roots = roots;
+        self
+    }
+
     fn new(
         engine: &'a Engine,
         st: &'a State,
@@ -1179,6 +1230,7 @@ impl<'a> Post<'a> {
             policies,
             tracking: Tracking::new(engine.git.as_ref(), st.git_roots.iter().cloned()),
             now,
+            link_roots: Vec::new(),
         }
     }
 
@@ -1213,6 +1265,12 @@ impl<'a> Post<'a> {
         let mut p = Protect::default();
 
         let prot = self.protected.check(path, platform);
+        if let Some(root) = self.link_roots.iter().find(|r| is_within(path, r)) {
+            p.link_escape = true;
+            p.evidence.push(Evidence::LinkEscape {
+                target: FsPath::from_path(root),
+            });
+        }
         p.in_protected_root = prot.in_protected_root;
         p.user_excluded = prot.user_excluded;
         p.protect_marker = prot.protect_marker;
@@ -1437,7 +1495,7 @@ impl<'a> Post<'a> {
                 protect_marker: protect.protect_marker,
                 in_use: in_use.in_use,
                 crosses_mount: protect.crosses_mount,
-                link_escape: false,
+                link_escape: protect.link_escape,
                 cloud_sync: protect.cloud.is_some(),
                 recent_activity: activity.recent_activity,
             },

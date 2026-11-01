@@ -91,7 +91,9 @@ pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
 pub use identity::{MACHINE_ID_FILE, current_user, existing_machine_id, machine_id};
 pub use native::{Native, native_path_bytes};
-pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
+pub use owner_only::{
+    Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only, open_file_no_follow,
+};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};
 pub use volumes::{
     FsFeatures, ScanPolicy, VolumeInfo, VolumeKind, free_space, is_mount_boundary, mounts_within,

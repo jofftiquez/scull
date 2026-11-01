@@ -143,6 +143,7 @@ fn examples() -> Vec<(&'static str, serde_json::Value)> {
             machine_id: "c0ffee00c0ffee00".into(),
             user: "dev".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         vec![PlanItem::from_candidate(&c).expect("plan item")],
     )

@@ -8,6 +8,7 @@ use scull_cleaner::headroom::{
     CreateOptions, HeadroomEvent, Limits, ReleaseOutcome, audit, create_with, release,
 };
 use scull_core::ErrorKind;
+use scull_platform::Platform as _;
 use scull_proactive::headroom::{
     HEADROOM_DIR, HeadroomState, MANIFEST_FILE, reserve_relative, status,
 };
@@ -86,28 +87,88 @@ fn create_writes_a_real_owner_only_reserve_and_release_frees_it() {
 
 #[test]
 fn a_replaced_file_is_never_released() {
+    // phase2 run 41321040626: on CI the replacement got the deleted file's inode number back
+    // (ext4 reuses them at once), so identity, kind and size all matched and the old check said
+    // "ready". The replacement here is made to pass that old check whenever the filesystem
+    // allows it (same size, created right after the removal to invite inode reuse); the marker
+    // and modification time still tell it apart.
     let (_t, d) = data_dir();
-    create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
-    // Someone swaps the file for another of the same size: a different identity. The new file
-    // is created while the old one still exists (then renamed over it), so the filesystem
-    // can't hand it the old inode number, which deleting first sometimes did.
-    let swap = d.join("swap.tmp");
-    std::fs::write(&swap, vec![7u8; (2 * MIB) as usize]).unwrap();
-    std::fs::rename(&swap, reserve(&d)).unwrap();
-    assert_eq!(status(&d).state, HeadroomState::Changed);
+    let m = create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
+    std::fs::remove_file(reserve(&d)).unwrap();
+    std::fs::write(reserve(&d), vec![7u8; (2 * MIB) as usize]).unwrap();
+    let reused = scull_platform::Native::new()
+        .metadata(&reserve(&d))
+        .unwrap()
+        .identity
+        == Some(m.identity);
+    println!("inode reused by the filesystem: {reused}");
+    let st = status(&d);
+    assert_eq!(st.state, HeadroomState::Changed, "{st:?}");
     let e = release(&d).unwrap_err();
     assert_eq!(e.kind, ErrorKind::SafetyBlocked);
-    assert!(e.message.contains("identity"), "{}", e.message);
+    assert!(
+        e.message.contains("identity")
+            || e.message.contains("marker")
+            || e.message.contains("modified"),
+        "{}",
+        e.message
+    );
     assert!(reserve(&d).exists(), "the unknown file is left alone");
     assert!(d.join(MANIFEST_FILE).exists());
+}
+
+/// The same file (same inode, size and modification time) whose content was overwritten: only
+/// the marker tells it apart, and it does.
+#[test]
+fn a_rewritten_file_with_the_same_identity_is_never_released() {
+    use std::io::{Seek, SeekFrom, Write};
+    let (_t, d) = data_dir();
+    let m = create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
+    let mtime = std::fs::metadata(reserve(&d)).unwrap().modified().unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(reserve(&d))
+        .unwrap();
+    f.seek(SeekFrom::Start(0)).unwrap();
+    f.write_all(&[0u8; 32]).unwrap();
+    f.set_modified(mtime).unwrap();
+    drop(f);
+    let md = scull_platform::Native::new()
+        .metadata(&reserve(&d))
+        .unwrap();
+    assert_eq!(md.identity, Some(m.identity), "same object");
+    assert_eq!(md.logical_size, 2 * MIB, "same size");
+    assert_eq!(md.mtime_unix, m.mtime_unix, "same modification time");
+    let st = status(&d);
+    assert_eq!(st.state, HeadroomState::Changed, "{st:?}");
+    assert!(st.detail.unwrap().contains("marker differs"));
+    let e = release(&d).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::SafetyBlocked);
+    assert!(e.message.contains("marker differs"), "{}", e.message);
+    assert!(reserve(&d).exists());
+}
+
+/// The marker is random, recorded and at the start of the file.
+#[test]
+fn the_marker_is_random_and_recorded() {
+    let (_t, a) = data_dir();
+    let (_u, b) = data_dir();
+    let ma = create_with(&a, &opts(MIB), LIMITS).unwrap();
+    let mb = create_with(&b, &opts(MIB), LIMITS).unwrap();
+    assert_eq!(ma.marker.len(), 64);
+    assert_ne!(ma.marker, mb.marker, "a fresh marker per reserve");
+    let head = std::fs::read(reserve(&a)).unwrap();
+    assert_eq!(scull_proactive::headroom::hex(&head[..32]), ma.marker);
+    assert_eq!(status(&a).state, HeadroomState::Ready);
 }
 
 #[test]
 fn a_grown_or_shrunk_file_is_never_released() {
     let (_t, d) = data_dir();
     create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
+    // `write`, not `append`: a Windows append-only handle may not change the length.
     std::fs::OpenOptions::new()
-        .append(true)
+        .write(true)
         .open(reserve(&d))
         .unwrap()
         .set_len(3 * MIB)

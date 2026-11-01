@@ -35,7 +35,15 @@
 //!    `deny`, too many wrong codes, no terminal, or a refused attempt) and a refused
 //!    `execute_cleanup` ([`record_execute_refusal`]; the Executor's gate records its own).
 //!    They hold codes and identifiers only, never a confirmation code, and recording one
-//!    never creates, changes or spends an approval.
+//!    never creates, changes or spends an approval. A human's denial (`deny`, the desktop
+//!    Deny button, or the code typed wrong too often) is **final** (#78): it is recorded
+//!    atomically with the check for an approval, the store refuses any later approval of
+//!    that plan, and [`status`] reports [`ApprovalState::Denied`] so the agent prepares a new
+//!    plan instead of polling.
+//!
+//! The MCP client's declared `clientInfo` (name, version) is recorded with each agent plan,
+//! sanitized and length-capped ([`AgentClient`]), and shown to the human as a claim; it is
+//! never trusted for anything.
 //! 6. Until the agent executes it, the human can **revoke** the approval ([`revoke`]:
 //!    `scull approve --revoke <plan-id>` in their terminal, or the desktop dialog). Revoking
 //!    spends the approval in the same atomic update the Executor uses to consume it, so a
@@ -76,7 +84,7 @@ use scull_core::{
     ScullError, Tier, narrow,
 };
 use scull_storage::{
-    AgentAuditEvent, Approval, ApprovalMethod, EventKind, NewApproval, StoreError,
+    AgentAuditEvent, AgentClient, Approval, ApprovalMethod, EventKind, NewApproval, StoreError,
 };
 use scull_storage::{OperationRecord, Store};
 use serde::Serialize;
@@ -168,6 +176,9 @@ pub enum Reason {
     RandomUnavailable,
     /// The human revoked the approval before it was used (#298).
     ApprovalRevoked,
+    /// A human denied the plan (`deny`, the desktop Deny button, or the code typed wrong too
+    /// often): final, it can never be approved (#78). The agent must prepare a new plan.
+    PlanDenied,
 }
 
 impl Reason {
@@ -190,6 +201,7 @@ impl Reason {
             Reason::Store => "store",
             Reason::RandomUnavailable => "random_unavailable",
             Reason::ApprovalRevoked => "approval_revoked",
+            Reason::PlanDenied => "plan_denied",
         }
     }
 
@@ -209,7 +221,8 @@ impl Reason {
             | Reason::ApprovalUsed
             | Reason::NotHuman
             | Reason::WrongCode
-            | Reason::ApprovalRevoked => ErrorKind::SafetyBlocked,
+            | Reason::ApprovalRevoked
+            | Reason::PlanDenied => ErrorKind::SafetyBlocked,
             Reason::Store | Reason::RandomUnavailable => ErrorKind::Io,
         }
     }
@@ -342,6 +355,9 @@ pub struct PlanSummary {
     pub items_by_tier: [u64; 3],
     /// Estimated reclaimable bytes at planning time.
     pub reclaimable_bytes: u64,
+    /// The MCP client the plan came through, as it named itself (`name version`; sanitized,
+    /// unverified, display only; #78). `None` when unknown.
+    pub client: Option<String>,
 }
 
 impl PlanSummary {
@@ -367,7 +383,19 @@ impl PlanSummary {
                 .items()
                 .iter()
                 .fold(0u64, |a, i| a.saturating_add(i.reclaimable_bytes)),
+            client: None,
         }
+    }
+
+    /// The summary of `plan` with the MCP client it was prepared through, when recorded.
+    pub fn with_client(store: &Store, plan: &Plan) -> Self {
+        let mut s = Self::of(plan);
+        s.client = store
+            .plan_client(plan.id())
+            .ok()
+            .flatten()
+            .map(|c| c.display());
+        s
     }
 }
 
@@ -382,7 +410,7 @@ pub fn awaiting(store: &Store, who: &Principal, now: i64) -> Result<Vec<PlanSumm
         if let Ok(Some(plan)) = store.get_plan(&id)
             && plan.verify(now, &who.machine_id, &who.user).is_ok()
         {
-            out.push(PlanSummary::of(&plan));
+            out.push(PlanSummary::with_client(store, &plan));
         }
     }
     Ok(out)
@@ -590,6 +618,7 @@ pub fn check_approver(
 pub struct Challenge {
     plan: Plan,
     code: ConfirmationCode,
+    client: Option<AgentClient>,
 }
 
 impl Challenge {
@@ -603,6 +632,12 @@ impl Challenge {
         &self.code
     }
 
+    /// The MCP client the plan came through, as it named itself (sanitized, unverified;
+    /// #78). Show it as a claim ("prepared through ..."), never as proof of anything.
+    pub fn client(&self) -> Option<&AgentClient> {
+        self.client.as_ref()
+    }
+
     /// A challenge with a fixed code (tests and reproducible demonstrations only; real
     /// approvals use [`begin`], which draws a random code).
     pub fn with_code(mut self, code: ConfirmationCode) -> Self {
@@ -611,10 +646,11 @@ impl Challenge {
     }
 }
 
-/// Start approving plan `id`: it must be an MCP plan for `who`, unexpired, valid and not yet
-/// approved. Returns the [`Challenge`] to show.
+/// Start approving plan `id`: it must be an MCP plan for `who`, unexpired, valid, not denied
+/// (#78) and not yet approved. Returns the [`Challenge`] to show.
 pub fn begin(store: &Store, id: &PlanId, who: &Principal, now: i64) -> Result<Challenge, Refused> {
     let plan = load_plan(store, id, who, now)?;
+    denied_check(store, id)?;
     if store.get_approval(id).map_err(store_err)?.is_some() {
         return Err(Refused::new(
             Reason::AlreadyApproved,
@@ -622,9 +658,28 @@ pub fn begin(store: &Store, id: &PlanId, who: &Principal, now: i64) -> Result<Ch
         ));
     }
     Ok(Challenge {
+        client: store.plan_client(id).map_err(store_err)?,
         plan,
         code: ConfirmationCode::generate()?,
     })
+}
+
+/// [`Reason::PlanDenied`] when a human already denied plan `id` (#78).
+fn denied_check(store: &Store, id: &PlanId) -> Result<(), Refused> {
+    match store.plan_denial(id).map_err(store_err)? {
+        Some(d) => Err(denied(id, &d.reason)),
+        None => Ok(()),
+    }
+}
+
+fn denied(id: &PlanId, reason: &str) -> Refused {
+    Refused::new(
+        Reason::PlanDenied,
+        format!(
+            "plan {id} was denied by the user ({reason}): it can never be approved; the agent \
+             must prepare a new plan"
+        ),
+    )
 }
 
 /// Record the human approval of the challenged plan when `typed` is its code. Refuses with
@@ -647,6 +702,7 @@ pub fn approve(
     }
     let shown = &challenge.plan;
     let plan = load_plan(store, shown.id(), who, now)?;
+    denied_check(store, plan.id())?;
     if plan.content_hash() != shown.content_hash() || plan != *shown {
         return Err(Refused::new(
             Reason::ReviewedPlanDiffers,
@@ -681,6 +737,11 @@ pub fn approve(
                 Reason::PlanExpired,
                 format!("plan {} expired before it was approved", plan.id()),
             ),
+            // A denial won the race (#78): the store refuses the approval in its transaction.
+            Some(ErrorKind::SafetyBlocked) => match store.plan_denial(plan.id()) {
+                Ok(Some(d)) => denied(plan.id(), &d.reason),
+                _ => store_err(e),
+            },
             Some(ErrorKind::PlanTampered) => Refused::new(
                 Reason::ApprovalMismatch,
                 "the approval does not match the recorded plan",
@@ -712,6 +773,9 @@ pub enum ApprovalState {
     Expired,
     /// The human revoked the approval before it was used: nothing will run.
     Revoked,
+    /// A human denied the plan (#78): final, it can never be approved or run; the agent must
+    /// prepare a new plan. `denial_reason` says how (`denied` or `wrong_code`).
+    Denied,
 }
 
 /// The approval status of a plan. Contains no token and no code: nothing in it can approve
@@ -734,6 +798,9 @@ pub struct ApprovalStatus {
     pub used_at: Option<i64>,
     /// Whether `execute_cleanup` would be accepted now (it still re-checks everything).
     pub executable: bool,
+    /// How a human denied the plan (`denied`: said no; `wrong_code`: the code was typed wrong
+    /// too often), when [`ApprovalState::Denied`].
+    pub denial_reason: Option<String>,
 }
 
 /// The approval status of MCP plan `id` at `now`. Expired plans still report (as
@@ -753,10 +820,15 @@ pub fn status(
         ));
     }
     let approval = store.get_approval(id).map_err(store_err)?;
+    let denial = match &approval {
+        None => store.plan_denial(id).map_err(store_err)?,
+        Some(_) => None,
+    };
     let plan_live = now < plan.expires_unix();
     let revoked = approval.as_ref().is_some_and(|a| a.used_at.is_some())
         && store.approval_revoked(id).map_err(store_err)?;
     let state = match &approval {
+        None if denial.is_some() => ApprovalState::Denied,
         None if plan_live => ApprovalState::AwaitingApproval,
         None => ApprovalState::Expired,
         Some(_) if revoked => ApprovalState::Revoked,
@@ -776,6 +848,7 @@ pub fn status(
             && approval
                 .as_ref()
                 .is_some_and(|a| HumanChannel::is_human(a.method)),
+        denial_reason: denial.map(|d| d.reason),
     })
 }
 
@@ -1196,6 +1269,11 @@ impl Denial {
 /// Record that an attempt to approve plan `plan_id` through `channel` ended without an
 /// approval ([`EventKind::ApprovalDenied`]): reason, plan ID and hash (when known), channel,
 /// machine and user. Never records the code, and never touches the approval itself.
+///
+/// [`Denial::Denied`] and [`Denial::WrongCode`] are the human's final answer (#78): the plan
+/// can never be approved afterwards ([`Store::deny_plan`]), [`status`] reports
+/// [`ApprovalState::Denied`] and the agent is told to prepare a new plan. The other denials
+/// are refused attempts and leave the plan approvable.
 pub fn record_denial(
     store: &mut Store,
     plan_id: &PlanId,
@@ -1209,21 +1287,26 @@ pub fn record_denial(
         HumanChannel::Terminal => "cli",
         HumanChannel::Desktop => "desktop",
     };
-    store
-        .record_agent_event(&AgentAuditEvent {
-            event_id: 0,
-            at: now,
-            kind: EventKind::ApprovalDenied,
-            source: source.into(),
-            plan_id: Some(plan_id.clone()),
-            content_hash: content_hash.cloned(),
-            reason: denial.code().into(),
-            channel: channel_name(channel.method()).into(),
-            machine_id: who.machine_id.clone(),
-            user: who.user.clone(),
-            count: 1,
-        })
-        .map_err(store_err)
+    let event = AgentAuditEvent {
+        event_id: 0,
+        at: now,
+        kind: EventKind::ApprovalDenied,
+        source: source.into(),
+        plan_id: Some(plan_id.clone()),
+        content_hash: content_hash.cloned(),
+        reason: denial.code().into(),
+        channel: channel_name(channel.method()).into(),
+        machine_id: who.machine_id.clone(),
+        user: who.user.clone(),
+        count: 1,
+    };
+    // A human's "no" (or the code typed wrong too often) is final (#78): recorded atomically
+    // with the check for an approval, so a racing approval and this denial can't both win.
+    if matches!(denial, Denial::Denied | Denial::WrongCode) {
+        store.deny_plan(&event).map(|_| ()).map_err(store_err)
+    } else {
+        store.record_agent_event(&event).map_err(store_err)
+    }
 }
 
 /// Record that the MCP server refused an `execute_cleanup` of `plan_id` (when the agent gave
@@ -1518,6 +1601,7 @@ mod tests {
                 machine_id: "m".into(),
                 user: "u".into(),
                 origin: PlanOrigin::Mcp,
+                operations_watermark: None,
             },
             vec![PlanItem::from_candidate(c).unwrap()],
         )

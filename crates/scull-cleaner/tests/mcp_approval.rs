@@ -48,6 +48,7 @@ fn mcp_plan(fx: &Fixture, scan: &ScanReport, rels: &[&str], id: &str, created: i
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin: PlanOrigin::Mcp,
+            operations_watermark: None,
         },
         items,
     )

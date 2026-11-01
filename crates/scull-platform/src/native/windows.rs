@@ -295,6 +295,34 @@ fn filetime_to_unix(ticks: i64) -> Option<i64> {
 
 /// Volume serial number + file ID. An ID of 0 or all ones is a filesystem saying "no stable
 /// ID", so it is reported as unknown rather than as a (colliding) identity.
+/// `CreateFileW(path, GENERIC_READ, FILE_FLAG_OPEN_REPARSE_POINT)`: a symbolic link, junction
+/// or other reparse point at `path` is opened as itself and then refused; anything but a
+/// regular file is refused; the identity comes from the opened handle.
+pub(super) fn open_file_no_follow(
+    path: &Path,
+) -> io::Result<(std::fs::File, Option<FileIdentity>)> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)?;
+    let md = f.metadata()?;
+    if md.file_attributes() & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file (a link, reparse point or directory)",
+        ));
+    }
+    // SAFETY: the handle is owned by `f`, which outlives `borrowed`; `ManuallyDrop` keeps the
+    // borrowed `Handle` from closing it.
+    let borrowed =
+        std::mem::ManuallyDrop::new(unsafe { Handle::from_raw(f.as_raw_handle() as HANDLE) });
+    let id = identity(&borrowed);
+    Ok((f, id))
+}
+
 pub(crate) fn identity(handle: &Handle) -> Option<FileIdentity> {
     if let Ok(info) = query::<FILE_ID_INFO>(handle) {
         let file = u128::from_le_bytes(info.FileId.Identifier);

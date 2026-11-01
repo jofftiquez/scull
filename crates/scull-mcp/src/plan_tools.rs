@@ -36,7 +36,7 @@ use scull_core::{
 };
 use scull_engine::paths::is_within;
 use scull_engine::{CancelToken, Engine, ScanReport, ScanRequest, now_unix};
-use scull_storage::{Approval, Store};
+use scull_storage::{AgentClient, Approval, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -477,9 +477,12 @@ pub(crate) fn call(
     name: &str,
     args: JsonObject,
     cancel: &CancelToken,
+    client: Option<&AgentClient>,
 ) -> Option<Result<Output, ToolError>> {
     let r = match name {
-        "prepare_cleanup" => parse(args).and_then(|a| prepare(ctx, plans, allow, a, cancel)),
+        "prepare_cleanup" => {
+            parse(args).and_then(|a| prepare(ctx, plans, allow, a, cancel, client))
+        }
         "get_cleanup_plan" => parse(args).and_then(|a| get_plan(ctx, plans, a)),
         "get_approval_status" => parse(args).and_then(|a| approval_status(plans, a)),
         "execute_cleanup" => {
@@ -578,6 +581,7 @@ fn prepare(
     allow: &Allowlist,
     a: PrepareArgs,
     cancel: &CancelToken,
+    client: Option<&AgentClient>,
 ) -> Result<Output, ToolError> {
     // #299: the session's rate first (before any scan), then the pending cap.
     if let Err(retry) = plans.admit() {
@@ -615,6 +619,12 @@ fn prepare(
     }
     let wanted: BTreeSet<&str> = a.item_ids.iter().map(String::as_str).collect();
     let roots = ctx.targets(allow, a.path.as_deref())?;
+    // SAFE-09: the last recorded operation before the scan starts; any later one invalidates
+    // the plan.
+    let mut store = open_store(plans)?;
+    let watermark = store
+        .operations_watermark()
+        .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
     let rep = fresh_scan(ctx, &roots, cancel)?;
     let r = &ctx.redactor;
     let mut items = Vec::new();
@@ -652,14 +662,14 @@ fn prepare(
             machine_id: plans.principal.machine_id.clone(),
             user: plans.principal.user.clone(),
             origin: PlanOrigin::Mcp,
+            operations_watermark: Some(watermark),
         },
         items,
     )
     .map_err(|e| ToolError::new("not_plannable", r.text(&e.message)))?;
-    let mut store = open_store(plans)?;
     // The cap again, atomically with the insert (another session may have prepared meanwhile).
     let inserted = store
-        .insert_agent_plan(&plan, now, plans.limits.max_pending)
+        .insert_agent_plan(&plan, now, plans.limits.max_pending, client)
         .map_err(|e| ToolError::new("store", ScullError::from(e).message))?;
     if !inserted {
         audit_prepare_refusal(plans, Some(&mut store), "too_many_pending_plans");
@@ -706,6 +716,7 @@ fn state_name(s: ApprovalState) -> &'static str {
         ApprovalState::Used => "approval used",
         ApprovalState::Expired => "expired",
         ApprovalState::Revoked => "approval revoked by the user",
+        ApprovalState::Denied => "denied by the user",
     }
 }
 
@@ -722,6 +733,11 @@ fn next_step(id: &PlanId, s: &ApprovalStatus) -> String {
         ApprovalState::Revoked => "The user revoked the approval: this plan will not run. Do \
              not prepare it again unless the user asks."
             .into(),
+        ApprovalState::Denied => format!(
+            "The user denied this plan ({}): it can never be approved or run. Stop polling; \
+             prepare a new plan only if the user still wants a cleanup.",
+            s.denial_reason.as_deref().unwrap_or("denied")
+        ),
     }
 }
 
@@ -961,6 +977,7 @@ fn cleanup_status(ctx: &Ctx, plans: &PlanTools, a: PlanIdArgs) -> Result<Output,
         (None, ApprovalState::Approved) => "approved",
         (None, ApprovalState::Expired) => "expired",
         (None, ApprovalState::Revoked) => "revoked",
+        (None, ApprovalState::Denied) => "denied",
     };
     let out = CleanupStatusOutput {
         plan_id: id.as_str().to_owned(),

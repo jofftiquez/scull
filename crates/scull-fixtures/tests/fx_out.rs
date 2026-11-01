@@ -1102,7 +1102,13 @@ fn fx_out_03_cli_and_mcp_give_identical_classifications() {
     assert!(via_cli.len() >= 5, "{via_cli:#?}");
 
     let mut m = Mcp::start(&cli);
-    let scan = m.tool("scan_directory", json!({ "path": r, "max_results": 1000 }));
+    // The server compares paths with its canonical roots before touching the disk, so the
+    // path is given as scull reports it (on Windows the temp dir is an 8.3 short path).
+    let canonical_root = s(&scull_engine::paths::canon(fx.root()));
+    let scan = m.tool(
+        "scan_directory",
+        json!({ "path": canonical_root, "max_results": 1000 }),
+    );
     assert_eq!(scan["truncated"], false, "{scan:#}");
     let via_mcp = classified(&scan["candidates"]);
     let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));

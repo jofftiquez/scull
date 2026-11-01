@@ -79,7 +79,8 @@ impl Store {
     ///    application's database → [`StoreError::NotScullDatabase`]. In all three cases the file
     ///    is left byte-identical.
     /// 3. Database, `-wal` and `-shm` files are restricted owner-only, connection settings are
-    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup.
+    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup. The
+    ///    `-wal` and `-shm` files SQLite creates while opening are restricted too.
     pub fn open_with(path: &Path, perms: &dyn OwnerOnly, options: &StoreOptions) -> Result<Store> {
         Self::open_inner(path, perms, options, MIGRATIONS)
     }
@@ -191,6 +192,17 @@ impl Store {
         })
         .map_err(StoreError::from)
         .map_err(cls)?;
+        // The `-wal` and `-shm` files SQLite created just now, in WAL mode. On Unix they take
+        // the database file's mode; on Windows they inherit the data folder's owner-only DACL
+        // but are owned by the process's default owner, which for an elevated administrator is
+        // the Administrators group, not the user. Restricting them makes the user the owner.
+        for p in [with_suffix(path, "-wal"), with_suffix(path, "-shm")] {
+            if std::fs::symlink_metadata(&p).is_ok() {
+                perms
+                    .restrict(&p)
+                    .map_err(|source| StoreError::Permissions { path: p, source })?;
+            }
+        }
         for b in &backups_taken {
             perms
                 .restrict(b)
@@ -314,8 +326,15 @@ impl Store {
     /// than `max_pending` plans awaiting approval at `now` ([`Store::pending_agent_plans`]):
     /// the count and the insert are one transaction, so concurrent sessions can't exceed the
     /// cap (#299). Returns `false`, recording nothing, when the cap is reached. Otherwise as
-    /// [`Store::insert_plan`].
-    pub fn insert_agent_plan(&mut self, plan: &Plan, now: i64, max_pending: u32) -> Result<bool> {
+    /// [`Store::insert_plan`], plus the MCP client the plan came through, when known
+    /// ([`crate::EventKind::AgentPlanClient`], #78), in the same transaction.
+    pub fn insert_agent_plan(
+        &mut self,
+        plan: &Plan,
+        now: i64,
+        max_pending: u32,
+        client: Option<&crate::AgentClient>,
+    ) -> Result<bool> {
         if plan.origin() != PlanOrigin::Mcp {
             return Err(StoreError::rejected(
                 ErrorKind::Usage,
@@ -329,6 +348,9 @@ impl Store {
                 return Ok(false);
             }
             row.insert(tx, plan)?;
+            if let Some(c) = client {
+                crate::events::insert_plan_client(tx, plan.id(), c, now)?;
+            }
             Ok(true)
         })
     }
@@ -372,7 +394,8 @@ impl Store {
     /// Record a human approval of a recorded plan (§13.3 step 3). Rejected if the plan is
     /// unknown, the hash differs from the recorded plan, the approval would outlive the plan,
     /// the plan already expired, or the plan already has an approval (single use: one approval
-    /// per plan). Returns the approval's row ID.
+    /// per plan), or a human denied the plan (#78, [`Store::deny_plan`]: final). Returns the
+    /// approval's row ID.
     pub fn insert_approval(&mut self, a: &NewApproval) -> Result<i64> {
         self.write(|tx| {
             let plan: Option<(String, i64)> = tx
@@ -415,6 +438,25 @@ impl Store {
                 return Err(StoreError::rejected(
                     ErrorKind::Usage,
                     format!("plan {} already has an approval (single use)", a.plan_id),
+                ));
+            }
+            // #78: a human's denial is final. Checked in this transaction; `deny_plan` checks
+            // for an approval in its own, so exactly one of a racing approve and deny wins.
+            let denied: bool = tx.query_row(
+                &format!(
+                    "SELECT EXISTS (SELECT 1 FROM events e WHERE {})",
+                    crate::events::final_denial_sql("?1")
+                ),
+                [a.plan_id.as_str()],
+                |r| r.get(0),
+            )?;
+            if denied {
+                return Err(StoreError::rejected(
+                    ErrorKind::SafetyBlocked,
+                    format!(
+                        "plan {} was denied by the user: it can never be approved",
+                        a.plan_id
+                    ),
                 ));
             }
             tx.execute(

@@ -424,6 +424,10 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
     let roots = pipeline::roots(&loaded, args.allow_broad_roots)?;
     let who = exec::who()?;
     let engine = pipeline::engine(&loaded, &roots, true, ui)?;
+    // SAFE-09: the last recorded operation before the scan starts. Any operation recorded
+    // after it may have touched what the scan observes, and invalidates the plan.
+    let mut store = exec::open_store()?;
+    let watermark = store.operations_watermark()?;
     let scan = scan(&engine, &roots, &loaded, true, ui)?;
     if scan.cancelled || cancel::is_cancelled() {
         return Err(cancel::cancelled_error());
@@ -448,16 +452,14 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
                 machine_id: who.machine_id.clone(),
                 user: who.user.clone(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: Some(watermark),
             },
             items,
         )?)
     };
-    let mut store = None;
     let mut plan_file = None;
     if let Some(p) = &plan {
-        let mut s = exec::open_store()?;
-        s.insert_plan(p)?;
-        store = Some(s);
+        store.insert_plan(p)?;
         if let Some(out) = &args.output {
             write_plan_file(out, p)?;
             plan_file = Some(FsPath::from_path(&absolute(&cwd, out)));
@@ -499,10 +501,6 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
         return Ok(());
     }
     let elevated = elevated_gate(&report, args.allow_permanent, true)?;
-    let mut store = match store {
-        Some(s) => s,
-        None => exec::open_store()?,
-    };
     let sizes = sizes_by_id(&scan.candidates);
     let run = execute(
         &plan,
@@ -1965,8 +1963,9 @@ mod tests {
         assert!(err.message.contains(TOOL_NATIVE_UNSUPPORTED), "{err}");
     }
 
-    /// A long-tail tool cache (P5-DET-05) is a package cache Quick Clean doesn't run yet: it
-    /// is excluded as not supported, never pointed at `scull clean caches`, never planned.
+    /// A long-tail tool cache Quick Clean doesn't run (#44: Puppeteer) is excluded as not
+    /// supported, never pointed at `scull clean caches`, never planned; one it runs (ccache)
+    /// is pointed at `scull clean caches`, and `scull clean` never runs it either.
     #[test]
     fn long_tail_tool_caches_are_never_planned() {
         let ccache = tool_candidate(
@@ -1977,11 +1976,23 @@ mod tests {
                 args: vec!["--clear".into()],
             },
         );
-        assert!(!is_quick_clean_tool("ccache"));
+        assert!(is_quick_clean_tool("ccache"));
         let (reason, why) = ineligible(&ccache).unwrap();
+        assert_eq!(reason, ExcludeReason::PackageCache);
+        assert!(why.contains("scull clean caches"), "{why}");
+        let puppeteer = tool_candidate(
+            Category::PackageCache,
+            "puppeteer.browsers",
+            Action::ToolCommand {
+                tool: "puppeteer".into(),
+                args: vec!["browsers".into(), "clear".into()],
+            },
+        );
+        assert!(!is_quick_clean_tool("puppeteer"));
+        let (reason, why) = ineligible(&puppeteer).unwrap();
         assert_eq!(reason, ExcludeReason::NotSupported);
-        assert!(why.contains("does not run `ccache`"), "{why}");
-        let cands = [ccache];
+        assert!(why.contains("does not run `puppeteer`"), "{why}");
+        let cands = [puppeteer];
         assert!(
             select(&cands, true, &[], Path::new("/"))
                 .unwrap()

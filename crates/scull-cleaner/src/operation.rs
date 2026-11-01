@@ -1,7 +1,9 @@
 //! One executed operation: its database record, targets, audit trail and quarantine folder.
 //!
 //! [`Executor::begin_operation`] (under the execution lock) refuses a plan whose targets
-//! another operation touched since the plan was created (SAFE-09, exit code 4), then records
+//! another operation touched since its scan observed them (SAFE-09, exit code 4: every
+//! operation recorded after the plan's [operations watermark](Plan::operations_watermark), or
+//! for plans without one, started at or after the plan's creation), then records
 //! the operation (`operations` row + `started` audit row, SAFE-08) and the identity of every
 //! target. [`Executor::execute_plan`] records one audit outcome per item through it, and
 //! quarantines into its folder (D-3). [`Operation::finish`] closes the audit.
@@ -249,10 +251,12 @@ impl Operation<'_> {
 impl Executor {
     /// Start an operation for `plan` (which must already be recorded in `store`), under the
     /// execution lock. Refuses with [`ErrorKind::SafetyBlocked`] while an earlier operation is
-    /// unfinished (a crash: run [`Executor::recover`] first, SAFE-19). Refuses with [`ErrorKind::PlanInvalidated`] (exit 4) when another
-    /// operation that started at or after the plan's creation targeted any of its items
-    /// (SAFE-09); otherwise records the operation, its `started` audit row and the identity of
-    /// every plan item.
+    /// unfinished (a crash: run [`Executor::recover`] first, SAFE-19). Refuses with
+    /// [`ErrorKind::PlanInvalidated`] (exit 4) when another operation targeted any of its items
+    /// after the plan's scan observed them (SAFE-09): one recorded after the plan's
+    /// [`Plan::operations_watermark`], taken when the scan started; for a plan without one, one
+    /// started at or after the plan's creation. Otherwise records the operation, its `started`
+    /// audit row and the identity of every plan item.
     ///
     /// A plan made by the MCP server ([`PlanOrigin::Mcp`]) additionally needs a human approval
     /// (MCP-04): this consumes it atomically and refuses with [`ErrorKind::SafetyBlocked`]
@@ -335,7 +339,12 @@ impl Executor {
         }
         let identities: Vec<_> = plan.items().iter().map(|i| i.identity).collect();
         let touched = store
-            .operations_touching(&identities, plan.created_unix(), None)
+            .operations_touching(
+                &identities,
+                plan.created_unix(),
+                plan.operations_watermark(),
+                None,
+            )
             .map_err(store_refusal)?;
         if !touched.is_empty() {
             let ids: Vec<&str> = touched.iter().map(OperationId::as_str).collect();
@@ -343,8 +352,8 @@ impl Executor {
                 ScullError::new(
                     ErrorKind::PlanInvalidated,
                     format!(
-                        "another operation touched this plan's targets since it was created \
-                         ({}); create a new plan",
+                        "another operation touched this plan's targets after its scan \
+                         observed them ({}); create a new plan",
                         ids.join(", ")
                     ),
                 ),

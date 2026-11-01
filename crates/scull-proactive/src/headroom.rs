@@ -13,9 +13,12 @@
 //!   deduplicated file would reserve nothing, so creation refuses one.
 //! * **Who:** owner-only permissions, like the rest of scull's data.
 //! * **Record:** `<data dir>/headroom.json` (the [`HeadroomManifest`]) records the file's
-//!   identity, size and allocated bytes. scull releases only a file that the manifest
-//!   describes and whose no-follow identity, kind and size still match. A link at the path is
-//!   never followed.
+//!   identity, size, allocated bytes, modification time and a **marker**: 32 random bytes
+//!   written as the file's first bytes when it was created. scull releases only a file that the
+//!   manifest describes: same no-follow identity, kind, size and modification time, **and** the
+//!   same marker, read through a handle opened without following links whose identity is
+//!   checked again ([`marker_mismatch`]). Identity alone is not enough: filesystems reuse inode
+//!   numbers right away, so a file put in the reserve's place can have the old identity.
 //! * **Size:** [`DEFAULT_SIZE`] (2 GiB) unless asked otherwise, at least [`MIN_SIZE`], at most
 //!   [`MAX_SIZE`] and at most [`MAX_SHARE_PERCENT`] % of the volume. Creation refuses when free
 //!   space would drop below the forecast reserve (`[proactive] reserve_gib`).
@@ -35,8 +38,11 @@ pub const HEADROOM_DIR: &str = "headroom";
 pub const RESERVE_FILE: &str = "reserve.bin";
 /// The manifest's file name in scull's data directory.
 pub const MANIFEST_FILE: &str = "headroom.json";
-/// Manifest format version.
-pub const MANIFEST_VERSION: u32 = 1;
+/// Manifest format version (2: the marker and modification time; a version-1 manifest has
+/// neither and is refused).
+pub const MANIFEST_VERSION: u32 = 2;
+/// Bytes of the random marker at the start of the reserve.
+pub const MARKER_LEN: usize = 32;
 /// Size when none is asked for (PRD: "e.g. 2–5 GB").
 pub const DEFAULT_SIZE: u64 = 2 * GIB;
 /// Smallest reserve accepted.
@@ -73,6 +79,10 @@ pub struct HeadroomManifest {
     pub volume_id: String,
     /// When it was created (Unix seconds).
     pub created_at: i64,
+    /// Its modification time when created (Unix seconds), when the OS reports one.
+    pub mtime_unix: Option<i64>,
+    /// The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.
+    pub marker: String,
 }
 
 /// What the reserve looks like now.
@@ -153,7 +163,10 @@ pub fn status(data_dir: &Path) -> HeadroomStatus {
             None,
             Some(e.to_string()),
         ),
-        Ok(md) => match mismatch(&manifest, md.kind, md.identity, md.logical_size) {
+        Ok(md) => match mismatch(&manifest, md.kind, md.identity, md.logical_size)
+            .or_else(|| mtime_mismatch(&manifest, md.mtime_unix))
+            .or_else(|| marker_mismatch(&path, &manifest))
+        {
             Some(why) => mk(HeadroomState::Changed, Some(manifest), None, Some(why)),
             None => {
                 let bytes = md.allocated_size.unwrap_or(manifest.allocated_bytes);
@@ -186,6 +199,47 @@ pub fn mismatch(
             "its size changed ({logical_size} bytes, recorded {})",
             manifest.size_bytes
         ));
+    }
+    None
+}
+
+/// Why the modification time says the file was rewritten since it was created, if it does.
+pub fn mtime_mismatch(manifest: &HeadroomManifest, mtime_unix: Option<i64>) -> Option<String> {
+    match (manifest.mtime_unix, mtime_unix) {
+        (Some(recorded), Some(now)) if recorded != now => Some(format!(
+            "it was modified after scull created it (mtime {now}, recorded {recorded})"
+        )),
+        _ => None,
+    }
+}
+
+/// Lowercase hex of `bytes`.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Why the file at `path` is not the one scull created, judged by its content: it is opened
+/// without following a link (`scull_platform::open_file_no_follow`), the handle's identity must
+/// be the recorded one, and its first [`MARKER_LEN`] bytes must be the recorded marker.
+/// Read-only.
+pub fn marker_mismatch(path: &Path, manifest: &HeadroomManifest) -> Option<String> {
+    use std::io::Read;
+    if manifest.marker.len() != MARKER_LEN * 2 {
+        return Some("the record has no valid marker".into());
+    }
+    let (mut f, id) = match scull_platform::open_file_no_follow(path) {
+        Ok(x) => x,
+        Err(e) => return Some(format!("it can't be opened without following links ({e})")),
+    };
+    if id != Some(manifest.identity) {
+        return Some("the opened file is not the one scull created (identity differs)".into());
+    }
+    let mut head = [0u8; MARKER_LEN];
+    if f.read_exact(&mut head).is_err() {
+        return Some("it is too short to hold scull's marker".into());
+    }
+    if hex(&head) != manifest.marker {
+        return Some("it is not the file scull created (marker differs)".into());
     }
     None
 }
@@ -285,6 +339,8 @@ mod tests {
             allocated_bytes: GIB,
             volume_id: "/".into(),
             created_at: 5,
+            mtime_unix: Some(5),
+            marker: "ab".repeat(MARKER_LEN),
         }
     }
 
@@ -353,6 +409,66 @@ mod tests {
                 .unwrap()
                 .contains("another path")
         );
+    }
+
+    #[test]
+    fn the_marker_is_read_through_a_no_follow_handle_and_compared() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("reserve.bin");
+        let mut body = vec![0x5au8; 4096];
+        body[..MARKER_LEN].copy_from_slice(&[3u8; MARKER_LEN]);
+        std::fs::write(&p, &body).unwrap();
+        let id = Native::new().metadata(&p).unwrap().identity.unwrap();
+        let m = HeadroomManifest {
+            identity: id,
+            marker: hex(&[3u8; MARKER_LEN]),
+            ..manifest()
+        };
+        assert_eq!(marker_mismatch(&p, &m), None);
+        let other = HeadroomManifest {
+            marker: hex(&[4u8; MARKER_LEN]),
+            ..m.clone()
+        };
+        assert!(
+            marker_mismatch(&p, &other)
+                .unwrap()
+                .contains("marker differs")
+        );
+        let foreign = HeadroomManifest {
+            identity: FileIdentity::new(id.volume, id.file + 1),
+            ..m.clone()
+        };
+        assert!(marker_mismatch(&p, &foreign).unwrap().contains("identity"));
+        let bad = HeadroomManifest {
+            marker: "zz".into(),
+            ..m.clone()
+        };
+        assert!(
+            marker_mismatch(&p, &bad)
+                .unwrap()
+                .contains("no valid marker")
+        );
+        std::fs::write(&p, b"short").unwrap();
+        assert!(marker_mismatch(&p, &m).is_some());
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("target.bin");
+            std::fs::write(&target, &body).unwrap();
+            std::fs::remove_file(&p).unwrap();
+            std::os::unix::fs::symlink(&target, &p).unwrap();
+            let linked = HeadroomManifest {
+                identity: Native::new().metadata(&target).unwrap().identity.unwrap(),
+                ..m.clone()
+            };
+            assert!(
+                marker_mismatch(&p, &linked)
+                    .unwrap()
+                    .contains("without following links")
+            );
+        }
+        assert_eq!(mtime_mismatch(&m, Some(5)), None);
+        assert!(mtime_mismatch(&m, Some(6)).unwrap().contains("modified"));
+        assert_eq!(mtime_mismatch(&m, None), None);
     }
 
     #[test]

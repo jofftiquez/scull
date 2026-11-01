@@ -55,8 +55,10 @@ impl Env {
         self.fx.base().join("scull-home")
     }
 
+    /// The fixture root, canonical: the spelling scull records (on Windows the temp dir is an
+    /// 8.3 short path such as `C:\Users\RUNNER~1\...`, which scull spells out in full).
     fn root(&self) -> PathBuf {
-        self.fx.root().to_path_buf()
+        scull_engine::paths::canon(self.fx.root())
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -213,12 +215,32 @@ impl Env {
 /// `SCULL_TEST_ASSUME_ELEVATED` through [`Env::cmd`], which never adds the flag.
 fn allow_root_if_elevated<'a>(args: &[&'a str]) -> Vec<&'a str> {
     let mut all = args.to_vec();
-    if matches!(args.first(), Some(&("clean" | "restore")))
-        && scull_platform::is_elevated().blocks_destructive()
-    {
+    if matches!(args.first(), Some(&("clean" | "restore"))) && needs_allow_root() {
         all.push("--allow-root");
     }
     all
+}
+
+/// Set by CI's standard-user run on Windows (`scripts/ci/run-as-standard-user.ps1`, #65): the
+/// test process must then be non-elevated, so `--allow-root` is never added and the refusal
+/// paths of a normal user run for real; an elevated process fails instead of quietly passing
+/// the flag.
+fn needs_allow_root() -> bool {
+    let elevated = scull_platform::is_elevated().blocks_destructive();
+    if std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_some_and(|v| !v.is_empty()) {
+        assert!(
+            !elevated,
+            "SCULL_TEST_REQUIRE_NOT_ELEVATED is set but this process runs elevated"
+        );
+        static MARK: std::sync::Once = std::sync::Once::new();
+        MARK.call_once(|| {
+            eprintln!(
+                "RUN {}: not elevated, no --allow-root (standard user)",
+                env!("CARGO_CRATE_NAME")
+            );
+        });
+    }
+    elevated
 }
 
 fn stderr(o: &Output) -> String {

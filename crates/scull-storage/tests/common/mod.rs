@@ -160,6 +160,7 @@ fn plan_of(n: u32, candidates: &[Candidate]) -> Plan {
             machine_id: "machine-a".into(),
             user: "dev".into(),
             origin: PlanOrigin::Mcp,
+            operations_watermark: None,
         },
         items,
     )

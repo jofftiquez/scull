@@ -273,17 +273,58 @@ fn fx_mcp_07_binary_needs_both_flag_and_config() {
 
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let names = s.tools();
-    for t in scull_mcp::PLAN_TOOL_NAMES {
-        assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+    if elevated_here() {
+        // SAFE-14: an elevated server never offers destructive tools, flag and config or not.
+        assert_eq!(names, scull_mcp::TOOL_NAMES, "read-only when elevated");
+        let err = s.finish();
+        assert!(err.contains("root/administrator"), "{err}");
+    } else {
+        for t in scull_mcp::PLAN_TOOL_NAMES {
+            assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+        }
+        let err = s.finish();
+        assert!(err.contains("scull approve"), "{err}");
     }
-    let err = s.finish();
-    assert!(err.contains("scull approve"), "{err}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// Whether this test process runs elevated (GitHub's Windows runners do): scull's MCP server
+/// then never offers destructive tools (SAFE-14), so the approval flow can't be exercised.
+fn elevated_here() -> bool {
+    scull_platform::is_elevated().blocks_destructive()
+}
+
+/// Set by CI's standard-user run of this test binary on Windows (`scripts/ci/run-as-standard-user.ps1`,
+/// #65): there an elevated process is a broken setup, not a reason to skip.
+const REQUIRE_NOT_ELEVATED_ENV: &str = "SCULL_TEST_REQUIRE_NOT_ELEVATED";
+
+/// The approval-flow tests need the plan tools; elevated, the server stays read-only (checked
+/// in `fx_mcp_07_binary_needs_both_flag_and_config`), so they only say so and stop. GitHub's
+/// Windows runners are elevated, so CI also runs this binary as a standard user, with
+/// [`REQUIRE_NOT_ELEVATED_ENV`] set: then a skip is a failure, never silent (#65).
+fn skip_if_elevated(test: &str) -> bool {
+    let required = std::env::var_os(REQUIRE_NOT_ELEVATED_ENV).is_some_and(|v| !v.is_empty());
+    if elevated_here() {
+        assert!(
+            !required,
+            "{test}: {REQUIRE_NOT_ELEVATED_ENV} is set but this process runs elevated, so the \
+             approval flow would be skipped"
+        );
+        eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
+        return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
+    }
+    false
 }
 
 /// The whole flow through the binary, with the adversarial steps an agent could try.
 #[test]
 fn agent_plan_runs_only_after_the_human_approves() {
+    if skip_if_elevated("agent_plan_runs_only_after_the_human_approves") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -458,11 +499,16 @@ fn agent_plan_runs_only_after_the_human_approves() {
     report.assert_ok();
 }
 
-/// `scull approve`'s prompt (what runs in a real terminal), with scripted answers: a wrong
-/// code re-prompts, `deny` and end of input approve nothing, three wrong codes give up, the
-/// shown code approves; the full plan with its hash is shown first.
+/// `scull approve`'s prompt (what runs in a real terminal), with scripted answers: the full
+/// plan with its hash and the MCP client it came through are shown first; a wrong code
+/// re-prompts and the shown code approves; `deny`, an empty line or end of input deny the
+/// plan, and three wrong codes deny it too: **final** (#78), so `scull approve` refuses that
+/// plan afterwards. Denials are audited with the plan's hash, never the code.
 #[test]
 fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
+    if skip_if_elevated("approve_prompt_shows_the_plan_and_needs_the_shown_code") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -474,14 +520,21 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         .map(|c| c["id"].clone())
         .collect();
     assert!(!ids.is_empty(), "{cands:#}");
-    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
-    assert!(!err, "{plan:#}");
-    s.finish();
-    let id = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    let prepare = |s: &mut Session| {
+        let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
+        assert!(!err, "{plan:#}");
+        (
+            PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap(),
+            plan["content_hash"].as_str().unwrap().to_owned(),
+        )
+    };
+    // One plan approved, four denied by an answer, one denied by three wrong codes (prepared
+    // once the others are no longer pending: at most 5 may await approval).
+    let mut plans: Vec<(PlanId, String)> = (0..5).map(|_| prepare(&mut s)).collect();
     let who = env.who();
     let mut store = env.store();
-    let answer = |store: &mut Store, input: &str| {
-        let ch = approval::begin(store, &id, &who, scull_engine::now_unix())
+    let answer = |store: &mut Store, id: &PlanId, input: &str| {
+        let ch = approval::begin(store, id, &who, scull_engine::now_unix())
             .unwrap()
             .with_code(ConfirmationCode::parse("WXY-Z23").unwrap());
         let mut out = Vec::new();
@@ -495,8 +548,27 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         );
         (r, String::from_utf8(out).unwrap())
     };
-    for denial in ["deny\n", "DENY\n", "\n", ""] {
-        let (r, out) = answer(&mut store, denial);
+
+    let (id, hash) = &plans[0];
+    let (r, out) = answer(&mut store, id, "nope\nwxy z23\n");
+    assert!(
+        matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),
+        "{out}"
+    );
+    assert!(out.contains("An AI agent asks to clean up"), "{out}");
+    assert!(
+        out.contains("Prepared through the MCP client scull-cli-test 0"),
+        "{out}"
+    );
+    assert!(out.contains(&hash[..12]), "{out}");
+    assert!(out.contains("app") || out.contains("web"), "{out}");
+    assert!(out.contains("That is not the code"), "{out}");
+    assert!(out.contains("Approved plan"), "{out}");
+    let a = store.get_approval(id).unwrap().unwrap();
+    assert_eq!(a.method, ApprovalMethod::CliTty);
+
+    for ((id, _), denial) in plans[1..5].iter().zip(["deny\n", "DENY\n", "\n", ""]) {
+        let (r, out) = answer(&mut store, id, denial);
         assert_eq!(
             r.unwrap(),
             scull_cli::cmd::approve::Answer::Denied,
@@ -504,25 +576,43 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         );
         assert!(out.contains("Not approved"), "{out}");
     }
-    let (r, out) = answer(&mut store, "AAAAAA\nBBBBBB\nyes\n");
-    assert_eq!(r.unwrap_err().kind, scull_core::ErrorKind::SafetyBlocked);
+    plans.push(prepare(&mut s));
+    s.finish();
+    let (id, _) = &plans[5];
+    let (r, out) = answer(&mut store, id, "AAAAAA\nBBBBBB\nyes\n");
+    let e = r.unwrap_err();
+    assert_eq!(e.kind, scull_core::ErrorKind::SafetyBlocked);
+    assert!(e.message.contains("now denied"), "{e}");
     assert_eq!(out.matches("Type WXY-Z23 to approve").count(), 3, "{out}");
-    assert!(store.get_approval(&id).unwrap().is_none());
-    // Four denials (folded into one entry counting 4) and one give-up are audited, with the
-    // plan's hash and never the code.
+
+    // Final: no denied plan can be approved again, and none has an approval.
+    for (id, _) in &plans[1..] {
+        assert!(store.get_approval(id).unwrap().is_none());
+        let e = approval::begin(&store, id, &who, scull_engine::now_unix()).unwrap_err();
+        assert_eq!(e.reason, approval::Reason::PlanDenied, "{e}");
+    }
     let events = store.agent_events(0, 10_000).unwrap();
     let got: Vec<(&str, u64)> = events
         .iter()
         .map(|e| (e.reason.as_str(), e.count))
         .collect();
-    assert_eq!(got, [("denied", 4), ("wrong_code", 1)]);
-    for e in &events {
+    assert_eq!(
+        got,
+        [
+            ("denied", 1),
+            ("denied", 1),
+            ("denied", 1),
+            ("denied", 1),
+            ("wrong_code", 1)
+        ]
+    );
+    for (e, (id, hash)) in events.iter().zip(&plans[1..]) {
         assert_eq!(e.kind.as_str(), "approval_denied");
         assert_eq!((e.source.as_str(), e.channel.as_str()), ("cli", "terminal"));
-        assert_eq!(e.plan_id.as_ref(), Some(&id));
+        assert_eq!(e.plan_id.as_ref(), Some(id));
         assert_eq!(
             e.content_hash.as_ref().map(|h| h.as_str()),
-            plan["content_hash"].as_str()
+            Some(hash.as_str())
         );
         assert_eq!(e.user, who.user);
     }
@@ -530,21 +620,6 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         !format!("{events:?}").contains("WXY"),
         "no code in the audit"
     );
-    let (r, out) = answer(&mut store, "nope\nwxy z23\n");
-    assert!(
-        matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),
-        "{out}"
-    );
-    assert!(out.contains("An AI agent asks to clean up"), "{out}");
-    assert!(
-        out.contains(&plan["content_hash"].as_str().unwrap()[..12]),
-        "{out}"
-    );
-    assert!(out.contains("app") || out.contains("web"), "{out}");
-    assert!(out.contains("That is not the code"), "{out}");
-    assert!(out.contains("Approved plan"), "{out}");
-    let a = store.get_approval(&id).unwrap().unwrap();
-    assert_eq!(a.method, ApprovalMethod::CliTty);
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 
@@ -658,6 +733,9 @@ fn approve_in_a_real_pseudo_terminal() {
 /// recorded at all.
 #[test]
 fn approve_without_a_terminal_creates_no_machine_id() {
+    if skip_if_elevated("approve_without_a_terminal_creates_no_machine_id") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -761,6 +839,9 @@ fn history_lists_a_bounded_number_of_agent_events() {
 /// changes, and `scull history` shows the revocation and the refusal.
 #[test]
 fn revoke_through_the_cli_stops_the_agent() {
+    if skip_if_elevated("revoke_through_the_cli_stops_the_agent") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -908,15 +989,17 @@ fn under_script(program: &std::path::Path, cmd: &str) -> Option<Command> {
         return None;
     }
     let mut c = Command::new(program);
+    // `; exit $?` keeps `program` alive as script's parent: a shell given a single command
+    // with `-c` may exec it in place (bash does), and `program` would leave the parent chain.
     if cfg!(target_os = "macos") {
         c.args([
             "-c",
-            &format!("script -q /dev/null sh -c {}", shell_quote(cmd)),
+            &format!("script -q /dev/null sh -c {}; exit $?", shell_quote(cmd)),
         ]);
     } else {
         c.args([
             "-c",
-            &format!("script -q -e -c {} /dev/null", shell_quote(cmd)),
+            &format!("script -q -e -c {} /dev/null; exit $?", shell_quote(cmd)),
         ]);
     }
     Some(c)
@@ -1058,7 +1141,13 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
     let fake = env.fx.base().join("bin");
     std::fs::create_dir_all(&fake).unwrap();
     let claude = fake.join("claude");
-    std::fs::copy("/bin/sh", &claude).unwrap();
+    // A shell that stays the process it was started as: macOS's `/bin/sh` is a launcher that
+    // re-executes the real shell, so a copy named `claude` would vanish from the parent chain.
+    let shell = ["/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .unwrap();
+    std::fs::copy(shell, &claude).unwrap();
     let Some(c) = under_script(&claude, &cmd) else {
         eprintln!("skipped: no script(1)");
         env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
