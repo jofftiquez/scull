@@ -88,7 +88,7 @@ function dismiss() {
       </div>
       <h2 class="m-0 text-body font-semibold">{{ who }} wants to clean {{ formatBytes(shown.reclaimable_bytes) }}</h2>
       <p class="m-0 text-label text-text-strong-muted">
-        {{ shown.item_count }} {{ shown.item_count === 1 ? 'item' : 'items' }} · plan {{ shortId(shown.plan_id.replace(/^plan_/, '')) }} ·
+        {{ shown.item_count }} {{ shown.item_count === 1 ? 'item' : 'items' }} · plan {{ shortId(shown.plan_id) }} ·
         decide within {{ minutes }} min. Nothing runs until you approve in scull.
       </p>
       <div class="mt-2 flex gap-2">

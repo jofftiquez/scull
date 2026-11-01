@@ -254,6 +254,9 @@ describe('Cleanup Review (agent request through the core broker, Tauri)', () => 
     const w = await mountAt(`/cleanup?request=${PLAN}`, createTauriPlanBridge({ transport: t, pollMs: 60_000 }));
     expect(w.get('[data-testid="code"]').text()).toBe('XRT-7KP');
     expect(w.get('[data-testid="asker"]').text()).toContain("the plan doesn't record which client asked");
+    // "the agent" mid-sentence, capitalized only at the start; the plan ID without its prefix.
+    expect(w.text()).toContain('plan 01JT·AURI · prepared by the agent');
+    expect(w.text()).toContain('The agent wants to clean 2 items');
     expect(w.text()).toContain('as recorded in the plan · not in your last scan');
     for (const b of w.findAll('input[aria-label^="Reviewed "]')) await b.setValue(true);
     await w.get('[data-testid="code-input"]').setValue('xrt7kp');

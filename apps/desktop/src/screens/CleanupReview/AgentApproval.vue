@@ -90,7 +90,10 @@ onBeforeUnmount(() => {
 
 const plan = computed(() => req.value?.plan ?? null);
 const src = computed(() => (plan.value?.source.kind === 'mcp' ? plan.value.source : null));
-const client = computed(() => src.value?.client ?? 'The agent');
+/** Who asked, mid-sentence ("the agent" when the plan doesn't record the client) ... */
+const client = computed(() => src.value?.client ?? 'the agent');
+/** ... and at the start of a sentence. */
+const Client = computed(() => client.value.charAt(0).toUpperCase() + client.value.slice(1));
 /** "by you" here, or the other human channel it was approved on (e.g. your terminal). */
 const approvedBy = computed(() => (st.value?.approvedVia === 'terminal' ? 'by you in your terminal' : 'by you'));
 const items = computed(() => plan.value?.items ?? []);
@@ -135,8 +138,8 @@ const subline = computed(() => {
 
 const askTitle = computed(() => {
   const what = `${itemsWord.value} · ${formatBytes(totals.value.bytes)}`;
-  if (phase.value === 'executed') return `${client.value} cleaned ${itemsWord.value} with your approval`;
-  return closed.value ? `${client.value} asked to clean ${what}` : `${client.value} wants to clean ${what}`;
+  if (phase.value === 'executed') return `${Client.value} cleaned ${itemsWord.value} with your approval`;
+  return closed.value ? `${Client.value} asked to clean ${what}` : `${Client.value} wants to clean ${what}`;
 });
 
 /** The right-hand tile: countdown, then Ready / Spent / closed. */
@@ -182,7 +185,12 @@ const fingerprint = computed(() => {
     phase.value === 'changed'
       ? { text: 'Void', cls: 'bg-accent-tint text-accent-text', sub: 'The disk no longer matches this fingerprint.' }
       : closed.value
-        ? { text: 'Closed', cls: 'bg-surface-raised text-text-strong-muted', sub: 'This fingerprint can never be approved again.' }
+        ? {
+            text: 'Closed',
+            cls: 'bg-surface-raised text-text-strong-muted',
+            // A denial closes the request here; only a spent or expired plan can never be approved.
+            sub: phase.value === 'denied' ? "scull won't offer this fingerprint again." : 'This fingerprint can never be approved again.',
+          }
         : { text: 'Matches', cls: 'bg-violet-tint text-violet-text', sub: `Same as the plan ID ${client.value} showed you. Any change voids approval.` };
   return { cells, lines: [`${h.slice(0, 4)} ${h.slice(4, 8)}`, `${h.slice(8, 12)} ${h.slice(12, 16)}`], tag };
 });
@@ -194,7 +202,7 @@ const table = computed(() => {
     case 'approved':
       return { title: 'Approved plan', hint: `Locked: approval is bound to these ${itemsWord.value}` };
     case 'running':
-      return { title: `${client.value} is running this plan`, hint: `${doneCount.value} of ${n.value} done · each item re-checked first` };
+      return { title: `${Client.value} is running this plan`, hint: `${doneCount.value} of ${n.value} done · each item re-checked first` };
     case 'executed': {
       const skipped = Object.values(s?.outcomes ?? {}).filter((o) => o.outcome === 'skipped').length;
       return { title: 'Result', hint: `${n.value - skipped} of ${n.value} done · ${skipped} skipped · measured, not estimated` };
@@ -300,7 +308,7 @@ const steps = computed(() => {
     { text: `Plan prepared by ${client.value}`, time: plan.value ? clock(plan.value.created_at) : '', state: 'done' },
     { text: s?.approvedVia === 'terminal' ? 'Approved by you in your terminal' : 'Approved by you in scull', time: at(s?.approvedAt), state: 'done' },
     {
-      text: running ? `${client.value} is running it · ${doneCount.value} of ${n.value}` : `Waiting for ${client.value} to run it`,
+      text: running ? `${Client.value} is running it · ${doneCount.value} of ${n.value}` : `Waiting for ${client.value} to run it`,
       time: running ? at(s?.startedAt) : '',
       state: 'active',
     },
@@ -316,14 +324,16 @@ const closedInfo = computed(() => {
     case 'expired':
       return {
         title: 'This request expired · nothing changed',
-        text: `No one approved plan ${p} in time, so it is void. ${client.value} gets "expired" when it checks and can prepare a new plan if you still want one.`,
+        text: `No one approved plan ${p} in time, so it is void. ${Client.value} gets "expired" when it checks and can prepare a new plan if you still want one.`,
         log: `audit · ${at(s.closedAt)} · plan ${p} · expired · 0 items touched`,
         icon: '0:00', iconCls: 'bg-surface-raised text-text-strong-muted text-[14px]',
       };
     case 'denied':
       return {
         title: 'You denied this request · nothing changed',
-        text: `${client.value} gets "denied by user" the next time it checks. It can't reopen this plan; a new request needs a new plan and a new review.`,
+        // The broker doesn't report denials to the agent (yet): it sees "awaiting approval" until
+        // the plan expires. Say exactly that.
+        text: `scull won't offer this plan again. ${Client.value} isn't told it was denied: it sees the plan waiting until it expires at ${expiresClock.value}, then expired. A new request needs a new plan and a new review.`,
         log: `audit · ${at(s.closedAt)} · plan ${p} · denied via desktop · 0 items touched`,
         icon: '✕', iconCls: 'bg-ink text-on-ink text-[20px]',
       };
@@ -338,7 +348,7 @@ const closedInfo = computed(() => {
       const it = items.value.find((i) => i.candidate.id === s.changed?.id);
       return {
         title: 'This plan changed since it was prepared',
-        text: `${it ? itemTitle(it) : 'A target'} was modified after ${client.value} made the plan, so the plan no longer matches the disk and can't be approved. Nothing was changed. ${client.value} is told the plan was invalidated and can prepare a fresh one.`,
+        text: `${it ? itemTitle(it) : 'A target'} was modified after ${client.value} made the plan, so the plan no longer matches the disk and can't be approved. Nothing was changed. ${Client.value} is told the plan was invalidated and can prepare a fresh one.`,
         log: `audit · ${at(s.closedAt)} · plan ${p} · invalidated (target changed) · 0 items touched`,
         icon: '≠', iconCls: 'bg-tier-s2 text-tier-s2-text text-[22px]',
       };
@@ -713,7 +723,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
         <span class="text-label text-text-strong-muted">
           {{
             phase === 'approved'
-              ? `${client} can now run plan ${pid} once. It hasn't yet: nothing has been deleted. You can still revoke until it starts.`
+              ? `${Client} can now run plan ${pid} once. It hasn't yet: nothing has been deleted. You can still revoke until it starts.`
               : 'Each item is re-checked right before it is touched. Anything that changed is skipped and reported.'
           }}
         </span>
