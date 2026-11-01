@@ -9,6 +9,8 @@ Workflow: `.github/workflows/ci.yml`.
 | `CI ok` | Linux | Passes only if every job above passed. |
 | `cargo-deny` (`policy.yml`) | Linux | Licenses (permissive only, no copyleft), RustSec advisories (same DB as cargo-audit), yanked crates, sources. Config: `deny.toml`. Also weekly. |
 | `platform-boundary` (`policy.yml`) | Linux | `scripts/ci/platform_boundary.py`: no `std::os::unix/windows`, `libc`, `windows-sys`, Apple frameworks or `extern "C"` outside `crates/scull-platform` (PLT-11). Test code and `crates/scull-fixtures` are exempt. Self-tested first. |
+| `release-versions` (`policy.yml`) | Linux | `scripts/release/bump_version.py --check`: the workspace, Tauri crate, `tauri.conf.json` and `package.json` versions agree (one tag releases everything); self-tests of the version-bump and changelog scripts. |
+| `release-desktop` (`release-desktop.yml`) | Linux on PRs that touch the bundling; macOS, Windows, Linux on `v1*` tags | Tauri bundles (DMG, MSI/NSIS, deb/rpm/AppImage), signed and notarized when the secrets exist, attached to the tag's release. PRs and manual runs are dry runs. See `docs/RELEASE_v1.md`. |
 
 | `cli-deps` (`policy.yml`) | Linux | `packaging/check_inspect_only.py deps`: the `scull` binary's dependency tree has no Tauri/webview crates. |
 | `release-gates` (`release-gates.yml`) | Linux | Runs before every release build (and as a manual dry run): inspect-only binary gate (every destructive command still a stub, MCP read-only, canary unchanged), `dist plan`. See `RELEASING.md`. |
