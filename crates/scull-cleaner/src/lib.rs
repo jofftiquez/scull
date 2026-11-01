@@ -1,6 +1,6 @@
 //! The Executor: the only code path in scull that deletes anything (SAFE-10).
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` for responsibilities and boundaries.
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

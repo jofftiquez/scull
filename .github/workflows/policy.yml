@@ -31,7 +31,7 @@ jobs:
           arguments: --all-features
 
   cli-deps:
-    # P1-REL-01 / HANDOVER §8.1 / PLT-05: `cargo build -p scull-cli` must not pull in Tauri or
+    # P1-REL-01 / PLT-05: `cargo build -p scull-cli` must not pull in Tauri or
     # webview crates (the CLI and MCP install without the desktop). Metadata only, no build.
     name: cli-deps
     runs-on: ubuntu-latest

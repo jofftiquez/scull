@@ -17,7 +17,7 @@
 //! * [`python`]: virtual environments (lockfiles, pinned requirements) and `__pycache__` (every
 //!   module's source present); the tool caches are plain rules.
 //!
-//! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
+//! See `docs/ARCHITECTURE.md` for responsibilities and boundaries.
 
 pub mod android;
 pub mod caches;
