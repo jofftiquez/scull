@@ -25,7 +25,7 @@ pub fn allowed() -> bool {
 }
 
 /// Skip `test` because `why`: prints the reason, or panics when skips are not
-/// [allowed](allowed) (CI). Return from the test right after calling it.
+/// [allowed] (CI). Return from the test right after calling it.
 #[track_caller]
 pub fn skip(test: &str, why: &str) {
     assert!(
