@@ -458,9 +458,11 @@ fn agent_plan_runs_only_after_the_human_approves() {
     report.assert_ok();
 }
 
-/// `scull approve`'s prompt (what runs in a real terminal), with scripted answers: a wrong
-/// code re-prompts, `deny` and end of input approve nothing, three wrong codes give up, the
-/// shown code approves; the full plan with its hash is shown first.
+/// `scull approve`'s prompt (what runs in a real terminal), with scripted answers: the full
+/// plan with its hash and the MCP client it came through are shown first; a wrong code
+/// re-prompts and the shown code approves; `deny`, an empty line or end of input deny the
+/// plan, and three wrong codes deny it too: **final** (#78), so `scull approve` refuses that
+/// plan afterwards. Denials are audited with the plan's hash, never the code.
 #[test]
 fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
     let env = Env::new(true);
@@ -474,14 +476,21 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         .map(|c| c["id"].clone())
         .collect();
     assert!(!ids.is_empty(), "{cands:#}");
-    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
-    assert!(!err, "{plan:#}");
-    s.finish();
-    let id = PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap();
+    let mut prepare = |s: &mut Session| {
+        let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
+        assert!(!err, "{plan:#}");
+        (
+            PlanId::try_from(plan["plan_id"].as_str().unwrap().to_owned()).unwrap(),
+            plan["content_hash"].as_str().unwrap().to_owned(),
+        )
+    };
+    // One plan approved, four denied by an answer, one denied by three wrong codes (prepared
+    // once the others are no longer pending: at most 5 may await approval).
+    let mut plans: Vec<(PlanId, String)> = (0..5).map(|_| prepare(&mut s)).collect();
     let who = env.who();
     let mut store = env.store();
-    let answer = |store: &mut Store, input: &str| {
-        let ch = approval::begin(store, &id, &who, scull_engine::now_unix())
+    let answer = |store: &mut Store, id: &PlanId, input: &str| {
+        let ch = approval::begin(store, id, &who, scull_engine::now_unix())
             .unwrap()
             .with_code(ConfirmationCode::parse("WXY-Z23").unwrap());
         let mut out = Vec::new();
@@ -495,8 +504,27 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         );
         (r, String::from_utf8(out).unwrap())
     };
-    for denial in ["deny\n", "DENY\n", "\n", ""] {
-        let (r, out) = answer(&mut store, denial);
+
+    let (id, hash) = &plans[0];
+    let (r, out) = answer(&mut store, id, "nope\nwxy z23\n");
+    assert!(
+        matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),
+        "{out}"
+    );
+    assert!(out.contains("An AI agent asks to clean up"), "{out}");
+    assert!(
+        out.contains("Prepared through the MCP client scull-cli-test 0"),
+        "{out}"
+    );
+    assert!(out.contains(&hash[..12]), "{out}");
+    assert!(out.contains("app") || out.contains("web"), "{out}");
+    assert!(out.contains("That is not the code"), "{out}");
+    assert!(out.contains("Approved plan"), "{out}");
+    let a = store.get_approval(id).unwrap().unwrap();
+    assert_eq!(a.method, ApprovalMethod::CliTty);
+
+    for ((id, _), denial) in plans[1..5].iter().zip(["deny\n", "DENY\n", "\n", ""]) {
+        let (r, out) = answer(&mut store, id, denial);
         assert_eq!(
             r.unwrap(),
             scull_cli::cmd::approve::Answer::Denied,
@@ -504,25 +532,43 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         );
         assert!(out.contains("Not approved"), "{out}");
     }
-    let (r, out) = answer(&mut store, "AAAAAA\nBBBBBB\nyes\n");
-    assert_eq!(r.unwrap_err().kind, scull_core::ErrorKind::SafetyBlocked);
+    plans.push(prepare(&mut s));
+    s.finish();
+    let (id, _) = &plans[5];
+    let (r, out) = answer(&mut store, id, "AAAAAA\nBBBBBB\nyes\n");
+    let e = r.unwrap_err();
+    assert_eq!(e.kind, scull_core::ErrorKind::SafetyBlocked);
+    assert!(e.message.contains("now denied"), "{e}");
     assert_eq!(out.matches("Type WXY-Z23 to approve").count(), 3, "{out}");
-    assert!(store.get_approval(&id).unwrap().is_none());
-    // Four denials (folded into one entry counting 4) and one give-up are audited, with the
-    // plan's hash and never the code.
+
+    // Final: no denied plan can be approved again, and none has an approval.
+    for (id, _) in &plans[1..] {
+        assert!(store.get_approval(id).unwrap().is_none());
+        let e = approval::begin(&store, id, &who, scull_engine::now_unix()).unwrap_err();
+        assert_eq!(e.reason, approval::Reason::PlanDenied, "{e}");
+    }
     let events = store.agent_events(0, 10_000).unwrap();
     let got: Vec<(&str, u64)> = events
         .iter()
         .map(|e| (e.reason.as_str(), e.count))
         .collect();
-    assert_eq!(got, [("denied", 4), ("wrong_code", 1)]);
-    for e in &events {
+    assert_eq!(
+        got,
+        [
+            ("denied", 1),
+            ("denied", 1),
+            ("denied", 1),
+            ("denied", 1),
+            ("wrong_code", 1)
+        ]
+    );
+    for (e, (id, hash)) in events.iter().zip(&plans[1..]) {
         assert_eq!(e.kind.as_str(), "approval_denied");
         assert_eq!((e.source.as_str(), e.channel.as_str()), ("cli", "terminal"));
-        assert_eq!(e.plan_id.as_ref(), Some(&id));
+        assert_eq!(e.plan_id.as_ref(), Some(id));
         assert_eq!(
             e.content_hash.as_ref().map(|h| h.as_str()),
-            plan["content_hash"].as_str()
+            Some(hash.as_str())
         );
         assert_eq!(e.user, who.user);
     }
@@ -530,21 +576,6 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         !format!("{events:?}").contains("WXY"),
         "no code in the audit"
     );
-    let (r, out) = answer(&mut store, "nope\nwxy z23\n");
-    assert!(
-        matches!(r.unwrap(), scull_cli::cmd::approve::Answer::Approved(_)),
-        "{out}"
-    );
-    assert!(out.contains("An AI agent asks to clean up"), "{out}");
-    assert!(
-        out.contains(&plan["content_hash"].as_str().unwrap()[..12]),
-        "{out}"
-    );
-    assert!(out.contains("app") || out.contains("web"), "{out}");
-    assert!(out.contains("That is not the code"), "{out}");
-    assert!(out.contains("Approved plan"), "{out}");
-    let a = store.get_approval(&id).unwrap().unwrap();
-    assert_eq!(a.method, ApprovalMethod::CliTty);
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 

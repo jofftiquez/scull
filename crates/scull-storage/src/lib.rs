@@ -58,7 +58,9 @@ pub use audit::{
 pub use backup::{list_backups, restore_backup};
 pub use error::{Result, StoreError};
 pub use events::{
-    AGENT_EVENT_MERGE_SECS, AgentAuditEvent, AlertEvent, Event, EventCount, EventKind,
+    AGENT_EVENT_MERGE_SECS, AgentAuditEvent, AgentClient, AlertEvent, Event, EventCount, EventKind,
+    FINAL_DENIAL_REASONS, HUMAN_DENIAL_SOURCES, MAX_CLIENT_NAME_CHARS, MAX_CLIENT_VERSION_CHARS,
+    PlanDenial,
 };
 pub use export::{EXPORT_TABLES, ExportSink, QuarantineSummary, TableCount};
 pub use history::{
