@@ -28,6 +28,9 @@ scull-safety.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
 scull-insights.workspace = true
+# The approval broker (P4-MCP-02). Read-only by construction: never depends on scull-cleaner
+# (SAFE-10, checked by its own test and tests/safe10.rs here).
+scull-mcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

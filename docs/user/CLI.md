@@ -128,6 +128,7 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull clean` | Plan a cleanup (dry run), review a plan, or run it | Only with `--plan` and confirmation |
 | `scull clean caches` | Quick Clean: run package managers' own cache commands | Only with confirmation |
 | `scull clean --purge-quarantine` | Permanently delete expired quarantine | Only with elevated confirmation |
+| `scull approve [PLAN_ID]` | Approve (or `--revoke`) a cleanup plan an AI agent prepared | Records the approval; the agent's run changes the disk |
 | `scull history [OPERATION]` | Show past cleanups | No |
 | `scull restore OPERATION` | Put quarantined items back | Only with confirmation |
 | `scull init` | First-run setup: scan roots and profile | Writes scull's config |
@@ -135,6 +136,10 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull rules list\|validate` | Detection rules | No |
 | `scull data show\|export\|purge` | What scull has recorded; export or delete it | `export` writes files; `purge` deletes scull's own files |
 | `scull headroom status\|create\|release` | Emergency reserve file, released when the disk is full (off by default) | `create` writes it; `release` deletes it (only that file) |
+| `scull check` | Light scan, free-space forecast, alerts, a ready-to-review plan | Records history and writes a plan file; never deletes |
+| `scull schedule enable\|disable\|status` | Run `scull check` periodically through the OS scheduler | `enable`/`disable` write or remove scheduler files, with consent |
+| `scull insights [export\|purge]` | Local trends from scull's own history | `purge` deletes history rows only |
+| `scull ask QUESTION` | Optional assistant over scull's read-only tools (off by default; your own model) | No |
 | `scull completions SHELL` | Shell completion script | No |
 | `scull mcp serve` | Read-only MCP server for AI agents | No |
 
@@ -634,6 +639,9 @@ agent's shell tool it exits 5 and changes nothing; with `--json` it exits 2. Nev
 
 Denials, refused attempts and revocations are recorded (`scull history`).
 
+Approving and running a plan in one terminal step (`scull approve <plan-id> --run`) is coming
+(#97); today the agent runs an approved plan with `execute_cleanup`.
+
 ```console
 $ scull approve --revoke plan_6b4b2f1c8e0d9a7b3c2d1e0f
 Revoked the approval of plan plan_6b4b2f1c8e0d9a7b3c2d1e0f. The agent can't run it; nothing was changed. See `scull history`.
@@ -992,6 +1000,122 @@ Released the headroom file: 2.0 GiB free again. Run the cleanup now (`scull clea
 
 JSON: `scull/headroom@1`.
 
+### `scull check`
+
+```text
+scull check [--no-scan] [--include-s1] [--no-auto-policies]
+```
+
+A light, unattended check, meant for the OS scheduler (`scull schedule`):
+
+1. Scans `scan.roots`, like `scull scan`, and records it. `--no-scan` skips this. Roots that
+   `scull scan` refuses without a flag (a filesystem root, your home folder, a network
+   volume) are not scanned unattended; the check says why and uses recorded history.
+2. Samples free space on every drive scull has seen before and on the drives holding your
+   scan roots.
+3. Forecasts each drive from its last 30 days of samples (see [FORECAST.md](../FORECAST.md)).
+4. Raises alerts: a drive below its reserve or forecast to drop below it within
+   `[proactive] alert_days`, budgets, stale worktrees, build outputs and caches, growth
+   spikes and fast free-space drops. Staleness and ecosystem or path budgets need the scan.
+5. Runs your **auto-policies**, only if you enabled one in the config file (off by default;
+   see [Configuration](#configuration-and-environment) and
+   [SAFETY.md](SAFETY.md#auto-policies-opt-in-s0-only-quarantine-only)). The first time a
+   policy only previews what it would move. Later checks move idle S0 build outputs into
+   quarantine (never delete them), within the per-run and per-day caps. `--no-auto-policies`
+   stops them for this run.
+6. Prepares a **ready-to-review** cleanup plan of S0 items (S1 too with `--include-s1`) and
+   tells you how to review it: `scull clean --plan <file>`.
+
+It never deletes anything. Alerts point to a reviewed cleanup, and the plan runs only through
+`scull clean --plan`, with a fresh check of every item and your confirmation. Without an
+enabled auto-policy it writes only history rows, the plan record and the plan file. With one,
+it also writes the owner-only state file `auto-policies.json` in scull's data folder, and each
+run is an operation in `scull history` that `scull restore` undoes. The exit code is 0 whether
+or not alerts fired. JSON: `scull/check@1`, with an `auto_policies` object (`off`, `stopped`,
+`refused` or `checked`, and each policy's outcome).
+
+### `scull schedule`
+
+```text
+scull schedule enable [--every DURATION] [--yes | --dry-run]
+scull schedule disable [--yes | --dry-run]
+scull schedule status
+```
+
+Registers `scull check --quiet --no-progress` with your OS scheduler: a launchd LaunchAgent
+on macOS, a systemd user timer on Linux, Task Scheduler on Windows. It runs as you, at low
+priority, every 6 hours by default (`--every` takes 15 minutes to 7 days: `30m`, `6h`, `1d`).
+
+* `enable` and `disable` first print every file they will write or remove, with its full
+  contents, and every command they will run. Then `--dry-run` stops, `--yes` applies, and
+  otherwise scull asks `[y/N]` on a terminal. Without a terminal, or with `--json`, they need
+  `--yes` and otherwise exit 2 with nothing changed.
+* Applying is refused from an elevated shell (root, an Administrator prompt): the job must
+  run as the user it belongs to. `--dry-run` and `status` still work.
+* `status` shows whether checks are registered. It is read-only.
+
+The scheduled job only reads and records, like `scull check`; it never deletes anything. If
+you enabled an auto-policy, it also moves idle S0 build outputs into quarantine (see
+`scull check`).
+JSON: `scull/schedule@1`.
+
+The desktop app can also watch from the menu bar or system tray while it runs. It shows OS
+notifications for low space, disk-full forecasts and other alerts, and an optional weekly digest (Settings → Alerts,
+off by default). The app only reads and notifies, and installs no background service.
+
+### `scull insights`
+
+```text
+scull insights [--since WHEN]
+scull insights export [--format json|csv] [--since WHEN]
+scull insights purge [--older-than WHEN] [--confirm]
+```
+
+Trends computed from scull's own history, on your machine: top growers over 7 and 30 days,
+artifacts that came back after a cleanup, duplication across projects, agent worktrees,
+predicted vs. measured cleanups, the ecosystem mix and free space per drive with its forecast.
+`--since` sets the window: a duration back from now (`7d`, `30d`, `12w`) or a UTC date
+(`2026-10-01`); the default is 30 days. Read-only.
+
+* **`export`** writes the report to stdout as JSON (default) or CSV. Redirect it to keep it.
+* **`purge`** forgets recorded trends: history rows only (free-space and footprint samples,
+  item and regrowth events, items that are gone) in scull's own database. Live items, scans,
+  plans, operations, audit and every file are kept. `--older-than` limits it to history older
+  than a duration or date. On a terminal you type `purge` to confirm; otherwise `--confirm` is
+  required. Each purge is recorded as an `insights_purged` event.
+
+JSON: `scull/insights@1`.
+
+### `scull ask`
+
+```text
+scull ask [--show-request] [--yes] QUESTION...
+```
+
+An optional assistant that answers questions about your developer storage ("why did my disk
+fill up this week?") with a model you choose. It is **off by default** and sends nothing
+until you turn it on.
+
+* **Setup.** Create `ask.toml` next to `config.toml` (`scull doctor` shows the folder) with
+  `enabled = true` and a provider: `anthropic`, or `openai` for any OpenAI-compatible
+  endpoint, including local servers such as Ollama or LM Studio via `base_url`.
+  `scull ask --help` lists every setting.
+* **Your key.** The API key is read from the environment (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, or the variable named by `api_key_env`). scull never stores or logs it,
+  and sends it only to the configured endpoint. Endpoints must use `https://` unless they are
+  on this machine, and redirects are never followed.
+* **Consent.** Before the first question to a provider and endpoint, scull shows what will be
+  sent, and to whom, and asks you to agree. `--show-request` prints the notice and the exact
+  first request (key masked) and sends nothing. It works even while the assistant is off.
+  `--yes` agrees without a prompt and is required when there is no terminal.
+* **Read-only.** The model can only call scull's read-only tools, the same ones
+  `scull mcp serve` offers minus `register_worktree`, with the same scan-root allowlist and
+  path redaction (`[mcp] redact_home`, `hash_names`). It can't delete, move or change files,
+  and it can't prepare or approve a cleanup. Letting it prepare a plan for your review is
+  tracked in #22.
+
+What you send goes to the provider you configured. Nothing else leaves your machine.
+
 ### `scull completions`
 
 ```text
@@ -1027,11 +1151,7 @@ These commands are built; `scull <command> --help` describes their options:
 |---|---|
 | `scull approve [PLAN_ID]`, `scull approve --revoke PLAN_ID` | Approve a plan an AI agent prepared, or revoke an approval, in your own terminal (interactive only; see above) |
 | `scull worktrees register PATH --ttl 7d` | Give an agent's worktree a time-to-live |
-| `scull check [--no-auto-policies]` | Light scan, forecast and alerts, for the OS scheduler; runs opt-in auto-policies (see below) |
-| `scull schedule enable\|disable\|status` | Register periodic checks |
-| `scull insights [export]` | Local trends and insights |
-| `scull insights purge [--older-than WHEN] [--confirm]` | Forget recorded trends: history rows only (free-space and footprint samples, item and regrowth events, items that are gone) in scull's own database. Live items, scans, plans, operations, audit and every file are kept. Asks you to type `purge` on a terminal; `--confirm` is required otherwise. Each purge is recorded as an `insights_purged` event. |
-| `scull agent install\|uninstall CLIENT` | Write MCP config for an AI client, with your consent |
+| `scull agent install\|uninstall CLIENT [--yes \| --dry-run]` | Write (or remove) scull's MCP entry and short guidance for an AI client (`claude-code`, `codex`, `cursor`, `vscode`, `gemini-cli`); shows each file's diff and asks first |
 | `scull doctor --report` | A shareable, redacted diagnostic report, shown as a preview first |
 
 ## Configuration and environment

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-approve-agent-plan"
+description = "Enables the approve_agent_plan command without any pre-configured scope."
+commands.allow = ["approve_agent_plan"]
+
+[[permission]]
+identifier = "deny-approve-agent-plan"
+description = "Denies the approve_agent_plan command without any pre-configured scope."
+commands.deny = ["approve_agent_plan"]

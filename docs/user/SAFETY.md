@@ -15,8 +15,13 @@ will and won't do. The architecture is described in [ARCHITECTURE.md](../ARCHITE
   you can rebuild those.
 * **Nothing is ever deleted for good behind your back.** When scull can't quarantine an
   item, it tries the Trash, and failing that it leaves the item alone.
-* **An AI agent can't clean up for you.** The MCP server is read-only. An AI tool call is not
-  your consent.
+* **An AI agent can't approve a cleanup.** The MCP server is read-only unless you turn on
+  destructive mode. Even then an agent can only prepare a plan; it runs after you approve it
+  yourself, in your own terminal or in the desktop app. An AI tool call is not your consent.
+* **Nothing runs unattended unless you opt in.** Scheduled checks, the desktop's monitor and
+  `scull ask` only read and notify. The one exception is an auto-policy you enable in your
+  config file: it moves idle S0 build outputs into quarantine, never deletes them (see
+  [Auto-policies](#auto-policies-opt-in-s0-only-quarantine-only)).
 * **No telemetry.** Everything stays on your machine.
 
 ## Risk tiers
@@ -293,13 +298,54 @@ really mean it. scull never asks for elevation itself.
 scull can serve AI coding agents over the Model Context Protocol (`scull mcp serve`). See
 [MCP.md](MCP.md). The rules:
 
-* **An AI tool call is not your consent.** No MCP tool can delete, move, plan or approve a
-  cleanup. The agent can only tell you to run `scull clean` yourself.
+* **An AI tool call is not your consent.** By default no MCP tool can delete, move, plan or
+  approve anything; the agent can tell you to run `scull clean` yourself.
+* **Destructive mode is opt-in, twice.** Only with `[mcp] destructive = true` in scull's config
+  file *and* `scull mcp serve --allow-destructive` can an agent prepare a cleanup plan. It is
+  never offered when scull runs elevated.
+* **Only you approve, outside the chat.** In the desktop app's main window, Cleanup Review
+  shows the plan: you tick each item, type the short code shown next to it, and press
+  **Approve** or **Deny**. The code exists only in the app, and scull's core checks it; the
+  menu bar widget can't approve. In a terminal, `scull approve <plan-id>` shows the whole plan
+  and a short code that you type. It never runs as root, and it refuses a pipe, a script or
+  an agent's shell tool. It also refuses a terminal that looks driven by an agent (agent
+  environment variables, an agent or terminal-automation tool among its parent processes, or
+  parents it can't read). That check is a heuristic, not a proof that a human is typing; see
+  [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md) for what it does and doesn't stop.
+* **A denial is final,** in the app or the terminal: **Deny**, `deny`, or three wrong codes
+  means that plan can never be approved. You can withdraw an approval (**Revoke approval** in
+  the app, `scull approve --revoke <plan-id>` in a terminal) until the agent starts the
+  cleanup; exactly one of the two wins. Both show the agent client's name as it gave it,
+  not verified.
+* **An approval runs the exact plan once.** It is bound to the plan's content and lapses with
+  it (15 minutes at most). If anything in the plan changed on disk, the whole plan is void.
+  The cleanup goes through the same Executor, checks and quarantine as `scull clean`.
+* **Limits.** At most 5 plans can await your approval at once, and each server session can
+  prepare at most 6 plans a minute (`mcp.max_pending_plans`, `mcp.prepare_per_minute`).
+  Denials, refusals, revocations and every run are recorded (`scull history`).
 * The server is off until you enable it, and it can only see your configured scan folders.
 * Names from your disk reach the model as escaped data, and the model is told to treat them
   as untrusted. File contents and commit messages are never sent.
 * **Out of scope:** an agent that can already run shell commands can delete files without
   scull. scull only guarantees that *its own* tools can't delete without you.
+
+The desktop dialog works only in the app's main window, and a page from any other origin is
+refused. What remains (another program running as you that drives the screen, or injects
+code into the app) is described in [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
+
+### `scull ask`
+
+`scull ask` is an optional assistant that answers questions with a model you choose. It is
+off until you configure it. Before the first question to a provider, scull shows what will be
+sent and asks for your consent. The model can call only scull's read-only tools, so it can't
+change files or prepare a cleanup. See [the CLI reference](CLI.md#scull-ask).
+
+## Unattended cleanup
+
+Off by default. `scull check` and `scull schedule` prepare a plan for you to review, and they
+never run it. The only unattended cleanup is an auto-policy you enable in your config file. It
+moves idle S0 build outputs into quarantine, after a dry run, within caps. See
+[Auto-policies](#auto-policies-opt-in-s0-only-quarantine-only).
 
 ## Privacy
 
@@ -310,8 +356,11 @@ scull can serve AI coding agents over the Model Context Protocol (`scull mcp ser
 * scull's database holds metadata (paths, sizes, tiers, history), never file contents.
   `scull data show` shows what is recorded, `scull data export` copies it out, and
   `scull data purge --all` deletes it.
-* The MCP server is the one exception: its results go to your AI client and possibly its
-  model provider. scull shows a notice before you enable it.
+* Two opt-in exceptions. The MCP server's results go to your AI client and possibly its
+  model provider; scull shows a notice before you enable it. `scull ask` sends your question
+  and the read-only tool results to the provider you configured, after you agree to a notice
+  that shows exactly what is sent.
+* The desktop's notifications and weekly digest are computed and shown on this machine.
 
 ## Terminal output is safe to read
 

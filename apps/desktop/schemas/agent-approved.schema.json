@@ -1,0 +1,29 @@
+{
+  "$id": "scull-desktop/agent-approved.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The human approved the plan.",
+  "properties": {
+    "approval_expires_at": {
+      "description": "When the unused approval lapses (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "approved_at": {
+      "description": "When (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "plan_id": {
+      "description": "Plan ID.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan_id",
+    "approved_at",
+    "approval_expires_at"
+  ],
+  "title": "AgentApproved",
+  "type": "object"
+}

@@ -285,9 +285,11 @@ export function describeEvidence(e: Evidence, nowSecs = Date.now() / 1000): stri
   }
 }
 
-/** `7f3a·c21e`: the first 8 hex digits of a plan ID or hash, as the design shows them. */
+/** `7f3a·c21e`: the first 8 characters of a plan ID (without its `plan_` prefix) or hash, as
+ *  the design shows them. */
 export function shortId(id: string): string {
-  return `${id.slice(0, 4)}·${id.slice(4, 8)}`;
+  const bare = id.replace(/^plan_/, '');
+  return `${bare.slice(0, 4)}·${bare.slice(4, 8)}`;
 }
 
 /** 24-hour wall clock, `10:42:06`. */

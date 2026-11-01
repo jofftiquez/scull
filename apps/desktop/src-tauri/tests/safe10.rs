@@ -69,22 +69,58 @@ fn no_filesystem_or_process_plugins() {
     }
 }
 
+/// `allow-<command>` for each app command listed in build.rs's app manifest.
+fn app_command_permissions() -> Vec<String> {
+    let build =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("build.rs")).unwrap();
+    let start = build.find("const COMMANDS").unwrap();
+    let end = start + build[start..].find("];").unwrap();
+    build[start..end]
+        .lines()
+        .filter_map(|l| l.split('"').nth(1))
+        .map(|c| format!("allow-{}", c.replace('_', "-")))
+        .collect()
+}
+
 #[test]
 fn capabilities_grant_no_filesystem_access() {
+    // Tauri core permissions, and scull's own app commands (their names are checked against
+    // mutating words in bridge/tests/commands.rs); never a plugin's.
+    let own = app_command_permissions();
+    assert!(own.len() > 20, "{own:?}");
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut n = 0;
     for e in std::fs::read_dir(dir).unwrap().flatten() {
         n += 1;
         let text = std::fs::read_to_string(e.path()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            v.get("remote").is_none(),
+            "{}: no remote URL may use a capability",
+            e.path().display()
+        );
         for p in v["permissions"].as_array().unwrap() {
             let id = p.as_str().or_else(|| p["identifier"].as_str()).unwrap();
             assert!(
-                id.starts_with("core:"),
-                "{}: permission {id} is outside Tauri core",
+                id.starts_with("core:") || own.iter().any(|o| o == id),
+                "{}: permission {id} is outside Tauri core and scull's own commands",
                 e.path().display()
             );
         }
     }
     assert!(n > 0);
+}
+
+#[test]
+fn release_builds_have_no_web_inspector() {
+    // P4-MCP-02 review: no devtools in any build profile (the inspector could read the
+    // confirmation code and call the approval commands).
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    for line in manifest
+        .lines()
+        .filter(|l| l.trim_start().starts_with("tauri "))
+    {
+        assert!(!line.contains("devtools"), "{line}");
+    }
 }
