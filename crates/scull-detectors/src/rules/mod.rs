@@ -13,7 +13,9 @@
 //! * a rule must require at least one marker that the candidate itself can't satisfy (CLS-03);
 //! * no key that looks like a command, script or hook is accepted anywhere (CLS-04, FX-CFG-06);
 //! * user/community rules can't assign S0 or use the tool-native strategy, and are loaded
-//!   disabled (CLS-04, FX-CFG-05);
+//!   disabled (CLS-04, FX-CFG-05); they can't claim a folder that holds people's work
+//!   ([`PROTECTED_FOLDER_NAMES`]), need two literal characters in every candidate name, and
+//!   need a marker beside or above the candidate (a project file) (P6-COM-01);
 //! * unknown fields, unsupported `schema_version`s, malformed patterns/paths and duplicate IDs
 //!   are rejected.
 
@@ -24,7 +26,9 @@ mod model;
 mod pattern;
 
 pub use error::{RuleError, RuleErrorKind};
-pub use loader::{BUNDLED_RULE_FILES, RuleSet, SCHEMA_VERSION, parse_rules};
+pub use loader::{
+    BUNDLED_RULE_FILES, PROTECTED_FOLDER_NAMES, RuleSet, SCHEMA_VERSION, parse_rules,
+};
 pub use markers::{FoundEntry, MarkerMatch, MarkerOutcome, Surroundings};
 pub use model::{
     ActivityChecks, EvidenceKind, MAX_UP, Platform, RegenerationGuidance, RelativeEntry, Rule,

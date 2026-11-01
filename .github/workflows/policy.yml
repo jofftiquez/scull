@@ -58,3 +58,18 @@ jobs:
         run: python3 scripts/ci/test_platform_boundary.py
       - name: Check the workspace
         run: python3 scripts/ci/platform_boundary.py
+
+  release-versions:
+    # P4-REL-01: one tag releases the CLI, MCP and desktop, so every version string must agree
+    # (scripts/release/bump_version.py); plus the release scripts' self-tests.
+    name: release-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every version agrees (Cargo workspace, Tauri crate, tauri.conf.json, package.json)
+        run: python3 scripts/release/bump_version.py --check
+      - name: Self-test the release scripts (version bump, changelog draft)
+        run: python3 scripts/release/test_release_scripts.py

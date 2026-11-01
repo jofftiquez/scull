@@ -29,7 +29,7 @@ use std::path::PathBuf;
 /// "~/Projects/legacy" = "S2"
 ///
 /// [rules]
-/// enabled = ["community.unity-library"]
+/// enabled = ["community.godot-import"]
 ///
 /// [mcp]
 /// enabled = true
