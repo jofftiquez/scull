@@ -425,3 +425,140 @@ fn an_s0_item_is_deleted_and_the_rest_left_alone() {
     )
     .assert_ok();
 }
+
+#[test]
+fn a_cancelled_scan_is_never_planned_from() {
+    let e = env();
+    // The cancel overtakes the scan's start, so the scan stops at once: a partial report.
+    let op = OpId::parse("op-cancelled").unwrap();
+    e.session.cancel(&op);
+    let params = ScanParams {
+        roots: vec![e.fx.root().to_string_lossy().into_owned()],
+        ..ScanParams::default()
+    };
+    let report = e.session.scan(&op, &params, |_| {}).unwrap();
+    assert!(report.cancelled);
+    let refused = e.desk.prepare(&e.session, None, now_unix()).unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Usage, "{}", refused.message);
+    assert!(refused.message.contains("cancelled"), "{}", refused.message);
+    // A complete scan replaces it and can be planned from.
+    e.scan();
+    assert!(!e.session.last_scan().unwrap().cancelled);
+    e.desk.prepare(&e.session, None, now_unix()).unwrap();
+    e.fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+        .assert_ok();
+}
+
+#[test]
+fn a_plan_runs_only_under_the_basis_of_its_own_scan() {
+    let e = env();
+    let now = now_unix();
+    e.scan();
+    let target = e.id_of("app/target");
+    let plan = e.desk.prepare(&e.session, None, now).unwrap();
+    // The app scans again: the reviewed plan's scan is no longer the one it would revalidate
+    // under, so it is refused, whole or narrowed, and nothing changes.
+    e.scan();
+    for items in [
+        plan.items
+            .iter()
+            .map(|c| c.id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec![target.clone()],
+    ] {
+        let refused = e
+            .desk
+            .execute(
+                &e.session,
+                &plan.plan_id,
+                &plan.content_hash,
+                &items,
+                None,
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            ErrorKind::PlanInvalidated,
+            "{}",
+            refused.message
+        );
+    }
+    assert_eq!(e.operations(), 0);
+    assert!(e.fx.root().join("app/target").exists());
+    // A plan from the new scan runs.
+    let fresh = e.desk.prepare(&e.session, None, now).unwrap();
+    e.desk
+        .execute(
+            &e.session,
+            &fresh.plan_id,
+            &fresh.content_hash,
+            std::slice::from_ref(&target),
+            None,
+            now,
+        )
+        .unwrap();
+    e.fx.check_invariants(
+        &scull_fixtures::InvariantInputs::new()
+            .plan(fresh.items.iter())
+            .allow("app/target"),
+    )
+    .assert_ok();
+}
+
+#[test]
+fn a_narrowed_plan_keeps_the_reviewed_plans_lifetime() {
+    let e = env();
+    e.scan();
+    let target = e.id_of("app/target");
+    // Reviewed 50 minutes ago: 10 minutes of its hour are left.
+    let now = now_unix();
+    let reviewed_at = now - 3000;
+    let plan = e.desk.prepare(&e.session, None, reviewed_at).unwrap();
+    assert_eq!(plan.expires_at, reviewed_at + 3600);
+    let run = e
+        .desk
+        .execute(
+            &e.session,
+            &plan.plan_id,
+            &plan.content_hash,
+            std::slice::from_ref(&target),
+            None,
+            now,
+        )
+        .unwrap();
+    assert_ne!(run.plan_id, plan.plan_id, "a subset is its own plan");
+    let store = scull_storage::Store::open_read_only(
+        &scull_engine::history_db_path(&e.data),
+        &scull_storage::StoreOptions::default(),
+    )
+    .unwrap();
+    let narrowed = store
+        .get_plan(&scull_core::PlanId::try_from(run.plan_id.clone()).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(narrowed.created_unix(), plan.created_at);
+    assert_eq!(
+        narrowed.expires_unix(),
+        plan.expires_at,
+        "no fresh hour for a narrowed plan"
+    );
+    // Past the reviewed plan's hour, nothing of it runs.
+    let modules = e.id_of("web/node_modules");
+    let late = e.desk.execute(
+        &e.session,
+        &plan.plan_id,
+        &plan.content_hash,
+        std::slice::from_ref(&modules),
+        None,
+        plan.expires_at + 1,
+    );
+    assert!(late.is_err());
+    assert!(e.fx.root().join("web/node_modules").exists());
+    e.fx.check_invariants(
+        &scull_fixtures::InvariantInputs::new()
+            .plan(plan.items.iter())
+            .allow("app/target"),
+    )
+    .assert_ok();
+}

@@ -102,9 +102,9 @@ pub struct Session {
     /// Cancellations for operations that hadn't started yet: the UI's `cancel_operation` can
     /// overtake the `scan` call it cancels (both are async commands).
     early_cancels: Mutex<Vec<(String, Instant)>>,
-    last_scan: Mutex<Option<Arc<ScanReport>>>,
-    /// What a desktop plan needs from the last scan besides its candidates (P3-EXEC-01).
-    last_scan_basis: Mutex<Option<ScanBasis>>,
+    /// The last scan with what a desktop plan needs from it besides its candidates
+    /// (P3-EXEC-01), under one lock: a report is never paired with another scan's basis.
+    last_scan: Mutex<Option<(Arc<ScanReport>, ScanBasis)>>,
     /// A caller-supplied in-use source instead of [`Setup::in_use`] (tests).
     in_use_source: Option<InUseSource>,
 }
@@ -145,7 +145,6 @@ impl Session {
             ops: Mutex::new(HashMap::new()),
             early_cancels: Mutex::new(Vec::new()),
             last_scan: Mutex::new(None),
-            last_scan_basis: Mutex::new(None),
             in_use_source: None,
         }
     }
@@ -356,8 +355,7 @@ impl Session {
         // A cancelled scan is partial: it never replaces a complete one.
         let mut last = lock(&self.last_scan);
         if !report.cancelled || last.is_none() {
-            *last = Some(Arc::new(report.clone()));
-            *lock(&self.last_scan_basis) = Some(basis);
+            *last = Some((Arc::new(report.clone()), basis));
         }
         Ok(report)
     }
@@ -377,11 +375,10 @@ impl Session {
             .ok()
     }
 
-    /// The last complete scan with its roots, configuration and watermark.
+    /// The last scan (see [`Self::last_scan`]) with its roots, configuration and watermark,
+    /// read together.
     pub(crate) fn last_scan_basis(&self) -> Option<(Arc<ScanReport>, ScanBasis)> {
-        let scan = self.last_scan()?;
-        let basis = lock(&self.last_scan_basis).clone()?;
-        Some((scan, basis))
+        lock(&self.last_scan).clone()
     }
 
     /// An engine for executing or revalidating under `roots` (no history recording).
@@ -396,7 +393,7 @@ impl Session {
     /// The last complete scan of this session (or the last cancelled one, before any complete
     /// scan), if any.
     pub fn last_scan(&self) -> Option<Arc<ScanReport>> {
-        lock(&self.last_scan).clone()
+        lock(&self.last_scan).as_ref().map(|(r, _)| Arc::clone(r))
     }
 
     /// Projects from the last scan (`scan_id: null` and an empty list before the first one).

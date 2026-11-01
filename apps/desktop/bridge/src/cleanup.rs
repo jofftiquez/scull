@@ -367,7 +367,7 @@ impl CleanupDesk {
     }
 
     /// The user's Trash, or one inside the test sandbox (never the real one under tests).
-    fn trash(&self) -> TrashLocations {
+    fn trash_locations(&self) -> TrashLocations {
         if let Some(t) = &self.trash {
             return t.clone();
         }
@@ -404,6 +404,14 @@ impl CleanupDesk {
                 "there is no complete scan to plan from yet: scan first",
             )
         })?;
+        // A cancelled scan is partial: what it didn't reach isn't known (nor is what it did
+        // reach checked against the rest), so nothing is planned from it.
+        if scan.cancelled {
+            return Err(ScullError::new(
+                ErrorKind::Usage,
+                "the last scan was cancelled before it finished: scan again to plan a cleanup",
+            ));
+        }
         let watermark = basis.watermark.ok_or_else(|| {
             ScullError::new(
                 ErrorKind::SafetyBlocked,
@@ -460,7 +468,7 @@ impl CleanupDesk {
             &scan.scan_id,
             watermark,
             &who,
-            now,
+            Lifetime::fresh(now),
         )?;
         Self::store(session)?
             .insert_plan(&plan)
@@ -510,6 +518,20 @@ impl CleanupDesk {
             ));
         }
         reviewed.verify(now, &who.machine_id, &who.user)?;
+        // Revalidation runs under the roots and configuration of the scan the plan was made
+        // from, read with that scan's report: if the app has scanned since, the plan is stale.
+        let basis = match session.last_scan_basis() {
+            Some((scan, basis)) if scan.scan_id == *reviewed.scan_id() && !scan.cancelled => basis,
+            _ => {
+                return Err(ScullError::new(
+                    ErrorKind::PlanInvalidated,
+                    format!(
+                        "plan {id} was made from an earlier scan than the app's last one; \
+                         review a new plan. Nothing was changed."
+                    ),
+                ));
+            }
+        };
         // Exactly the items the human chose, each from the reviewed plan, once.
         let mut picked = BTreeSet::new();
         for i in item_ids {
@@ -536,7 +558,14 @@ impl CleanupDesk {
             let watermark = reviewed.operations_watermark().ok_or_else(|| {
                 ScullError::new(ErrorKind::PlanInvalidated, "the plan has no watermark")
             })?;
-            let narrowed = desktop_plan(&items, reviewed.scan_id(), watermark, &who, now)?;
+            // The reviewed plan's lifetime, not a fresh one (D-25): narrowing never extends it.
+            let narrowed = desktop_plan(
+                &items,
+                reviewed.scan_id(),
+                watermark,
+                &who,
+                Lifetime::of(&reviewed, now),
+            )?;
             store.insert_plan(&narrowed).map_err(store_err)?;
             narrowed
         };
@@ -554,12 +583,6 @@ impl CleanupDesk {
                 ),
             ));
         }
-        let basis = session.last_scan_basis().map(|(_, b)| b).ok_or_else(|| {
-            ScullError::new(
-                ErrorKind::Usage,
-                "scan again: the app has no scan to revalidate under",
-            )
-        })?;
         self.run_plan(session, &mut store, &plan, &basis, &who, now)
     }
 
@@ -588,7 +611,7 @@ impl CleanupDesk {
                 },
             )?
             .with_quarantine(QuarantineSettings::from_config(&basis.config.quarantine))
-            .with_trash(self.trash());
+            .with_trash(self.trash_locations());
         let engine = session.engine_for(basis.config.clone(), &basis.roots)?;
         let revalidation = Revalidation::new(&engine, &basis.roots);
         let ctx = PlanContext {
@@ -836,20 +859,49 @@ impl CleanupDesk {
     }
 }
 
-/// A desktop plan (D-25 lifetime) of `items` from scan `scan_id`.
+/// When a desktop plan is made and how long it lives.
+struct Lifetime {
+    /// Now, for the plan's ID.
+    now: i64,
+    created_unix: i64,
+    /// `None`: the desktop default (D-25: 1 hour).
+    ttl_secs: Option<i64>,
+}
+
+impl Lifetime {
+    /// A new plan: created now, the default lifetime.
+    fn fresh(now: i64) -> Self {
+        Self {
+            now,
+            created_unix: now,
+            ttl_secs: None,
+        }
+    }
+
+    /// A plan narrowed from `reviewed`: the same creation time and expiry.
+    fn of(reviewed: &Plan, now: i64) -> Self {
+        Self {
+            now,
+            created_unix: reviewed.created_unix(),
+            ttl_secs: Some(reviewed.expires_unix() - reviewed.created_unix()),
+        }
+    }
+}
+
+/// A desktop plan of `items` from scan `scan_id`.
 fn desktop_plan(
     items: &[PlanItem],
     scan_id: &ScanId,
     watermark: u64,
     who: &Who,
-    now: i64,
+    life: Lifetime,
 ) -> Result<Plan, ScullError> {
     Plan::new(
         PlanParams {
-            id: PlanId::from_suffix(&new_id_suffix(now)).map_err(internal)?,
+            id: PlanId::from_suffix(&new_id_suffix(life.now)).map_err(internal)?,
             scan_id: scan_id.clone(),
-            created_unix: now,
-            ttl_secs: None,
+            created_unix: life.created_unix,
+            ttl_secs: life.ttl_secs,
             machine_id: who.machine_id.clone(),
             user: who.user.clone(),
             origin: PlanOrigin::Desktop,
