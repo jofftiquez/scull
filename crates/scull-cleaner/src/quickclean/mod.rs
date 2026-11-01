@@ -196,7 +196,9 @@ use scull_core::{
     Action, Candidate, Category, FileIdentity, FsPath, ItemId, Plan, PlanItem, PlanParams,
     ScullError, Tier,
 };
-use scull_detectors::caches::{CacheProblem, CacheScan, CacheTool, LocatedCache, NativeCommand};
+use scull_detectors::caches::{
+    CacheProblem, CacheScan, CacheTool, LocatedCache, NativeCommand, commands_for_rule,
+};
 use scull_engine::now_unix;
 use scull_platform::remove::RemoveReport;
 use scull_platform::{Elevation, Platform, free_space};
@@ -427,6 +429,9 @@ pub enum SkipReason {
     /// D-36 never removes this tool's cache itself (conda's `pkgs/`, which environments
     /// hard-link into: [`crate::orphaned::not_orphan_removable`]).
     NotOrphanRemovable(String),
+    /// The tool has no native cleanup command (Gradle, Maven: S3, inspect-only), so scull never
+    /// runs anything for its cache, whatever the request or plan says.
+    InspectOnly,
 }
 
 impl fmt::Display for SkipReason {
@@ -479,6 +484,10 @@ impl fmt::Display for SkipReason {
             SkipReason::Sandbox(e) => write!(f, "could not create the private sandbox: {e}"),
             SkipReason::NotApproved => f.write_str("not part of the approved operation plan"),
             SkipReason::NotOrphanRemovable(why) => f.write_str(why),
+            SkipReason::InspectOnly => f.write_str(
+                "inspect-only: the tool has no command that cleans its cache, so scull never \
+                 runs or removes anything for it",
+            ),
         }
     }
 }
@@ -791,6 +800,10 @@ impl QuickClean {
         sandbox: &mut Option<Result<Sandbox, String>>,
         spawned: &mut Vec<Spawn>,
     ) -> Result<PlannedTool, SkipReason> {
+        // Inspect-only before anything else: no request (tick, wipe) can make it runnable.
+        let Some(commands) = c.commands() else {
+            return Err(SkipReason::InspectOnly);
+        };
         if request.unticked.contains(&c.tool) {
             return Err(SkipReason::Unticked);
         }
@@ -842,7 +855,6 @@ impl QuickClean {
         }
         in_use(&location, probe)?;
 
-        let commands = c.commands();
         let wipe_requested = request.wipe.contains(&c.tool);
         let (cmd, mode): (NativeCommand, CleanMode) = match (wipe_requested, commands.wipe) {
             (true, Some(w)) => (w, CleanMode::Wipe),
@@ -862,7 +874,7 @@ impl QuickClean {
                     .into(),
             );
         }
-        let (tool_args, env) = tool_invocation(c.tool, cmd, &location);
+        let (tool_args, env) = tool_invocation(c.tool, cmd, &location)?;
         let args: Vec<OsString> = script
             .iter()
             .map(|s| s.as_os_str().to_owned())
@@ -1285,6 +1297,10 @@ impl QuickClean {
 
     /// SAFE-05-style checks right before starting a tool.
     fn revalidate(&self, t: &PlannedTool, probe: &dyn ActivityProbe) -> Result<(), SkipReason> {
+        // A plan is data: one naming an inspect-only tool (forged or stale) never runs.
+        if commands_for_rule(t.tool.rule_id()).is_none() {
+            return Err(SkipReason::InspectOnly);
+        }
         self.check_location(&t.cache, &t.anchor, t.identity)?;
         if self.trusted.find(t.tool.binary()).program()
             != Some((t.binary.clone(), t.script.clone()))
@@ -1470,7 +1486,11 @@ fn location_of(c: &LocatedCache) -> Result<PathBuf, SkipReason> {
         | CacheTool::YarnClassic
         | CacheTool::Pip
         | CacheTool::Uv
-        | CacheTool::Conda => c.path.clone(),
+        | CacheTool::Conda
+        | CacheTool::GoBuild
+        | CacheTool::GoMod
+        | CacheTool::NuGet => c.path.clone(),
+        CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
     };
     // Absolute, so it can never be read as an option.
     if !loc.is_absolute() {
@@ -1482,12 +1502,16 @@ fn location_of(c: &LocatedCache) -> Result<PathBuf, SkipReason> {
     Ok(loc)
 }
 
-/// The exact arguments and the location variables for `cmd` acting on `location`.
+/// A tool's arguments and the variables added to its sanitized environment.
+type Invocation = (Vec<OsString>, Vec<(String, OsString)>);
+
+/// The exact arguments and the location variables for `cmd` acting on `location`;
+/// [`SkipReason::InspectOnly`] for a tool with no command (never a panic).
 fn tool_invocation(
     tool: CacheTool,
     cmd: NativeCommand,
     location: &Path,
-) -> (Vec<OsString>, Vec<(String, OsString)>) {
+) -> Result<Invocation, SkipReason> {
     let mut args: Vec<OsString> = cmd.args.iter().map(OsString::from).collect();
     let mut env = Vec::new();
     let loc = location.as_os_str().to_owned();
@@ -1525,8 +1549,30 @@ fn tool_invocation(
             env.push(("CONDA_PKGS_DIRS".to_owned(), loc));
             env.push(("CONDA_OFFLINE".to_owned(), "true".into()));
         }
+        // Go has no cache-location flag: `GOCACHE` / `GOMODCACHE` outrank the Go env file,
+        // which `GOENV=off` disables anyway; an empty `GOFLAGS` drops inherited flags and
+        // `GOTOOLCHAIN=local` stops Go from downloading or switching to another toolchain.
+        CacheTool::GoBuild | CacheTool::GoMod => {
+            let var = if tool == CacheTool::GoBuild {
+                "GOCACHE"
+            } else {
+                "GOMODCACHE"
+            };
+            env.push((var.to_owned(), loc));
+            env.push(("GOENV".to_owned(), "off".into()));
+            env.push(("GOFLAGS".to_owned(), OsString::new()));
+            env.push(("GOTOOLCHAIN".to_owned(), "local".into()));
+        }
+        // `NUGET_PACKAGES` outranks `globalPackagesFolder` in every NuGet.Config.
+        CacheTool::NuGet => {
+            env.push(("NUGET_PACKAGES".to_owned(), loc));
+            env.push(("DOTNET_CLI_TELEMETRY_OPTOUT".to_owned(), "1".into()));
+            env.push(("DOTNET_NOLOGO".to_owned(), "1".into()));
+        }
+        // Unreachable through `plan_one` (no command, refused first); refused, not a panic.
+        CacheTool::Gradle | CacheTool::Maven => return Err(SkipReason::InspectOnly),
     }
-    (args, env)
+    Ok((args, env))
 }
 
 /// QC-05: nothing may hold `dir`; "unknown" counts as held.
@@ -1590,7 +1636,93 @@ fn pnpm_explanation(r: &ToolResult) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+    use std::ffi::OsStr;
+
+    fn invocation(tool: CacheTool, cmd: NativeCommand, loc: &Path) -> Invocation {
+        tool_invocation(tool, cmd, loc).unwrap()
+    }
+
+    fn vars(pairs: &[(&str, &OsStr)]) -> Vec<(String, OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    /// Go and NuGet take the located folder through their highest-precedence variable, with
+    /// exactly the QC-03 table's arguments (P5-DET-01).
+    #[test]
+    fn go_and_nuget_invocations_pin_the_location_variable() {
+        let loc = PathBuf::from(if cfg!(windows) { r"C:\u\c" } else { "/u/c" });
+        let l = loc.as_os_str();
+        for (tool, var, flag) in [
+            (CacheTool::GoBuild, "GOCACHE", "-cache"),
+            (CacheTool::GoMod, "GOMODCACHE", "-modcache"),
+        ] {
+            let k = commands_for_rule(tool.rule_id()).unwrap();
+            assert_eq!(k.preferred.tool, "go");
+            let (a, e) = invocation(tool, k.preferred, &loc);
+            assert_eq!(a, ["clean", flag], "{tool:?}");
+            assert_eq!(
+                e,
+                vars(&[
+                    (var, l),
+                    ("GOENV", OsStr::new("off")),
+                    ("GOFLAGS", OsStr::new("")),
+                    ("GOTOOLCHAIN", OsStr::new("local")),
+                ]),
+                "{tool:?}"
+            );
+        }
+        let k = commands_for_rule(CacheTool::NuGet.rule_id()).unwrap();
+        assert_eq!(k.preferred.tool, "dotnet");
+        let (a, e) = invocation(CacheTool::NuGet, k.preferred, &loc);
+        assert_eq!(a, ["nuget", "locals", "global-packages", "--clear"]);
+        assert_eq!(
+            e,
+            vars(&[
+                ("NUGET_PACKAGES", l),
+                ("DOTNET_CLI_TELEMETRY_OPTOUT", OsStr::new("1")),
+                ("DOTNET_NOLOGO", OsStr::new("1")),
+            ])
+        );
+    }
+
+    /// Gradle and Maven have no command: building their invocation is refused with
+    /// [`SkipReason::InspectOnly`], never a panic; every other tool has one.
+    #[test]
+    fn inspect_only_tools_get_no_invocation() {
+        let loc = PathBuf::from(if cfg!(windows) { r"C:\u\c" } else { "/u/c" });
+        for tool in CacheTool::ALL {
+            let fake = NativeCommand {
+                tool: tool.binary(),
+                args: &["clean"],
+            };
+            match commands_for_rule(tool.rule_id()) {
+                None => {
+                    assert!(
+                        matches!(tool, CacheTool::Gradle | CacheTool::Maven),
+                        "{tool:?}"
+                    );
+                    assert_eq!(
+                        tool_invocation(tool, fake, &loc),
+                        Err(SkipReason::InspectOnly),
+                        "{tool:?}"
+                    );
+                }
+                Some(k) => assert!(tool_invocation(tool, k.preferred, &loc).is_ok(), "{tool:?}"),
+            }
+        }
+        assert_eq!(SkipReason::InspectOnly.code(), "inspect_only");
+        assert!(
+            SkipReason::InspectOnly
+                .to_string()
+                .starts_with("inspect-only")
+        );
+    }
 
     #[test]
     fn invocation_passes_the_location_through_each_tools_own_option() {
@@ -1600,7 +1732,7 @@ mod tests {
             "/u/.npm"
         });
         let cmd = |tool, args| NativeCommand { tool, args };
-        let (a, e) = tool_invocation(CacheTool::Npm, cmd("npm", &["cache", "verify"]), &loc);
+        let (a, e) = invocation(CacheTool::Npm, cmd("npm", &["cache", "verify"]), &loc);
         assert_eq!(
             a,
             [
@@ -1611,7 +1743,7 @@ mod tests {
             ]
         );
         assert!(e.is_empty());
-        let (a, e) = tool_invocation(CacheTool::Pnpm, cmd("pnpm", &["store", "prune"]), &loc);
+        let (a, e) = invocation(CacheTool::Pnpm, cmd("pnpm", &["store", "prune"]), &loc);
         assert_eq!(
             a,
             [
@@ -1627,7 +1759,7 @@ mod tests {
             (CacheTool::YarnClassic, "YARN_CACHE_FOLDER"),
             (CacheTool::YarnBerry, "YARN_GLOBAL_FOLDER"),
         ] {
-            let (a, e) = tool_invocation(tool, cmd("x", &["cache", "clean"]), &loc);
+            let (a, e) = invocation(tool, cmd("x", &["cache", "clean"]), &loc);
             assert_eq!(a, ["cache", "clean"]);
             assert_eq!(e, [(var.to_owned(), loc.clone().into_os_string())]);
         }

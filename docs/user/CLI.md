@@ -561,8 +561,8 @@ until then." One confirmation covers all tools; no elevated confirmation is need
 | `--confirm` | Run the commands without asking |
 | `--dry-run` | Only show what would run; never ask |
 | `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune (npm, uv). pnpm and conda are never wiped. |
-| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`, `pip`, `uv`, `conda`) |
-| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several. Never offered for conda's `pkgs/`. |
+| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`, `pip`, `uv`, `conda`, `go`, `go-build`, `go-mod`, `nuget`) |
+| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several. Never offered for conda's `pkgs/` or the Go module cache. |
 | `--allow-root` | Allow running as root or Administrator |
 
 Before each tool runs, scull checks again that its cache is the same folder, not a link, on

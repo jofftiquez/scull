@@ -19,9 +19,16 @@
 //! * a **fresh** in-use probe says **No** (unknown counts as in use);
 //! * the caller obtained a **per-tool confirmation** showing the not-undoable note
 //!   ([`NOT_UNDOABLE_NOTE`]);
-//! * the tool is **not conda** ([`not_orphan_removable`]): conda environments hard-link (or,
-//!   with `allow_softlinks`, symlink) into `pkgs/`, so it is never removed directly, whether
-//!   conda is installed or not.
+//! * the tool is **not excluded** ([`not_orphan_removable`]):
+//!   * conda: environments hard-link (or, with `allow_softlinks`, symlink) into `pkgs/`, so it
+//!     is never removed directly, whether conda is installed or not;
+//!   * the Go module cache: Go writes its files and folders read-only, so a direct removal
+//!     fails part way through (only `go clean -modcache` makes them writable first);
+//!   * Gradle and Maven: inspect-only (S3, no command, so never this path's S1 tool-command
+//!     candidate either), and Maven's repository may hold artifacts that exist nowhere else.
+//!
+//!   The Go build cache and the NuGet global packages folder are plain re-downloadable or
+//!   rebuildable files, like npm's or pip's cache, and qualify.
 //!
 //! # Why a narrow path, not a core rule
 //!
@@ -50,12 +57,22 @@ pub const MAX_EVIDENCE_AGE: Duration = Duration::from_secs(30);
 /// condition in the [module docs](self)).
 ///
 /// conda's `pkgs/` is excluded: environments hard-link (or symlink) into it, and only conda can
-/// tell which packages are still in use (`conda clean --packages`).
+/// tell which packages are still in use (`conda clean --packages`). So are the Go module cache
+/// (read-only files) and the inspect-only Gradle and Maven caches (see the module docs).
 pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
     match tool {
         CacheTool::Conda => Some(
             "conda's package cache is never removed directly: environments hard-link into \
              pkgs/ (D-36 excludes it); only `conda clean --packages` may prune it",
+        ),
+        CacheTool::GoMod => Some(
+            "the Go module cache is never removed directly: Go writes it read-only, so a \
+             plain delete fails part way through (D-36 excludes it); only \
+             `go clean -modcache` may clean it",
+        ),
+        CacheTool::Gradle | CacheTool::Maven => Some(
+            "inspect-only: this cache has no command that cleans it, and scull never removes \
+             it itself (D-36 excludes it)",
         ),
         CacheTool::Npm
         | CacheTool::Pnpm
@@ -63,7 +80,9 @@ pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
         | CacheTool::YarnClassic
         | CacheTool::YarnBerry
         | CacheTool::Pip
-        | CacheTool::Uv => None,
+        | CacheTool::Uv
+        | CacheTool::GoBuild
+        | CacheTool::NuGet => None,
     }
 }
 
@@ -405,18 +424,29 @@ mod tests {
         inv.assert_ok();
     }
 
-    /// D-36 never covers conda's `pkgs/` (environments hard-link into it): refused whether the
-    /// evidence or only the item names conda, with the cache left intact.
+    /// D-36 never covers conda's `pkgs/` (environments hard-link into it), the read-only Go
+    /// module cache or the inspect-only Gradle and Maven caches: refused whether the evidence
+    /// or only the item names the tool, with the cache left intact.
     #[test]
     fn d36_refuses_conda_pkgs() {
         let Some(fx) = fixture() else { return };
         assert!(not_orphan_removable(CacheTool::Conda).is_some());
+        let excluded = [
+            CacheTool::Conda,
+            CacheTool::GoMod,
+            CacheTool::Gradle,
+            CacheTool::Maven,
+        ];
         for t in CacheTool::ALL {
             assert_eq!(
                 not_orphan_removable(t).is_some(),
-                t == CacheTool::Conda,
+                excluded.contains(&t),
                 "{t:?}"
             );
+        }
+        assert!(not_orphan_removable(CacheTool::GoMod).is_some_and(|w| w.contains("read-only")));
+        for t in [CacheTool::Gradle, CacheTool::Maven] {
+            assert!(not_orphan_removable(t).is_some_and(|w| w.contains("inspect-only")));
         }
         let cache = fx.root().join(CACHE);
         let anchor = fx.root().join("home");
@@ -426,26 +456,30 @@ mod tests {
             path: &cache,
         };
         let exec = locked(&fx);
-        let conda_action = Action::ToolCommand {
-            tool: "conda".into(),
-            args: vec!["clean".into(), "--packages".into()],
-        };
-        // The item classified by conda's rule, evidence for Bun.
-        let mut conda_item = item(&fx, Tier::S1, Category::PackageCache, conda_action);
-        conda_item.rule.id = CacheTool::Conda.rule_id().into();
-        let e = exec
-            .delete_orphaned_cache(&conda_item, &target, evidence(&fx))
-            .expect_err("conda item");
-        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
-        assert!(e.message.contains("hard-link"), "{e}");
-        // Evidence gathered for conda, matching everything else.
-        let mut ev = evidence(&fx);
-        ev.tool = CacheTool::Conda;
-        let good = item(&fx, Tier::S1, Category::PackageCache, tool_action());
-        let e = exec
-            .delete_orphaned_cache(&good, &target, ev)
-            .expect_err("conda evidence");
-        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        for tool in excluded {
+            let action = Action::ToolCommand {
+                tool: tool.binary().into(),
+                args: vec!["clean".into()],
+            };
+            // The item classified by the excluded tool's rule, evidence for Bun (forged as an
+            // S1 tool-command item even for the inspect-only tools, which are never S1).
+            let mut excluded_item = item(&fx, Tier::S1, Category::PackageCache, action);
+            excluded_item.rule.id = tool.rule_id().into();
+            let e = exec
+                .delete_orphaned_cache(&excluded_item, &target, evidence(&fx))
+                .expect_err("excluded item");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{tool:?}: {e}");
+            assert!(e.message.contains("D-36 excludes it"), "{tool:?}: {e}");
+            // Evidence gathered for the excluded tool, matching everything else.
+            let mut ev = evidence(&fx);
+            ev.tool = tool;
+            let good = item(&fx, Tier::S1, Category::PackageCache, tool_action());
+            let e = exec
+                .delete_orphaned_cache(&good, &target, ev)
+                .expect_err("excluded evidence");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{tool:?}: {e}");
+            assert!(e.message.contains("D-36 excludes it"), "{tool:?}: {e}");
+        }
         assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");
         let inv = fx.check_invariants(&InvariantInputs::new());
         println!("{inv}");
@@ -459,7 +493,13 @@ mod tests {
         let Some(fx) = fixture() else { return };
         assert!(!crate::is_quick_clean_tool("ollama"));
         for t in CacheTool::ALL {
-            assert!(crate::is_quick_clean_tool(t.binary()), "{t:?}");
+            // Gradle and Maven are inspect-only: their binaries are never run either.
+            let inspect_only = matches!(t, CacheTool::Gradle | CacheTool::Maven);
+            assert_eq!(
+                crate::is_quick_clean_tool(t.binary()),
+                !inspect_only,
+                "{t:?}"
+            );
         }
         let cache = fx.root().join(CACHE);
         let anchor = fx.root().join("home");

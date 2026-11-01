@@ -198,11 +198,12 @@ impl Executor {
 pub const TOOL_NATIVE_UNSUPPORTED: &str = "tool-native ML removal not supported yet";
 
 /// Whether `tool` is one of the package managers Quick Clean runs (resolved from trusted
-/// locations, SAFE-12). Any other tool command is never executed.
+/// locations, SAFE-12). Any other tool command is never executed, including the binaries of
+/// inspect-only caches (Gradle's `gradle`, Maven's `mvn`: no cleanup command).
 pub fn is_quick_clean_tool(tool: &str) -> bool {
-    scull_detectors::caches::CacheTool::ALL
-        .iter()
-        .any(|t| t.binary() == tool)
+    scull_detectors::caches::CacheTool::ALL.iter().any(|t| {
+        t.binary() == tool && scull_detectors::caches::commands_for_rule(t.rule_id()).is_some()
+    })
 }
 
 /// Tier and action checks (I-1, D-3, D-28) for the walker: only `Delete`.

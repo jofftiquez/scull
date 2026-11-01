@@ -504,7 +504,7 @@ pub struct CleanCachesArgs {
     #[arg(long)]
     pub wipe: bool,
     /// Leave this tool's cache alone; repeat for several (npm, pnpm, bun, yarn,
-    /// yarn-classic, yarn-berry, pip, uv, conda).
+    /// yarn-classic, yarn-berry, pip, uv, conda, go, go-build, go-mod, nuget).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub untick: Vec<crate::cmd::clean_caches::Untick>,
     /// Also remove this uninstalled tool's orphaned cache folder, when the preview lists it as

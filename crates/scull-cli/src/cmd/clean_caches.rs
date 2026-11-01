@@ -95,9 +95,17 @@ pub fn parse_tool(s: &str) -> Result<Untick, String> {
         "pip" => vec![CacheTool::Pip],
         "uv" => vec![CacheTool::Uv],
         "conda" => vec![CacheTool::Conda],
+        "go" => vec![CacheTool::GoBuild, CacheTool::GoMod],
+        "go-build" => vec![CacheTool::GoBuild],
+        "go-mod" => vec![CacheTool::GoMod],
+        "nuget" => vec![CacheTool::NuGet],
+        // Inspect-only (never run); accepted so every reported name round-trips.
+        "gradle" => vec![CacheTool::Gradle],
+        "maven" => vec![CacheTool::Maven],
         _ => {
             return Err(
-                "expected one of npm, pnpm, bun, yarn, yarn-classic, yarn-berry, pip, uv, conda"
+                "expected one of npm, pnpm, bun, yarn, yarn-classic, yarn-berry, pip, uv, conda, \
+                 go, go-build, go-mod, nuget, gradle, maven"
                     .into(),
             );
         }
@@ -116,6 +124,11 @@ pub fn tool_name(t: CacheTool) -> &'static str {
         CacheTool::Pip => "pip",
         CacheTool::Uv => "uv",
         CacheTool::Conda => "conda",
+        CacheTool::GoBuild => "go-build",
+        CacheTool::GoMod => "go-mod",
+        CacheTool::Gradle => "gradle",
+        CacheTool::Maven => "maven",
+        CacheTool::NuGet => "nuget",
     }
 }
 
@@ -316,6 +329,7 @@ fn skip_code(r: &SkipReason) -> &'static str {
         SkipReason::Sandbox(_) => "sandbox",
         SkipReason::NotApproved => "not_approved",
         SkipReason::NotOrphanRemovable(_) => "d36_excluded",
+        SkipReason::InspectOnly => "inspect_only",
     }
 }
 

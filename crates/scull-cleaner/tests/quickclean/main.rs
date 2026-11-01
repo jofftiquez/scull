@@ -189,6 +189,22 @@ const TESTS: &[Test] = &[
         "d36_conda_pkgs_is_never_orphan_removable",
         d36_conda_pkgs_is_never_orphan_removable,
     ),
+    (
+        "go_and_nuget_exact_argv_env_and_location",
+        go_and_nuget_exact_argv_env_and_location,
+    ),
+    (
+        "d36_go_modcache_is_never_orphan_removable",
+        d36_go_modcache_is_never_orphan_removable,
+    ),
+    (
+        "gradle_and_maven_are_inspect_only_and_never_run",
+        gradle_and_maven_are_inspect_only_and_never_run,
+    ),
+    (
+        "forged_gradle_and_maven_plan_entries_never_run",
+        forged_gradle_and_maven_plan_entries_never_run,
+    ),
 ];
 
 fn main() {
@@ -523,6 +539,90 @@ fn conda_pkgs(fx: &mut Fixture) -> PathBuf {
     .unwrap()
     .file(format!("{c}/{}", fake::GUARD), "")
     .unwrap();
+    fx.root().join(c)
+}
+
+/// Go's build cache at its Linux default (`$XDG_CACHE_HOME/go-build`).
+fn go_build_cache(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.cache/go-build";
+    fx.file(
+        format!("{c}/README"),
+        "This directory holds cached build artifacts from the Go build system.\n",
+    )
+    .unwrap()
+    .file(format!("{c}/trim.txt"), "1730000000\n")
+    .unwrap()
+    .file_of_size(format!("{c}/0a/0a1b2c3d-a"), 512)
+    .unwrap()
+    .file_of_size(format!("{c}/ff/ff00aa11-d"), 4096)
+    .unwrap()
+    .file(format!("{c}/{}", fake::GUARD), "")
+    .unwrap();
+    fx.root().join(c)
+}
+
+/// Go's module cache at its default (`$HOME/go/pkg/mod`).
+fn go_modcache(fx: &mut Fixture) -> PathBuf {
+    let c = "home/go/pkg/mod";
+    let dl = format!("{c}/cache/download/github.com/pkg/errors/@v");
+    fx.file_of_size(format!("{dl}/v0.9.1.zip"), 4096)
+        .unwrap()
+        .file(format!("{dl}/v0.9.1.info"), "{\"Version\":\"v0.9.1\"}")
+        .unwrap()
+        .file(format!("{dl}/v0.9.1.mod"), "module github.com/pkg/errors\n")
+        .unwrap()
+        .file_of_size(format!("{c}/github.com/pkg/errors@v0.9.1/errors.go"), 2048)
+        .unwrap()
+        .file(format!("{c}/{}", fake::GUARD), "")
+        .unwrap();
+    fx.root().join(c)
+}
+
+/// NuGet's global packages folder at its default (`~/.nuget/packages`).
+fn nuget_packages(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.nuget/packages";
+    let p = format!("{c}/newtonsoft.json/13.0.3");
+    fx.file(
+        format!("{p}/.nupkg.metadata"),
+        "{\"version\":2,\"source\":\"https://api.nuget.org/v3/index.json\"}",
+    )
+    .unwrap()
+    .file_of_size(format!("{p}/newtonsoft.json.13.0.3.nupkg"), 4096)
+    .unwrap()
+    .file(format!("{c}/{}", fake::GUARD), "")
+    .unwrap();
+    fx.root().join(c)
+}
+
+/// Gradle's caches at the default (`~/.gradle/caches`).
+fn gradle_caches(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.gradle/caches";
+    fx.file_of_size(
+        format!("{c}/modules-2/files-2.1/com.google.guava/guava/33.0.0-jre/abc/guava.jar"),
+        4096,
+    )
+    .unwrap()
+    .file(format!("{c}/modules-2/modules-2.lock"), "")
+    .unwrap()
+    .file_of_size(format!("{c}/build-cache-1/0123abcd"), 1024)
+    .unwrap()
+    .file(format!("{c}/{}", fake::GUARD), "")
+    .unwrap();
+    fx.root().join(c)
+}
+
+/// Maven's local repository at the default (`~/.m2/repository`).
+fn maven_repository(fx: &mut Fixture) -> PathBuf {
+    let c = "home/.m2/repository";
+    let a = format!("{c}/org/apache/commons/commons-lang3/3.14.0");
+    fx.file_of_size(format!("{a}/commons-lang3-3.14.0.jar"), 4096)
+        .unwrap()
+        .file(format!("{a}/commons-lang3-3.14.0.pom"), "<project/>")
+        .unwrap()
+        .file(format!("{a}/_remote.repositories"), "central\n")
+        .unwrap()
+        .file(format!("{c}/{}", fake::GUARD), "")
+        .unwrap();
     fx.root().join(c)
 }
 
@@ -2840,5 +2940,360 @@ fn d36_conda_pkgs_is_never_orphan_removable() {
     assert!(conda.join("numpy-1.26.4-py312.conda").is_file());
     assert!(conda.join("urls.txt").is_file());
     assert!(pip.join("wheels").is_dir(), "pip was not confirmed");
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// P5-DET-01: Go, NuGet (tool commands) and Gradle, Maven (inspect-only)
+// ---------------------------------------------------------------------------------------------
+
+/// The Go build and module caches and the NuGet global packages folder are cleaned with their
+/// own commands, pointed at the located folder through `GOCACHE` / `GOMODCACHE` /
+/// `NUGET_PACKAGES` (Go with its env file off, no inherited `GOFLAGS` and no toolchain switch),
+/// audited, and only the located folders change. The fakes refuse anything but the documented
+/// invocation; no real `go` or `dotnet` runs.
+fn go_and_nuget_exact_argv_env_and_location() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let gobuild = go_build_cache(&mut fx);
+    let gomod = go_modcache(&mut fx);
+    let nuget = nuget_packages(&mut fx);
+    fx.checkpoint().unwrap();
+    let go = fake::install(&tools(&fx), "go");
+    let dotnet = fake::install(&tools(&fx), "dotnet");
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    for tool in [CacheTool::GoBuild, CacheTool::GoMod, CacheTool::NuGet] {
+        let c = cands
+            .iter()
+            .find(|c| c.rule.id == tool.rule_id())
+            .unwrap_or_else(|| panic!("{tool:?} located: {scan:#?}"));
+        assert_eq!(c.tier, Tier::S1, "{c:#?}");
+    }
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    assert!(plan.spawned.is_empty(), "planning starts nothing");
+    let mut planned = planned_tools(&plan);
+    planned.sort();
+    assert_eq!(
+        planned,
+        [CacheTool::GoBuild, CacheTool::GoMod, CacheTool::NuGet]
+    );
+    let by = |tool| plan.tools.iter().find(|t| t.tool == tool).unwrap();
+    let env = |pairs: &[(&str, OsString)]| -> Vec<(String, OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect()
+    };
+    let go_cases = [
+        (
+            CacheTool::GoBuild,
+            &gobuild,
+            "-cache",
+            "GOCACHE",
+            "GOMODCACHE",
+        ),
+        (
+            CacheTool::GoMod,
+            &gomod,
+            "-modcache",
+            "GOMODCACHE",
+            "GOCACHE",
+        ),
+    ];
+    for (tool, dir, flag, var, _) in go_cases {
+        let t = by(tool);
+        assert_eq!(t.binary, canonical(&go));
+        assert_eq!(t.location, *dir);
+        assert_eq!(t.args, os(&["clean", flag]));
+        assert_eq!(
+            t.env,
+            env(&[
+                (var, path_arg(dir)),
+                ("GOENV", "off".into()),
+                ("GOFLAGS", OsString::new()),
+                ("GOTOOLCHAIN", "local".into()),
+            ])
+        );
+        assert_eq!(t.mode, CleanMode::Wipe, "Go has no prune");
+        assert_eq!(t.not_undoable, NOT_UNDOABLE_NOTE);
+    }
+    let t = by(CacheTool::NuGet);
+    assert_eq!(t.binary, canonical(&dotnet));
+    assert_eq!(t.location, nuget);
+    assert_eq!(
+        t.args,
+        os(&["nuget", "locals", "global-packages", "--clear"])
+    );
+    assert_eq!(
+        t.env,
+        env(&[
+            ("NUGET_PACKAGES", path_arg(&nuget)),
+            ("DOTNET_CLI_TELEMETRY_OPTOUT", "1".into()),
+            ("DOTNET_NOLOGO", "1".into()),
+        ])
+    );
+    assert_eq!(t.mode, CleanMode::Wipe);
+
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(report.results.len(), 3);
+    assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
+    let sandbox = canonical(&sandbox_base(&fx));
+
+    let calls = fake::calls(&tools(&fx), "go");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    for (_, dir, flag, var, other) in go_cases {
+        let call = calls
+            .iter()
+            .find(|c| c.argv == ["clean", flag])
+            .unwrap_or_else(|| panic!("go clean {flag}: {calls:?}"));
+        assert_eq!(call.env[var], dir.to_string_lossy());
+        assert_eq!(call.env["GOENV"], "off");
+        assert_eq!(call.env["GOFLAGS"], "");
+        assert_eq!(call.env["GOTOOLCHAIN"], "local");
+        assert!(!call.env.contains_key(other), "{other} not passed");
+        assert_eq!(
+            env_names(&call.env),
+            expected_env_names(&[var, "GOENV", "GOFLAGS", "GOTOOLCHAIN"])
+        );
+        assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
+    }
+    let call = only_call(&fx, "dotnet");
+    assert_eq!(call.argv, ["nuget", "locals", "global-packages", "--clear"]);
+    assert_eq!(call.env["NUGET_PACKAGES"], nuget.to_string_lossy());
+    assert_eq!(
+        env_names(&call.env),
+        expected_env_names(&[
+            "NUGET_PACKAGES",
+            "DOTNET_CLI_TELEMETRY_OPTOUT",
+            "DOTNET_NOLOGO"
+        ])
+    );
+    assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
+
+    for dir in [&gobuild, &gomod, &nuget] {
+        assert_eq!(files_below(dir), [fake::GUARD], "{}", dir.display());
+    }
+    let rows = rows(&fx, &report.rec);
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    assert!(
+        rows.iter().all(|r| r.outcome == ItemOutcome::ToolRun),
+        "{rows:#?}"
+    );
+    check(
+        &fx,
+        &plan,
+        &cands,
+        &[rel(&fx, &gobuild), rel(&fx, &gomod), rel(&fx, &nuget)],
+        &[&report.rec],
+    );
+}
+
+/// D-36: Go writes its module cache read-only, so an uninstalled Go's module cache is never
+/// offered as orphaned (its build cache and NuGet's folder, with the same checks passing, are).
+/// A forged orphaned entry for it, confirmed and part of the approved plan, is refused before
+/// anything is gathered or removed.
+fn d36_go_modcache_is_never_orphan_removable() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let gobuild = go_build_cache(&mut fx);
+    let gomod = go_modcache(&mut fx);
+    let nuget = nuget_packages(&mut fx);
+    fx.checkpoint().unwrap();
+    fs::create_dir_all(tools(&fx)).unwrap(); // trusted folder without go or dotnet
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    assert!(plan.tools.is_empty());
+    for (tool, dir) in [
+        (CacheTool::GoBuild, &gobuild),
+        (CacheTool::GoMod, &gomod),
+        (CacheTool::NuGet, &nuget),
+    ] {
+        assert_eq!(
+            skip_reason(&plan.skipped, tool),
+            SkipReason::NotInstalled {
+                manual_removal: dir.clone()
+            }
+        );
+    }
+    let mut orphaned: Vec<CacheTool> = plan.orphaned.iter().map(|o| o.tool).collect();
+    orphaned.sort();
+    assert_eq!(
+        orphaned,
+        [CacheTool::GoBuild, CacheTool::NuGet],
+        "{plan:#?}"
+    );
+
+    let cand = cands
+        .iter()
+        .find(|c| c.rule.id == CacheTool::GoMod.rule_id())
+        .unwrap();
+    assert_eq!(cand.tier, Tier::S1);
+    let mut forged = plan.orphaned[0].clone();
+    forged.tool = CacheTool::GoMod;
+    forged.cache = gomod.clone();
+    forged.identity = cand.identity;
+    forged.item = scull_core::PlanItem::from_candidate(cand).unwrap();
+    forged.reclaimable_bytes = cand.sizes.reclaimable.bytes;
+    let mut plan = plan;
+    plan.orphaned = vec![forged];
+
+    let exec = locked_executor(&fx);
+    let report = orphans_audited(
+        &fx,
+        &exec,
+        &q,
+        &plan,
+        &confirmed(&[CacheTool::GoMod]),
+        &Probe::idle(),
+        &CancelToken::new(),
+    );
+    assert!(report.removed.is_empty(), "{report:#?}");
+    let reason = skip_reason(&report.skipped, CacheTool::GoMod);
+    assert!(
+        matches!(&reason, SkipReason::NotOrphanRemovable(why) if why.contains("read-only")),
+        "{reason:?}"
+    );
+    only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("d36_excluded"));
+    assert!(
+        gomod
+            .join("cache/download/github.com/pkg/errors/@v/v0.9.1.zip")
+            .is_file()
+    );
+    assert!(gobuild.join("trim.txt").is_file(), "not confirmed");
+    assert!(nuget.join("newtonsoft.json").is_dir(), "not confirmed");
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+/// Gradle and Maven have no cleanup command (S3, inspect-only): with their binaries trusted
+/// and a wipe requested for them, or with no binary at all, Quick Clean plans nothing for
+/// them, skips them as `InspectOnly` and never offers them as orphaned.
+fn gradle_and_maven_are_inspect_only_and_never_run() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let gradle = gradle_caches(&mut fx);
+    let maven = maven_repository(&mut fx);
+    fx.checkpoint().unwrap();
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    for tool in [CacheTool::Gradle, CacheTool::Maven] {
+        let c = cands
+            .iter()
+            .find(|c| c.rule.id == tool.rule_id())
+            .unwrap_or_else(|| panic!("{tool:?} located: {scan:#?}"));
+        assert_eq!(c.tier, Tier::S3, "{c:#?}");
+        assert_eq!(c.action, Action::None, "{c:#?}");
+    }
+    let forced = QuickCleanRequest {
+        wipe: BTreeSet::from([CacheTool::Gradle, CacheTool::Maven]),
+        ..QuickCleanRequest::default()
+    };
+    // Binaries absent, then present (the fakes record any start).
+    let empty = fx.base().join("empty-tools");
+    fs::create_dir_all(&empty).unwrap();
+    for dir in [empty, tools(&fx)] {
+        if dir == tools(&fx) {
+            fake::install(&dir, "gradle");
+            fake::install(&dir, "mvn");
+        }
+        let q = quick(options(&fx, std::slice::from_ref(&dir)));
+        let plan = q.plan(&scan, &cands, &forced, &Probe::idle());
+        assert!(plan.tools.is_empty(), "{plan:#?}");
+        assert!(plan.orphaned.is_empty(), "{plan:#?}");
+        assert!(plan.spawned.is_empty());
+        for tool in [CacheTool::Gradle, CacheTool::Maven] {
+            assert_eq!(skip_reason(&plan.skipped, tool), SkipReason::InspectOnly);
+        }
+        check(&fx, &plan, &cands, &[], &[]);
+    }
+    assert!(!fake::ran_in(&tools(&fx)));
+    assert!(gradle.join("modules-2/modules-2.lock").is_file());
+    assert!(
+        maven
+            .join("org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar")
+            .is_file()
+    );
+}
+
+/// A plan is data: Gradle and Maven entries forged into an approved plan (from pip's and uv's
+/// planned tools, pointing at the real Gradle and Maven caches, their identities and trusted
+/// fake binaries, so every other run-time check would pass) are refused at run time as
+/// `InspectOnly`, audited as `refused`, and nothing starts or changes.
+fn forged_gradle_and_maven_plan_entries_never_run() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let pip = pip_cache(&mut fx);
+    let uv = uv_cache(&mut fx);
+    let gradle = gradle_caches(&mut fx);
+    let maven = maven_repository(&mut fx);
+    fx.checkpoint().unwrap();
+    fake::install(&tools(&fx), "pip");
+    fake::install(&tools(&fx), "uv");
+    let gradle_bin = fake::install(&tools(&fx), "gradle");
+    let mvn_bin = fake::install(&tools(&fx), "mvn");
+    let scan = locate(&fx);
+    let cands = candidates(&scan);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let mut plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    let mut planned = planned_tools(&plan);
+    planned.sort();
+    assert_eq!(planned, [CacheTool::Pip, CacheTool::Uv]);
+    let forge = |t: &mut scull_cleaner::quickclean::PlannedTool,
+                 tool: CacheTool,
+                 dir: &Path,
+                 bin: &Path| {
+        let cand = cands.iter().find(|c| c.rule.id == tool.rule_id()).unwrap();
+        t.tool = tool;
+        t.cache = dir.to_path_buf();
+        t.location = dir.to_path_buf();
+        t.identity = cand.identity;
+        t.binary = canonical(bin);
+        t.script = None;
+        t.args = os(&["clean"]);
+        t.env = Vec::new();
+    };
+    plan.tools.sort_by_key(|t| t.tool);
+    forge(&mut plan.tools[0], CacheTool::Gradle, &gradle, &gradle_bin);
+    forge(&mut plan.tools[1], CacheTool::Maven, &maven, &mvn_bin);
+    // Drop the planning-time skips, so the report's come from the run alone.
+    plan.skipped.clear();
+
+    let report = run_ok(&fx, &q, &plan);
+    assert!(report.results.is_empty(), "{report:#?}");
+    assert!(report.spawned.is_empty(), "{report:#?}");
+    assert_eq!(report.skipped.len(), 2, "{report:#?}");
+    for tool in [CacheTool::Gradle, CacheTool::Maven] {
+        assert_eq!(skip_reason(&report.skipped, tool), SkipReason::InspectOnly);
+    }
+    assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+    let rows = rows(&fx, &report.rec);
+    assert_eq!(rows.len(), 2, "{rows:#?}");
+    assert!(
+        rows.iter()
+            .all(|r| r.outcome == ItemOutcome::Refused
+                && r.reason.as_deref() == Some("inspect_only")),
+        "{rows:#?}"
+    );
+    assert!(gradle.join("modules-2/modules-2.lock").is_file());
+    assert!(
+        maven
+            .join("org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar")
+            .is_file()
+    );
+    assert!(pip.join("wheels").is_dir());
+    assert!(uv.join("wheels-v5/pypi/keep01").is_file());
     check(&fx, &plan, &cands, &[], &[&report.rec]);
 }

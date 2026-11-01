@@ -252,8 +252,11 @@ impl From<(ItemId, Tier, Action)> for PlanEntry {
 /// The tools scull may start (SAFE-12, PRD §10.8): Git for repository state, and the package
 /// managers whose own cleanup Quick Clean runs (`scull_detectors::caches::CacheTool::binary`).
 /// Matched against the binary's file name without an `.exe` extension. Tool-native ML removal
-/// (`ollama rm`) is not run by scull, so `ollama` is not listed.
-pub const ALLOWED_TOOLS: &[&str] = &["git", "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda"];
+/// (`ollama rm`) is not run by scull, so `ollama` is not listed; nor are `gradle` and `mvn`
+/// (their caches are inspect-only: no cleanup command).
+pub const ALLOWED_TOOLS: &[&str] = &[
+    "git", "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda", "go", "dotnet",
+];
 
 /// One process scull started, for I-7: the binary as spawned and its arguments.
 ///
