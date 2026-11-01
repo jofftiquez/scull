@@ -36,17 +36,19 @@ The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
   in your own terminal with `scull approve`, or in the desktop app's approval dialog, and can
   withdraw an approval (`--revoke`, or **Revoke approval** in the app). Denials are final,
   pending plans and the preparation rate are capped, and everything is audited.
+- `scull approve <plan-id> --run`: approve an agent's plan and run it yourself, in one
+  terminal step (#102; review fixes follow).
+- Opt-in auto-policies (`[auto]` in the config file only): the scheduled `scull check` moves
+  idle S0 build outputs into quarantine. It never deletes them and never uses the Trash. It
+  runs a dry run first, within per-run and per-day caps, under the cleanup lock, and stops
+  with any kill switch (#74).
 - `scull ask`: an optional assistant with your own model (or a local one) over scull's
-  read-only tools, with a consent notice before the first request.
+  read-only tools, with a consent notice before the first request. With `[mcp] destructive =
+  true` it may also prepare a plan, which runs only after you approve it (#105).
 - `scull agent install|uninstall`, `scull insights`, `scull worktrees register --ttl`,
   `scull doctor --report`.
 - In the repository, not in the CLI release: the desktop app (Tauri, Phase 3), with menu bar
   and tray monitoring and an opt-in weekly digest.
-
-### Not in this release yet
-
-- Opt-in auto-policies (#20), approve-and-run in one terminal step (`scull approve --run`,
-  #97), and plan preparation from `scull ask` (#22).
 
 ## 0.1.0-alpha.1
 
