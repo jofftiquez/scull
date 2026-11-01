@@ -168,3 +168,27 @@ fn own_data_is_listed_without_opening_the_database() {
     validate(&serde_json::to_value(&v).unwrap());
     assert_eq!(snapshot(&data), before, "database files unchanged");
 }
+
+#[test]
+fn headroom_is_reported_read_only() {
+    use scull_proactive::headroom::{HEADROOM_DIR, HeadroomState, MANIFEST_FILE};
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let v = session(tmp.path(), &[]).settings();
+    assert_eq!(v.data.headroom.as_ref().unwrap().state, HeadroomState::None);
+    assert!(
+        !data.join(HEADROOM_DIR).exists(),
+        "the view never creates the reserve"
+    );
+    // A file at the reserve's path without scull's record: reported, never claimed.
+    std::fs::create_dir(data.join(HEADROOM_DIR)).unwrap();
+    std::fs::write(data.join(HEADROOM_DIR).join("reserve.bin"), b"x").unwrap();
+    let v = session(tmp.path(), &[]).settings();
+    assert_eq!(
+        v.data.headroom.as_ref().unwrap().state,
+        HeadroomState::Unrecorded
+    );
+    assert!(!data.join(MANIFEST_FILE).exists());
+    validate(&serde_json::to_value(&v).unwrap());
+}

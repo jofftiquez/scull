@@ -70,6 +70,7 @@ export function designSettings(): SettingsView {
         { path: `${SUPPORT}/scull.db.bak-v1`, kind: 'backup', bytes: Math.round(4 * MiB) },
       ],
       footprint_bytes: Math.round(212 * MiB) + 32768,
+      headroom: { state: 'none', path: `${SUPPORT}/headroom/reserve.bin`, manifest: null, releasable_bytes: null, detail: null },
     },
   };
 }
