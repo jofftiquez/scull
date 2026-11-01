@@ -6,8 +6,7 @@
 
 use crate::cancel;
 use crate::cli::{
-    CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
-    WorktreesAction,
+    CleanAction, Cli, Command, DataAction, McpAction, ProjectsAction, RulesAction, WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -47,10 +46,6 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Init(_) => None,
         Command::Status { .. } => None,
         Command::Check(_) => None,
-        Command::Insights {
-            action: Some(InsightsAction::Purge { .. }),
-            ..
-        } => Some(crate::cmd::insights::PURGE),
         Command::Insights { .. } => None,
         Command::Agent { .. } => None,
         Command::Schedule { .. } => None,
@@ -213,25 +208,22 @@ mod tests {
         planned_for(&cli.command)
     }
 
+    /// No command is a stub in this build; the stub machinery stays for future commands.
     #[test]
-    fn every_planned_command_names_its_issue() {
-        let table: &[(&[&str], &str, Option<u32>)] = &[
-            (&["insights", "purge"], "insights purge", Some(266)),
-            (
-                &["insights", "purge", "--older-than", "90d", "--confirm"],
-                "insights purge",
-                Some(266),
-            ),
-        ];
-        for (args, name, issue) in table {
-            assert_eq!(
-                planned_of(args),
-                Some(Planned {
-                    name,
-                    issue: *issue
-                }),
-                "{args:?}"
-            );
+    fn no_command_is_planned_and_stubs_name_their_issue() {
+        let p = Planned {
+            name: "example",
+            issue: Some(7),
+        };
+        assert_eq!(
+            not_implemented(p).message,
+            "`scull example` is not implemented yet (tracked in #7)"
+        );
+        for purge in [
+            &["insights", "purge"][..],
+            &["insights", "purge", "--older-than", "90d", "--confirm"],
+        ] {
+            assert_eq!(planned_of(purge), None, "{purge:?}");
         }
         assert_eq!(planned_of(&["completions", "bash"]), None);
         assert_eq!(planned_of(&["doctor"]), None);

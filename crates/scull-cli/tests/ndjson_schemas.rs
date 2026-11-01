@@ -90,7 +90,8 @@ const RUNS: &[(&str, &[&str], &str)] = &[
     ("doctor", &["doctor"], "doctor"),
     // `phase2` commands, without executing anything: `clean` only plans (the plan is recorded
     // in scull's own database), `clean caches --dry-run` previews, `history` lists the (empty)
-    // audit log, `data` reads, exports to a temp folder and purges scull's own temp data.
+    // audit log, `insights purge` forgets the temp history, `data` reads, exports to a temp
+    // folder and purges scull's own temp data.
     (
         "clean",
         &["clean", "--root", "{root}", "--allow-network-roots"],
@@ -119,6 +120,12 @@ const RUNS: &[(&str, &[&str], &str)] = &[
         "headroom release",
         &["headroom", "release", "--yes"],
         "headroom",
+    ),
+    // Forgets the history `check` recorded above (scull's own temp database).
+    (
+        "insights purge",
+        &["insights", "purge", "--confirm"],
+        "insights-purge",
     ),
     (
         "data purge",
@@ -168,7 +175,7 @@ const VARIANTS: &[(&str, &[&str], &str)] = &[
 ];
 
 /// Commands this build refuses (not implemented / inspect-only gate): stdout stays empty.
-const REFUSED: &[(&str, &[&str])] = &[("insights purge", &["insights", "purge"])];
+const REFUSED: &[(&str, &[&str])] = &[];
 
 /// Every runnable command path in the clap tree (`rules list`, `scan`, ...): commands that
 /// require a subcommand and `help` are left out.

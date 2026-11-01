@@ -982,7 +982,7 @@ fn on_terminal(env: &Env, args: &[&str], input: &str) -> Option<Output> {
 /// wrong count cancels (exit 130), the right one passes the gate.
 #[cfg(target_os = "linux")]
 #[test]
-fn terminal_prompts_confirm_and_decline() {
+fn fx_exec_11_terminal_prompts_confirm_decline_and_typed_count() {
     if Command::new("script").arg("--version").output().is_err() {
         eprintln!("SKIP: script(1) not available");
         return;

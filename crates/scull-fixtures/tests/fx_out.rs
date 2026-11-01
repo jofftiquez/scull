@@ -198,6 +198,10 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     schemas.ndjson(&cli, &["check"], "check");
     schemas.json(&cli, &["insights"], "insights");
     schemas.ndjson(&cli, &["insights"], "insights");
+    // `insights purge` (#31): forgets the history recorded in the temp `SCULL_HOME` only.
+    let purged = schemas.json(&cli, &["insights", "purge", "--confirm"], "insights-purge");
+    assert_eq!(purged["data"]["database_found"], true, "{purged:#}");
+    schemas.ndjson(&cli, &["insights", "purge", "--confirm"], "insights-purge");
     // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
     // config and writes nothing.
     schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
@@ -623,8 +627,13 @@ struct Mcp {
 
 impl Mcp {
     fn start(cli: &Cli) -> Self {
+        Self::start_with(cli, &["mcp", "serve"])
+    }
+
+    /// `scull <args>` (e.g. `mcp serve --allow-destructive`), initialized.
+    fn start_with(cli: &Cli, args: &[&str]) -> Self {
         let mut child = cli
-            .command(&["mcp", "serve"])
+            .command(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -750,14 +759,6 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         &["scan", &missing, "--json"],
         ExitCode::General,
         Some("not_found"),
-    );
-    expect(
-        &mut seen,
-        &schemas,
-        &cli,
-        &["insights", "purge", "--json"],
-        ExitCode::General,
-        Some("unsupported_platform"),
     );
     // 2: usage and configuration errors.
     expect(
@@ -961,6 +962,111 @@ fn exec_exit_codes(
 // ------------------------------------------------------------------------------------------
 
 /// (id, tier, category) of every candidate in a list of candidate objects.
+/// FX-OUT-03 (plan contents): the same items, planned through the CLI binary
+/// (`clean --item <id> --dry-run --json`) and through the MCP server the same binary serves in
+/// destructive mode (`prepare_cleanup`), give the same plan: the same item IDs, categories,
+/// tiers, actions and reclaimable bytes, in the same order, and the same total. Nothing is
+/// executed on either side.
+#[test]
+fn fx_out_03_cli_and_mcp_plan_identical_contents() {
+    // Idle artifacts (S0..S2, depending on what this machine can observe), so both sides
+    // have several items to plan.
+    let mut fx = Fixture::new().unwrap();
+    fx.cargo_project("app", "app")
+        .unwrap()
+        .cargo_target("app", "app", 64 * 1024)
+        .unwrap()
+        .npm_project("web", "web", NodeLock::Npm)
+        .unwrap()
+        .node_modules("web", &["left-pad"])
+        .unwrap()
+        .npm_project("nolock", "nolock", NodeLock::None)
+        .unwrap()
+        .node_modules("nolock", &["x"])
+        .unwrap()
+        .cargo_project("vault", "vault")
+        .unwrap()
+        .cargo_target("vault", "vault", 1024)
+        .unwrap()
+        .file("vault/.scull-protect", "")
+        .unwrap();
+    for d in ["app", "web", "nolock", "vault"] {
+        fx.age(d, days_ago(30)).unwrap();
+    }
+    fx.checkpoint().unwrap();
+    let cli = mcp_cli(&[fx.root()]);
+    cli.write_config(&format!(
+        "[mcp]\nenabled = true\ndestructive = true\n\n[scan]\nroots = [\"{}\"]\n",
+        toml_path(fx.root())
+    ));
+    let r = s(fx.root());
+
+    let mut m = Mcp::start_with(&cli, &["mcp", "serve", "--allow-destructive"]);
+    let cands = m.tool("get_cleanup_candidates", json!({ "max_results": 1000 }));
+    let ids: Vec<String> = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["tier"] != "S3")
+        .map(|c| c["id"].as_str().unwrap().to_owned())
+        .collect();
+    // app/target, web/node_modules and nolock/node_modules; vault is protected (S3).
+    assert_eq!(ids.len(), 3, "{cands:#}");
+    let prepared = m.tool("prepare_cleanup", json!({ "item_ids": ids }));
+    let exit = m.finish();
+    assert_eq!(exit, Some(0));
+    let via_mcp: Vec<(String, String, String, String, u64)> = prepared["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{prepared:#}"))
+        .iter()
+        .map(|i| {
+            (
+                i["id"].as_str().unwrap().to_owned(),
+                i["category"].as_str().unwrap().to_owned(),
+                i["tier"].as_str().unwrap().to_owned(),
+                i["action"].as_str().unwrap().to_owned(),
+                i["reclaimable_bytes"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+
+    let mut args: Vec<&str> = vec!["clean", "--root", &r, "--allow-network-roots", "--dry-run"];
+    for id in &ids {
+        args.push("--item");
+        args.push(id);
+    }
+    let doc = Schemas::default().json(&cli, &args, "clean-plan");
+    let plan = &doc["data"]["plan"];
+    let via_cli: Vec<(String, String, String, String, u64)> = plan["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["item_id"].as_str().unwrap().to_owned(),
+                i["category"].as_str().unwrap().to_owned(),
+                i["tier"].as_str().unwrap().to_owned(),
+                i["action"]["type"].as_str().unwrap().to_owned(),
+                i["reclaimable_bytes"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+
+    println!("plan items via CLI and MCP ({}):", via_cli.len());
+    for i in &via_cli {
+        println!("  {i:?}");
+    }
+    assert_eq!(via_cli.len(), ids.len(), "{doc:#}");
+    assert_eq!(
+        via_mcp, via_cli,
+        "prepare_cleanup differs from clean --item"
+    );
+    let total: u64 = via_cli.iter().map(|i| i.4).sum();
+    assert_eq!(prepared["reclaimable_bytes"].as_u64(), Some(total));
+    assert!(via_cli.iter().all(|i| i.2 != "S3"));
+    check(&fx);
+}
+
 fn classified(cands: &Value) -> BTreeSet<(String, String, String)> {
     cands
         .as_array()
