@@ -1,0 +1,197 @@
+name: Release extras
+
+# P2-REL-01: called by release.yml (dist `global-artifacts-jobs`) after every local build and
+# before anything is hosted. If a job here fails, nothing is released.
+#
+# * SBOM: one CycloneDX 1.5 document per target (packaging/sbom.py, stdlib Python over
+#   `cargo metadata`), and the Scoop manifest `scull.json` (packaging/scoop.py) from the Windows
+#   archive's checksum. Both, with .sha256 files, are attached to the GitHub release
+#   (artifact `artifacts-release-extras`; host uploads every `artifacts-*`).
+# * Signature checks and macOS notarization, each skipped with a notice when its secrets are
+#   absent: with CODESIGN_* set, the macOS binaries must carry a valid Developer ID signature
+#   with the hardened runtime and a secure timestamp; with APPLE_API_* also set, they are
+#   notarized (`xcrun notarytool`, App Store Connect API key) and a rejection fails the
+#   release. With SSLDOTCOM_* set, scull.exe must have a valid Authenticode signature.
+#   Notarization does not change the binary, so the archives and their checksums stay valid.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sbom-and-scoop:
+    name: SBOM and Scoop manifest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Fetch the local build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-build-local-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Version
+        id: v
+        run: |
+          version=$(jq -r '.releases[] | select(.app_name == "scull-cli") | .app_version' <<< "$PLAN")
+          [ -n "$version" ] || { echo "no scull-cli release in the plan"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: CycloneDX SBOM per target
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python3 packaging/sbom.py --all-targets --out-dir extras
+      - name: Scoop manifest
+        run: python3 packaging/scoop.py --version "${{ steps.v.outputs.version }}" --distrib target/distrib --out extras/scull.json
+      - name: Checksums
+        working-directory: extras
+        run: |
+          for f in *; do sha256sum "$f" > "$f.sha256"; done
+          cat ./*.sha256
+      - name: Attach to the release
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-release-extras
+          path: extras/*
+
+  signing-status:
+    name: Signing status
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.s.outputs.macos }}
+      notarize: ${{ steps.s.outputs.notarize }}
+      windows: ${{ steps.s.outputs.windows }}
+    env:
+      CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+      CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+      CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+      SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+      SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+      SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+    steps:
+      - id: s
+        shell: bash
+        run: |
+          set -euo pipefail
+          all() { for v in "$@"; do [ -n "${!v:-}" ] || return 1; done; }
+          if all CODESIGN_IDENTITY CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+            if all APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; then
+              echo "notarize=true" >> "$GITHUB_OUTPUT"
+              echo "::notice title=macOS::signed with Developer ID; notarization runs next."
+            else
+              echo "notarize=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=macOS notarization skipped::APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER are not all set; the macOS binaries are signed but NOT notarized."
+            fi
+          else
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=macOS signing and notarization skipped::CODESIGN_* secrets are not set; the macOS binaries are NOT signed or notarized."
+          fi
+          if all SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Windows::Authenticode signature check runs next."
+          else
+            echo "windows=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Windows signing skipped::SSLDOTCOM_* secrets are not set; scull.exe is NOT signed."
+          fi
+
+  macos:
+    name: macOS signature and notarization
+    needs: signing-status
+    if: needs.signing-status.outputs.macos == 'true'
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      NOTARIZE: ${{ needs.signing-status.outputs.notarize }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+    steps:
+      - name: Fetch the macOS archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-build-local-*apple-darwin*
+          path: dist/
+          merge-multiple: true
+      - name: Verify the signatures, then notarize
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey.p8"
+          if [ "$NOTARIZE" = "true" ]; then
+            printf '%s' "$APPLE_API_KEY" > "$key"
+            chmod 600 "$key"
+          fi
+          trap 'rm -f "$key"' EXIT
+          shopt -s nullglob
+          archives=(dist/scull-cli-*-apple-darwin.tar.gz)
+          [ ${#archives[@]} -gt 0 ] || { echo "no macOS archives found"; exit 1; }
+          for archive in "${archives[@]}"; do
+            name=$(basename "$archive" .tar.gz)
+            work="$RUNNER_TEMP/$name"
+            mkdir -p "$work"
+            tar xzf "$archive" -C "$work"
+            bin="$work/$name/scull"
+            echo "== $name"
+            codesign --verify --strict --verbose=2 "$bin"
+            info=$(codesign -dvvv "$bin" 2>&1)
+            echo "$info" | grep -E '^(Authority|TeamIdentifier|Timestamp|CodeDirectory)'
+            grep -q '^Authority=Developer ID Application' <<< "$info" || { echo "::error::$name is not signed with a Developer ID Application certificate"; exit 1; }
+            grep -q 'flags=.*runtime' <<< "$info" || { echo "::error::$name lacks the hardened runtime (needed for notarization)"; exit 1; }
+            grep -q '^Timestamp=' <<< "$info" || { echo "::error::$name has no secure timestamp (needed for notarization)"; exit 1; }
+            if [ "$NOTARIZE" = "true" ]; then
+              ditto -c -k --keepParent "$bin" "$work/scull.zip"
+              out=$(xcrun notarytool submit "$work/scull.zip" --key "$key" --key-id "$APPLE_API_KEY_ID" \
+                --issuer "$APPLE_API_ISSUER" --wait --timeout 30m --output-format json)
+              echo "$out"
+              id=$(jq -r '.id' <<< "$out")
+              status=$(jq -r '.status' <<< "$out")
+              if [ "$status" != "Accepted" ]; then
+                xcrun notarytool log "$id" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+                echo "::error::notarization of $name: $status"
+                exit 1
+              fi
+              # A bare executable cannot be stapled; Gatekeeper looks the ticket up online.
+              echo "::notice title=Notarized::$name ($id)"
+            fi
+          done
+
+  windows:
+    name: Windows Authenticode check
+    needs: signing-status
+    if: needs.signing-status.outputs.windows == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Fetch the Windows archive
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-build-local-*windows*
+          path: dist/
+          merge-multiple: true
+      - name: scull.exe has a valid Authenticode signature
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/scull-cli-*-windows-msvc.zip | Select-Object -First 1
+          if (-not $zip) { throw "no Windows archive found" }
+          Expand-Archive $zip.FullName -DestinationPath "$env:RUNNER_TEMP/win" -Force
+          $sig = Get-AuthenticodeSignature "$env:RUNNER_TEMP/win/scull.exe"
+          $sig | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($sig.Status -ne 'Valid') { throw "scull.exe signature: $($sig.Status)" }
+          if (-not $sig.TimeStamperCertificate) { throw "scull.exe signature has no timestamp" }
