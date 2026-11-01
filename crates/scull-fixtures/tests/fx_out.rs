@@ -8,7 +8,7 @@
 //!   scan validates against `schemas/v1/plan.schema.json`.
 //! * **FX-OUT-02**: the documented exit-code table (`docs/user/CLI.md`, CLI-05) is exactly `scull_core::ExitCode`,
 //!   and the binary returns the documented code for each condition: 0, 1, 2, 3, 4, 5, 6 (the
-//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (Unix).
+//!   last three through `scull clean`, with I-4 on the CLI's own audit) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 //!
 //! `scull clean`, `history` and `restore` run on fixture trees only, against items the fixture
 //! created; the audited operation is checked against the disk (I-4).
@@ -672,8 +672,12 @@ impl Mcp {
 
     /// `scull <args>` (e.g. `mcp serve --allow-destructive`), initialized.
     fn start_with(cli: &Cli, args: &[&str]) -> Self {
-        let mut child = cli
-            .command(args)
+        Self::start_command(cli.command(args))
+    }
+
+    /// `command` (a `scull mcp serve`), initialized.
+    fn start_command(mut command: Command) -> Self {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -766,7 +770,7 @@ fn expect(
 
 /// FX-OUT-02 (end to end): every documented exit condition returns the documented code,
 /// from the real binary: 0, 1, 2 (usage and config), 3 (an item skipped during `scull clean`),
-/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and, on Unix, 130 (SIGINT).
+/// 4 (a replayed plan), 5 (policy), 6 (execution lock held) and 130 (SIGINT on Unix, a console Ctrl-Break on Windows).
 #[test]
 fn fx_out_02_binary_returns_the_documented_exit_codes() {
     let fx = tree(false);
@@ -861,6 +865,16 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
             .or_default()
             .push("SIGINT to scull mcp serve (after the MCP handshake)".into());
     }
+    // 130 on Windows: a real console interrupt (Ctrl-Break: Ctrl-C can't be aimed at one
+    // child, see scull_platform::console) to `scull mcp serve`, started with a console and
+    // process group of its own, sent by a helper process (`fx_out_02_ctrl_c_sender`).
+    #[cfg(windows)]
+    {
+        windows_ctrl_c_exits_130(&fx);
+        seen.entry(130)
+            .or_default()
+            .push("console Ctrl-Break to scull mcp serve (after the MCP handshake)".into());
+    }
     println!("--- exit codes observed (docs/user/CLI.md) ---");
     for (n, meaning) in &doc {
         match seen.get(n) {
@@ -873,15 +887,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         .copied()
         .filter(|n| !seen.contains_key(n))
         .collect();
-    let allowed: BTreeSet<i32> = if cfg!(unix) {
-        BTreeSet::new()
-    } else {
-        [130].into()
-    };
-    assert!(
-        unreached.is_subset(&allowed),
-        "codes not exercised: {unreached:?}"
-    );
+    assert!(unreached.is_empty(), "codes not exercised: {unreached:?}");
     check(&fx);
     // I-4 on the partly failed operation, from the CLI's own database.
     let store =
@@ -1176,4 +1182,98 @@ fn fx_out_03_cli_and_mcp_give_identical_classifications() {
         .collect();
     assert_eq!(via_mcp_candidates, actionable);
     check(&fx);
+}
+
+/// Environment variable carrying the process ID the Ctrl-C sender targets.
+#[cfg(windows)]
+const CTRL_C_PID_ENV: &str = "SCULL_TEST_CTRL_C_PID";
+
+/// Helper process for [`windows_ctrl_c_exits_130`] (run by it, not directly): delivers a
+/// console interrupt (Ctrl-Break) to the process group in `SCULL_TEST_CTRL_C_PID`, giving up
+/// its own console.
+#[cfg(windows)]
+#[test]
+#[ignore = "helper process for fx_out_02 (run by it, not directly)"]
+fn fx_out_02_ctrl_c_sender() {
+    let Some(pid) = std::env::var(CTRL_C_PID_ENV)
+        .ok()
+        .and_then(|p| p.parse().ok())
+    else {
+        return;
+    };
+    scull_platform::console::send_ctrl_break(pid).expect("send Ctrl-Break");
+}
+
+/// FX-OUT-02 on Windows: `scull mcp serve`, after the MCP handshake, gets a real console
+/// interrupt and exits 130 promptly (CLI-05), with stdin still open. It never changed anything
+/// (the caller checks the invariants). The interrupt is Ctrl-Break, which reaches scull's
+/// Ctrl-C handler (`ctrlc` handles both); `CTRL_C_EVENT` can't be aimed at one process and
+/// stays ignored below a CI job (see `scull_platform::console`).
+#[cfg(windows)]
+fn windows_ctrl_c_exits_130(fx: &Fixture) {
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let mcp = mcp_cli(&[fx.root()]);
+    let mut command = mcp.command(&["mcp", "serve"]);
+    command.creation_flags(scull_platform::console::TARGET_CREATION_FLAGS);
+    let mut m = Mcp::start_command(command);
+    let pid = m.child.id();
+    let send = || {
+        let sender = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fx_out_02_ctrl_c_sender",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CTRL_C_PID_ENV, pid.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            sender.status.success(),
+            "interrupt sender failed: {}\n{}",
+            String::from_utf8_lossy(&sender.stdout),
+            String::from_utf8_lossy(&sender.stderr)
+        );
+    };
+    let exited_within = |m: &mut Mcp, secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            if let Some(status) = m.child.try_wait().unwrap() {
+                return Some(status);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    send();
+    // Prompt: well within a few seconds, while stdin is still open.
+    let Some(status) = exited_within(&mut m, 15) else {
+        // Tell "never received" from "received but stuck": a second interrupt makes scull exit
+        // at once (cancel.rs) if the first one arrived.
+        send();
+        let second = exited_within(&mut m, 10);
+        if second.is_none() {
+            let _ = m.child.kill();
+        }
+        let mut err = String::new();
+        if let Some(mut e) = m.child.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+        }
+        panic!(
+            "scull mcp serve did not exit within 15 s of a console interrupt; after a second \
+             one: {second:?}\nstderr:\n{err}"
+        );
+    };
+    drop(m.child.stdin.take());
+    assert_eq!(
+        status.code(),
+        Some(ExitCode::Cancelled.as_i32()),
+        "{status:?}"
+    );
 }
