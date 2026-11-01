@@ -31,4 +31,5 @@ scull-fixtures.workspace = true
 scull-platform.workspace = true
 scull-safety.workspace = true
 scull-proactive.workspace = true
+scull-storage.workspace = true
 tempfile = "3"

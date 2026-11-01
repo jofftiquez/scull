@@ -65,7 +65,7 @@ mod views;
 
 pub use allowlist::{Allowlist, MAX_PATH_ARG_BYTES, Refusal, Root, path_from_file_uri};
 pub use escape::{Suspicion, TRUNCATION_MARKER, escape, needs_escape, suspicion};
-pub use local::{LocalResult, ToolSpec, read_only_tool_names};
+pub use local::{IN_PROCESS_PLAN_TOOL_NAMES, LocalResult, ToolSpec, read_only_tool_names};
 pub use plan_tools::{
     CleanupRunner, CleanupStatusOutput, ExecuteOutput, ItemOutcomeView, MAX_PLAN_ITEMS,
     OperationView, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanIdArgs, PlanItemView, PlanLimits,

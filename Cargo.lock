@@ -1481,6 +1481,7 @@ dependencies = [
  "scull-platform",
  "scull-proactive",
  "scull-safety",
+ "scull-storage",
  "serde",
  "serde_json",
  "tempfile",
