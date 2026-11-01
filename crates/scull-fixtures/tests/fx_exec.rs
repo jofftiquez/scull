@@ -277,10 +277,13 @@ fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
     let staged = deny_removal(&locked_dir);
     fx.checkpoint().unwrap();
     if !staged {
-        println!("SKIP: permission denied can't be staged for this user");
         allow_removal(&locked_dir);
         fx.check_invariants(&InvariantInputs::new().allow("p3"))
             .assert_ok();
+        scull_fixtures::skip::skip(
+            "fx_exec_14",
+            "permission denied can't be staged for this user (root)",
+        );
         return;
     }
 

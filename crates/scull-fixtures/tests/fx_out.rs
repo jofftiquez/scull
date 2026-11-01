@@ -33,11 +33,14 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+/// Whether Git is installed; without it the worktree parts of FX-OUT-01/03 are skipped (a
+/// failure in CI, see `scull_fixtures::skip`).
 fn git_available() -> bool {
-    Command::new("git")
+    let ok = Command::new("git")
         .arg("--version")
         .output()
-        .is_ok_and(|o| o.status.success())
+        .is_ok_and(|o| o.status.success());
+    scull_fixtures::skip::require(ok, "fx_out", "git is not installed: worktree parts skipped")
 }
 
 fn check(fx: &Fixture) -> InvariantReport {
@@ -649,6 +652,14 @@ fn skip_if_elevated(test: &str, m: &mut Mcp) -> bool {
             !tools.contains(&"prepare_cleanup"),
             "an elevated scull must not offer prepare_cleanup (SAFE-14): {tools:?}"
         );
+        if cfg!(unix) {
+            // Linux and macOS CI never run as root: a skip there is a failure (Windows CI runs
+            // this elevated on purpose and once more as a standard user).
+            scull_fixtures::skip::skip(
+                test,
+                "running as root, so scull mcp serves read-only tools",
+            );
+        }
         eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
         return true;
     }

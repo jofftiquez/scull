@@ -1054,9 +1054,13 @@ fn fx_qc_05_remove_orphaned_flag_through_the_binary() {
                 serde_json::json!(["pnpm"]),
                 "{v:#}"
             );
-            println!(
-                "NOTE: the pnpm store is not removable here (activity not observable): {}",
-                tool(&v, "skipped", "pnpm").unwrap()
+            // The removal half below only runs where activity is observable: a failure in CI.
+            scull_fixtures::skip::skip(
+                "fx_qc_05_remove_orphaned_flag_through_the_binary",
+                &format!(
+                    "the pnpm store is not removable here (activity not observable): {}",
+                    tool(&v, "skipped", "pnpm").unwrap()
+                ),
             );
         }
     }
