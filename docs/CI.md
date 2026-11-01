@@ -38,3 +38,11 @@ python3 scripts/ci/platform_boundary.py
 
 The boundary check exempts the item right after a `#[cfg(test)]` attribute (found by brace
 counting), files under `tests/`/`benches/`, `[dev-dependencies]`, and `crates/scull-fixtures`.
+
+## Windows is advisory during the MVP push
+
+Provisional maintainer decision (Nov 1, 2026), revisit before v1.0: the `test (windows-latest)`
+job still runs on every push to `main`/`phase2`, nightly and on demand, but it is
+`continue-on-error`, so a Windows failure does not fail `CI ok` or block merges. Linux and macOS
+remain required. Windows failures are filed as issues and fixed outside the critical path.
+Pull requests continue to run Linux only.
