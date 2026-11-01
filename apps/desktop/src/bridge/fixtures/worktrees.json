@@ -1,0 +1,286 @@
+{
+  "cancelled": false,
+  "problems": [],
+  "roots": [
+    "/Users/ada/code"
+  ],
+  "signals_unavailable": [
+    {
+      "affected": 5,
+      "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+      "signal": "in_use"
+    },
+    {
+      "affected": 1,
+      "reason": "in-use detection unavailable; re-checked before execution",
+      "signal": "in use"
+    }
+  ],
+  "worktrees": [
+    {
+      "allocated": 335872,
+      "candidate": null,
+      "common_dir": "/Users/ada/code/app/.git",
+      "decision": {
+        "action": {
+          "type": "none"
+        },
+        "artifact_cleanup": "allowed",
+        "artifacts": [],
+        "evidence": [
+          {
+            "kind": "signal_unavailable",
+            "reason": "in-use detection unavailable; re-checked before execution",
+            "signal": "in use"
+          },
+          {
+            "kind": "last_modified",
+            "newest_unix": 1793467666,
+            "sampled": false
+          },
+          {
+            "kind": "signal_unavailable",
+            "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+            "signal": "in_use"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "protected_root",
+            "message": "main working tree of the repository: only linked worktrees are removable",
+            "tier": "S3"
+          },
+          {
+            "code": "signal_unavailable",
+            "message": "in use unknown (in-use detection unavailable; re-checked before execution): assumed the protective answer",
+            "tier": "S2"
+          }
+        ],
+        "tier": "S3",
+        "unique_ignored": []
+      },
+      "inside_roots": true,
+      "kind": "main",
+      "path": "/Users/ada/code/app",
+      "state": {
+        "activity": {
+          "status": "known",
+          "value": {
+            "complete": true,
+            "entries_sampled": 76,
+            "newest_path": null,
+            "newest_unix": 1793467666
+          }
+        },
+        "git_dir": "/Users/ada/code/app/.git",
+        "head": {
+          "status": "known",
+          "value": {
+            "kind": "branch",
+            "name": "refs/heads/main",
+            "oid": "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+          }
+        },
+        "head_reachability": {
+          "status": "known",
+          "value": {
+            "kind": "reachable_from",
+            "refs": [
+              "refs/heads/main"
+            ],
+            "total": 1
+          }
+        },
+        "ignored": {
+          "status": "known",
+          "value": {
+            "paths": [
+              "target/"
+            ],
+            "total": 1,
+            "truncated": false
+          }
+        },
+        "kind": "main",
+        "lock": {
+          "state": "unlocked"
+        },
+        "merge": {
+          "method": "unknown",
+          "reason": "no default branch ref found (remote HEAD, main or master)"
+        },
+        "missing": false,
+        "name": null,
+        "path": "/Users/ada/code/app",
+        "repo": {
+          "bare": false,
+          "common_dir": "/Users/ada/code/app/.git",
+          "main_worktree": "/Users/ada/code/app"
+        },
+        "submodules": {
+          "status": "known",
+          "value": []
+        },
+        "tracked_changes": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "unpushed": {
+          "status": "known",
+          "value": {
+            "count": 1,
+            "oids": [
+              "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+            ],
+            "truncated": false
+          }
+        },
+        "untracked": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "upstream": {
+          "status": "known",
+          "value": null
+        }
+      }
+    },
+    {
+      "allocated": 28672,
+      "candidate": "2ddac7be4af44614fe2386a73265bc79",
+      "common_dir": "/Users/ada/code/app/.git",
+      "decision": {
+        "action": {
+          "type": "quarantine"
+        },
+        "artifact_cleanup": "allowed",
+        "artifacts": [],
+        "evidence": [
+          {
+            "kind": "signal_unavailable",
+            "reason": "in-use detection unavailable; re-checked before execution",
+            "signal": "in use"
+          },
+          {
+            "kind": "last_modified",
+            "newest_unix": 1793467666,
+            "sampled": false
+          },
+          {
+            "kind": "signal_unavailable",
+            "reason": "open-file, process working directory and tool-lock checks are not available in this build yet (P1-SAFE-02, #49); every candidate is treated as possibly in use (at least S2)",
+            "signal": "in_use"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "signal_unavailable",
+            "message": "in use unknown (in-use detection unavailable; re-checked before execution): assumed the protective answer",
+            "tier": "S2"
+          }
+        ],
+        "tier": "S2",
+        "unique_ignored": []
+      },
+      "inside_roots": true,
+      "kind": "linked",
+      "path": "/Users/ada/code/app-agent-1",
+      "state": {
+        "activity": {
+          "status": "known",
+          "value": {
+            "complete": true,
+            "entries_sampled": 6,
+            "newest_path": null,
+            "newest_unix": 1793467666
+          }
+        },
+        "git_dir": "/Users/ada/code/app/.git/worktrees/app-agent-1",
+        "head": {
+          "status": "known",
+          "value": {
+            "kind": "branch",
+            "name": "refs/heads/agent-1",
+            "oid": "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+          }
+        },
+        "head_reachability": {
+          "status": "known",
+          "value": {
+            "kind": "reachable_from",
+            "refs": [
+              "refs/heads/agent-1"
+            ],
+            "total": 1
+          }
+        },
+        "ignored": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "kind": "linked",
+        "lock": {
+          "state": "unlocked"
+        },
+        "merge": {
+          "default_ref": "refs/heads/main",
+          "method": "ancestor_of_default"
+        },
+        "missing": false,
+        "name": "app-agent-1",
+        "path": "/Users/ada/code/app-agent-1",
+        "repo": {
+          "bare": false,
+          "common_dir": "/Users/ada/code/app/.git",
+          "main_worktree": "/Users/ada/code/app"
+        },
+        "submodules": {
+          "status": "known",
+          "value": []
+        },
+        "tracked_changes": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "unpushed": {
+          "status": "known",
+          "value": {
+            "count": 1,
+            "oids": [
+              "1e807b4398cf424e15a3f1c9e1e5cdb11015ff36"
+            ],
+            "truncated": false
+          }
+        },
+        "untracked": {
+          "status": "known",
+          "value": {
+            "paths": [],
+            "total": 0,
+            "truncated": false
+          }
+        },
+        "upstream": {
+          "status": "known",
+          "value": null
+        }
+      }
+    }
+  ]
+}

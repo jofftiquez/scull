@@ -225,7 +225,8 @@ fn disclose_once(state: &Path) {
     mark_disclosed(state);
 }
 
-fn mark_disclosed(state: &Path) {
+/// Remember that the disclosure was shown (also used by `scull agent install`).
+pub(crate) fn mark_disclosed(state: &Path) {
     if scull_platform::create_dir_owner_only(state).is_ok() {
         let _ = replace_owner_only(
             &state.join(DISCLOSURE_MARKER),

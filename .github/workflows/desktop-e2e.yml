@@ -1,0 +1,48 @@
+name: Desktop E2E
+
+# Playwright flows of the desktop app (P3-E2E-01; apps/desktop/e2e), Linux only, in the same
+# container as `apps/desktop/e2e/run.sh` runs locally. The app runs on the mock bridge in the
+# browser: no Tauri, nothing on disk changes, and requests outside the app's origin are aborted.
+on:
+  pull_request:
+    paths: ["apps/desktop/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/desktop-e2e.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: desktop e2e (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      # Keep in step with @playwright/test in apps/desktop/package.json (run.sh checks locally).
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --ipc=host
+    env:
+      HOME: /root
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+      - run: pnpm install --frozen-lockfile
+      - name: build, serve and run the flows
+        working-directory: apps/desktop
+        run: bash e2e/in-container.sh preview
+      - name: report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e
+          path: |
+            apps/desktop/e2e/report
+            apps/desktop/e2e/results
+            apps/desktop/e2e/shots
+          retention-days: 14
+          if-no-files-found: ignore

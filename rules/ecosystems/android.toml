@@ -1,0 +1,74 @@
+# Android rules. Format: rules/README.md.
+# The Gradle caches are package caches (`scull_detectors::caches`, `gradle.caches`); the project
+# `.gradle/` folder and plain JVM `build/` folders are `jvm.toml` rules.
+#
+# Rust detectors in `scull_detectors::android` add to these rules, never loosen them:
+# * `android.build`: release outputs (`outputs/apk/release`, `outputs/bundle/release`) make it
+#   S1 (a signed release build needs the signing key to rebuild); R8/ProGuard mapping files
+#   (`outputs/mapping/`), needed to deobfuscate crash reports from that release, make it S2;
+# * `android.avd`: the folder must sit in an `avd` folder (`~/.android/avd`, `ANDROID_AVD_HOME`).
+#
+# An emulator (AVD) holds the apps and data installed in it: S2 (quarantined, restorable).
+
+schema_version = 1
+
+[[rule]]
+id = "android.build"
+version = 1
+artifact = "Android Gradle build output"
+ecosystem = "android"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["build"]
+
+[rule.markers]
+# A Gradle build script beside it, and the Android Gradle Plugin's `intermediates/` inside.
+all = ["../{build.gradle,build.gradle.kts}", "intermediates"]
+
+[rule.exclude]
+# Another build system beside it may write `build/` too: ownership is ambiguous (FX-CLS-10).
+markers = [
+  "../{CMakeLists.txt,meson.build,package.json,setup.py,pyproject.toml,Makefile}",
+]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["gradle", "gradlew", "java", "studio", "aapt2"]
+
+[rule.regeneration]
+instructions = "Run `./gradlew assembleDebug` (or build in Android Studio) to rebuild."
+network = false
+long_build = false
+
+[[rule]]
+id = "android.avd"
+version = 1
+artifact = "Android emulator (AVD)"
+ecosystem = "android"
+category = "other"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S2"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["*.avd"]
+
+[rule.markers]
+# The device configuration and the emulator's disk images or state files inside.
+all = ["config.ini"]
+any = ["userdata-qemu.img", "userdata.img", "hardware-qemu.ini", "emulator-user.ini"]
+
+[rule.activity]
+processes = ["emulator", "qemu-system-x86_64", "qemu-system-aarch64"]
+lock_files = ["multiinstance.lock", "hardware-qemu.ini.lock"]
+
+[rule.regeneration]
+instructions = "Create a new emulator in Android Studio (Device Manager) or with `avdmanager create avd`; apps and data installed in this one are lost."
+network = true
+long_build = false

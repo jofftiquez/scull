@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "BridgeKind": {
+      "description": "Which bridge implementation answered.",
+      "oneOf": [
+        {
+          "const": "tauri",
+          "description": "The Tauri app (this crate).",
+          "type": "string"
+        },
+        {
+          "const": "mock",
+          "description": "The frontend's in-browser mock.",
+          "type": "string"
+        }
+      ]
+    },
+    "Os": {
+      "description": "Operating system family.",
+      "oneOf": [
+        {
+          "const": "macos",
+          "description": "macOS.",
+          "type": "string"
+        },
+        {
+          "const": "windows",
+          "description": "Windows.",
+          "type": "string"
+        },
+        {
+          "const": "linux",
+          "description": "Linux.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "scull-desktop/app-info.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Which bridge answers, and about what (`app_info` command).",
+  "properties": {
+    "bridge": {
+      "$ref": "#/$defs/BridgeKind",
+      "description": "Always `tauri` from this crate; the frontend's mock answers `mock`."
+    },
+    "os": {
+      "$ref": "#/$defs/Os",
+      "description": "Operating system the core runs on."
+    },
+    "version": {
+      "description": "scull version of the core.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "bridge",
+    "os"
+  ],
+  "title": "AppInfo",
+  "type": "object"
+}

@@ -531,3 +531,51 @@ fn items_require_a_recorded_scan() {
     let mut s = open(&db_in(&dir));
     assert!(s.upsert_items(&scan_id(7), T0, &candidates()).is_err());
 }
+
+/// `open_read_only` (desktop History, SAFE-10) reads a current database, refuses every write,
+/// and never creates, migrates or changes a file.
+#[test]
+fn open_read_only_reads_but_never_writes_or_creates() {
+    use scull_storage::StoreOptions;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scull.db");
+    let opts = StoreOptions::default();
+
+    // Missing: refused, nothing created.
+    let e = Store::open_read_only(&path, &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::NotFound);
+    assert!(!path.exists());
+    // A folder at the path: refused.
+    std::fs::create_dir(dir.path().join("dir.db")).unwrap();
+    let e = Store::open_read_only(&dir.path().join("dir.db"), &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::Config);
+
+    // A current database with one plan.
+    let mut store = Store::open(&path, &TestPerms::default()).unwrap();
+    let plan = plan(1);
+    store.insert_plan(&plan).unwrap();
+    drop(store);
+    let before = std::fs::read(&path).unwrap();
+
+    let ro = Store::open_read_only(&path, &opts).unwrap();
+    assert_eq!(ro.get_plan(plan.id()).unwrap().unwrap().id(), plan.id());
+    assert!(ro.operations(0).unwrap().is_empty());
+    assert!(ro.backups_taken().is_empty());
+    // Every write is refused by SQLite.
+    let mut ro = ro;
+    assert!(ro.insert_plan(&plan_with_items(2, 1)).is_err());
+    drop(ro);
+    assert_eq!(std::fs::read(&path).unwrap(), before, "byte-identical");
+
+    // An older schema is not migrated.
+    let old = dir.path().join("old.db");
+    std::fs::copy(&path, &old).unwrap();
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.pragma_update(None, "user_version", 1).unwrap();
+    }
+    let old_bytes = std::fs::read(&old).unwrap();
+    let e = Store::open_read_only(&old, &opts).unwrap_err();
+    assert_eq!(rejected_kind(e), ErrorKind::Config);
+    assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
+}

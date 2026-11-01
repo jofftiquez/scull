@@ -71,6 +71,75 @@ impl Store {
         Self::open_inner(path, perms, options, MIGRATIONS)
     }
 
+    /// Open an existing database **read-only**, for viewers that must never change it (the
+    /// desktop History screen, SAFE-10).
+    ///
+    /// The connection is opened with `SQLITE_OPEN_READ_ONLY` and `query_only` on: no file or
+    /// folder is created, no permission is changed, nothing is migrated or written (SQLite may
+    /// still create the WAL index sidecar a reader needs). The file must be a regular file
+    /// holding a scull database at exactly this build's schema version; otherwise it is
+    /// refused and left untouched: missing → [`ErrorKind::NotFound`]; a link or not a regular
+    /// file, or an older schema (pending migration) → [`ErrorKind::Config`]; newer →
+    /// [`StoreError::SchemaTooNew`]; another application's → [`StoreError::NotScullDatabase`];
+    /// damaged → [`StoreError::Corrupt`].
+    pub fn open_read_only(path: &Path, options: &StoreOptions) -> Result<Store> {
+        let known = u32::try_from(MIGRATIONS.len()).unwrap_or(u32::MAX);
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.is_file() => {}
+            Ok(_) => {
+                return Err(StoreError::rejected(
+                    ErrorKind::Config,
+                    format!(
+                        "{} is not a regular file; refusing to read it",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StoreError::rejected(
+                    ErrorKind::NotFound,
+                    format!("no database at {}", path.display()),
+                ));
+            }
+            Err(e) => return Err(StoreError::io(path, e)),
+        }
+        let cls = |e: StoreError| classify(path, e);
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(StoreError::from)
+        .map_err(cls)?;
+        check_compatible(&conn, path, known).map_err(cls)?;
+        let version = user_version(&conn).map_err(StoreError::from).map_err(cls)?;
+        if version != known {
+            return Err(StoreError::rejected(
+                ErrorKind::Config,
+                format!(
+                    "{} has schema version {version} (this build reads {known}); it is migrated \
+                     the next time scull opens it for writing",
+                    path.display()
+                ),
+            ));
+        }
+        (|| -> rusqlite::Result<()> {
+            conn.busy_timeout(options.busy_timeout)?;
+            conn.pragma_update(None, "query_only", true)?;
+            conn.pragma_update(None, "trusted_schema", false)?;
+            conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
+                r.get::<_, i64>(0)
+            })?;
+            Ok(())
+        })()
+        .map_err(StoreError::from)
+        .map_err(cls)?;
+        Ok(Store {
+            conn,
+            path: path.to_owned(),
+            backups_taken: Vec::new(),
+        })
+    }
+
     pub(crate) fn open_inner(
         path: &Path,
         perms: &dyn OwnerOnly,

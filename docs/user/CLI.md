@@ -560,9 +560,9 @@ until then." One confirmation covers all tools; no elevated confirmation is need
 |---|---|
 | `--confirm` | Run the commands without asking |
 | `--dry-run` | Only show what would run; never ask |
-| `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune. pnpm is never wiped. |
-| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`) |
-| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several |
+| `--wipe` | Wipe caches fully instead of pruning, where the tool has a prune (npm, uv). pnpm and conda are never wiped. |
+| `--untick TOOL` | Leave this tool alone; repeat for several (`npm`, `pnpm`, `bun`, `yarn`, `yarn-classic`, `yarn-berry`, `pip`, `uv`, `conda`, `go`, `go-build`, `go-mod`, `nuget`) |
+| `--remove-orphaned TOOL` | Also remove this uninstalled tool's orphaned cache folder, if the preview lists it (not undoable); repeat for several. Never offered for conda's `pkgs/` or the Go module cache. |
 | `--allow-root` | Allow running as root or Administrator |
 
 Before each tool runs, scull checks again that its cache is the same folder, not a link, on
@@ -582,7 +582,8 @@ Not run (1):
 
 A cache whose tool is no longer installed can't be cleaned with the tool's command. If it is
 still a recognized package cache in its usual place, not a link, on the expected drive and not
-in use, the preview lists it under "Orphaned caches" with its size and the not-undoable note;
+in use, the preview lists it under "Orphaned caches" with its size and the not-undoable note
+(except conda's `pkgs/`: environments hard-link into it, so scull never deletes it itself);
 otherwise it is listed under "Not run" and left for you to remove. scull deletes an orphaned
 cache itself only after a confirmation **for that tool**: `--remove-orphaned TOOL` (with
 `--confirm` when there is no terminal), or answering `y` to its own question on a terminal.

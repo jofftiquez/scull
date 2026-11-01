@@ -141,16 +141,7 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
 /// Every not-yet-implemented command fails with exit 1 and names its tracking issue.
 #[test]
 fn stub_commands_exit_1_with_tracking_issue() {
-    let cases: &[(&[&str], &str)] = &[
-        (
-            &["worktrees", "register", ".", "--ttl", "7d"],
-            "(tracked in #111)",
-        ),
-        (&["check"], "(tracked in #114)"),
-        (&["insights"], "(tracked in #116)"),
-        (&["agent", "install", "codex"], "(tracked in #110)"),
-        (&["schedule", "enable"], "(tracked in #114)"),
-    ];
+    let cases: &[(&[&str], &str)] = &[(&["insights", "purge"], "(tracked in #266)")];
     for (args, want) in cases {
         let o = scull(args);
         assert_eq!(o.status.code(), Some(1), "{args:?}");
@@ -166,7 +157,7 @@ fn stub_commands_exit_1_with_tracking_issue() {
 fn stub_errors_are_json_on_stderr_in_machine_modes() {
     let validator = error_schema_validator();
     for mode in ["--json", "--ndjson"] {
-        let o = scull(&["check", mode]);
+        let o = scull(&["insights", "purge", mode]);
         assert_eq!(o.status.code(), Some(1), "{mode}");
         assert!(o.stdout.is_empty(), "{mode}: no partial document on stdout");
         let err = stderr(&o);
@@ -177,7 +168,7 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
         assert_eq!(v["error"]["kind"], "unsupported_platform");
         assert_eq!(
             v["error"]["message"],
-            "`scull check` is not implemented yet (tracked in #114)"
+            "`scull insights purge` is not implemented yet (tracked in #266)"
         );
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{mode}: {errors:?}");
@@ -186,29 +177,37 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
 
 #[test]
 fn quiet_still_reports_errors() {
-    let o = scull(&["check", "-q"]);
+    let o = scull(&["insights", "purge", "-q"]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("tracked in #114"));
+    assert!(stderr(&o).contains("tracked in #266"));
     // -q and -v are mutually exclusive.
-    assert_eq!(scull(&["check", "-q", "-v"]).status.code(), Some(2));
-    assert_eq!(scull(&["-q", "check", "-v"]).status.code(), Some(2));
+    assert_eq!(
+        scull(&["insights", "purge", "-q", "-v"]).status.code(),
+        Some(2)
+    );
+    assert_eq!(
+        scull(&["-q", "insights", "purge", "-v"]).status.code(),
+        Some(2)
+    );
 }
 
 #[test]
 fn color_never_and_no_color_produce_no_escapes() {
-    let o = scull(&["check", "--color", "never"]);
+    let o = scull(&["insights", "purge", "--color", "never"]);
     assert!(!stderr(&o).contains('\x1b'));
     let o = Command::new(env!("CARGO_BIN_EXE_scull"))
-        .args(["check"])
+        .args(["insights", "purge"])
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
         .output()
         .expect("run");
     assert!(!String::from_utf8_lossy(&o.stderr).contains('\x1b'));
-    let o = scull(&["check", "--color", "always"]);
+    let o = scull(&["insights", "purge", "--color", "always"]);
     assert!(stderr(&o).contains("\x1b["), "--color always forces color");
     assert_eq!(
-        scull(&["check", "--color", "rainbow"]).status.code(),
+        scull(&["insights", "purge", "--color", "rainbow"])
+            .status
+            .code(),
         Some(2)
     );
 }
@@ -256,7 +255,10 @@ fn committed_error_schema_validates_real_output() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let validator = jsonschema::validator_for(&committed).expect("schema compiles");
-    for args in [&["check", "--json"][..], &["frob", "--ndjson"][..]] {
+    for args in [
+        &["insights", "purge", "--json"][..],
+        &["frob", "--ndjson"][..],
+    ] {
         let o = scull(args);
         let v: Value = serde_json::from_str(&stderr(&o)).expect("JSON error");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();

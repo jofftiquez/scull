@@ -42,6 +42,8 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: scull-cli has no Tauri/webview crates (all targets)
         run: python3 packaging/check_inspect_only.py deps
+      - name: Self-test the inspect-only gate (consent and metadata-only rules)
+        run: python3 packaging/test_check_inspect_only.py
 
   platform-boundary:
     # P1-CI-03 / PLT-11: no OS APIs outside crates/scull-platform.

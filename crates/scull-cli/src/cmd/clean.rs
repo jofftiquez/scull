@@ -69,12 +69,12 @@ use scull_cleaner::measure::{
 };
 use scull_cleaner::{
     DEFAULT_RETENTION_SECS, ExecutionReport, ItemOutcome, ItemReport, PlanContext, RemoveOutcome,
-    Revalidation, Skip,
+    Revalidation, Skip, TOOL_NATIVE_UNSUPPORTED, is_quick_clean_tool,
 };
 use scull_core::{
-    Action, Candidate, ContentHash, DropReason, ErrorKind, Evidence, FsPath, ItemId, OperationId,
-    Plan, PlanId, PlanItem, PlanOrigin, PlanParams, RegenerationCost, Restorability, ScanId,
-    ScullError, Sizes, Tier, action_allowed_for, narrow,
+    Action, Candidate, Category, ContentHash, DropReason, ErrorKind, Evidence, FsPath, ItemId,
+    OperationId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, RegenerationCost, Restorability,
+    ScanId, ScullError, Sizes, Tier, action_allowed_for, narrow,
 };
 use scull_engine::{Engine, ScanReport, ScanRequest, SignalUnavailable, now_unix};
 use scull_scanner::ActionReclaim;
@@ -189,7 +189,8 @@ pub enum ExcludeReason {
     NoAction,
     /// A package cache: `scull clean caches` cleans it with its own tool.
     PackageCache,
-    /// An action this build's `scull clean` does not execute (Git worktree operations).
+    /// An action this build's `scull clean` does not execute (Git worktree operations,
+    /// tool-native ML removal such as `ollama rm`).
     NotSupported,
     /// S1: opt in with `--include-s1` or `--item`.
     OptInS1,
@@ -687,9 +688,21 @@ fn ineligible(c: &Candidate) -> Option<(ExcludeReason, String)> {
             ExcludeReason::NoAction,
             "no cleanup action at this tier (inspect only)".into(),
         )),
+        Action::ToolCommand { tool, .. }
+            if c.category == Category::PackageCache && is_quick_clean_tool(tool) =>
+        {
+            Some((
+                ExcludeReason::PackageCache,
+                format!("package cache: `scull clean caches` cleans it with {tool}'s own command"),
+            ))
+        }
+        // E.g. `ollama rm` for Ollama models (P4-DET-01): no trusted-tool runner allow-lists it.
         Action::ToolCommand { tool, .. } => Some((
-            ExcludeReason::PackageCache,
-            format!("package cache: `scull clean caches` cleans it with {tool}'s own command"),
+            ExcludeReason::NotSupported,
+            format!(
+                "{TOOL_NATIVE_UNSUPPORTED} (`{}` is never run by scull)",
+                escape_for_terminal(tool)
+            ),
         )),
         Action::Delete | Action::Quarantine
             if c.is_consistent() && action_allowed_for(c.tier, &c.action) =>
@@ -1870,6 +1883,71 @@ mod tests {
     fn utc_datetime_is_civil() {
         assert_eq!(utc_datetime(0), "1970-01-01 00:00 UTC");
         assert_eq!(utc_datetime(1_800_000_000), "2027-01-15 08:00 UTC");
+    }
+
+    fn tool_candidate(category: Category, rule: &str, action: Action) -> Candidate {
+        let identity = scull_core::FileIdentity::new(7, 1);
+        let path = "/home/u/.ollama/models";
+        Candidate {
+            id: ItemId::derive(identity, path.as_bytes()),
+            path: FsPath::from(path),
+            identity,
+            category,
+            artifact: "test".into(),
+            rule: scull_core::RuleRef {
+                id: rule.into(),
+                version: 1,
+            },
+            project: None,
+            tier: Tier::S1,
+            reasons: vec![scull_core::TierReason::new(
+                Tier::S1,
+                scull_core::ReasonCode::PackageCache,
+                "test",
+            )],
+            evidence: vec![],
+            sizes: Sizes::default(),
+            flags: scull_core::Flags::default(),
+            regeneration: scull_core::Regeneration::default(),
+            action,
+        }
+    }
+
+    /// A package cache points at `scull clean caches`; any other tool command (`ollama rm`
+    /// for Ollama models) is left out as not supported, with the reason, never planned.
+    #[test]
+    fn tool_commands_are_never_planned_and_ollama_says_why() {
+        let npm = tool_candidate(
+            Category::PackageCache,
+            "npm.cache",
+            Action::ToolCommand {
+                tool: "npm".into(),
+                args: vec!["cache".into(), "verify".into()],
+            },
+        );
+        let (reason, why) = ineligible(&npm).unwrap();
+        assert_eq!(reason, ExcludeReason::PackageCache);
+        assert!(why.contains("scull clean caches"), "{why}");
+
+        let ollama = tool_candidate(
+            Category::MlCache,
+            "ollama.models",
+            Action::ToolCommand {
+                tool: "ollama".into(),
+                args: vec!["rm".into(), "llama3:latest".into()],
+            },
+        );
+        let (reason, why) = ineligible(&ollama).unwrap();
+        assert_eq!(reason, ExcludeReason::NotSupported);
+        assert!(why.contains(TOOL_NATIVE_UNSUPPORTED), "{why}");
+        assert!(why.contains("`ollama`"), "{why}");
+        let cands = [ollama];
+        let sel = select(&cands, true, &[], Path::new("/")).unwrap();
+        assert!(sel.items.is_empty());
+        assert_eq!(sel.excluded.len(), 1);
+        let err = select(&cands, true, &[cands[0].id.to_string()], Path::new("/")).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::SafetyBlocked);
+        assert!(err.message.contains(TOOL_NATIVE_UNSUPPORTED), "{err}");
     }
 
     #[test]

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 32 32">
+  <!-- App icon source (D-21 logo on a paper tile). Regenerate icons:
+       pnpm tauri icon app-icon.svg -o src-tauri/icons -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#F7F5F2"/>
+  <g transform="translate(4 4) scale(0.75)" fill="none" stroke="#15121A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="5" y1="27" x2="27" y2="5"/>
+    <line x1="5" y1="5" x2="27" y2="27"/>
+    <line x1="3.5" y1="28.5" x2="7.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"/>
+    <line x1="28.5" y1="28.5" x2="24.5" y2="24.5" stroke-width="4.5" stroke="#D6268A"/>
+    <path d="M10 15a6 6 0 0 1 12 0v3l-2 2v2h-8v-2l-2-2z" fill="#FFFFFF"/>
+    <circle cx="13.6" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"/>
+    <circle cx="18.4" cy="15.4" r="1.4" fill="#7C4DFF" stroke="none"/>
+  </g>
+</svg>

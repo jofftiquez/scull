@@ -1,0 +1,82 @@
+# PENDING MAINTAINER DECISION #210: the MPL-2.0 exceptions below (Tauri's transitive deps). The
+# desktop must not be released until #210 is answered.
+#
+# cargo-deny for the desktop app workspace (apps/desktop/src-tauri is its own Cargo workspace).
+# Same policy as the root deny.toml, plus the exceptions Tauri 2 itself requires (below).
+#   cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml check
+# cargo-deny policy (P1-CI-02, D-2, T-54). Run: `cargo deny check`.
+# scull is MIT OR Apache-2.0 and must never ship copyleft code.
+
+[graph]
+all-features = true
+# Check what we ship on every OS, not just the host.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+# RustSec advisory DB (the same database cargo-audit uses).
+version = 2
+yanked = "deny"
+ignore = [
+  # proc-macro-error is unmaintained (no vulnerability). It is a build-time proc-macro reached
+  # only through Tauri's Linux GTK3 stack (glib-macros 0.18 <- gtk <- muda/wry <- tauri).
+  { id = "RUSTSEC-2024-0370", reason = "build-time proc-macro in Tauri's Linux GTK3 stack; unmaintained, not vulnerable" },
+]
+
+[licenses]
+version = 2
+# Permissive licenses only. Anything else (GPL, LGPL, AGPL, MPL, EUPL, SSPL, unlicensed) fails.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "BSL-1.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+# Our own crates are unpublished workspace members; they're covered by LICENSE-MIT/APACHE.
+private = { ignore = true }
+
+# MPL-2.0 crates that Tauri 2 (the PRD §18 desktop stack) depends on. MPL is file-level copyleft:
+# using these crates unmodified in an MIT/Apache app is compatible, and their sources stay
+# available on crates.io. None of them is in the root workspace (CLI, MCP). Flagged for the
+# maintainer in P3-APP-01 (pending decision #210); do not add to this list without a decision.
+#   * cssparser, cssparser-macros, dtoa-short, selectors: tauri-utils -> dom_query, used only
+#     inside the tauri-codegen proc-macro (build time; not linked into the app).
+#   * option-ext: dirs-sys -> dirs, linked at runtime (tauri, wry).
+exceptions = [
+  { crate = "cssparser", allow = ["MPL-2.0"] },         # build time only (tauri-codegen)
+  { crate = "cssparser-macros", allow = ["MPL-2.0"] },  # build time only (tauri-codegen)
+  { crate = "dtoa-short", allow = ["MPL-2.0"] },        # build time only (tauri-codegen)
+  { crate = "selectors", allow = ["MPL-2.0"] },         # build time only (tauri-codegen)
+  { crate = "option-ext", allow = ["MPL-2.0"] },        # linked at runtime (dirs-sys)
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  # Desktop/MCP must never pull in GUI runtimes through the CLI build (HANDOVER §8.1);
+  # enforced per-crate in P3. Placeholder for explicit bans.
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

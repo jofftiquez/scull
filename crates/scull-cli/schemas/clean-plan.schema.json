@@ -929,7 +929,7 @@
         },
         {
           "const": "not_supported",
-          "description": "An action this build's `scull clean` does not execute (Git worktree operations).",
+          "description": "An action this build's `scull clean` does not execute (Git worktree operations,\ntool-native ML removal such as `ollama rm`).",
           "type": "string"
         },
         {

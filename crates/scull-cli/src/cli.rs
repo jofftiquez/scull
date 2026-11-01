@@ -202,10 +202,14 @@ pub enum Command {
     },
 
     /// Light scan plus forecast and alerts (run by the OS scheduler).
-    Check,
+    Check(CheckArgs),
 
-    /// Local trends and insights.
+    /// Local trends and insights from scull's own history (read-only).
     Insights {
+        /// Start of the report window: a duration back from now (7d, 30d, 12w, 48h) or a UTC
+        /// date (2026-10-01). Default: 30 days.
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        since: Option<crate::cmd::insights::When>,
         /// Optional subcommand.
         #[command(subcommand)]
         action: Option<InsightsAction>,
@@ -270,6 +274,20 @@ pub struct ScanArgs {
     /// overlay (skipped by default, D-22; backup volumes are never scanned).
     #[arg(long)]
     pub allow_network_roots: bool,
+}
+
+/// Arguments for `scull check`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct CheckArgs {
+    /// Only sample free space and use recorded history: skip the scan of `scan.roots`
+    /// (staleness and ecosystem/path budgets need it and are not evaluated).
+    #[arg(long)]
+    pub no_scan: bool,
+
+    /// Also put S1 (costly to recreate) items in the ready-to-review cleanup plan; by default
+    /// it holds S0 items only (D-28). The plan is never executed by `check`.
+    #[arg(long)]
+    pub include_s1: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.
@@ -481,18 +499,19 @@ pub struct CleanCachesArgs {
     /// Run the commands without asking (otherwise only show them, or ask on a terminal).
     #[arg(long)]
     pub confirm: bool,
-    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm is never
-    /// wiped).
+    /// Wipe caches entirely instead of pruning (where the tool has a prune; pnpm and conda
+    /// are never wiped).
     #[arg(long)]
     pub wipe: bool,
     /// Leave this tool's cache alone; repeat for several (npm, pnpm, bun, yarn,
-    /// yarn-classic, yarn-berry).
+    /// yarn-classic, yarn-berry, pip, uv, conda, go, go-build, go-mod, nuget).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub untick: Vec<crate::cmd::clean_caches::Untick>,
     /// Also remove this uninstalled tool's orphaned cache folder, when the preview lists it as
     /// removable (D-36): scull deletes it itself, which is not undoable. Repeat for several.
     /// This is the per-tool confirmation; on a terminal, each orphaned cache not named here
-    /// is asked about separately.
+    /// is asked about separately. conda's `pkgs/` is never removed this way (environments
+    /// hard-link into it).
     #[arg(long, value_name = "TOOL", value_parser = crate::cmd::clean_caches::parse_tool)]
     pub remove_orphaned: Vec<crate::cmd::clean_caches::Untick>,
     /// Only show what would run; never ask or run.
@@ -518,29 +537,151 @@ pub enum RulesAction {
 /// `scull insights` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum InsightsAction {
-    /// Export recorded trends.
-    Export,
-    /// Delete recorded trends.
-    Purge,
+    /// Write the insights report to stdout as JSON or CSV (redirect it to a file to keep it).
+    Export {
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
+        /// Start of the report window (as for `scull insights --since`).
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        since: Option<crate::cmd::insights::When>,
+    },
+    /// Forget recorded trends (history rows only; scans, plans, audit and files are kept).
+    /// Refused in the inspect-only alpha (#266).
+    Purge {
+        /// Only delete history older than this: a duration (90d, 12w) or a UTC date.
+        #[arg(long, value_name = "WHEN", value_parser = crate::cmd::insights::parse_when)]
+        older_than: Option<crate::cmd::insights::When>,
+        /// Delete without asking (required without a terminal or with --json/--ndjson).
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+/// Formats for `scull insights export`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ExportFormat {
+    /// The `scull/insights@1` JSON document.
+    Json,
+    /// One tidy CSV table: section, period, subject, metric, value.
+    Csv,
 }
 
 /// `scull agent` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Write MCP config and guidance for an AI client.
-    Install {
-        /// Client name (e.g. claude-code, codex, cursor, vscode, gemini-cli).
-        client: String,
-    },
+    /// Register scull's read-only MCP server and short guidance with an AI client. Shows each
+    /// file's path and diff first and asks before writing (or `--yes`).
+    Install(AgentInstallArgs),
+    /// Remove scull's MCP entry and guidance from an AI client (nothing else is touched).
+    Uninstall(AgentUninstallArgs),
+}
+
+/// AI clients `scull agent` can configure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AgentClient {
+    /// Claude Code (`~/.claude.json`, guidance in `~/.claude/CLAUDE.md`).
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    /// OpenAI Codex CLI (`~/.codex/config.toml`, guidance in `~/.codex/AGENTS.md`).
+    Codex,
+    /// Cursor (`~/.cursor/mcp.json`).
+    Cursor,
+    /// Visual Studio Code (user `mcp.json`).
+    #[value(name = "vscode", alias = "code", alias = "vs-code")]
+    Vscode,
+    /// Gemini CLI (`~/.gemini/settings.json`, guidance in `~/.gemini/GEMINI.md`).
+    #[value(name = "gemini-cli", alias = "gemini")]
+    GeminiCli,
+}
+
+impl AgentClient {
+    /// The command-line id, e.g. `claude-code`.
+    pub fn id(self) -> &'static str {
+        match self {
+            AgentClient::ClaudeCode => "claude-code",
+            AgentClient::Codex => "codex",
+            AgentClient::Cursor => "cursor",
+            AgentClient::Vscode => "vscode",
+            AgentClient::GeminiCli => "gemini-cli",
+        }
+    }
+
+    /// The product name, e.g. `Claude Code`.
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentClient::ClaudeCode => "Claude Code",
+            AgentClient::Codex => "Codex",
+            AgentClient::Cursor => "Cursor",
+            AgentClient::Vscode => "VS Code",
+            AgentClient::GeminiCli => "Gemini CLI",
+        }
+    }
+}
+
+/// Arguments for `scull agent install`.
+#[derive(Debug, Args)]
+pub struct AgentInstallArgs {
+    /// The AI client.
+    #[arg(value_enum)]
+    pub client: AgentClient,
+    /// Apply without asking (after reviewing `--dry-run`).
+    #[arg(short, long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and diffs; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// The command the client runs (use a full path if the client does not inherit PATH).
+    #[arg(long, value_name = "PATH", default_value = "scull")]
+    pub command: String,
+}
+
+/// Arguments for `scull agent uninstall`.
+#[derive(Debug, Args)]
+pub struct AgentUninstallArgs {
+    /// The AI client.
+    #[arg(value_enum)]
+    pub client: AgentClient,
+    /// Apply without asking (after reviewing `--dry-run`).
+    #[arg(short, long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and diffs; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `scull schedule` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ScheduleAction {
-    /// Register periodic `scull check` runs.
-    Enable,
-    /// Remove periodic checks.
-    Disable,
+    /// Register periodic `scull check` runs (low priority, as you) with launchd, a systemd
+    /// user timer or Task Scheduler. Shows every file and command and asks first (or `--yes`).
+    Enable {
+        /// How often: e.g. `30m`, `6h`, `1d` (15 minutes to 7 days).
+        #[arg(long, value_name = "DURATION", default_value = "6h")]
+        every: String,
+        /// Consent flags.
+        #[command(flatten)]
+        consent: ConsentArgs,
+    },
+    /// Remove the periodic checks registered by `scull schedule enable`.
+    Disable {
+        /// Consent flags.
+        #[command(flatten)]
+        consent: ConsentArgs,
+    },
+    /// Show whether periodic checks are registered (read-only).
+    Status,
+}
+
+/// `--yes` / `--dry-run` for commands that change your system with consent.
+#[derive(Debug, Clone, Copy, Default, Args)]
+pub struct ConsentArgs {
+    /// Apply without asking (the files and commands are still printed first).
+    #[arg(long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and commands; change nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `scull data` subcommands.

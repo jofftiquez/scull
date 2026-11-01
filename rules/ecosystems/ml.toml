@@ -1,0 +1,156 @@
+# ML / AI cache rules. Format: rules/README.md.
+# The conda package cache is a package cache (Quick Clean), located by Rust code in
+# `scull_detectors::caches` (rule ID `conda.pkgs`), not a rule (CLS-02).
+#
+# Rust detectors in `scull_detectors::ml` add to these rules, never loosen them:
+# * every rule: ML caches belong to no project (no project is recorded);
+# * `huggingface.datasets-cache`: the folder must sit in a `huggingface` folder (the default
+#   `~/.cache/huggingface/datasets`); other locations come from `HF_DATASETS_CACHE` / `HF_HOME`
+#   through `scull_detectors::ml::locate_ml_caches`;
+# * `ollama.models`: at least one model manifest (`manifests/<registry>/<namespace>/<model>/<tag>`)
+#   must be present; the installed models become the `ollama rm` command (never run by scull
+#   itself; Ollama removes blobs no other model uses);
+# * `torch.hub`: the folder must sit in a `torch` folder (the default `~/.cache/torch/hub`) or
+#   hold torch's `trusted_list`.
+#
+# Models are re-downloadable: S1 when the source revision is recorded. A Hugging Face repository
+# without `refs/` doesn't record which revision it came from: no lockfile, so S2. Processed
+# datasets (the `datasets` library cache) are built from sources scull can't verify: S2.
+
+schema_version = 1
+
+[[rule]]
+id = "huggingface.model"
+version = 1
+artifact = "Hugging Face model (hub cache)"
+ecosystem = "ml"
+category = "ml_cache"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["models--*"]
+
+[rule.markers]
+# The hub cache layout: content-addressed blobs and per-revision snapshots.
+all = ["blobs", "snapshots"]
+
+[rule.lockfiles]
+# `refs/<branch>` records the revision the snapshot was downloaded from.
+any = ["refs"]
+
+[rule.activity]
+processes = ["python", "python3", "huggingface-cli", "hf"]
+
+[rule.regeneration]
+instructions = "Downloaded again from the Hugging Face Hub on next use (`hf download <repo>`); gated or deleted repositories may not be available."
+network = true
+long_build = false
+
+[[rule]]
+id = "huggingface.dataset"
+version = 1
+artifact = "Hugging Face dataset (hub cache)"
+ecosystem = "ml"
+category = "ml_cache"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["datasets--*"]
+
+[rule.markers]
+all = ["blobs", "snapshots"]
+
+[rule.lockfiles]
+# Without a recorded revision the dataset's source is unknown: S2 (FX-CLS-13).
+any = ["refs"]
+
+[rule.activity]
+processes = ["python", "python3", "huggingface-cli", "hf"]
+
+[rule.regeneration]
+instructions = "Downloaded again from the Hugging Face Hub on next use (`hf download --repo-type dataset <repo>`); gated or deleted datasets may not be available."
+network = true
+long_build = false
+
+[[rule]]
+id = "huggingface.datasets-cache"
+version = 1
+artifact = "Hugging Face processed datasets cache"
+ecosystem = "ml"
+category = "ml_cache"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S2"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["datasets"]
+
+[rule.markers]
+# `downloads/` and `<owner>___<name>` builder folders, as the `datasets` library writes them.
+any = ["downloads", "*___*"]
+
+[rule.activity]
+processes = ["python", "python3"]
+
+[rule.regeneration]
+instructions = "The `datasets` library rebuilds processed datasets from their sources on next load, if those sources are still available."
+network = true
+long_build = true
+
+[[rule]]
+id = "ollama.models"
+version = 1
+artifact = "Ollama models"
+ecosystem = "ml"
+category = "ml_cache"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "tool_native"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["models"]
+
+[rule.markers]
+all = ["blobs", "manifests"]
+
+[rule.activity]
+processes = ["ollama"]
+
+[rule.regeneration]
+instructions = "Download a model again with `ollama pull <model>`."
+network = true
+long_build = false
+
+[[rule]]
+id = "torch.hub"
+version = 1
+artifact = "PyTorch Hub cache"
+ecosystem = "ml"
+category = "ml_cache"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["hub"]
+
+[rule.markers]
+# Downloaded weights (`checkpoints/`) or the list of trusted hub repositories.
+any = ["checkpoints", "trusted_list"]
+
+[rule.activity]
+processes = ["python", "python3"]
+
+[rule.regeneration]
+instructions = "PyTorch downloads weights and hub repositories again on next use (`torch.hub.load`, `load_state_dict_from_url`)."
+network = true
+long_build = false

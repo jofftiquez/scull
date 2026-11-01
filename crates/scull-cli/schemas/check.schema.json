@@ -1,0 +1,563 @@
+{
+  "$defs": {
+    "Alert": {
+      "additionalProperties": false,
+      "description": "One alert.",
+      "properties": {
+        "bytes": {
+          "description": "The bytes concerned (stale total, budget usage, growth), when there is such a number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Stable identity for de-duplication and responses: `<kind>:<subject>`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AlertKind",
+          "description": "What it is about."
+        },
+        "message": {
+          "description": "One plain sentence for people (not terminal-escaped: callers escape on output).",
+          "type": "string"
+        },
+        "paths": {
+          "description": "The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "raised_at": {
+          "description": "When it was raised (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "How urgent it is."
+        },
+        "subject": {
+          "description": "The volume, category or path it concerns.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "severity",
+        "key",
+        "subject",
+        "message",
+        "raised_at",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "AlertKind": {
+      "description": "What an alert is about.",
+      "oneOf": [
+        {
+          "const": "disk_full_forecast",
+          "description": "A volume is forecast to drop below its reserve soon (PRO-01: time-based, default\nwithin 14 days).",
+          "type": "string"
+        },
+        {
+          "const": "low_space",
+          "description": "A volume is already below its reserve (measured).",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "Worktrees, build outputs or caches idle longer than their staleness window (PRO-02).",
+          "type": "string"
+        },
+        {
+          "const": "worktree_ttl_expired",
+          "description": "An agent or script worktree is past its registered TTL (PRO-08).",
+          "type": "string"
+        },
+        {
+          "const": "budget_exceeded",
+          "description": "A category, ecosystem or path is over its size budget (PRO-03).",
+          "type": "string"
+        },
+        {
+          "const": "growth_spike",
+          "description": "A category grew faster than the spike threshold (PRO-04).",
+          "type": "string"
+        },
+        {
+          "const": "free_space_drop",
+          "description": "A volume lost free space faster than the spike threshold (PRO-04).",
+          "type": "string"
+        }
+      ]
+    },
+    "CheckReport": {
+      "additionalProperties": false,
+      "description": "`scull check` output.",
+      "properties": {
+        "alerts": {
+          "description": "Alerts raised, most severe first.",
+          "items": {
+            "$ref": "#/$defs/Alert"
+          },
+          "type": "array"
+        },
+        "forecasts": {
+          "description": "Disk-full forecast of every volume ever sampled, by volume id.",
+          "items": {
+            "$ref": "#/$defs/ForecastReport"
+          },
+          "type": "array"
+        },
+        "not_sampled": {
+          "description": "Volumes known from history that could not be sampled now.",
+          "items": {
+            "$ref": "#/$defs/NotSampled"
+          },
+          "type": "array"
+        },
+        "now": {
+          "description": "When the check ran (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "review_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewPlanReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ready-to-review reclaim plan (PRO-05), when one is current. Never executed."
+        },
+        "sampled": {
+          "description": "Free space sampled now (and recorded in history).",
+          "items": {
+            "$ref": "#/$defs/VolumeReport"
+          },
+          "type": "array"
+        },
+        "scan": {
+          "$ref": "#/$defs/CheckScan",
+          "description": "What was scanned."
+        }
+      },
+      "required": [
+        "now",
+        "scan",
+        "sampled",
+        "not_sampled",
+        "forecasts",
+        "alerts"
+      ],
+      "type": "object"
+    },
+    "CheckScan": {
+      "description": "The scan a check ran (or why it did not).",
+      "oneOf": [
+        {
+          "description": "No `scan.roots` configured: only history is used.",
+          "properties": {
+            "state": {
+              "const": "not_configured",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`--no-scan`: only history is used.",
+          "properties": {
+            "state": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The roots were not scanned; recorded history is used instead.",
+          "properties": {
+            "reason": {
+              "description": "Why (e.g. a broad root that needs `scull scan --allow-broad-roots`).",
+              "type": "string"
+            },
+            "state": {
+              "const": "skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The roots were scanned (and the scan recorded in history).",
+          "properties": {
+            "allocated_bytes": {
+              "description": "Allocated bytes of everything found.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "candidates": {
+              "description": "Candidates found.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "entries_scanned": {
+              "description": "Entries counted.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "roots": {
+              "description": "The roots scanned.",
+              "items": {
+                "$ref": "#/$defs/FsPath"
+              },
+              "type": "array"
+            },
+            "scan_id": {
+              "$ref": "#/$defs/ScanId",
+              "description": "The scan's ID."
+            },
+            "state": {
+              "const": "scanned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "scan_id",
+            "roots",
+            "candidates",
+            "entries_scanned",
+            "allocated_bytes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Confidence": {
+      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "Not enough history to say anything.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Shown in status lines and may alert.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Long, regular history and a short extrapolation.",
+          "type": "string"
+        }
+      ]
+    },
+    "ForecastReport": {
+      "additionalProperties": false,
+      "description": "One volume's disk-full forecast.",
+      "properties": {
+        "as_of": {
+          "description": "When the latest sample was taken (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence",
+          "description": "`unknown`, `low`, `medium` or `high`. Status lines and alerts use `medium` and up."
+        },
+        "days_until_threshold": {
+          "description": "Whole days until free space drops below the reserve (`filling`: at least 1;\n`below_reserve`: 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fill_bytes_per_day": {
+          "description": "Free space lost per day by the trend, in bytes (negative when free space grows).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "free_bytes": {
+          "description": "Latest free space (bytes), plus bytes known to be freed since.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reserve_bytes": {
+          "description": "The free space the forecast counts down to (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "samples": {
+          "description": "Samples the forecast used.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "span_secs": {
+          "description": "Seconds between the first and the latest sample used.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ForecastState",
+          "description": "`not_enough_history`, `not_filling`, `filling` or `below_reserve`."
+        },
+        "threshold_at": {
+          "description": "When free space is forecast to drop below the reserve (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "state",
+        "confidence",
+        "reserve_bytes",
+        "samples",
+        "span_secs"
+      ],
+      "type": "object"
+    },
+    "ForecastState": {
+      "description": "What the forecast concluded.",
+      "oneOf": [
+        {
+          "const": "not_enough_history",
+          "description": "Too few samples or too short a span in the window; no extrapolation.",
+          "type": "string"
+        },
+        {
+          "const": "not_filling",
+          "description": "Free space is stable or growing, or would take longer than the horizon to run out.",
+          "type": "string"
+        },
+        {
+          "const": "filling",
+          "description": "Free space is shrinking: see `days_until_threshold`.",
+          "type": "string"
+        },
+        {
+          "const": "below_reserve",
+          "description": "Free space is already at or below the reserve (measured, not forecast).",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "NotSampled": {
+      "additionalProperties": false,
+      "description": "A volume known from history that was not sampled.",
+      "properties": {
+        "reason": {
+          "description": "Why: e.g. `not connected`.",
+          "type": "string"
+        },
+        "volume_id": {
+          "description": "Volume identifier as recorded.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ReviewPlanReport": {
+      "additionalProperties": false,
+      "description": "The review plan as reported by `scull check` / `scull status`.",
+      "properties": {
+        "created_at": {
+          "description": "When it was prepared (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "description": "When it expires (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "file": {
+          "description": "The plan file.",
+          "type": "string"
+        },
+        "includes_s1": {
+          "description": "Whether S1 items were included (`--include-s1`).",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "Items in the plan.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_id": {
+          "description": "The plan's ID (in the database's `plans` table).",
+          "type": "string"
+        },
+        "reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reused": {
+          "description": "True when this check kept the existing plan (same work) instead of making a new one.",
+          "type": "boolean"
+        },
+        "review_command": {
+          "description": "The command that reviews it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "file",
+        "items",
+        "reclaimable_bytes",
+        "created_at",
+        "expires_at",
+        "includes_s1",
+        "review_command",
+        "reused"
+      ],
+      "type": "object"
+    },
+    "ScanId": {
+      "pattern": "^scan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "Severity": {
+      "description": "How urgent an alert is. Ordered: `Info < Warning < Critical`.",
+      "oneOf": [
+        {
+          "const": "info",
+          "description": "Worth knowing.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "Act within days.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "Act now.",
+          "type": "string"
+        }
+      ]
+    },
+    "VolumeReport": {
+      "additionalProperties": false,
+      "description": "One volume's latest free-space sample.",
+      "properties": {
+        "free_bytes": {
+          "description": "Bytes available to the user.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sampled_at": {
+          "description": "When it was sampled (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "Volume size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "total_bytes",
+        "free_bytes",
+        "sampled_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/CheckReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/check@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/check@1",
+  "type": "object"
+}

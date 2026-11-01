@@ -31,9 +31,12 @@
 //! * **Privacy** (MCP-05, T-44): the home folder prefix is shown as `~` by default
 //!   (`mcp.redact_home`); `mcp.hash_names` hashes project and folder names with a per-machine
 //!   salt that is never returned. The CLI prints [`DISCLOSURE`] when MCP is first enabled.
-//! * **Nothing is written** by the read-only tools: scans run without a history store and the
-//!   history database is opened read-only. In destructive mode, `prepare_cleanup` records the
-//!   plan in scull's database. This crate never depends on `scull-cleaner` (SAFE-10).
+//! * **Nothing of yours is written** by the read-only tools: scans run without a history
+//!   store and the history database is opened read-only. The one metadata-only tool,
+//!   `register_worktree`, appends a TTL reminder to scull's own [`registry`] file; expiry raises
+//!   a review suggestion and never deletes anything. In destructive mode, `prepare_cleanup`
+//!   records the plan in scull's database. This crate never depends on `scull-cleaner`
+//!   (SAFE-10).
 //!
 //! # Connecting a client
 //!
@@ -51,6 +54,7 @@ mod escape;
 mod history;
 mod plan_tools;
 mod redact;
+pub mod registry;
 mod server;
 mod tools;
 mod views;
@@ -69,7 +73,7 @@ pub use redact::{
 pub use server::{
     INSTRUCTIONS, ROOTS_TIMEOUT, ScullMcp, ServerOptions, serve, serve_stdio, serve_until,
 };
-pub use tools::{TOOL_NAMES, ToolError, definitions};
+pub use tools::{METADATA_TOOLS, TOOL_NAMES, ToolError, definitions};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
@@ -80,8 +84,9 @@ scull MCP server: privacy notice
   Results of scull's MCP tools (paths, project names, Git branch names, sizes) are sent to the
   AI client that started the server, and possibly to that client's cloud model provider. This
   is the one exception to scull keeping everything on your machine.
-  * Tools are read-only: they cannot delete, move or change anything, or approve a cleanup.
-    (Cleanup tools exist only if you set mcp.destructive = true and start the server with
+  * Tools are read-only: they cannot delete, move or change your files, or approve a cleanup.
+    (register_worktree only records a reminder in scull's own data folder. Cleanup tools
+    exist only if you set mcp.destructive = true and start the server with
     --allow-destructive; even then nothing runs until you approve the plan yourself with
     `scull approve` in your own terminal.)
   * Only folders under your configured scan roots (scan.roots) can be inspected.

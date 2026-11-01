@@ -40,11 +40,9 @@
 //! # Retention and downsampling (DATA-06, INS-02)
 //!
 //! [`Store::maintain`] is the hook background maintenance calls during scheduled checks (never
-//! during an interactive cleanup). Today it downsamples free-space samples older than
-//! [`RetentionPolicy::raw_free_space_secs`] to the last sample per volume per UTC day, oldest
-//! first. The v1.0 storage budget (FX-DATA-02) extends it to: daily then monthly rollups of
-//! `scan_rollups`, thinning old `changed` item events, footprint samples, and incremental
-//! vacuum. Append-only tables (plans, approvals, operations, audit) are never touched.
+//! during an interactive cleanup); see [`crate::retention`] for the age tiers and the storage
+//! budget (FX-DATA-02). Append-only tables (plans, approvals, operations, audit) are never
+//! touched.
 
 use crate::error::{Result, StoreError};
 use crate::records::{Rollup, ScanFinish, ScanStatus, ScanTotals};
@@ -300,29 +298,6 @@ pub struct StatusSummary {
     pub last_scan: Option<LastScan>,
     /// Latest free-space sample of every volume ever sampled, by volume ID.
     pub volumes: Vec<VolumeSample>,
-}
-
-/// Retention settings for [`Store::maintain`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RetentionPolicy {
-    /// Free-space samples older than this many seconds are downsampled to one per volume per
-    /// UTC day (INS-02: raw data is kept 12 months).
-    pub raw_free_space_secs: i64,
-}
-
-impl Default for RetentionPolicy {
-    fn default() -> Self {
-        Self {
-            raw_free_space_secs: 365 * 86_400,
-        }
-    }
-}
-
-/// What [`Store::maintain`] did.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MaintenanceReport {
-    /// Free-space samples removed by downsampling.
-    pub free_space_samples_removed: u64,
 }
 
 /// Per category × tier × ecosystem rollups of `candidates`, sorted, for [`ScanFinish::rollups`].
@@ -755,28 +730,6 @@ impl Store {
             Ok(StatusSummary { last_scan, volumes })
         })
     }
-
-    /// Retention and downsampling hook for background maintenance (DATA-06); see the module
-    /// docs. Safe to call at any time and repeatedly: with nothing old enough it changes
-    /// nothing. Call it from scheduled checks, never during an interactive cleanup.
-    pub fn maintain(&mut self, policy: &RetentionPolicy, now: i64) -> Result<MaintenanceReport> {
-        let cutoff = now.saturating_sub(policy.raw_free_space_secs.max(0));
-        self.write(|tx| {
-            // Keep the last sample per volume per UTC day among samples older than the cutoff.
-            // SQLite returns the bare `sample_id` from the row holding max(sampled_at).
-            let removed = tx.execute(
-                "DELETE FROM free_space_samples WHERE sampled_at < ?1 AND sample_id NOT IN ( \
-                   SELECT sample_id FROM ( \
-                     SELECT sample_id, max(sampled_at) FROM free_space_samples \
-                     WHERE sampled_at < ?1 \
-                     GROUP BY volume, (sampled_at - ((sampled_at % 86400) + 86400) % 86400)))",
-                [cutoff],
-            )?;
-            Ok(MaintenanceReport {
-                free_space_samples_removed: removed as u64,
-            })
-        })
-    }
 }
 
 // ---- recording internals --------------------------------------------------------------------
@@ -1073,23 +1026,23 @@ fn mark_absent_items_gone(
 
 // ---- row helpers ----------------------------------------------------------------------------
 
-fn uint(v: i64) -> u64 {
+pub(crate) fn uint(v: i64) -> u64 {
     u64::try_from(v).unwrap_or(0)
 }
 
-fn bad(m: String) -> StoreError {
+pub(crate) fn bad(m: String) -> StoreError {
     StoreError::rejected(ErrorKind::Internal, m)
 }
 
-fn scan_id(s: String) -> Result<ScanId> {
+pub(crate) fn scan_id(s: String) -> Result<ScanId> {
     ScanId::try_from(s).map_err(bad)
 }
 
-fn item_id(s: String) -> Result<ItemId> {
+pub(crate) fn item_id(s: String) -> Result<ItemId> {
     ItemId::try_from(s).map_err(bad)
 }
 
-fn tier_of(s: &str) -> Result<Tier> {
+pub(crate) fn tier_of(s: &str) -> Result<Tier> {
     match s {
         "S0" => Ok(Tier::S0),
         "S1" => Ok(Tier::S1),
@@ -1099,7 +1052,7 @@ fn tier_of(s: &str) -> Result<Tier> {
     }
 }
 
-fn category_of(s: &str) -> Result<Category> {
+pub(crate) fn category_of(s: &str) -> Result<Category> {
     serde_json::from_value(serde_json::Value::String(s.to_owned()))
         .map_err(|e| bad(format!("unknown category {s:?}: {e}")))
 }

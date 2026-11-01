@@ -6,7 +6,10 @@
 //! an allowlisted fixture; paths outside the allowlist, `../` traversal, option-like strings
 //! and symlink escapes are refused (FX-MCP-06); results are capped; nothing is written (I-2,
 //! I-3, no history database created); no file contents appear in any result; MCP and the
-//! engine agree on classifications (FX-OUT-03).
+//! engine agree on classifications (FX-OUT-03). Agent lifecycle tools (P4-AI-02):
+//! `check_capacity` (free space, reclaimable bytes, forecast, verdicts) and the metadata-only
+//! `register_worktree`, whose expired TTL is a review suggestion only (FX-MCP-10); neither
+//! touches anything outside scull's data folder.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // MCP roots are deprecated by SEP-2577 but are what handshake clients still send.
@@ -22,7 +25,7 @@ use scull_core::config::{Config, McpConfig};
 use scull_detectors::CacheEnv;
 use scull_engine::{CancelToken, Engine, EngineConfig, FixedInUse, InUseSource, ScanRequest};
 use scull_fixtures::{Fixture, InvariantInputs, NodeLock, days_ago};
-use scull_mcp::{ScullMcp, ServerOptions, TOOL_NAMES};
+use scull_mcp::{METADATA_TOOLS, ScullMcp, ServerOptions, TOOL_NAMES};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,7 +42,6 @@ const FORBIDDEN_TOOLS: &[&str] = &[
     "get_approval_status",
     "execute_cleanup",
     "get_cleanup_status",
-    "register_worktree",
 ];
 
 fn git_available() -> bool {
@@ -249,7 +251,9 @@ async fn tools_list_is_exactly_the_read_only_set() {
     }
     for t in &tools {
         let ann = t.annotations.as_ref().expect("annotations");
-        assert_eq!(ann.read_only_hint, Some(true), "{}", t.name);
+        // Only the metadata-only tools may write (to scull's data folder); none is destructive.
+        let metadata = METADATA_TOOLS.contains(&t.name.as_ref());
+        assert_eq!(ann.read_only_hint, Some(!metadata), "{}", t.name);
         assert_eq!(ann.destructive_hint, Some(false), "{}", t.name);
         assert_eq!(t.input_schema["type"], "object", "{}", t.name);
         assert!(t.output_schema.is_some(), "{}", t.name);
@@ -480,10 +484,17 @@ async fn paths_outside_the_allowlist_are_refused() {
         "inspect_worktree",
         "find_large_files",
         "get_cleanup_candidates",
+        "check_capacity",
+        "register_worktree",
     ];
     for (path, want) in &cases {
         for tool in tools {
-            let r = call(&client, tool, json!({ "path": path })).await;
+            let a = if tool == "register_worktree" {
+                json!({ "path": path, "ttl": "7d" })
+            } else {
+                json!({ "path": path })
+            };
+            let r = call(&client, tool, a).await;
             assert_eq!(&error_code(&r), want, "{tool} {path:?}");
             // The refusal never echoes the path or anything about it.
             let msg = structured(&r)["error"]["message"].as_str().unwrap();
@@ -513,6 +524,10 @@ async fn paths_outside_the_allowlist_are_refused() {
         assert!(e.to_string().contains("unknown tool"), "{f}: {e}");
     }
     client.cancel().await.unwrap();
+    assert!(
+        std::fs::read_dir(data.path()).unwrap().next().is_none(),
+        "refused calls write nothing, not even a registration"
+    );
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 
@@ -1231,5 +1246,311 @@ async fn hashed_names_are_stable_and_never_reveal_the_salt() {
             assert!(!s.contains(salt.trim()), "salt leaked");
         }
     }
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// The output schema of `tool`, compiled.
+async fn validate_output<C: ClientHandler>(
+    client: &RunningService<RoleClient, C>,
+    tool: &str,
+    v: &Value,
+) {
+    let tools = client.list_all_tools().await.unwrap();
+    let t = tools.iter().find(|t| t.name == tool).unwrap();
+    let schema = Value::Object(t.output_schema.as_ref().unwrap().as_ref().clone());
+    let validator = jsonschema::validator_for(&schema).expect("schema compiles");
+    let errors: Vec<String> = validator.iter_errors(v).map(|e| e.to_string()).collect();
+    assert!(errors.is_empty(), "{tool}: {errors:?}\n{v:#}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn check_capacity_reports_free_space_reclaimable_and_verdicts() {
+    let fx = fixture(false);
+    let data = tempfile::tempdir().unwrap();
+    let client = connect(Setup::new(&fx, data.path()).server(), ()).await;
+
+    let cap = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({})).await,
+    );
+    validate_output(&client, "check_capacity", &cap).await;
+    assert_eq!(cap["read_only"], true);
+    assert_eq!(cap["roots"], json!(["~/root"]));
+    assert!(cap["request"].is_null());
+    let vol = &cap["volumes"][0];
+    assert!(vol["free_bytes"].as_u64().is_some(), "{cap}");
+    assert!(
+        vol["safe_reclaimable_bytes"].as_u64().unwrap() >= 4096,
+        "{cap}"
+    );
+    assert!(
+        vol["reclaimable_bytes"].as_u64().unwrap()
+            >= vol["safe_reclaimable_bytes"].as_u64().unwrap()
+    );
+    assert!(vol["verdict"].is_null());
+    // No history database: free space and reclaimable bytes, and "forecast unavailable".
+    assert!(vol["forecast"].is_null());
+    assert!(
+        vol["forecast_unavailable"]
+            .as_str()
+            .unwrap()
+            .starts_with("forecast unavailable"),
+        "{cap}"
+    );
+
+    // A tiny request fits unless the temp volume is already below the reserve.
+    let small = assert_ok(
+        "check_capacity",
+        &call(
+            &client,
+            "check_capacity",
+            json!({ "path": "~/root/app", "needed_bytes": 1 }),
+        )
+        .await,
+    );
+    let free = small["volumes"][0]["free_bytes"].as_u64().unwrap();
+    let reserve = small["volumes"][0]["reserve_bytes"].as_u64().unwrap();
+    let want = if free > reserve {
+        "fits"
+    } else {
+        "fits_after_cleanup_or_not"
+    };
+    let got = small["volumes"][0]["verdict"].as_str().unwrap().to_owned();
+    if want == "fits" {
+        assert_eq!(got, "fits", "{small}");
+    } else {
+        assert!(
+            got == "fits_after_cleanup" || got == "does_not_fit",
+            "{small}"
+        );
+    }
+    // An impossible request does not fit.
+    let huge = assert_ok(
+        "check_capacity",
+        &call(
+            &client,
+            "check_capacity",
+            json!({ "worktrees": 3, "bytes_per_worktree": u64::MAX / 4 }),
+        )
+        .await,
+    );
+    validate_output(&client, "check_capacity", &huge).await;
+    assert_eq!(huge["volumes"][0]["verdict"], "does_not_fit", "{huge}");
+    assert_eq!(huge["request"]["estimate_source"], "bytes_per_worktree");
+    // No linked worktrees to take a median from: the size is unknown, so is the verdict.
+    let unknown = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({ "worktrees": 3 })).await,
+    );
+    assert_eq!(unknown["request"]["estimate_source"], "unknown");
+    assert_eq!(unknown["volumes"][0]["verdict"], "unknown");
+    // Contradictory or out-of-range arguments are refused.
+    for bad in [
+        json!({ "needed_bytes": 1, "worktrees": 2 }),
+        json!({ "bytes_per_worktree": 1 }),
+        json!({ "worktrees": 0 }),
+        json!({ "worktrees": 1001 }),
+        json!({ "worktrees": 1, "rm": "-rf" }),
+    ] {
+        let r = call(&client, "check_capacity", bad.clone()).await;
+        assert_eq!(error_code(&r), "invalid_arguments", "{bad}");
+    }
+    client.cancel().await.unwrap();
+    assert!(
+        std::fs::read_dir(data.path()).unwrap().next().is_none(),
+        "check_capacity writes nothing"
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn check_capacity_uses_the_forecast_from_recorded_history() {
+    let fx = fixture(false);
+    let data = tempfile::tempdir().unwrap();
+    let mount = scull_platform::volume_of(fx.root()).unwrap().mount_point;
+    let id = mount.to_string_lossy().into_owned();
+    // Ten days of a volume losing 2 GiB a day, recorded the way `scull check` does.
+    {
+        let mut store = scull_engine::open_history(data.path()).unwrap();
+        let now = scull_engine::now_unix();
+        let gib = 1024u64 * 1024 * 1024;
+        let samples: Vec<scull_storage::VolumeSample> = (0..10)
+            .map(|d| scull_storage::VolumeSample {
+                volume_id: id.clone(),
+                total: 500 * gib,
+                free: 100 * gib - d * 2 * gib,
+                at: now - (10 - d as i64) * 86_400,
+            })
+            .collect();
+        store.record_free_space(&samples, None).unwrap();
+    }
+    let db = data.path().join(scull_storage::DB_FILE_NAME);
+    let before = std::fs::read(&db).unwrap();
+    let client = connect(Setup::new(&fx, data.path()).server(), ()).await;
+    let cap = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({})).await,
+    );
+    validate_output(&client, "check_capacity", &cap).await;
+    let f = &cap["volumes"][0]["forecast"];
+    assert_eq!(f["state"], "filling", "{cap}");
+    assert!(f["days_until_reserve"].as_u64().unwrap() > 0, "{cap}");
+    assert!(cap["volumes"][0]["forecast_unavailable"].is_null());
+    client.cancel().await.unwrap();
+    assert_eq!(std::fs::read(&db).unwrap(), before, "database unchanged");
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fx_mcp_10_expired_ttl_is_a_review_suggestion_and_nothing_is_deleted() {
+    let with_git = git_available();
+    let fx = fixture(with_git);
+    let data = tempfile::tempdir().unwrap();
+    let client = connect(Setup::new(&fx, data.path()).server(), ()).await;
+    if !with_git {
+        // Without git no worktree can be verified, so nothing is registered.
+        let r = call(
+            &client,
+            "register_worktree",
+            json!({ "path": "~/root/app", "ttl": "7d" }),
+        )
+        .await;
+        assert_eq!(r.is_error, Some(true));
+        client.cancel().await.unwrap();
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    }
+    let wt = fx.root().join("repo-wt");
+    let reg = assert_ok(
+        "register_worktree",
+        &call(
+            &client,
+            "register_worktree",
+            json!({ "path": "~/root/repo-wt", "ttl": "7d" }),
+        )
+        .await,
+    );
+    validate_output(&client, "register_worktree", &reg).await;
+    assert_eq!(reg["metadata_only"], true);
+    assert_eq!(reg["ttl"], "7d");
+    assert_eq!(reg["registration"]["path"], "~/root/repo-wt", "{reg}");
+    assert_eq!(reg["registration"]["ttl_secs"], 7 * 86_400);
+    assert_eq!(reg["registration"]["expired"], false);
+    assert_eq!(reg["registration"]["source"], "mcp");
+    // The only thing written: the registry file in scull's data folder.
+    let written: Vec<String> = std::fs::read_dir(data.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(written, [scull_mcp::registry::REGISTRY_FILE]);
+
+    // Main checkouts, plain folders and bad TTLs are refused.
+    for (a, code) in [
+        (
+            json!({ "path": "~/root/repo", "ttl": "7d" }),
+            "not_a_linked_worktree",
+        ),
+        (
+            json!({ "path": "~/root/repo-wt", "ttl": "7" }),
+            "invalid_arguments",
+        ),
+        (
+            json!({ "path": "~/root/repo-wt", "ttl": "0m" }),
+            "invalid_arguments",
+        ),
+        (
+            json!({ "path": "~/root/repo-wt", "ttl": "400d" }),
+            "invalid_arguments",
+        ),
+        (json!({ "path": "~/root/repo-wt" }), "invalid_arguments"),
+        (
+            json!({ "path": "~/root/repo-wt", "ttl": "1d", "delete": true }),
+            "invalid_arguments",
+        ),
+    ] {
+        let r = call(&client, "register_worktree", a.clone()).await;
+        assert_eq!(error_code(&r), code, "{a}");
+    }
+
+    // FX-MCP-10: the TTL runs out (recorded as if registered two days ago with a 1-day TTL).
+    let canonical = std::fs::canonicalize(&wt).unwrap();
+    let now = scull_engine::now_unix();
+    scull_mcp::registry::Registry::in_data_dir(data.path())
+        .record(
+            &canonical,
+            86_400,
+            now - 2 * 86_400,
+            scull_mcp::registry::Source::Cli,
+        )
+        .unwrap();
+    let cap = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({})).await,
+    );
+    let sugg = cap["review_suggestions"].as_array().unwrap();
+    assert_eq!(sugg.len(), 1, "{cap}");
+    assert_eq!(sugg[0]["registration"]["path"], "~/root/repo-wt");
+    assert_eq!(sugg[0]["registration"]["expired"], true);
+    let reason = sugg[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("never removes it automatically"),
+        "{reason}"
+    );
+    // The staleness alert changed nothing: the worktree and its tier are as before.
+    assert!(
+        wt.join("README.md").exists(),
+        "the expired worktree is untouched"
+    );
+    let w = assert_ok(
+        "inspect_worktree",
+        &call(
+            &client,
+            "inspect_worktree",
+            json!({ "path": "~/root/repo-wt" }),
+        )
+        .await,
+    );
+    assert_eq!(w["worktree"]["kind"], "linked");
+    // Registering another time replaces the TTL; the suggestion goes away.
+    let again = assert_ok(
+        "register_worktree",
+        &call(
+            &client,
+            "register_worktree",
+            json!({ "path": p(&wt), "ttl": "2w" }),
+        )
+        .await,
+    );
+    assert_eq!(again["registration"]["expired"], false);
+    let cap = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({})).await,
+    );
+    assert_eq!(cap["review_suggestions"], json!([]), "{cap}");
+    client.cancel().await.unwrap();
+    // Nothing in the tree or the canary changed: registration is metadata only (I-2, I-3).
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn registrations_outside_the_allowlist_are_never_returned() {
+    let fx = fixture(false);
+    let data = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    scull_mcp::registry::Registry::in_data_dir(data.path())
+        .record(
+            &std::fs::canonicalize(elsewhere.path()).unwrap(),
+            60,
+            0,
+            scull_mcp::registry::Source::Cli,
+        )
+        .unwrap();
+    let client = connect(Setup::new(&fx, data.path()).server(), ()).await;
+    let cap = assert_ok(
+        "check_capacity",
+        &call(&client, "check_capacity", json!({})).await,
+    );
+    assert_eq!(cap["review_suggestions"], json!([]), "{cap}");
+    client.cancel().await.unwrap();
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

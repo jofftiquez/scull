@@ -1,1 +1,0 @@
-import{_ as e,c as t,f as n,m as r,p as i}from"./index-BB5JkSQ7.js";import{n as a,t as o}from"./PlaceholderTile-B6fjKW_T.js";var s=i({__name:`InsightsScreen`,setup(i){return(i,s)=>(r(),t(a,null,{default:e(()=>[n(o,{title:`Insights`,issue:`P3-UI-10`,note:`Forecast, regrowth, duplication and agent footprint.`})]),_:1}))}});export{s as default};
