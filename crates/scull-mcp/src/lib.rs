@@ -11,8 +11,8 @@
 //!   `prepare_cleanup`, `get_cleanup_plan`, `get_approval_status`, `execute_cleanup`,
 //!   `get_cleanup_status`, offered only when `[mcp] destructive = true` is in the user config
 //!   file **and** the server was launched with `--allow-destructive`
-//!   ([`ScullMcp::with_plan_tools`], FX-MCP-07). The agent can prepare a plan but never approve
-//!   it: the human approves it outside the model with `scull approve <plan-id>` in their own
+//!   ([`ScullMcp::with_plan_tools`], FX-MCP-07). The agent can prepare a plan; no tool can
+//!   approve it: the human approves it outside the model with `scull approve <plan-id>` in their own
 //!   terminal or in the desktop app ([`approval`], the approval broker). Execution runs through
 //!   a [`CleanupRunner`] the CLI implements with `scull-cleaner`'s Executor, which consumes the
 //!   approval and revalidates every item.

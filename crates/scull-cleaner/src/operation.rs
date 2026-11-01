@@ -13,10 +13,14 @@
 //! interactive terminal or the desktop dialog ([`ApprovalMethod::CliTty`],
 //! [`ApprovalMethod::Desktop`]), bound to the plan's exact content hash, unexpired and unused.
 //! Consumption is one atomic database update, so an approval starts at most one operation even
-//! when several executors race, and the operation records the approval's own approver and
-//! method. [`Executor::execute_plan`] refuses an MCP plan outside such an operation. This is
-//! the Executor's own check: whatever calls it (the MCP server, the CLI, a bug), an agent's
-//! plan never runs on the agent's say-so.
+//! when several executors race. The approval must have been given by the account the
+//! Executor runs as (read from the OS here, `scull_platform::current_user`), which the
+//! operation records as its approver, with the approval's channel.
+//! [`Executor::execute_plan`] refuses an MCP plan outside such an operation. This is the
+//! Executor's own check: whatever calls it (the MCP server, the CLI, a bug), an agent's plan
+//! never runs on the agent's say-so. (Approval rows are not authenticated beyond the
+//! database's owner-only permissions: a process that can write the user's database can
+//! insert one; see `docs/THREAT_MODEL.md` T-41.)
 
 use crate::executor::Executor;
 use crate::measure::{Baseline, FreeSpaceSource, MeasuredDelta, Meter, Tally, VolumeMeter};
@@ -193,9 +197,10 @@ impl Executor {
     ///
     /// A plan made by the MCP server ([`PlanOrigin::Mcp`]) additionally needs a human approval
     /// (MCP-04): this consumes it atomically and refuses with [`ErrorKind::SafetyBlocked`]
-    /// (exit 5) when there is none, it was not given through a human channel, it expired or it
-    /// was already used, and with [`ErrorKind::PlanTampered`] when it is bound to other content
-    /// or `start` does not record the approval's approver and method. See the module docs.
+    /// (exit 5) when there is none, it was not given through a human channel or by the account
+    /// this process runs as, it expired or it was already used, and with
+    /// [`ErrorKind::PlanTampered`] when it is bound to other content or `start` does not record
+    /// this account as the approver and the approval's channel. See the module docs.
     pub fn begin_operation<'s>(
         &self,
         store: &'s mut Store,
@@ -273,8 +278,9 @@ impl Executor {
 
 /// MCP-04 (PRD §13.3 step 4): consume the human approval of the agent-prepared `plan`, or
 /// refuse. The approval must exist, come from a human channel (the `scull approve` terminal
-/// or the desktop dialog), be bound to the plan's exact content hash and match what `start`
-/// records; consumption ([`Store::consume_approval`]) is one atomic update that also requires
+/// or the desktop dialog), be bound to the plan's exact content hash, have been given by the
+/// account this process runs as (the OS's answer, not the caller's), which `start` must record
+/// as the approver along with the approval's channel; consumption ([`Store::consume_approval`]) is one atomic update that also requires
 /// it to be unused and unexpired at the real current time (not the caller's `started_at`).
 fn consume_human_approval(
     store: &mut Store,
@@ -308,10 +314,34 @@ fn consume_human_approval(
             ),
         ));
     }
-    if start.method != approval.method || start.approver != approval.approver {
+    // The approver must be the account this Executor runs as, read from the OS here (not
+    // taken from the caller or the approval): an approval recorded for another account never
+    // runs, and the audit records who actually executed.
+    let owner = scull_platform::current_user().map_err(|e| {
+        blocked(format!(
+            "cannot tell which account scull runs as ({e}), so the approval of plan {} can't be \
+             checked; nothing was changed",
+            plan.id()
+        ))
+    })?;
+    if approval.approver != owner {
+        return Err(blocked(format!(
+            "plan {} was approved by another account; approvals run only for the account that \
+             gave them; nothing was changed",
+            plan.id()
+        )));
+    }
+    if start.approver != owner {
         return Err(ScullError::new(
             ErrorKind::PlanTampered,
-            "the operation must record the approval's own approver and method (SAFE-08)",
+            "the operation must record the account that runs it as the approver (SAFE-08)",
+        ));
+    }
+    // Audit consistency only: the channel is the approval's (the caller copies it).
+    if start.method != approval.method {
+        return Err(ScullError::new(
+            ErrorKind::PlanTampered,
+            "the operation must record the approval's channel (SAFE-08)",
         ));
     }
     let consumed = store

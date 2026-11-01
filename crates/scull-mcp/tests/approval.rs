@@ -711,6 +711,81 @@ async fn plan_mutated_on_disk_after_approval_is_void() {
     env.invariants(&["app/target", "app/target-old", "app"]);
 }
 
+/// D-34, changes `narrow` would accept for a CLI plan: the same folder (same inode) whose
+/// contents grew after approval voids the agent plan, spends its approval, never reaches
+/// the runner, and reports `size_changed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn same_folder_with_changed_contents_voids_the_plan() {
+    let mut env = Env::new();
+    let client = connect(env.server(true, true)).await;
+    let id = id_of(&prepare(&client, &["app/target"]).await);
+    human_approves(&mut env.store(), &id);
+    let target = env.fx.root().join("app/target");
+    use scull_platform::Platform;
+    let identity = |p: &std::path::Path| scull_platform::Native.metadata(p).unwrap().identity;
+    let before = identity(&target);
+    std::fs::write(target.join("debug/extra.bin"), vec![7u8; 256 * 1024]).unwrap();
+    env.fx.age("app", days_ago(3)).unwrap();
+    assert_eq!(before, identity(&target), "same folder object");
+    let p = json!({ "plan_id": id.as_str() });
+    let r = call(&client, "execute_cleanup", p.clone()).await;
+    assert_eq!(error_code(&r), "plan_changed");
+    assert!(text_of(&r).contains("size_changed"), "{}", text_of(&r));
+    let st = ok("status", &call(&client, "get_cleanup_status", p).await);
+    assert_eq!(st["state"], "voided");
+    assert_eq!(env.calls(), 0);
+    client.cancel().await.unwrap();
+    env.invariants(&["app/target", "app"]);
+}
+
+/// D-34: a tier that went *down* after approval (a build output that was recently active,
+/// S1, is idle by execution time, S0) still voids the agent plan; `narrow` alone would run
+/// it at the lower tier.
+#[tokio::test(flavor = "multi_thread")]
+async fn lowered_tier_voids_the_plan() {
+    let mut env = Env::new();
+    // Recently written: the activity window makes it more protective at planning time.
+    env.fx
+        .set_mtime("app/target/debug/app", std::time::SystemTime::now())
+        .unwrap();
+    env.fx.checkpoint().unwrap();
+    let client = connect(env.server(true, true)).await;
+    let planned = candidate(&client, "app/target").await;
+    assert_ne!(
+        planned["tier"], "S0",
+        "recent activity raises the tier: {planned:#}"
+    );
+    let id = id_of(&prepare(&client, &["app/target"]).await);
+    human_approves(&mut env.store(), &id);
+    env.fx
+        .set_mtime("app/target/debug/app", days_ago(3))
+        .unwrap();
+    let r = call(
+        &client,
+        "execute_cleanup",
+        json!({ "plan_id": id.as_str() }),
+    )
+    .await;
+    assert_eq!(error_code(&r), "plan_changed");
+    assert!(
+        text_of(&r).contains("tier_changed") || text_of(&r).contains("action_changed"),
+        "{}",
+        text_of(&r)
+    );
+    assert_eq!(env.calls(), 0);
+    assert!(
+        env.store()
+            .get_approval(&id)
+            .unwrap()
+            .unwrap()
+            .used_at
+            .is_some(),
+        "approval spent"
+    );
+    client.cancel().await.unwrap();
+    env.invariants(&["app/target"]);
+}
+
 /// Concurrent approvals of one plan: exactly one is recorded. Concurrent consumption of one
 /// approval (several executors racing): exactly one wins.
 #[tokio::test(flavor = "multi_thread")]

@@ -7,8 +7,8 @@
 //! ([`crate::ScullMcp::with_plan_tools`]); otherwise they are absent from `tools/list` and
 //! calling them is an unknown-tool error (FX-MCP-07).
 //!
-//! The agent can prepare a plan and ask about it. It can never approve one: approval happens
-//! outside the model ([`crate::approval`]). `execute_cleanup` runs only with a human approval
+//! The agent can prepare a plan and ask about it. No tool can approve one: approval happens
+//! outside the model ([`crate::approval`]; for the limits of that, see its module docs). `execute_cleanup` runs only with a human approval
 //! bound to the plan's exact hash, unexpired and unused, and only if no item changed since the
 //! plan was prepared (D-34); execution itself goes through the [`CleanupRunner`], which the
 //! CLI implements with `scull-cleaner`'s Executor (this crate never depends on it, SAFE-10):
@@ -49,7 +49,7 @@ pub const MAX_PLAN_ITEMS: usize = 200;
 /// Extra instructions sent at initialization when the plan tools are enabled.
 pub const PLAN_INSTRUCTIONS: &str = " Destructive mode is enabled for this server, which \
     changes the above: prepare_cleanup records a cleanup plan of exact item IDs (from get_cleanup_candidates), \
-    but you can never approve it. Tell the user to run `scull approve <plan_id>` in their own \
+    but no tool can approve it. Tell the user to run `scull approve <plan_id>` in their own \
     terminal (or review it in the scull desktop app); poll get_approval_status; then call \
     execute_cleanup once. Plans expire after 15 minutes, approvals are single-use, and a plan \
     whose items changed on disk is void.";
@@ -302,7 +302,7 @@ pub fn definitions() -> Vec<Tool> {
             "prepare_cleanup",
             "Prepare a cleanup plan",
             "Record a cleanup plan for exact item IDs from get_cleanup_candidates. Nothing is \
-             changed on disk. You cannot approve the plan: the user must approve it outside \
+             changed on disk. No tool can approve the plan: the user must approve it outside \
              this chat by running `scull approve <plan_id>` in their own terminal (or in the \
              scull desktop app). Plans expire after 15 minutes.",
             false,
@@ -434,7 +434,7 @@ fn plan_output(plan: &Plan, status: ApprovalStatus, r: &Redactor, next_step: Str
 fn approve_hint(id: &PlanId) -> String {
     format!(
         "Ask the user to run `scull approve {id}` in their own terminal (or to review it in the \
-         scull desktop app). You cannot approve it. Then poll get_approval_status and call \
+         scull desktop app). No tool can approve it. Then poll get_approval_status and call \
          execute_cleanup once it is approved, within 15 minutes of preparing it."
     )
 }
@@ -606,7 +606,7 @@ fn execute(
         let voided = approval::void(&mut store, &auth.plan, now_unix()).map_err(refused)?;
         let list: Vec<String> = changed
             .iter()
-            .map(|c| format!("{} ({})", c.item_id, c.reason.code()))
+            .map(|c| format!("{} ({})", c.item_id, c.change.code()))
             .collect();
         return Err(refused(Refused {
             reason: Reason::PlanChanged,

@@ -23,22 +23,32 @@
 //!    ([`authorize`] is the server's read-only pre-check; the authority is the Executor, which
 //!    **consumes** the approval atomically in `Executor::begin_operation` and refuses an MCP
 //!    plan without it). Before execution the plan's items are re-derived from the disk: if
-//!    any of them changed, the whole plan is void (D-34, provisional: [`check_unchanged`],
-//!    [`void`]) and the agent must prepare a new one. Every item is revalidated again by the
-//!    Executor right before it is touched (SAFE-05).
+//!    **anything** about any of them changed (gone, replaced, moved, a different tier in
+//!    either direction, a different action, a different reclaimable size, a different
+//!    detection), the whole plan is void (D-34, provisional: [`check_unchanged`], [`void`])
+//!    and the agent must prepare a new one. Every item is revalidated again by the Executor
+//!    right before it is touched (SAFE-05).
 //! 5. Without a valid approval everything fails closed. The plan, the approval and the
 //!    executed operation (with the approval's channel and approver, per-item outcomes) are
 //!    recorded in the store's append-only tables.
 //!
-//! # What the confirmation code is for
+//! # What the confirmation code is for, and what it is not
 //!
-//! The code proves that whoever approves *reads the screen the plan is shown on*: a piped
-//! `yes`, or a client that relays keystrokes without showing the plan, cannot approve. It is
-//! random per attempt ([`ConfirmationCode::generate`]), shown only on the approving surface,
-//! compared in constant time, case-, space- and hyphen-insensitive (paste allowed, WCAG 2.2
-//! SC 3.3.8). It is **not** a secret shared with anything else: an agent with unrestricted
-//! shell access that can drive a pseudo-terminal can delete files without scull anyway, which
-//! is out of scope (PRD §13.4).
+//! The code proves that whoever approves *reads the screen the plan is shown on*: a pipe, a
+//! piped `yes`, an agent's shell tool without a terminal, or a client that relays keystrokes
+//! without showing the plan cannot approve. It is drawn from the OS random number generator
+//! for each challenge (one `scull approve` run, or one opening of the desktop dialog;
+//! [`ConfirmationCode::generate`]), stays the same across that challenge's retries, is shown
+//! only on the approving surface, and is compared in constant time, case-, space- and
+//! hyphen-insensitive (paste allowed, WCAG 2.2 SC 3.3.8).
+//!
+//! It is **not** a secret and not a proof of a human: a process that drives a
+//! pseudo-terminal on the same host (`expect`, `script`, `tmux`) passes the terminal checks
+//! and can read and type the code, and anything that can write the user's database can
+//! insert an approval row. Both are the same trust boundary as an agent with unrestricted
+//! shell access, which can delete files without scull anyway: out of scope (PRD §13.4,
+//! `docs/THREAT_MODEL.md` T-41). The desktop dialog (#109) is the preferred approval
+//! surface.
 //!
 //! # API for the desktop bridge (#109)
 //!
@@ -139,6 +149,8 @@ pub enum Reason {
     ReviewedPlanDiffers,
     /// scull's database failed.
     Store,
+    /// The OS random number generator failed (no confirmation code could be drawn).
+    RandomUnavailable,
 }
 
 impl Reason {
@@ -159,6 +171,7 @@ impl Reason {
             Reason::PlanChanged => "plan_changed",
             Reason::ReviewedPlanDiffers => "reviewed_plan_differs",
             Reason::Store => "store",
+            Reason::RandomUnavailable => "random_unavailable",
         }
     }
 
@@ -178,7 +191,7 @@ impl Reason {
             | Reason::ApprovalUsed
             | Reason::NotHuman
             | Reason::WrongCode => ErrorKind::SafetyBlocked,
-            Reason::Store => ErrorKind::Io,
+            Reason::Store | Reason::RandomUnavailable => ErrorKind::Io,
         }
     }
 }
@@ -235,24 +248,18 @@ impl std::fmt::Debug for ConfirmationCode {
 }
 
 impl ConfirmationCode {
-    /// A fresh random code. The randomness comes from the standard library's per-process
-    /// random hash keys (seeded by the OS), mixed with the time and a counter.
-    pub fn generate() -> Self {
-        use std::hash::{BuildHasher, RandomState};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let mut bits = RandomState::new().hash_one((nanos, n, std::process::id()));
-        let mut out = [0u8; CODE_LEN];
-        for c in &mut out {
-            *c = CODE_ALPHABET[(bits & 31) as usize];
-            bits >>= 5;
-        }
-        Self(out)
+    /// A fresh code from the OS cryptographic random number generator (`getrandom`). Fails
+    /// closed ([`Reason::RandomUnavailable`]) if the OS can't provide randomness.
+    pub fn generate() -> Result<Self, Refused> {
+        let mut bytes = [0u8; CODE_LEN];
+        getrandom::fill(&mut bytes).map_err(|e| {
+            Refused::new(
+                Reason::RandomUnavailable,
+                format!("the OS random number generator failed ({e}); nothing was approved"),
+            )
+        })?;
+        // 32 symbols: the low 5 bits of each byte are uniform.
+        Ok(Self(bytes.map(|b| CODE_ALPHABET[usize::from(b & 31)])))
     }
 
     /// A code from its characters (tests and fixed demonstrations). `None` unless it has
@@ -453,7 +460,7 @@ pub fn begin(store: &Store, id: &PlanId, who: &Principal, now: i64) -> Result<Ch
     }
     Ok(Challenge {
         plan,
-        code: ConfirmationCode::generate(),
+        code: ConfirmationCode::generate()?,
     })
 }
 
@@ -693,28 +700,113 @@ fn used(id: &PlanId) -> Refused {
     )
 }
 
+/// How a plan item differs from what is on disk now (D-34).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Change {
+    /// [`narrow`] dropped it (gone, replaced, moved, ambiguous, now protected, tier raised,
+    /// action no longer allowed, ...).
+    Dropped(DropReason),
+    /// Its tier is different (here: lower; a higher tier is a drop).
+    Tier {
+        /// Tier when the plan was approved.
+        planned: Tier,
+        /// Tier now.
+        fresh: Tier,
+    },
+    /// The proposed action is different.
+    Action,
+    /// The reclaimable size is different (the contents changed).
+    Size {
+        /// Bytes when the plan was approved.
+        planned: u64,
+        /// Bytes now.
+        fresh: u64,
+    },
+    /// It is detected differently (category or rule).
+    Detection,
+}
+
+impl Change {
+    /// Stable machine code: `narrow`'s drop reason, or `tier_changed`, `action_changed`,
+    /// `size_changed`, `detection_changed`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Change::Dropped(r) => r.code(),
+            Change::Tier { .. } => "tier_changed",
+            Change::Action => "action_changed",
+            Change::Size { .. } => "size_changed",
+            Change::Detection => "detection_changed",
+        }
+    }
+}
+
 /// One plan item that no longer matches the disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedItem {
     /// The item.
     pub item_id: ItemId,
-    /// Why it no longer matches ([`scull_core::narrow`]'s reason).
-    pub reason: DropReason,
+    /// How it changed.
+    pub change: Change,
 }
 
-/// D-34 (provisional): an agent's plan runs only as approved. Re-derive the candidates from
-/// the disk (`fresh`) and [`narrow`] the plan: if **any** item dropped out (gone, replaced,
-/// moved, tier raised, action changed), the whole plan is void. Returns the changed items.
+/// D-34 (provisional): an agent's plan runs only exactly as approved. Re-derive the
+/// candidates from the disk (`fresh`): if **any** item changed in any way, the whole plan is
+/// void. That is stricter than [`narrow`], which CLI and desktop plans keep using (it skips
+/// changed items, and accepts a lower tier, a safer action and a new size): here an item
+/// [`narrow`] drops, or whose fresh candidate differs from the approved item in tier, action,
+/// reclaimable bytes, category or rule, is a change. Returns every changed item.
 pub fn check_unchanged(plan: &Plan, fresh: &[Candidate]) -> Result<(), Vec<ChangedItem>> {
     let n = narrow(plan, fresh);
-    if n.dropped.is_empty() && n.executable.len() == plan.items().len() {
-        return Ok(());
-    }
-    Err(n
+    let mut changed: Vec<ChangedItem> = n
         .dropped
         .into_iter()
-        .map(|(item_id, reason)| ChangedItem { item_id, reason })
-        .collect())
+        .map(|(item_id, reason)| ChangedItem {
+            item_id,
+            change: Change::Dropped(reason),
+        })
+        .collect();
+    for item in plan.items() {
+        if changed.iter().any(|c| c.item_id == item.item_id) {
+            continue;
+        }
+        // `narrow` kept it, so exactly one fresh candidate has this ID, path and identity.
+        let Some(c) = fresh.iter().find(|c| c.id == item.item_id) else {
+            changed.push(ChangedItem {
+                item_id: item.item_id.clone(),
+                change: Change::Dropped(DropReason::Missing),
+            });
+            continue;
+        };
+        let change = if c.tier != item.tier {
+            Some(Change::Tier {
+                planned: item.tier,
+                fresh: c.tier,
+            })
+        } else if c.action != item.action {
+            Some(Change::Action)
+        } else if c.sizes.reclaimable.bytes != item.reclaimable_bytes {
+            Some(Change::Size {
+                planned: item.reclaimable_bytes,
+                fresh: c.sizes.reclaimable.bytes,
+            })
+        } else if c.category != item.category || c.rule != item.rule {
+            Some(Change::Detection)
+        } else {
+            None
+        };
+        if let Some(change) = change {
+            changed.push(ChangedItem {
+                item_id: item.item_id.clone(),
+                change,
+            });
+        }
+    }
+    if changed.is_empty() {
+        Ok(())
+    } else {
+        Err(changed)
+    }
 }
 
 /// Void plan `plan` after [`check_unchanged`] failed (D-34): its approval is marked used, so
@@ -760,17 +852,21 @@ pub fn ineligible(c: &Candidate) -> Option<&'static str> {
     }
 }
 
-/// A new plan ID: Unix seconds then 64 random bits, in hex.
+/// A new plan ID: Unix seconds then 64 random bits from the OS random number generator, in
+/// hex. (If the OS generator fails, the bits come from the standard library's randomly keyed
+/// hasher: plan IDs are identifiers, not secrets.)
 pub fn new_plan_id(now: i64) -> PlanId {
-    use std::hash::{BuildHasher, RandomState};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let random = RandomState::new().hash_one((nanos, n, std::process::id()));
+    let mut bytes = [0u8; 8];
+    let random = if getrandom::fill(&mut bytes).is_ok() {
+        u64::from_le_bytes(bytes)
+    } else {
+        use std::hash::{BuildHasher, RandomState};
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        RandomState::new().hash_one((nanos, std::process::id()))
+    };
     let suffix = format!("{:x}{random:016x}", u64::try_from(now).unwrap_or(0));
     #[allow(clippy::expect_used)] // Lowercase hex is always a valid suffix.
     PlanId::from_suffix(&suffix).expect("hex suffix is a valid plan ID")
@@ -787,7 +883,7 @@ mod tests {
 
     #[test]
     fn codes_are_drawn_from_the_alphabet_and_vary() {
-        let a = ConfirmationCode::generate();
+        let a = ConfirmationCode::generate().unwrap();
         let shown = a.display();
         assert_eq!(shown.len(), CODE_LEN + 1);
         assert_eq!(&shown[3..4], "-");
@@ -798,7 +894,7 @@ mod tests {
                 .all(|b| CODE_ALPHABET.contains(&b))
         );
         let many: std::collections::BTreeSet<String> = (0..64)
-            .map(|_| ConfirmationCode::generate().display())
+            .map(|_| ConfirmationCode::generate().unwrap().display())
             .collect();
         assert!(many.len() > 60, "codes repeat too often: {many:?}");
         assert_eq!(format!("{a:?}"), "ConfirmationCode(..)", "never logged");
@@ -846,5 +942,119 @@ mod tests {
         assert!(HumanChannel::is_human(ApprovalMethod::Desktop));
         assert!(!HumanChannel::is_human(ApprovalMethod::CliFlag));
         assert!(!HumanChannel::is_human(ApprovalMethod::CliInteractive));
+    }
+
+    // ---- D-34: any change voids an agent plan --------------------------------------------
+
+    use scull_core::{
+        Category, FileIdentity, Flags, FsPath, PlanItem, PlanParams, ReasonCode, Regeneration,
+        RuleRef, Sizes, TierReason,
+    };
+
+    fn cand(tier: Tier, action: Action, bytes: u64) -> Candidate {
+        let identity = FileIdentity::new(1, 42);
+        let path = "/work/app/target";
+        let mut sizes = Sizes::default();
+        sizes.reclaimable.bytes = bytes;
+        Candidate {
+            id: ItemId::derive(identity, path.as_bytes()),
+            path: FsPath::from(path),
+            identity,
+            category: Category::ProjectArtifact,
+            artifact: "Cargo build output".into(),
+            rule: RuleRef {
+                id: "rust.target".into(),
+                version: 1,
+            },
+            project: None,
+            tier,
+            reasons: vec![TierReason::new(tier, ReasonCode::Regenerable, "test")],
+            evidence: vec![],
+            sizes,
+            flags: Flags::default(),
+            regeneration: Regeneration::default(),
+            action,
+        }
+    }
+
+    fn mcp_plan(c: &Candidate) -> Plan {
+        Plan::new(
+            PlanParams {
+                id: PlanId::from_suffix("01JD34").unwrap(),
+                scan_id: scull_core::ScanId::from_suffix("01JD34").unwrap(),
+                created_unix: 1_800_000_000,
+                ttl_secs: None,
+                machine_id: "m".into(),
+                user: "u".into(),
+                origin: PlanOrigin::Mcp,
+            },
+            vec![PlanItem::from_candidate(c).unwrap()],
+        )
+        .unwrap()
+    }
+
+    fn change_of(plan: &Plan, fresh: Candidate) -> Option<Change> {
+        check_unchanged(plan, &[fresh])
+            .err()
+            .map(|mut v| v.remove(0).change)
+    }
+
+    #[test]
+    fn d34_unchanged_items_pass() {
+        let c = cand(Tier::S1, Action::Quarantine, 4096);
+        assert!(check_unchanged(&mcp_plan(&c), std::slice::from_ref(&c)).is_ok());
+    }
+
+    /// `narrow` keeps these for CLI/desktop plans (lower tier, safer action, new size);
+    /// D-34 voids an agent plan for each of them.
+    #[test]
+    fn d34_changes_narrow_accepts_still_void_an_agent_plan() {
+        let plan = mcp_plan(&cand(Tier::S1, Action::Quarantine, 4096));
+        // Same inode, contents changed: a different reclaimable size.
+        assert_eq!(
+            change_of(&plan, cand(Tier::S1, Action::Quarantine, 9000)),
+            Some(Change::Size {
+                planned: 4096,
+                fresh: 9000
+            })
+        );
+        // Tier lowered (S1 -> S0).
+        assert_eq!(
+            change_of(&plan, cand(Tier::S0, Action::Quarantine, 4096)),
+            Some(Change::Tier {
+                planned: Tier::S1,
+                fresh: Tier::S0
+            })
+        );
+        // Same tier, another proposed action (S1 quarantine -> S1 trash).
+        assert_eq!(
+            change_of(&plan, cand(Tier::S1, Action::Trash, 4096)),
+            Some(Change::Action)
+        );
+        // Detected by another rule version.
+        let mut other = cand(Tier::S1, Action::Quarantine, 4096);
+        other.rule.version = 2;
+        assert_eq!(change_of(&plan, other), Some(Change::Detection));
+        // `narrow`'s skip semantics for CLI/desktop plans are unchanged: it keeps these.
+        for fresh in [
+            cand(Tier::S1, Action::Quarantine, 9000),
+            cand(Tier::S0, Action::Quarantine, 4096),
+        ] {
+            assert_eq!(narrow(&plan, &[fresh]).executable.len(), 1);
+        }
+    }
+
+    #[test]
+    fn d34_dropped_items_void_an_agent_plan() {
+        let plan = mcp_plan(&cand(Tier::S1, Action::Quarantine, 4096));
+        assert_eq!(
+            check_unchanged(&plan, &[]).unwrap_err()[0].change,
+            Change::Dropped(DropReason::Missing)
+        );
+        let raised = change_of(&plan, cand(Tier::S2, Action::Quarantine, 4096)).unwrap();
+        assert!(matches!(
+            raised,
+            Change::Dropped(DropReason::TierRaised { .. })
+        ));
     }
 }

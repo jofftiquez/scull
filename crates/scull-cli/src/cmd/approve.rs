@@ -2,8 +2,13 @@
 //! own terminal, a cleanup plan an AI agent prepared through the MCP server.
 //!
 //! * **Interactive terminal only** (FX-MCP-08, T-41): stdin, stdout and stderr must all be
-//!   terminals, and the output format human. An agent's shell tool, a pipe or a script gets
-//!   `safety_blocked` (exit 5) and nothing is approved. There is no flag to skip this.
+//!   terminals, and the output format human. Anything without a terminal (an agent's shell
+//!   tool, a pipe, a script, `echo yes |`) gets `safety_blocked` (exit 5) and nothing is
+//!   approved. There is no flag to skip this. The typed code proves the plan was on a screen
+//!   someone read; it does not prove a human: a process that drives a pseudo-terminal on the
+//!   same host (`expect`, `script`, `tmux`) passes these checks, which is the out-of-scope
+//!   case of an agent with unrestricted shell access (PRD §13.4, `docs/THREAT_MODEL.md`
+//!   T-41). The desktop dialog (#109) is the preferred approval surface.
 //! * **Never elevated**: refused as root/administrator, with no override (#199: agent
 //!   approvals are off when running elevated).
 //! * Without a plan ID it lists the agent plans awaiting approval and approves nothing.
@@ -107,9 +112,9 @@ pub fn require_interactive(
     if !(stdin && stdout && stderr) {
         return Err(ScullError::new(
             ErrorKind::SafetyBlocked,
-            "scull approve needs an interactive terminal (stdin, stdout and stderr): an AI \
-             agent, script or pipe can never approve a cleanup (MCP-04). Run `scull approve \
-             <plan-id>` yourself in a terminal. Nothing was approved.",
+            "scull approve needs an interactive terminal (stdin, stdout and stderr): pipes, \
+             scripts and agent tools without a terminal can't approve a cleanup (MCP-04). Run \
+             `scull approve <plan-id>` yourself in a terminal. Nothing was approved.",
         ));
     }
     Ok(())

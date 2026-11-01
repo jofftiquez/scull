@@ -48,25 +48,41 @@ fn mcp_plan(fx: &Fixture, scan: &ScanReport, rels: &[&str], id: &str, created: i
     .unwrap()
 }
 
+/// The account this test runs as (what the Executor reads from the OS).
+fn me() -> String {
+    scull_platform::current_user().unwrap()
+}
+
 fn approve(s: &mut Store, plan: &Plan, method: ApprovalMethod, at: i64, expires: i64) {
+    approve_as(s, plan, method, at, expires, &me());
+}
+
+fn approve_as(
+    s: &mut Store,
+    plan: &Plan,
+    method: ApprovalMethod,
+    at: i64,
+    expires: i64,
+    approver: &str,
+) {
     s.insert_approval(&NewApproval {
         plan_id: plan.id().clone(),
         content_hash: plan.content_hash().clone(),
         method,
-        approver: USER.into(),
+        approver: approver.into(),
         approved_at: at,
         expires_at: expires,
     })
     .unwrap();
 }
 
-/// The start the MCP runner sends: the approval's approver and channel.
+/// The start the MCP runner sends: this account (from the OS) and the approval's channel.
 fn start(plan: &Plan, op: &str, method: ApprovalMethod) -> OperationStart {
     OperationStart {
         operation_id: OperationId::from_suffix(op).unwrap(),
         plan_id: plan.id().clone(),
         content_hash: plan.content_hash().clone(),
-        approver: USER.into(),
+        approver: me(),
         method,
         started_at: now_unix(),
     }
@@ -136,7 +152,7 @@ fn approved_agent_plan_runs_once_and_consumes_the_approval() {
         .unwrap()
         .unwrap();
     assert_eq!(op.method, ApprovalMethod::CliTty);
-    assert_eq!(op.approver, USER);
+    assert_eq!(op.approver, me());
     check(&fx, &plan, &r, &["app/target"]);
 }
 
@@ -372,6 +388,26 @@ fn non_human_or_misrecorded_approvals_are_refused() {
     let e = exec.begin_operation(&mut s, &plan, &st).unwrap_err();
     assert_eq!(e.kind, ErrorKind::PlanTampered, "{}", e.message);
     assert_eq!(s.get_approval(plan.id()).unwrap().unwrap().used_at, None);
+
+    // An approval recorded for another account never runs here, whatever the caller claims:
+    // the Executor reads the account it runs as from the OS.
+    let theirs = mcp_plan(&fx, &scan, &["app/target"], "01JMCPOTHER", now);
+    s.insert_plan(&theirs).unwrap();
+    approve_as(
+        &mut s,
+        &theirs,
+        ApprovalMethod::CliTty,
+        now,
+        theirs.expires_unix(),
+        "other-account",
+    );
+    for approver in [me(), "other-account".to_owned()] {
+        let mut st = start(&theirs, "01JMCPOTHER", ApprovalMethod::CliTty);
+        st.approver = approver;
+        let e = exec.begin_operation(&mut s, &theirs, &st).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{}", e.message);
+    }
+    assert_eq!(s.get_approval(theirs.id()).unwrap().unwrap().used_at, None);
     nothing_happened(&fx, &s);
 }
 

@@ -449,3 +449,106 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
     assert_eq!(a.method, ApprovalMethod::CliTty);
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
+
+/// `scull approve` in a **real** pseudo-terminal (tmux; skipped where tmux is not installed):
+/// the full plan and the code are shown, a wrong code re-prompts, the shown code approves,
+/// and the approval is recorded with channel `cli_tty`. (This is also how a PTY-driving
+/// process could approve: T-41's documented residual, #302.)
+#[cfg(unix)]
+#[test]
+fn approve_in_a_real_pseudo_terminal() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("skipped: tmux is not installed");
+        return;
+    }
+    let env = Env::new(true);
+    let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
+    let (_, cands) = s.call("get_cleanup_candidates", json!({}));
+    let ids: Vec<Value> = cands["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(c["action"].as_str(), Some("delete" | "quarantine")))
+        .map(|c| c["id"].clone())
+        .collect();
+    let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
+    assert!(!err, "{plan:#}");
+    s.finish();
+    let id = plan["plan_id"].as_str().unwrap().to_owned();
+
+    // The same environment as `Env::cmd`, spelled out for the shell tmux starts.
+    let q = |p: &std::path::Path| format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"));
+    let user_home = env.fx.base().join("userhome");
+    let mut vars = format!(
+        "env -u SCULL_TEST_ASSUME_ELEVATED SCULL_HOME={} HOME={} TERM=xterm NO_COLOR=1",
+        q(&env.home()),
+        q(&user_home)
+    );
+    for (k, v) in env.fx.sandbox_env() {
+        vars.push_str(&format!(" {k}={}", q(v)));
+    }
+    let script = format!(
+        "{vars} {} approve {id}; echo SCULL-EXIT=$?; sleep 60",
+        q(std::path::Path::new(env!("CARGO_BIN_EXE_scull")))
+    );
+    let socket = env.fx.base().join("tmux.sock");
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .arg("-S")
+            .arg(&socket)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let o = tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "approve",
+        "-x",
+        "200",
+        "-y",
+        "60",
+        &script,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let pane = || {
+        String::from_utf8_lossy(&tmux(&["capture-pane", "-p", "-t", "approve"]).stdout).into_owned()
+    };
+    let wait_for = |needle: &str| -> String {
+        for _ in 0..200 {
+            let p = pane();
+            if p.contains(needle) {
+                return p;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("{needle:?} never appeared:\n{}", pane());
+    };
+    let shown = wait_for(" to approve, or `deny`");
+    let code = shown
+        .split("Type ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(code.len(), 7, "{shown}");
+    assert!(shown.contains("An AI agent asks to clean up"), "{shown}");
+    assert!(shown.contains(&id), "{shown}");
+    tmux(&["send-keys", "-t", "approve", "ZZZ-ZZZ", "Enter"]);
+    wait_for("That is not the code");
+    tmux(&["send-keys", "-t", "approve", &code.to_lowercase(), "Enter"]);
+    let done = wait_for("SCULL-EXIT=");
+    tmux(&["kill-server"]);
+    assert!(done.contains("SCULL-EXIT=0"), "{done}");
+    assert!(done.contains("Approved plan"), "{done}");
+    let a = env
+        .store()
+        .get_approval(&PlanId::try_from(id).unwrap())
+        .unwrap()
+        .expect("approved");
+    assert_eq!(a.method, ApprovalMethod::CliTty);
+    assert_eq!(a.approver, env.who().user);
+    let _ = std::fs::remove_file(&socket);
+    env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}

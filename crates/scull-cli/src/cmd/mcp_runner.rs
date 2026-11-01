@@ -8,10 +8,10 @@
 //! 2. take the per-user execution lock, failing at once if another operation holds it
 //!    (SAFE-09, `lock_held`; the approval is not spent);
 //! 3. reconcile operations a crash interrupted (SAFE-19);
-//! 4. start the operation with the **approval's** approver and channel:
-//!    `Executor::begin_operation` consumes the approval atomically and refuses an agent plan
-//!    without a matching, unexpired, unused human approval (MCP-04), or whose targets another
-//!    operation touched (SAFE-09);
+//! 4. start the operation with this account (from the OS) as the approver and the approval's
+//!    channel: `Executor::begin_operation` consumes the approval atomically and refuses an
+//!    agent plan without a matching, unexpired, unused human approval given by this account
+//!    (MCP-04), or whose targets another operation touched (SAFE-09);
 //! 5. execute with per-item revalidation (SAFE-05): S0 deleted, S1/S2 quarantined (the
 //!    configured location, P2-EXEC-13), the Trash only where quarantine is impossible (D-3);
 //!    the free-space delta is measured and recorded (I-5);
@@ -58,7 +58,9 @@ impl CleanupRunner for ExecutorRunner {
                     operation_id: operation_id.clone(),
                     plan_id: req.plan.id().clone(),
                     content_hash: req.plan.content_hash().clone(),
-                    approver: req.approval.approver.clone(),
+                    // The account this process runs as, from the OS (the Executor checks the
+                    // approval was given by it); the channel is the approval's.
+                    approver: exec::who()?.user,
                     method: req.approval.method,
                     started_at,
                 },
