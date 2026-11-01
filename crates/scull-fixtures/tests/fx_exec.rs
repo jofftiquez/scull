@@ -3,10 +3,8 @@
 //! runs the plan under the execution lock inside an audited operation, and every invariant
 //! with an input runs, including **I-4** on the Executor's own audit.
 //!
-//! I-5 (an operation record holding predicted *and* measured bytes) cannot hold for an
-//! Executor `Operation` yet: `Operation::finish` always records `measured_delta_bytes: None`
-//! (#76). FX-EXEC-01 therefore measures the delta and asserts it is reported, but feeds no
-//! operation bytes, and the registry keeps it tracked by #76.
+//! FX-EXEC-01 also checks **I-5**: the operation measures the free-space delta itself
+//! (`Operation::with_meter`) and `Operation::finish` records it next to the predicted bytes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -15,9 +13,7 @@ mod exec;
 use exec::engine::{
     MACHINE, USER, ctx, harness, inputs, locked, plan, print_report, run, start, store, three_tiers,
 };
-use scull_cleaner::measure::{
-    ItemExecution, MeasureOptions, PlatformFreeSpace, Tally, VolumeMeter,
-};
+use scull_cleaner::measure::{MeasureOptions, PlatformFreeSpace, VolumeMeter};
 use scull_cleaner::{ItemOutcome, PlanContext, RemoveOutcome};
 use scull_core::{CLI_PLAN_TTL_SECS, ErrorKind, OperationId, Plan};
 use scull_engine::{CancelToken, now_unix};
@@ -70,14 +66,12 @@ fn fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported() {
     );
 
     let op = OperationId::from_suffix("OX01").unwrap();
-    let predicted = exec::predict(&fx, "lib/target");
     let meter = VolumeMeter::new(
         PlatformFreeSpace,
         MeasureOptions::default()
             .with_samples(3)
             .with_resampling(Duration::from_millis(200), Duration::from_secs(3)),
     );
-    let baseline = meter.before([fx.root()]);
     let exec = locked(&fx);
     let mut operation = exec
         .begin_operation(&mut s, &p, &start(&p, &op))
@@ -85,7 +79,8 @@ fn fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported() {
         .with_quarantine(scull_cleaner::QuarantineSettings {
             base: Some(fx.quarantine_base().to_path_buf()),
             ..scull_cleaner::QuarantineSettings::default()
-        });
+        })
+        .with_meter(meter);
     let r = exec
         .execute_plan(
             &p,
@@ -105,16 +100,11 @@ fn fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported() {
     assert_eq!(d.outcome, RemoveOutcome::Complete);
     assert!(!fx.root().join("lib/target").exists());
     let item = &p.items()[0];
-    let mut tally = Tally::new();
-    tally.add(
-        &predicted.reclaim,
-        &predicted.notes,
-        ItemExecution::Done {
-            removed: d.removed.allocated_bytes,
-            moved: 0,
-        },
-    );
-    let delta = meter.after(baseline, &tally);
+    // The measured free-space delta is reported beside the prediction ...
+    let delta = r
+        .measurement
+        .as_ref()
+        .expect("the operation measured the run");
     println!("{delta}");
     let measured = delta
         .measured_total
@@ -123,9 +113,18 @@ fn fx_exec_01_s0_deleted_after_confirmation_measured_delta_reported() {
         "FX-EXEC-01: predicted {} B, removed {} B, measured {measured:+} B",
         item.reclaimable_bytes, d.removed.allocated_bytes
     );
+    assert_eq!(delta.removed, d.removed.allocated_bytes);
+    // ... and recorded with the operation (I-5).
+    let rec = s.operation(&op).unwrap().expect("operation recorded");
+    let fin = rec.finished.as_ref().expect("operation finished");
+    assert_eq!(fin.totals.measured_delta_bytes, Some(measured), "{rec:#?}");
     assert_eq!(r.error_kind(), None);
-    let inv = check(&fx, &inputs(&p, &r, &s, &op, &["lib/target"]));
+    let inv = check(
+        &fx,
+        &inputs(&p, &r, &s, &op, &["lib/target"]).operation_bytes(&s, &op),
+    );
     assert_eq!(inv.outcome(InvariantId::I4), &Outcome::Passed, "{inv}");
+    assert_eq!(inv.outcome(InvariantId::I5), &Outcome::Passed, "{inv}");
     assert_ran(&inv, &[InvariantId::I1, InvariantId::I8]);
 }
 

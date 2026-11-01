@@ -169,6 +169,9 @@ def parse_results(out: str, fns: list[str], returncode: int) -> dict[str, str]:
 
 def check_fixtures(allow_skips: bool, report: Path | None) -> None:
     os_letter = this_os()
+    # FX-OUT/FX-DATA and the CLI tests drive the real `scull` binary (target/debug/scull);
+    # `cargo test -p scull-fixtures` alone does not build it.
+    subprocess.run(["cargo", "build", "--locked", "-p", "scull-cli"], cwd=ROOT, check=True)
     registry = load_registry()
     mvp = [f for f in registry if f["gate"] == "MVP"]
     print(f"MVP fixture gate on {platform.system()} ({os_letter}): {len(mvp)} MVP fixtures registered")
