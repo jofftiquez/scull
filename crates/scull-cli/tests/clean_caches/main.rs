@@ -689,10 +689,13 @@ fn run_report_with_observable_activity() {
     }
     let npm = fake::calls(&env.tools(), "npm");
     assert_eq!(npm.len(), 1);
+    // The tool ran inside the sandbox, compared canonically (the tool's private working folder
+    // is gone by now; on Windows the sandbox may be spelled with an 8.3 short name).
+    let plain = scull_engine::paths::canon;
     assert!(
-        npm[0]
-            .cwd
-            .starts_with(std::fs::canonicalize(&sandbox).unwrap())
+        plain(&npm[0].cwd).starts_with(plain(&sandbox)),
+        "{:?} outside {sandbox:?}",
+        npm[0].cwd
     );
     let content = root.join(NPM).join("_cacache/content-v2/sha512/ab/cd");
     assert!(!content.join("unused01").exists() && content.join("keep01").exists());

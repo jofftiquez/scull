@@ -381,27 +381,9 @@ impl Home {
     }
 }
 
-/// Removal goes through the cleaner's walker, which Windows does not have yet (#68): there the
-/// purge must refuse as unsupported with nothing deleted. Returns true when that was checked.
-fn no_walker_here(h: &Home, args: &[&str]) -> bool {
-    if !cfg!(windows) {
-        return false;
-    }
-    let before = h.data_entries();
-    let o = scull_in(h.home(), args);
-    assert_eq!(o.status.code(), Some(1));
-    assert_eq!(error_kind(&o), "unsupported_platform");
-    assert_eq!(h.data_entries(), before);
-    h.check_unchanged();
-    true
-}
-
 #[test]
 fn fx_data_04_purge_all_removes_exactly_sculls_files() {
     let h = Home::new();
-    if no_walker_here(&h, &["data", "purge", "--all", "--confirm", "--json"]) {
-        return;
-    }
     let v = json_ok(&scull_in(
         h.home(),
         &["data", "purge", "--all", "--confirm", "--json"],
@@ -644,17 +626,6 @@ fn purge_older_than_removes_only_old_copies() {
             .open(h.home().join("data").join(name))
             .and_then(|f| f.set_modified(old))
             .expect("age");
-    }
-    let args = [
-        "data",
-        "purge",
-        "--older-than",
-        "30d",
-        "--confirm",
-        "--json",
-    ];
-    if no_walker_here(&h, &args) {
-        return;
     }
     let v = json_ok(&scull_in(
         h.home(),

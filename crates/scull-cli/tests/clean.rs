@@ -72,8 +72,14 @@ impl Env {
         self.fx.base().join("scull-home")
     }
 
+    /// The fixture root, canonical: the spelling scull reports (on Windows the temp dir is an
+    /// 8.3 short path such as `C:\Users\RUNNER~1\...`, which scull spells out in full).
     fn root(&self) -> PathBuf {
-        self.fx.root().to_path_buf()
+        let c = std::fs::canonicalize(self.fx.root()).unwrap();
+        match c.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+            Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+            _ => c,
+        }
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -561,7 +567,10 @@ fn fx_exec_07_tampered_plans_are_rejected() {
     let original = std::fs::read_to_string(env.plan_file()).unwrap();
 
     // 1. Hand-edited: a path swapped in, hash unchanged.
-    let edited = original.replace("app/target", "notes");
+    // (`app\\target` in the JSON of a Windows plan.)
+    let edited = original
+        .replace("app/target", "notes")
+        .replace(r"app\\target", "notes");
     assert_ne!(edited, original);
     std::fs::write(env.plan_file(), &edited).unwrap();
     let o = env.run(&[
@@ -930,14 +939,14 @@ fn plan_roots_come_from_history() {
     }
     let file = env.plan_file();
     let o = env
-        .cmd(&[
+        .cmd(&allow_root_if_elevated(&[
             "clean",
             "--plan",
             file.to_str().unwrap(),
             "--confirm",
             "--allow-network-roots",
             "--json",
-        ])
+        ]))
         .current_dir(env.fx.base().join("userhome"))
         .output()
         .unwrap();

@@ -273,17 +273,43 @@ fn fx_mcp_07_binary_needs_both_flag_and_config() {
 
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let names = s.tools();
-    for t in scull_mcp::PLAN_TOOL_NAMES {
-        assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+    if elevated_here() {
+        // SAFE-14: an elevated server never offers destructive tools, flag and config or not.
+        assert_eq!(names, scull_mcp::TOOL_NAMES, "read-only when elevated");
+        let err = s.finish();
+        assert!(err.contains("root/administrator"), "{err}");
+    } else {
+        for t in scull_mcp::PLAN_TOOL_NAMES {
+            assert!(names.iter().any(|n| n == t), "{t} offered: {names:?}");
+        }
+        let err = s.finish();
+        assert!(err.contains("scull approve"), "{err}");
     }
-    let err = s.finish();
-    assert!(err.contains("scull approve"), "{err}");
     env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// Whether this test process runs elevated (GitHub's Windows runners do): scull's MCP server
+/// then never offers destructive tools (SAFE-14), so the approval flow can't be exercised.
+fn elevated_here() -> bool {
+    scull_platform::is_elevated().blocks_destructive()
+}
+
+/// The approval-flow tests need the plan tools; elevated, the server stays read-only (checked
+/// in `fx_mcp_07_binary_needs_both_flag_and_config`), so they only say so and stop.
+fn skip_if_elevated(test: &str) -> bool {
+    if elevated_here() {
+        eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
+        return true;
+    }
+    false
 }
 
 /// The whole flow through the binary, with the adversarial steps an agent could try.
 #[test]
 fn agent_plan_runs_only_after_the_human_approves() {
+    if skip_if_elevated("agent_plan_runs_only_after_the_human_approves") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));
@@ -463,6 +489,9 @@ fn agent_plan_runs_only_after_the_human_approves() {
 /// shown code approves; the full plan with its hash is shown first.
 #[test]
 fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
+    if skip_if_elevated("approve_prompt_shows_the_plan_and_needs_the_shown_code") {
+        return;
+    }
     let env = Env::new(true);
     let mut s = Session::start(env.cmd(&["mcp", "serve", "--allow-destructive"]));
     let (_, cands) = s.call("get_cleanup_candidates", json!({}));

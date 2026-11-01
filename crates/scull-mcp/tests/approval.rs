@@ -370,10 +370,12 @@ async fn prepare_refuses_protected_and_unknown_items() {
             "{code}"
         );
     }
+    // An absolute path outside the allowlist (`/etc` is not absolute on Windows).
+    let outside = if cfg!(windows) { r"C:\Windows" } else { "/etc" };
     let r = call(
         &client,
         "prepare_cleanup",
-        json!({ "item_ids": [good["id"]], "path": "/etc" }),
+        json!({ "item_ids": [good["id"]], "path": outside }),
     )
     .await;
     assert_eq!(error_code(&r), "outside_allowlist");

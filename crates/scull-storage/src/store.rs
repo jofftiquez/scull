@@ -66,7 +66,8 @@ impl Store {
     ///    application's database → [`StoreError::NotScullDatabase`]. In all three cases the file
     ///    is left byte-identical.
     /// 3. Database, `-wal` and `-shm` files are restricted owner-only, connection settings are
-    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup.
+    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup. The
+    ///    `-wal` and `-shm` files SQLite creates while opening are restricted too.
     pub fn open_with(path: &Path, perms: &dyn OwnerOnly, options: &StoreOptions) -> Result<Store> {
         Self::open_inner(path, perms, options, MIGRATIONS)
     }
@@ -176,6 +177,17 @@ impl Store {
         })
         .map_err(StoreError::from)
         .map_err(cls)?;
+        // The `-wal` and `-shm` files SQLite created just now, in WAL mode. On Unix they take
+        // the database file's mode; on Windows they inherit the data folder's owner-only DACL
+        // but are owned by the process's default owner, which for an elevated administrator is
+        // the Administrators group, not the user. Restricting them makes the user the owner.
+        for p in [with_suffix(path, "-wal"), with_suffix(path, "-shm")] {
+            if std::fs::symlink_metadata(&p).is_ok() {
+                perms
+                    .restrict(&p)
+                    .map_err(|source| StoreError::Permissions { path: p, source })?;
+            }
+        }
         for b in &backups_taken {
             perms
                 .restrict(b)

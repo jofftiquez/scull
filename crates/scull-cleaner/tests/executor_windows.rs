@@ -331,7 +331,10 @@ fn fx_win_03_file_held_open_by_another_process_is_skipped_and_named() {
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     loop {
         match lines.next() {
-            Some(Ok(line)) if line.trim() == HOLDING => break,
+            // With `--test-threads=1` libtest prints `test <name> ... ` before running the
+            // test, so the marker arrives on that line, not on a line of its own (waiting for
+            // an exact line here hung until the watchdog fired).
+            Some(Ok(line)) if line.trim_end().ends_with(HOLDING) => break,
             Some(Ok(_)) => continue,
             other => panic!("the holder exited before opening the file: {other:?}"),
         }

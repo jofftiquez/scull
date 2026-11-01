@@ -792,8 +792,10 @@ fn os(v: &[&str]) -> Vec<OsString> {
     v.iter().map(OsString::from).collect()
 }
 
+/// A path as the tools receive it: native separators (`home/.cache/pip` joined onto a Windows
+/// root is passed as `home\.cache\pip`).
 fn path_arg(p: &Path) -> OsString {
-    p.as_os_str().to_owned()
+    p.components().collect::<PathBuf>().into_os_string()
 }
 
 /// One audited operation, for the invariants and the audit assertions.
@@ -2442,7 +2444,7 @@ fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
         let location = home(&fx).join(".npm");
         assert_eq!(t.binary, canonical(&node), "{style:?}");
         assert_eq!(t.script.as_deref(), Some(script.as_path()));
-        assert_eq!(t.shim.as_deref(), Some(shim.as_path()));
+        assert_eq!(t.shim.as_deref(), Some(canonical(&shim).as_path()));
         assert_eq!(
             t.args,
             [

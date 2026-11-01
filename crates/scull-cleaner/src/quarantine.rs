@@ -133,9 +133,17 @@ pub(crate) fn test_sandbox() -> Option<PathBuf> {
 
 /// Under the test sandbox, why `path` may not be used (it is outside the sandbox, or the
 /// sandbox is not an absolute path). `None` outside the harness or when `path` is inside.
+///
+/// Containment is judged on canonical spellings (links resolved; on Windows an 8.3 short name
+/// such as `RUNNER~1` spelled out in full), so the same folder written two ways is inside and
+/// a link out of the sandbox is not. A path that doesn't exist is resolved through its nearest
+/// existing ancestor.
 pub(crate) fn outside_test_sandbox(path: &Path) -> Option<String> {
     let sandbox = test_sandbox()?;
-    if sandbox.is_absolute() && path.is_absolute() && path.starts_with(&sandbox) {
+    if sandbox.is_absolute()
+        && path.is_absolute()
+        && scull_engine::paths::canon(path).starts_with(scull_engine::paths::canon(&sandbox))
+    {
         return None;
     }
     Some(format!(
@@ -245,7 +253,14 @@ fn prepare_configured_base(
     if !base.is_absolute() {
         return impossible("is not an absolute path".into());
     }
-    if let Some(item) = plan_paths.iter().find(|p| base.starts_with(p)) {
+    // Inside an item however either is spelled: lexically, or canonically (links resolved; on
+    // Windows `RUNNER~1` and `runneradmin` are the same folder, and so are `/` and `\`),
+    // case-folded where the OS folds case. Refusing on any match errs toward "impossible".
+    let canonical_base = scull_engine::paths::canon(base);
+    if let Some(item) = plan_paths.iter().find(|p| {
+        scull_engine::paths::is_within(base, p)
+            || scull_engine::paths::is_within(&canonical_base, &scull_engine::paths::canon(p))
+    }) {
         return impossible(format!(
             "is inside {}, an item being cleaned",
             item.display()
