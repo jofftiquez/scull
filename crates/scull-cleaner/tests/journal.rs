@@ -7,8 +7,10 @@
 //!
 //! Kill tests: the operation runs in a **child process** (this test binary re-executed with
 //! `SCULL_KILL_CHILD` set). The child installs a step hook that, at the crash point named by
-//! the environment, writes a marker and blocks; the parent then SIGKILLs it
-//! (`Child::kill`), runs `Executor::recover` and asserts the invariants. Crash points are a
+//! the environment, writes a marker and blocks; the parent then kills it (`Child::kill`:
+//! SIGKILL on Unix, `TerminateProcess` on Windows, neither runs destructors or flushes), runs
+//! `Executor::recover` and asserts the invariants. Runs on every OS: Windows has same-volume
+//! quarantine moves (`scull_platform::quarantine::windows`). Crash points are a
 //! deterministic list (every point for every item kind) plus a seeded pseudo-random sample
 //! (`SCULL_KILL_SEED`, printed, to replay a failure).
 //!
@@ -16,7 +18,6 @@
 //! partial, a rerun completes the rest), FX-RACE-07 (killed during a quarantine move: the
 //! journal reconciles on next start, no orphaned or double-counted items).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
 
 #[path = "common/ops.rs"]
 mod ops;
@@ -265,7 +266,7 @@ fn run_and_kill(fx: &Fixture, plan: &Plan, op: &str, item: &str, point: &str, n:
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if reached.exists() {
-            child.kill().unwrap(); // SIGKILL: no destructors, no flushing.
+            child.kill().unwrap(); // SIGKILL / TerminateProcess: no destructors, no flushing.
             child.wait().unwrap();
             std::fs::remove_file(&reached).unwrap();
             return true;
