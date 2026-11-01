@@ -250,6 +250,9 @@ On Linux, FX-LNX-03 and FX-LNX-06 need real root, either directly or through `SC
 | FX-MCP-08 | `scull approve` without an interactive terminal | Refused | MLW | v1.0 | CI |
 | FX-MCP-09 | Default redaction | Home prefix shown as `~` in all MCP results | MLW | MVP | CI |
 | FX-MCP-10 | `register_worktree` with an expired TTL | Staleness alert only; nothing deleted | MLW | v1.0 | CI |
+| FX-MCP-11 | `scull approve` run under a pseudo-terminal driver (`script`, `expect`) | Refused (`pty_driver`) before the plan or code is shown; audited; nothing approved | ML | v1.0 | CI |
+| FX-MCP-12 | `scull approve` in a terminal carrying an AI agent's environment (e.g. a `tmux` session the agent started) | Refused (`agent_environment`); audited; nothing approved | ML | v1.0 | CI |
+| FX-MCP-13 | `scull approve` with an AI agent client among its parent processes | Refused (`agent_process`); audited; nothing approved | MLW | v1.0 | CI |
 
 ### 3.10 Windows-specific (FX-WIN)
 
@@ -340,7 +343,7 @@ On Linux, FX-LNX-03 and FX-LNX-06 need real root, either directly or through `SC
 | T-34 Misleading permanence | FX-EXEC-11 |
 | T-35 Running as root | FX-EXEC-12 |
 | T-40 Prompt injection | FX-MCP-05 |
-| T-41 Self-approval | FX-MCP-08 |
+| T-41 Self-approval | FX-MCP-08, -11, -12, -13 |
 | T-42 Approval misuse | FX-MCP-01, -02, -03, -04 |
 | T-43 MCP scope escape | FX-MCP-06 |
 | T-44 Path leakage | FX-MCP-09 |
