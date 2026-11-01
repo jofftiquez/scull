@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-weekly-digest"
+description = "Enables the weekly_digest command without any pre-configured scope."
+commands.allow = ["weekly_digest"]
+
+[[permission]]
+identifier = "deny-weekly-digest"
+description = "Denies the weekly_digest command without any pre-configured scope."
+commands.deny = ["weekly_digest"]

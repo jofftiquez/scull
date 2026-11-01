@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-monitor-status"
+description = "Enables the monitor_status command without any pre-configured scope."
+commands.allow = ["monitor_status"]
+
+[[permission]]
+identifier = "deny-monitor-status"
+description = "Denies the monitor_status command without any pre-configured scope."
+commands.deny = ["monitor_status"]
