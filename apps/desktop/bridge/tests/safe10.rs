@@ -21,8 +21,9 @@ fn desktop() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// Path dependencies declared in `[workspace.dependencies]` of the root manifest.
-fn workspace_paths() -> BTreeMap<String, PathBuf> {
+/// `[workspace.dependencies]` of the root manifest: key -> (package name, path if any). The
+/// package is the key unless `package = "..."` renames it.
+fn workspace_paths() -> BTreeMap<String, (String, Option<PathBuf>)> {
     let root = repo_root();
     let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     let mut out = BTreeMap::new();
@@ -33,11 +34,11 @@ fn workspace_paths() -> BTreeMap<String, PathBuf> {
             in_ws = line == "[workspace.dependencies]";
             continue;
         }
-        if in_ws
-            && let Some((name, rest)) = line.split_once('=')
-            && let Some(p) = quoted_after(rest, "path")
-        {
-            out.insert(name.trim().to_owned(), root.join(p));
+        if in_ws && let Some((key, rest)) = line.split_once('=') {
+            let key = key.trim().trim_matches('"').to_owned();
+            let name = quoted_after(rest, "package").unwrap_or_else(|| key.clone());
+            let path = quoted_after(rest, "path").map(|p| root.join(p));
+            out.insert(key, (name, path));
         }
     }
     out
@@ -70,64 +71,101 @@ fn dep_section(header: &str) -> Option<Option<String>> {
 
 #[derive(Debug, Default)]
 struct Manifest {
-    /// `scull-*` crates this manifest depends on (normal and build edges), with their
-    /// directory when it can be resolved.
+    /// `scull-*` packages this manifest depends on (normal and build edges), by package name
+    /// (a `package = "..."` rename is resolved), with their directory when it can be resolved.
     deps: Vec<(String, Option<PathBuf>)>,
     /// Whether `scull-platform`'s `delete` feature is enabled anywhere.
     enables_delete: bool,
 }
 
-fn read_manifest(dir: &Path, ws: &BTreeMap<String, PathBuf>) -> Manifest {
+/// One dependency entry while reading: its key, package name, path, and whether its own
+/// `features` list names `delete`.
+struct Entry {
+    key: String,
+    name: String,
+    path: Option<PathBuf>,
+    workspace: bool,
+    delete: bool,
+}
+
+fn read_manifest(dir: &Path, ws: &BTreeMap<String, (String, Option<PathBuf>)>) -> Manifest {
     let text = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-    let mut m = Manifest::default();
+    let mut entries: Vec<Entry> = Vec::new();
+    // Feature lists of the whole manifest, for `<key>/delete` forwarding.
+    let mut features = String::new();
     let mut section: Option<Option<String>> = None;
     for raw in text.lines() {
         let line = raw.split('#').next().unwrap_or("").trim();
         if line.starts_with('[') {
             section = dep_section(line);
-            if let Some(Some(name)) = &section
-                && name.starts_with("scull-")
-            {
-                m.deps.push((name.clone(), ws.get(name).cloned()));
+            if let Some(Some(key)) = &section {
+                // A `[dependencies.<key>]` table; its lines fill the entry in.
+                entries.push(Entry {
+                    key: key.clone(),
+                    name: key.clone(),
+                    path: None,
+                    workspace: false,
+                    delete: false,
+                });
             }
             continue;
         }
-        if line.contains("scull-platform/delete") || line.contains("scull-platform?/delete") {
-            m.enables_delete = true;
-        }
+        features.push_str(line);
+        features.push('\n');
         let Some(sec) = &section else { continue };
         let delete = line.contains("\"delete\"") || line.contains("'delete'");
         match sec {
-            Some(table) => {
-                if table == "scull-platform" && delete {
-                    m.enables_delete = true;
-                }
-                if table.starts_with("scull-")
-                    && let Some(p) = quoted_after(line, "path")
-                    && line.trim_start().starts_with("path")
-                {
-                    let d = m.deps.iter_mut().find(|(n, _)| n == table).unwrap();
-                    d.1 = Some(dir.join(p));
+            Some(_) => {
+                let e = entries.last_mut().unwrap();
+                let (k, v) = line.split_once('=').unwrap_or((line, ""));
+                match k.trim() {
+                    "package" => e.name = quoted_after(v, "").unwrap_or_default(),
+                    "path" => e.path = quoted_after(v, "").map(|p| dir.join(p)),
+                    "workspace" => e.workspace = v.trim() == "true",
+                    _ => e.delete |= delete,
                 }
             }
             None => {
-                let name = line
-                    .split(['.', ' ', '='])
-                    .next()
-                    .unwrap_or("")
-                    .trim_matches('"');
-                if !name.starts_with("scull-") {
+                let Some((k, v)) = line.split_once('=') else {
+                    continue;
+                };
+                // `key = ...`, `key.workspace = true`, `"key" = ...`
+                let key = k.trim().split('.').next().unwrap_or("").trim_matches('"');
+                if key.is_empty() {
                     continue;
                 }
-                if name == "scull-platform" && delete {
-                    m.enables_delete = true;
-                }
-                let path = quoted_after(line, "path")
-                    .map(|p| dir.join(p))
-                    .or_else(|| ws.get(name).cloned());
-                m.deps.push((name.to_owned(), path));
+                entries.push(Entry {
+                    key: key.to_owned(),
+                    name: quoted_after(v, "package").unwrap_or_else(|| key.to_owned()),
+                    path: quoted_after(v, "path").map(|p| dir.join(p)),
+                    workspace: k.contains(".workspace") || v.contains("workspace = true"),
+                    delete,
+                });
             }
         }
+    }
+    let mut m = Manifest::default();
+    for e in entries {
+        let (name, path) = match (e.workspace, ws.get(&e.key)) {
+            (true, Some((name, path))) => (name.clone(), path.clone()),
+            _ => (
+                e.name.clone(),
+                e.path.or_else(|| ws.get(&e.name).and_then(|w| w.1.clone())),
+            ),
+        };
+        if name == "scull-platform"
+            && (e.delete
+                || features.contains(&format!("{}/delete", e.key))
+                || features.contains(&format!("{}?/delete", e.key)))
+        {
+            m.enables_delete = true;
+        }
+        if name.starts_with("scull-") {
+            m.deps.push((name, path));
+        }
+    }
+    if features.contains("scull-platform/delete") || features.contains("scull-platform?/delete") {
+        m.enables_delete = true;
     }
     m
 }
@@ -223,7 +261,7 @@ const MUTATION_APIS: &[&str] = &[
 ];
 
 /// What even the Executor module may not do itself: every deletion or move goes through the
-/// Executor's own API.
+/// Executor's operations (`execute_plan`, `restore`, `QuickClean::run`).
 const DIRECT_DELETION: &[&str] = &[
     "remove_file",
     "remove_dir",
@@ -240,12 +278,18 @@ const DIRECT_DELETION: &[&str] = &[
     "scull_platform::quarantine",
     ".delete(",
     "delete_observed",
+    ".trash(",
+    "trash_checked",
+    "delete_orphaned_cache",
     "remove_orphaned",
     "purge",
+    "purge_own_files",
 ];
 
-/// The Executor / Quick Clean calls the module may make.
-const EXECUTOR_CALLS: &[&str] = &[
+/// The `scull-cleaner` API names the module may call (any receiver): the operations, their
+/// builders and the read-only accessors of their reports. Every other public method name of
+/// `scull-cleaner` is refused, whatever the binding is called.
+const ALLOWED_CLEANER_CALLS: &[&str] = &[
     "acquire",
     "recover",
     "begin_operation",
@@ -259,7 +303,82 @@ const EXECUTOR_CALLS: &[&str] = &[
     "finish",
     "finish_measured",
     "audit_plan",
+    "succeeded",
+    "reason_code",
+    "cache_bytes_freed",
+    "total_reclaimable",
+    // Generic or read-only names that `scull-cleaner` also uses (Vec, Mutex, constructors,
+    // `Action::restorability`).
+    "restorability",
+    "new",
+    "is_empty",
+    "lock",
+    "id",
 ];
+
+/// The `scull_cleaner` items the module may import.
+const ALLOWED_CLEANER_IMPORTS: &[&str] = &[
+    "Executor",
+    "ItemOutcome",
+    "ItemReport",
+    "LockOptions",
+    "PlanContext",
+    "QuarantineSettings",
+    "RestoreOutcome",
+    "Revalidation",
+    "Ended",
+    "QuickClean",
+    "QuickCleanOptions",
+    "QuickCleanRequest",
+    "ToolResult",
+    "TrashLocations",
+];
+
+/// The method names of the types that act on the disk (`Executor`, `Operation`, `QuickClean`):
+/// every `fn` in their `impl` blocks in `scull-cleaner`'s sources, public or behind `bare_api!`.
+fn cleaner_api_names() -> std::collections::BTreeSet<String> {
+    let mut files = Vec::new();
+    rust_sources(&repo_root().join("crates/scull-cleaner/src"), &mut files);
+    let mut names = std::collections::BTreeSet::new();
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap();
+        for head in [
+            "impl Executor {",
+            "impl Operation<'_> {",
+            "impl QuickClean {",
+        ] {
+            for (start, _) in text.match_indices(head) {
+                // The block, by brace matching.
+                let mut depth = 0i32;
+                let mut end = text.len();
+                for (k, c) in text[start..].char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = start + k;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let block = &text[start..end];
+                for (i, _) in block.match_indices("fn ") {
+                    let name: String = block[i + 3..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        names.insert(name);
+                    }
+                }
+            }
+        }
+    }
+    names
+}
 
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -275,10 +394,16 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of `f` before its unit tests (they may build temp trees).
+/// The code of `f` before its unit-test module: everything up to a `#[cfg(test)]` line that is
+/// directly followed by `mod tests` (the text `#[cfg(test)]` anywhere else doesn't end it).
 fn code_of(f: &Path) -> String {
     let text = std::fs::read_to_string(f).unwrap();
-    text.split("#[cfg(test)]").next().unwrap_or("").to_owned()
+    let lines: Vec<&str> = text.lines().collect();
+    let end = lines
+        .windows(2)
+        .position(|w| w[0].trim() == "#[cfg(test)]" && w[1].trim_start().starts_with("mod tests"))
+        .unwrap_or(lines.len());
+    lines[..end].join("\n")
 }
 
 #[test]
@@ -308,17 +433,60 @@ fn the_cleanup_module_deletes_only_through_the_executor() {
     for api in DIRECT_DELETION {
         assert!(!code.contains(api), "{CLEANUP_MODULE} uses {api}");
     }
-    // Methods called on the Executor and Quick Clean handles.
-    for handle in ["executor.", "qc.", "Executor::"] {
-        for (i, _) in code.match_indices(handle) {
-            let rest = &code[i + handle.len()..];
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
+    // Nothing of scull-cleaner is re-exported, and it is only named in `use` lines.
+    for line in code.lines() {
+        let t = line.trim_start();
+        assert!(
+            !(t.starts_with("pub use ")
+                || t.starts_with("pub(crate) use ")
+                || t.starts_with("pub(super) use ")),
+            "{CLEANUP_MODULE} re-exports something: {line}"
+        );
+    }
+    let mut imports = String::new();
+    let mut in_use = false;
+    for line in code.lines() {
+        let t = line.trim_start();
+        if t.starts_with("use scull_cleaner") {
+            in_use = true;
+        }
+        if in_use {
+            imports.push_str(t);
+            imports.push(' ');
+            in_use = !t.ends_with(';');
+        } else {
             assert!(
-                EXECUTOR_CALLS.contains(&name.as_str()),
-                "{CLEANUP_MODULE} calls {handle}{name}"
+                !line.contains("scull_cleaner::"),
+                "{CLEANUP_MODULE} names scull_cleaner outside a use line: {line}"
+            );
+        }
+    }
+    for word in imports
+        .replace("use scull_cleaner", " ")
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+    {
+        assert!(
+            ALLOWED_CLEANER_IMPORTS.contains(&word),
+            "{CLEANUP_MODULE} imports scull_cleaner::{word}"
+        );
+    }
+    // Every call of a scull-cleaner method name, whatever the receiver, is an allowed one.
+    let api = cleaner_api_names();
+    assert!(
+        api.contains("execute_plan") && api.contains("trash"),
+        "{api:?}"
+    );
+    for (i, _) in code.match_indices('.') {
+        let name: String = code[i + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let called = code[i + 1 + name.len()..].starts_with('(');
+        if called && api.contains(&name) {
+            assert!(
+                ALLOWED_CLEANER_CALLS.contains(&name.as_str()),
+                "{CLEANUP_MODULE} calls scull-cleaner's {name}"
             );
         }
     }
@@ -371,6 +539,38 @@ fn detector_sees_every_spelling() {
         ),
         (
             "[dependencies]\nscull-platform.workspace = true # features = [\"delete\"]\n",
+            false,
+            false,
+        ),
+        // Renamed: the package is what counts, not the key.
+        (
+            "[dependencies]\ndeleter = { package = \"scull-cleaner\", path = \"x\" }\n",
+            true,
+            false,
+        ),
+        (
+            "[dependencies.deleter]\npath = \"x\"\npackage = \"scull-cleaner\"\n",
+            true,
+            false,
+        ),
+        (
+            "[dependencies]\nplat = { package = \"scull-platform\", path = \"x\", features = [\"delete\"] }\n",
+            false,
+            true,
+        ),
+        (
+            "[dependencies.plat]\nfeatures = [\"delete\"]\npackage = \"scull-platform\"\npath = \"x\"\n",
+            false,
+            true,
+        ),
+        (
+            "[dependencies]\nplat = { package = \"scull-platform\", path = \"x\" }\n[features]\nx = [\"plat/delete\"]\n",
+            false,
+            true,
+        ),
+        // Only a different package under the cleaner's name is not the cleaner.
+        (
+            "[dependencies]\nscull-cleaner = { package = \"other\", path = \"x\" }\n",
             false,
             false,
         ),

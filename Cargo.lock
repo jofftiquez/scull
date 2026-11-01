@@ -1495,6 +1495,7 @@ version = "0.0.0"
 dependencies = [
  "getrandom 0.3.4",
  "schemars",
+ "scull-cleaner",
  "scull-core",
  "scull-detectors",
  "scull-engine",

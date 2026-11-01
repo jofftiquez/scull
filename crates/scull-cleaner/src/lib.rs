@@ -89,6 +89,20 @@
 //!
 //! * the Windows quarantine/restore moves (#71/#72) and the CLI tests that execute them are
 //!   implemented but have not run on Windows CI yet.
+/// An Executor method that is `pub` only with the `bare-api` feature (tests), else
+/// crate-private: the bare per-item calls that skip the operation, journal and audit.
+macro_rules! bare_api {
+    ($(#[$m:meta])* fn $name:ident $($rest:tt)*) => {
+        #[cfg(feature = "bare-api")]
+        $(#[$m])*
+        pub fn $name $($rest)*
+        #[cfg(not(feature = "bare-api"))]
+        #[allow(dead_code)]
+        $(#[$m])*
+        pub(crate) fn $name $($rest)*
+    };
+}
+
 mod execution;
 mod executor;
 pub mod headroom;
