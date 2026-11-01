@@ -88,9 +88,12 @@ fn create_writes_a_real_owner_only_reserve_and_release_frees_it() {
 fn a_replaced_file_is_never_released() {
     let (_t, d) = data_dir();
     create_with(&d, &opts(2 * MIB), LIMITS).unwrap();
-    // Someone swaps the file for another of the same size: a different identity.
-    std::fs::remove_file(reserve(&d)).unwrap();
-    std::fs::write(reserve(&d), vec![7u8; (2 * MIB) as usize]).unwrap();
+    // Someone swaps the file for another of the same size: a different identity. The new file
+    // is created while the old one still exists (then renamed over it), so the filesystem
+    // can't hand it the old inode number, which deleting first sometimes did.
+    let swap = d.join("swap.tmp");
+    std::fs::write(&swap, vec![7u8; (2 * MIB) as usize]).unwrap();
+    std::fs::rename(&swap, reserve(&d)).unwrap();
     assert_eq!(status(&d).state, HeadroomState::Changed);
     let e = release(&d).unwrap_err();
     assert_eq!(e.kind, ErrorKind::SafetyBlocked);
