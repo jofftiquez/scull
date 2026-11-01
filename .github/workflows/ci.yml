@@ -71,7 +71,8 @@ jobs:
       # `--allow-root`. Run them again as a standard user, where they must take the normal
       # user's path (a skip or an elevated process is a failure, #65).
       - name: Elevation-gated tests as a standard user (Windows)
-        if: runner.os == 'Windows'
+        # Runs even when `test` failed elsewhere: its coverage is independent.
+        if: runner.os == 'Windows' && !cancelled()
         shell: pwsh
         run: >-
           ./scripts/ci/run-as-standard-user.ps1
