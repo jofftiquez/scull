@@ -6,8 +6,10 @@
 //!
 //! Fixture IDs (docs/FIXTURES.md): FX-EXEC-02 (quarantine half; restore is #72), FX-EXEC-03,
 //! FX-EXEC-06, FX-EXEC-16 (owner-only folder; the second-user read check is nightly).
+//!
+//! macOS, Linux and Windows (same-volume moves on handles there, #71). Making quarantine
+//! impossible differs per OS: a read-only parent on Unix, a deny ACL on Windows (FX-EXEC-03).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
 
 #[path = "common/ops.rs"]
 mod ops;
@@ -16,16 +18,21 @@ mod planning;
 
 use ops::*;
 use planning::*;
+#[cfg(unix)]
+use scull_cleaner::QUARANTINE_DIR_NAME;
 use scull_cleaner::{
     DEFAULT_RETENTION_SECS, DISK_MANIFEST, Executor, ItemOutcome, PurgeOutcome, PurgePolicy,
-    QUARANTINE_DIR_NAME,
 };
 use scull_core::{Action, ErrorKind, OperationId, Tier};
 use scull_engine::{CancelToken, now_unix};
 use scull_fixtures::{Fixture, NodeLock, TreeSnapshot};
-use scull_platform::{Native, Platform, ensure_owner_only};
+#[cfg(unix)]
+use scull_platform::ensure_owner_only;
+use scull_platform::{Native, Platform};
 use scull_storage::{ItemOutcome as AuditOutcome, OperationEnd};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::Path;
 
 /// FX-EXEC-02 (quarantine half): an S1 item is moved into the same-volume quarantine by a
@@ -66,8 +73,8 @@ fn fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical() {
     let e = &entries[0];
     assert_eq!(e.entry_id, q.entry_id);
     assert_eq!(
-        e.entry.original_path.to_path_buf(),
-        fx.root().join("app/target")
+        canon(&e.entry.original_path.to_path_buf()),
+        canon(&fx.root().join("app").join("target"))
     );
     assert_eq!(e.entry.entry_kind, "dir");
     assert_eq!(
@@ -94,9 +101,9 @@ fn fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical() {
     assert_eq!(row.outcome, AuditOutcome::Quarantined);
     assert_eq!(row.moved_bytes, Some(q.bytes));
     assert!(s.verify_chain(&op).unwrap().is_intact());
-    // The on-disk copy exists, owner-only, and lists the entry.
+    // The on-disk copy exists, owner-only, and lists the entry (JSON escapes `\`).
     let copy = std::fs::read_to_string(op_dir(&fx, "Q1").join(DISK_MANIFEST)).unwrap();
-    assert!(copy.contains("app/target"), "{copy}");
+    assert!(copy.replace("\\\\", "/").contains("app/target"), "{copy}");
     check(&fx, &plan, &r, &["app/target", "lib/target"]);
 }
 
@@ -104,6 +111,7 @@ fn fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical() {
 /// another account can't list or read them. (Reading as a second test user is the nightly
 /// half of this fixture.)
 #[test]
+#[cfg(unix)]
 fn fx_exec_16_quarantine_folder_is_owner_only() {
     let fx = fixture();
     let h = harness(false);
@@ -127,6 +135,7 @@ fn fx_exec_16_quarantine_folder_is_owner_only() {
 #[test]
 fn fx_exec_03_quarantine_impossible_blocked_never_deleted() {
     let mut fx = fixture();
+    #[cfg(unix)]
     if owned_by_root(fx.root()) {
         eprintln!("running as root: directory permissions don't apply; skipped");
         return;
@@ -137,7 +146,7 @@ fn fx_exec_03_quarantine_impossible_blocked_never_deleted() {
     let plan = plan_named(&fx, &scan, &["web/node_modules"], "Q3");
     s.insert_plan(&plan).unwrap();
     let web = fx.root().join("web");
-    std::fs::set_permissions(&web, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let guard = no_moves_out_of(&web);
     fx.checkpoint().unwrap();
 
     let exec = locked(&fx);
@@ -155,7 +164,7 @@ fn fx_exec_03_quarantine_impossible_blocked_never_deleted() {
         )
         .unwrap();
     operation.finish(OperationEnd::Normal, now_unix()).unwrap();
-    std::fs::set_permissions(&web, std::fs::Permissions::from_mode(0o755)).unwrap();
+    drop(guard);
     print_report(&fx, &r);
 
     match &r.items[0].outcome {
@@ -178,7 +187,73 @@ fn fx_exec_03_quarantine_impossible_blocked_never_deleted() {
     check(&fx, &plan, &r, &[]);
 }
 
+/// Makes moving entries out of `dir` impossible until dropped: a read-only directory on Unix;
+/// on Windows (where the read-only attribute doesn't apply to folders) ACEs denying this
+/// account DELETE on its entries and DELETE_CHILD on it, which a rename needs.
+struct NoMovesOut {
+    dir: std::path::PathBuf,
+    #[cfg(windows)]
+    entries: Vec<std::path::PathBuf>,
+}
+
+fn no_moves_out_of(dir: &std::path::Path) -> NoMovesOut {
+    #[cfg(unix)]
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    #[cfg(windows)]
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    #[cfg(windows)]
+    {
+        icacls(dir, &["/deny", &format!("{}:(DC)", win_user())]);
+        for e in &entries {
+            icacls(e, &["/deny", &format!("{}:(DE)", win_user())]);
+        }
+    }
+    NoMovesOut {
+        dir: dir.to_path_buf(),
+        #[cfg(windows)]
+        entries,
+    }
+}
+
+impl Drop for NoMovesOut {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(windows)]
+        {
+            for e in &self.entries {
+                icacls(e, &["/remove:d", &win_user()]);
+            }
+            icacls(&self.dir, &["/remove:d", &win_user()]);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn win_user() -> String {
+    std::env::var("USERNAME").expect("USERNAME is set on Windows")
+}
+
+#[cfg(windows)]
+fn icacls(path: &std::path::Path, args: &[&str]) {
+    let o = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .expect("icacls runs");
+    assert!(
+        o.status.success(),
+        "icacls {} {args:?}: {}",
+        path.display(),
+        String::from_utf8_lossy(&o.stdout)
+    );
+}
+
 /// Whether this process runs as root (it owns what it creates).
+#[cfg(unix)]
 fn owned_by_root(p: &Path) -> bool {
     std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(p).unwrap()) == 0
 }

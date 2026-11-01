@@ -1234,90 +1234,69 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 71,
-            reason: "same-volume quarantine and the identical restored tree are covered on Unix; Windows quarantine moves (handle-based rename) are not implemented yet",
-            partial: &[
-                t(
-                    QUAR,
-                    "fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical",
-                ),
-                t(
-                    RESTORE,
-                    "fx_exec_02_quarantined_item_restored_tree_identical_and_idempotent",
-                ),
-            ],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[
+            t(
+                QUAR,
+                "fx_exec_02_s1_item_quarantined_by_same_volume_rename_tree_identical",
+            ),
+            t(
+                RESTORE,
+                "fx_exec_02_quarantined_item_restored_tree_identical_and_idempotent",
+            ),
+        ]),
+    ),
     fx(
         "FX-EXEC-03",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 71,
-            reason: "blocked-never-deleted is covered on Unix and the read-only parent Trash refusal on Linux; Windows quarantine is not implemented yet, so the fallback chain can't be staged there",
-            partial: &[
-                t(QUAR, "fx_exec_03_quarantine_impossible_blocked_never_deleted"),
-                t(
-                    TRASH,
-                    "fx_exec_03_read_only_parent_trash_refused_never_deleted",
-                ),
-            ],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[
+            t(
+                QUAR,
+                "fx_exec_03_quarantine_impossible_blocked_never_deleted",
+            ),
+            t(
+                TRASH,
+                "fx_exec_03_read_only_parent_trash_refused_never_deleted",
+            ),
+        ]),
+    ),
     fx(
         "FX-EXEC-04",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 72,
-            reason: "restore to a sibling path without overwriting is covered on Unix; Windows restore needs the Windows quarantine moves first",
-            partial: &[t(
+        Status::Implemented(&[
+            t(
                 RESTORE,
                 "fx_exec_04_original_path_exists_restored_to_sibling_nothing_overwritten",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+            ),
+        ]),
+    ),
     fx(
         "FX-EXEC-05",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 72,
-            reason: "a tampered folder manifest is refused and the database manifest wins on Unix; Windows restore needs the Windows quarantine moves first",
-            partial: &[t(
+        Status::Implemented(&[
+            t(
                 RESTORE,
                 "fx_exec_05_tampered_manifest_pointing_at_ssh_is_refused_db_is_authoritative",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+            ),
+        ]),
+    ),
     fx(
         "FX-EXEC-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 71,
-            reason: "expired quarantine entries are purged with freed bytes recorded on Unix; Windows quarantine is not implemented yet",
-            partial: &[t(
+        Status::Implemented(&[
+            t(
                 QUAR,
                 "fx_exec_06_retention_expires_purged_freed_bytes_recorded",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+            ),
+        ]),
+    ),
     fx(
         "FX-EXEC-07",
         Gate::Mvp,
