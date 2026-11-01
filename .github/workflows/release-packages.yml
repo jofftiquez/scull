@@ -1,0 +1,94 @@
+name: Release packages
+
+# P2-REL-01: called by release.yml (dist `publish-jobs`) after the GitHub release exists. dist
+# runs it for stable releases only (prereleases skip it unless `publish-prereleases = true`).
+#
+# * Homebrew: copies the formula dist generated (`scull.rb`, a release asset) into the tap
+#   repository jofftiquez/homebrew-scull as Formula/scull.rb (`brew install jofftiquez/scull/scull`).
+# * Scoop: copies `scull.json` (release-extras.yml) into the bucket repository
+#   jofftiquez/scoop-scull as bucket/scull.json
+#   (`scoop bucket add scull https://github.com/jofftiquez/scoop-scull`, `scoop install scull/scull`).
+#
+# Each needs a fine-grained token with "Contents: read and write" on its repository only
+# (HOMEBREW_TAP_TOKEN, SCOOP_BUCKET_TOKEN). Without it the job logs a notice and succeeds: the
+# formula and manifest are still attached to the release for a manual copy (RELEASING.md).
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    name: Homebrew tap
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PLAN: ${{ inputs.plan }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      TAP_REPO: jofftiquez/homebrew-scull
+    steps:
+      - name: Update Formula/scull.rb
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(jq -r '.announcement_tag' <<< "$PLAN")
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice title=Homebrew tap not updated::HOMEBREW_TAP_TOKEN is not set. scull.rb is attached to release $tag; copy it to $TAP_REPO as Formula/scull.rb by hand (RELEASING.md)."
+            exit 0
+          fi
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p scull.rb -D "$RUNNER_TEMP"
+          ruby -c "$RUNNER_TEMP/scull.rb"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          mkdir -p Formula
+          cp "$RUNNER_TEMP/scull.rb" Formula/scull.rb
+          git add Formula/scull.rb
+          if git diff --cached --quiet; then
+            echo "Formula/scull.rb is already up to date"
+            exit 0
+          fi
+          git -c user.name="scull release" -c user.email="scull-release@users.noreply.github.com" \
+            commit -m "scull ${tag#v}"
+          git push origin HEAD
+          echo "::notice title=Homebrew tap updated::$TAP_REPO Formula/scull.rb -> ${tag#v}"
+
+  scoop:
+    name: Scoop bucket
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PLAN: ${{ inputs.plan }}
+      BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      BUCKET_REPO: jofftiquez/scoop-scull
+    steps:
+      - name: Update bucket/scull.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(jq -r '.announcement_tag' <<< "$PLAN")
+          if [ -z "$BUCKET_TOKEN" ]; then
+            echo "::notice title=Scoop bucket not updated::SCOOP_BUCKET_TOKEN is not set. scull.json is attached to release $tag; copy it to $BUCKET_REPO as bucket/scull.json by hand (RELEASING.md)."
+            exit 0
+          fi
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p scull.json -D "$RUNNER_TEMP"
+          jq -e '.version and .architecture."64bit".hash' "$RUNNER_TEMP/scull.json" > /dev/null
+          git clone --depth 1 "https://x-access-token:${BUCKET_TOKEN}@github.com/${BUCKET_REPO}.git" "$RUNNER_TEMP/bucket"
+          cd "$RUNNER_TEMP/bucket"
+          mkdir -p bucket
+          cp "$RUNNER_TEMP/scull.json" bucket/scull.json
+          git add bucket/scull.json
+          if git diff --cached --quiet; then
+            echo "bucket/scull.json is already up to date"
+            exit 0
+          fi
+          git -c user.name="scull release" -c user.email="scull-release@users.noreply.github.com" \
+            commit -m "scull ${tag#v}"
+          git push origin HEAD
+          echo "::notice title=Scoop bucket updated::$BUCKET_REPO bucket/scull.json -> ${tag#v}"
