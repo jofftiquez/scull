@@ -1,5 +1,6 @@
 //! Linux and macOS: `lstat` fields via `std::os::unix::fs::MetadataExt`.
 
+use crate::types::EntryAt;
 use crate::{
     Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, PlatformError, Result,
 };
@@ -10,6 +11,7 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
+use std::sync::Arc;
 
 /// `st_blocks` is in 512-byte units on Linux and macOS, regardless of the filesystem block
 /// size.
@@ -85,15 +87,26 @@ pub(super) fn metadata(path: &Path) -> io::Result<Metadata> {
 
 pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
     // `std::fs::read_dir` follows a symlink at `path`, so check first and refuse links.
-    let found = metadata(path)
-        .map_err(|e| PlatformError::from_io(Operation::Metadata, path, e))?
-        .kind;
-    if found != EntryKind::Dir {
-        return Err(PlatformError::not_a_directory(path, found));
+    let checked =
+        metadata(path).map_err(|e| PlatformError::from_io(Operation::Metadata, path, e))?;
+    if checked.kind != EntryKind::Dir {
+        return Err(PlatformError::not_a_directory(path, checked.kind));
     }
     let dir = path.to_path_buf();
     let rd = fs::read_dir(path).map_err(|e| PlatformError::from_io(Operation::ReadDir, path, e))?;
+    // The same directory, opened once more for `fstatat` of its entries ([`entry_metadata`]).
+    // The listing owns it; entries hold it weakly, so it lives exactly as long as the listing.
+    let stat_dir = checked.identity.and_then(|id| open_for_stat(path, id));
+    let at = stat_dir
+        .as_ref()
+        .zip(checked.identity)
+        .map(|(d, id)| EntryAt {
+            dir: Arc::downgrade(d),
+            dir_id: id,
+        });
     Ok(Box::new(rd.map(move |entry| {
+        // Keeps the descriptor open while the listing is iterated.
+        let _owner = &stat_dir;
         let entry = entry.map_err(|e| PlatformError::from_io(Operation::ReadDirEntry, &dir, e))?;
         let entry_path = entry.path();
         // `DirEntry::file_type` uses `d_type` from `readdir` and falls back to `lstat`: never
@@ -107,8 +120,107 @@ pub(super) fn read_dir(path: &Path) -> Result<DirIter<'static>> {
             path: entry_path,
             kind,
             reparse_tag: None,
+            at: at.clone(),
         })
     })))
+}
+
+/// `path` opened `O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` for `fstatat`, if it is
+/// still the directory `expect` (checked on the descriptor). `None` (entries then use their
+/// paths) when it can't be opened or was swapped since it was checked.
+fn open_for_stat(path: &Path, expect: FileIdentity) -> Option<Arc<fs::File>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let md = file.metadata().ok()?;
+    let same = FileIdentity::new(md.dev(), u128::from(md.ino())) == expect;
+    same.then(|| Arc::new(file))
+}
+
+/// A listed entry's metadata: `fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)` relative to its
+/// listed directory while the listing is alive, else `lstat` of its path. Both give the same
+/// values ([`convert_stat`] mirrors [`convert`]).
+pub(super) fn entry_metadata(entry: &DirEntry) -> io::Result<Metadata> {
+    match entry.at.as_ref().and_then(|a| a.dir.upgrade()) {
+        Some(dir) => fstatat_nofollow(&dir, &entry.file_name).map(|st| convert_stat(&st)),
+        None => metadata(&entry.path),
+    }
+}
+
+/// `fstatat(dir, name, AT_SYMLINK_NOFOLLOW)`: never follows a link at `name`, never opens it.
+#[allow(unsafe_code)]
+fn fstatat_nofollow(dir: &fs::File, name: &std::ffi::OsStr) -> io::Result<libc::stat> {
+    use std::os::fd::AsRawFd;
+    let c = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "name contains a NUL byte"))?;
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `dir` is an open directory descriptor for the duration of the call; `c` is a
+    // NUL-terminated name that outlives it; `st` points to writable memory for one `stat`.
+    let r = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            c.as_ptr(),
+            st.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if r != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fstatat` returned 0, so it filled in the whole `stat`.
+    Ok(unsafe { st.assume_init() })
+}
+
+/// [`convert`] for a raw `stat`, with the same conversions std's `MetadataExt` applies, so a
+/// `fstatat` result equals the `lstat` one field for field.
+#[allow(clippy::unnecessary_cast)] // field widths differ between Linux and macOS
+fn convert_stat(st: &libc::stat) -> Metadata {
+    let fmt = st.st_mode & libc::S_IFMT;
+    let kind = if fmt == libc::S_IFLNK {
+        EntryKind::Symlink
+    } else if fmt == libc::S_IFDIR {
+        EntryKind::Dir
+    } else if fmt == libc::S_IFREG {
+        EntryKind::File
+    } else if fmt == libc::S_IFIFO {
+        EntryKind::Fifo
+    } else if fmt == libc::S_IFSOCK {
+        EntryKind::Socket
+    } else if fmt == libc::S_IFBLK {
+        EntryKind::BlockDevice
+    } else if fmt == libc::S_IFCHR {
+        EntryKind::CharDevice
+    } else {
+        EntryKind::Other
+    };
+    Metadata {
+        kind,
+        identity: Some(FileIdentity::new(
+            st.st_dev as u64,
+            u128::from(st.st_ino as u64),
+        )),
+        logical_size: st.st_size as u64,
+        allocated_size: Some((st.st_blocks as u64).saturating_mul(ST_BLOCK_UNIT)),
+        nlink: Some(st.st_nlink as u64),
+        mtime_unix: Some(st.st_mtime as i64),
+        readonly: (st.st_mode as u32) & 0o222 == 0,
+        file_attributes: None,
+        reparse_tag: None,
+        bsd_flags: stat_bsd_flags(st),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn stat_bsd_flags(st: &libc::stat) -> Option<u32> {
+    Some(st.st_flags)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stat_bsd_flags(_st: &libc::stat) -> Option<u32> {
+    None
 }
 
 pub(super) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
