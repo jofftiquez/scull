@@ -596,6 +596,145 @@ fn only_test_items_are_cut() {
     assert!(strip_test_items("fn broken( {").is_err());
 }
 
+/// std filesystem calls that write, move, delete or change permissions.
+const FS_WRITES: &[&str] = &[
+    "write",
+    "rename",
+    "copy",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "create_dir",
+    "create_dir_all",
+    "set_permissions",
+    "hard_link",
+    "soft_link",
+    "symlink",
+    "symlink_file",
+    "symlink_dir",
+];
+
+/// Every path `file` names: `use` trees flattened (groups, renames, globs as `*`), and every
+/// path in expressions, types and patterns. A rename is recorded as the path plus `as`.
+#[derive(Default)]
+struct Paths(Vec<Vec<String>>);
+
+impl Paths {
+    fn use_tree(&mut self, prefix: &[String], t: &syn::UseTree) {
+        let mut p = prefix.to_vec();
+        match t {
+            syn::UseTree::Path(x) => {
+                p.push(x.ident.to_string());
+                self.use_tree(&p, &x.tree);
+            }
+            syn::UseTree::Name(x) => {
+                p.push(x.ident.to_string());
+                self.0.push(p);
+            }
+            syn::UseTree::Rename(x) => {
+                p.push(x.ident.to_string());
+                p.push("as".into());
+                self.0.push(p);
+            }
+            syn::UseTree::Glob(_) => {
+                p.push("*".into());
+                self.0.push(p);
+            }
+            syn::UseTree::Group(g) => {
+                for t in &g.items {
+                    self.use_tree(&p, t);
+                }
+            }
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Paths {
+    fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
+        self.use_tree(&[], &u.tree);
+    }
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        self.0
+            .push(p.segments.iter().map(|s| s.ident.to_string()).collect());
+        syn::visit::visit_path(self, p);
+    }
+}
+
+/// The std write/spawn APIs `code` reaches, however they're spelled (empty when none).
+fn std_writes(code: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(code).map_err(|e| format!("does not parse: {e}"))?;
+    let mut paths = Paths::default();
+    syn::visit::Visit::visit_file(&mut paths, &file);
+    let mut bad = Vec::new();
+    for p in &paths.0 {
+        let joined = p.join("::");
+        let has = |a: &str, b: &[&str]| {
+            p.windows(2)
+                .any(|w| w[0] == a && (b.contains(&w[1].as_str())))
+        };
+        let aliased = p.last().is_some_and(|l| l == "as")
+            && p.len() >= 2
+            && matches!(p[p.len() - 2].as_str(), "std" | "fs" | "process" | "os");
+        if has("fs", FS_WRITES)
+            || has("fs", &["*"])
+            || has("File", &["create", "create_new", "options"])
+            || has("process", &["Command", "*"])
+            || p.iter().any(|s| s == "OpenOptions")
+            || aliased
+        {
+            bad.push(joined);
+        }
+    }
+    Ok(bad)
+}
+
+/// No desktop production code writes through std or spawns a process: `std::fs` writes, moves,
+/// deletes and permission changes, `File::create/options`, `OpenOptions`, `process::Command`,
+/// in any spelling (use groups, renames, globs, full paths), and no alias of `std`, `std::fs`
+/// or `std::process` (#121).
+#[test]
+fn desktop_sources_use_no_std_writes() {
+    for f in desktop_rust_files() {
+        // cleanup.rs included: its one directory is created through scull_platform.
+        let bad = std_writes(&code_of(&f)).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        assert!(bad.is_empty(), "{}: {bad:?}", f.display());
+    }
+}
+
+#[test]
+fn std_write_guard_sees_every_spelling() {
+    for code in [
+        "use std::fs::{rename};\nfn f() { rename(a, b); }",
+        "use std::fs::{write as w};\nfn f() { w(a, b); }",
+        "fn f() { std::fs::remove_dir_all(a); }",
+        "fn f() { let _ = std::fs::File::options().write(true).truncate(true).open(p); }",
+        "fn f() { let _ = std::fs::File::create(p); }",
+        "use std::fs::OpenOptions;",
+        "fn f() { std::process::Command::new(\"rm\"); }",
+        "use std::process::{Command};",
+        "use std::fs::*;",
+        "use std::fs as f;",
+        "use std::{fs as f};",
+        "use std as s;",
+        "use std::os::unix::fs::symlink;",
+        "use tokio::process::Command;",
+    ] {
+        assert!(!std_writes(code).unwrap().is_empty(), "not caught: {code}");
+    }
+    for code in [
+        "fn f() { let _ = std::fs::read_to_string(p); let _ = std::fs::File::open(p); }",
+        "fn f() { std::process::exit(1); let _ = std::process::id(); }",
+        "use std::fs::{read, metadata};",
+        "fn f() { let _ = Action::ToolCommand { tool, args }; }",
+    ] {
+        assert_eq!(
+            std_writes(code).unwrap(),
+            Vec::<String>::new(),
+            "false positive: {code}"
+        );
+    }
+}
+
 #[test]
 fn desktop_sources_have_no_filesystem_mutation() {
     let mut files = Vec::new();
