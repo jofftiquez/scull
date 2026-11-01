@@ -1902,8 +1902,9 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(TRASH, "fx_mac_05_external_volume_uses_its_trashes"),
             t(TRASH, "fx_mac_05_missing_trashes_is_created"),
         ]),
-    )
-    .pending_ci(MACOS_PENDING),
+    ),
+    // Verified on macOS: the hdiutil disk-image test passed on macos-latest (scull-archive#250,
+    // run 41336894966); the trash.rs tests run in the 3-OS CI on every push to phase2.
     fx("FX-MAC-06", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
     // §3.12 Linux-specific (FX-LNX)
     fx(
