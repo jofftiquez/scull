@@ -3,9 +3,25 @@
 //! # Where the quarantine lives
 //!
 //! Per volume and per user: `<base>/.scull-quarantine/<operation-id>/`, where `<base>` is the
-//! **shallowest directory on the item's volume, among the item's ancestors, that the current
-//! user owns** (`scull_platform::quarantine::quarantine_base`): typically the home directory,
-//! or the user's own folder on a shared data volume. Both directories are created owner-only
+//! **configured base** for the item ([`QuarantineSettings::base_for`]: `[quarantine] base` /
+//! `bases` in the user config, `SCULL_QUARANTINE_BASE`; P2-EXEC-13) or, when none is
+//! configured, the **shallowest directory on the item's volume, among the item's ancestors, that
+//! the current user owns** (`scull_platform::quarantine::quarantine_base`): typically the home
+//! directory, or the user's own folder on a shared data volume.
+//!
+//! A configured base is checked before anything is journaled or created: it must be absolute,
+//! on the **same volume** as the item (checked on its nearest existing ancestor, so nothing is
+//! created on another volume), not inside an item of the plan, and a real directory (not a
+//! link); a missing base is created owner-only (`0700` / protected DACL). If any check fails the
+//! item's quarantine is impossible: Trash fallback, else blocked; never moved across volumes,
+//! never deleted.
+//!
+//! Under the test harness ([`scull_core::config::TEST_SANDBOX_ENV`], set by `scull-fixtures` on
+//! every scull process a test starts) nothing outside the sandbox directory is used: an item
+//! with no configured base is **blocked** (`quarantine_base_required`) instead of using the
+//! automatic location, and a base outside the sandbox is blocked (`outside_test_sandbox`).
+//!
+//! Both directories are created owner-only
 //! (`0700` / protected DACL) and checked to be owner-only before anything is moved in, so a
 //! quarantine is never readable by another account, even on a shared volume (FX-EXEC-16).
 //! Volume roots are never used unless the user owns them, and nothing is ever moved to another
@@ -40,6 +56,7 @@ use crate::executor::Executor;
 use crate::journal::{StepHook, StepPoint, at};
 use crate::operation::Operation;
 use crate::revalidate::Revalidated;
+use scull_core::config::{QuarantineConfig, TEST_SANDBOX_ENV, quarantine_base_for};
 use scull_core::{ErrorKind, FileIdentity, FsPath, OperationId, ScullError};
 use scull_platform::quarantine::{
     MoveError, MoveRequest, QUARANTINE_DIR_NAME, move_no_replace, quarantine_base,
@@ -52,6 +69,7 @@ use scull_storage::{
     JournalAction, JournalIntent, NewQuarantineEntry, QuarantineEntry, QuarantineEvent,
     QuarantineLogEntry, Store,
 };
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -66,9 +84,13 @@ pub const DISK_MANIFEST: &str = "manifest.json";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuarantineSettings {
     /// Use this directory as the base (it holds `.scull-quarantine`) instead of the
-    /// automatic choice. It must be on the item's volume (otherwise the move is refused as
-    /// cross-device). For tests and portable setups.
+    /// automatic choice, for items on its volume. Items on another volume are not
+    /// quarantined there (Trash fallback, else blocked). `[quarantine] base` in the config.
     pub base: Option<PathBuf>,
+    /// Per volume (or any directory): items whose path starts with the key use the value as
+    /// their base; the longest key wins, before [`QuarantineSettings::base`].
+    /// `[quarantine.bases]` in the config.
+    pub bases: BTreeMap<PathBuf, PathBuf>,
     /// How long entries are kept before they may be purged.
     pub retention_secs: i64,
 }
@@ -77,9 +99,51 @@ impl Default for QuarantineSettings {
     fn default() -> Self {
         Self {
             base: None,
+            bases: BTreeMap::new(),
             retention_secs: DEFAULT_RETENTION_SECS,
         }
     }
+}
+
+impl QuarantineSettings {
+    /// The settings of a resolved `[quarantine]` config section (default retention).
+    pub fn from_config(config: &QuarantineConfig) -> Self {
+        Self {
+            base: config.base.clone(),
+            bases: config.bases.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// The configured base for an item at `item`: the [`QuarantineSettings::bases`] entry with
+    /// the longest key that is a path prefix of `item`, else [`QuarantineSettings::base`].
+    /// `None`: the automatic choice.
+    pub fn base_for(&self, item: &Path) -> Option<&Path> {
+        quarantine_base_for(&self.bases, self.base.as_deref(), item)
+    }
+}
+
+/// The test sandbox ([`TEST_SANDBOX_ENV`]): set (absolute, non-empty) only by the test
+/// fixtures on the scull processes they start.
+pub(crate) fn test_sandbox() -> Option<PathBuf> {
+    std::env::var_os(TEST_SANDBOX_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Under the test sandbox, why `path` may not be used (it is outside the sandbox, or the
+/// sandbox is not an absolute path). `None` outside the harness or when `path` is inside.
+pub(crate) fn outside_test_sandbox(path: &Path) -> Option<String> {
+    let sandbox = test_sandbox()?;
+    if sandbox.is_absolute() && path.is_absolute() && path.starts_with(&sandbox) {
+        return None;
+    }
+    Some(format!(
+        "{} is outside the test sandbox {} ({TEST_SANDBOX_ENV}): scull never uses a location \
+         outside a test's temp dir",
+        path.display(),
+        sandbox.display()
+    ))
 }
 
 /// One operation's quarantine folder on one volume.
@@ -108,8 +172,16 @@ pub struct Quarantined {
 /// Why an item was not quarantined. Nothing was removed.
 #[derive(Debug)]
 pub(crate) enum QuarantineRefusal {
-    /// Quarantine is impossible here and there is no Trash fallback yet: blocked (D-3).
+    /// Quarantine is impossible here: Trash fallback if the operation has one, else blocked
+    /// (D-3).
     Impossible(String),
+    /// Blocked outright, without the Trash fallback (the test-harness guard, P2-EXEC-13).
+    Blocked {
+        /// Stable reason code.
+        code: &'static str,
+        /// Why.
+        message: String,
+    },
     /// The item changed or the move failed; the item stays where it was (or, if
     /// `ScullError` says so, was moved back).
     Failed(ScullError),
@@ -146,6 +218,70 @@ pub(crate) fn measure(path: &Path) -> (u64, u64) {
 
 fn failed(kind: ErrorKind, msg: impl Into<String>) -> QuarantineRefusal {
     QuarantineRefusal::Failed(ScullError::new(kind, msg))
+}
+
+/// The volume of `path` or, if it doesn't exist yet, of its nearest existing ancestor (no-follow
+/// metadata): where `path` would be created.
+fn existing_volume(path: &Path) -> Option<u64> {
+    path.ancestors()
+        .find_map(|a| Native.metadata(a).ok())
+        .and_then(|m| m.identity)
+        .map(|id| id.volume)
+}
+
+/// Checks a configured base for an item whose parent is `parent` and creates it owner-only
+/// when missing (P2-EXEC-13). Every refusal is "impossible here" (Trash, else blocked).
+fn prepare_configured_base(
+    base: &Path,
+    parent: &Path,
+    plan_paths: &[PathBuf],
+) -> Result<(), QuarantineRefusal> {
+    let impossible = |why: String| {
+        Err(QuarantineRefusal::Impossible(format!(
+            "the configured quarantine location {} {why}",
+            base.display()
+        )))
+    };
+    if !base.is_absolute() {
+        return impossible("is not an absolute path".into());
+    }
+    if let Some(item) = plan_paths.iter().find(|p| base.starts_with(p)) {
+        return impossible(format!(
+            "is inside {}, an item being cleaned",
+            item.display()
+        ));
+    }
+    let item_volume = Native
+        .metadata(parent)
+        .ok()
+        .and_then(|m| m.identity)
+        .map(|id| id.volume);
+    let (Some(item_volume), Some(base_volume)) = (item_volume, existing_volume(base)) else {
+        return impossible("or the item's volume can't be identified".into());
+    };
+    if item_volume != base_volume {
+        return impossible(
+            "is on another volume than the item; quarantine never moves anything across \
+             volumes"
+                .into(),
+        );
+    }
+    if Native.metadata(base).is_err()
+        && let Err(e) = create_dir_owner_only(base)
+    {
+        return impossible(format!("can't be created: {e}"));
+    }
+    match Native.metadata(base) {
+        Ok(m) if m.kind == EntryKind::Dir => {}
+        Ok(m) if m.kind.is_link() => return impossible("is a link, never followed".into()),
+        Ok(m) => return impossible(format!("is a {}, not a directory", m.kind)),
+        Err(e) => return impossible(format!("can't be read: {e}")),
+    }
+    // Created now or earlier: still the item's volume (a mount may sit at the base itself).
+    match Native.metadata(base).ok().and_then(|m| m.identity) {
+        Some(id) if id.volume == item_volume => Ok(()),
+        _ => impossible("is on another volume than the item".into()),
+    }
 }
 
 impl Operation<'_> {
@@ -213,8 +349,33 @@ impl Operation<'_> {
             .strip_prefix(&item.anchor)
             .map_err(|_| failed(ErrorKind::SafetyBlocked, "the item is not below its anchor"))?
             .to_path_buf();
-        let base = match &self.quarantine.base {
-            Some(b) => b.clone(),
+        let base = match self.quarantine.base_for(&item.path) {
+            Some(b) => {
+                let b = b.to_path_buf();
+                if let Some(why) = outside_test_sandbox(&b) {
+                    return Err(QuarantineRefusal::Blocked {
+                        code: "outside_test_sandbox",
+                        message: why,
+                    });
+                }
+                let plan_paths: Vec<PathBuf> = self
+                    .plan_items
+                    .iter()
+                    .map(|i| i.path.to_path_buf())
+                    .collect();
+                prepare_configured_base(&b, parent, &plan_paths)?;
+                b
+            }
+            None if test_sandbox().is_some() => {
+                return Err(QuarantineRefusal::Blocked {
+                    code: "quarantine_base_required",
+                    message: format!(
+                        "running under the test harness ({TEST_SANDBOX_ENV}) with no configured \
+                         quarantine location: the automatic location is never used there, so \
+                         the item was left in place"
+                    ),
+                });
+            }
             None => match quarantine_base(parent) {
                 Ok(Some(b)) => b,
                 Ok(None) => {
@@ -571,6 +732,9 @@ fn purge_one(entry: &QuarantineEntry) -> PurgeOutcome {
     };
     if entry.entry.quarantine_path.is_lossy() || !path.is_absolute() {
         return kept("the recorded quarantine path can't be used".into());
+    }
+    if let Some(why) = outside_test_sandbox(&path) {
+        return kept(why);
     }
     let req = RemoveRequest {
         anchor: folder,

@@ -304,6 +304,30 @@
       },
       "type": "object"
     },
+    "QuarantineLayer": {
+      "additionalProperties": false,
+      "description": "`[quarantine]` in a [`ConfigLayer`]. See [`super::QuarantineConfig`].",
+      "properties": {
+        "base": {
+          "description": "Directory that holds `.scull-quarantine` for items on its volume (replaces lower\nlayers).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per volume (or directory) → base directory (replaces lower layers).",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RulesLayer": {
       "additionalProperties": false,
       "description": "`[rules]` in a [`ConfigLayer`].",
@@ -439,7 +463,7 @@
   "$id": "https://scull.dev/schemas/v1/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n```",
+  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.unity-library\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n\n[quarantine]             # optional; see `QuarantineConfig`\nbase = \"~/.scull-q\"\n\n[quarantine.bases]       # optional, per volume\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n```",
   "properties": {
     "forge": {
       "$ref": "#/$defs/ForgeLayer",
@@ -456,6 +480,10 @@
     "proactive": {
       "$ref": "#/$defs/ProactiveLayer",
       "description": "Alert policies (user config file only)."
+    },
+    "quarantine": {
+      "$ref": "#/$defs/QuarantineLayer",
+      "description": "Where quarantined items are kept."
     },
     "rules": {
       "$ref": "#/$defs/RulesLayer",

@@ -256,6 +256,65 @@
       ],
       "type": "object"
     },
+    "QuarantineBase": {
+      "additionalProperties": false,
+      "description": "One `quarantine.bases` entry.",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/FsPath",
+          "description": "The base used for items under it."
+        },
+        "prefix": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Volume mount point or directory."
+        }
+      },
+      "required": [
+        "prefix",
+        "base"
+      ],
+      "type": "object"
+    },
+    "QuarantineLocation": {
+      "additionalProperties": false,
+      "description": "Where new quarantines go: `<base>/.scull-quarantine/` on each item's volume.",
+      "properties": {
+        "base": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`quarantine.base`: for items on the volume holding it."
+        },
+        "bases": {
+          "description": "`quarantine.bases`: items under `prefix` use `base` (longest prefix wins).",
+          "items": {
+            "$ref": "#/$defs/QuarantineBase"
+          },
+          "type": "array"
+        },
+        "configured": {
+          "description": "Whether a base is configured; `false`: automatic (the shallowest folder above the item,\non its volume, that you own).",
+          "type": "boolean"
+        },
+        "error": {
+          "description": "Why the configuration couldn't be read, if it couldn't (the location is then unknown).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "configured",
+        "bases"
+      ],
+      "type": "object"
+    },
     "QuarantineReport": {
       "additionalProperties": false,
       "description": "Quarantine as recorded in the manifest (the manifest of record, SAFE-16).",
@@ -270,6 +329,10 @@
         "known": {
           "description": "Whether the manifest could be read (false when the database couldn't).",
           "type": "boolean"
+        },
+        "location": {
+          "$ref": "#/$defs/QuarantineLocation",
+          "description": "Where new quarantines go (`[quarantine]` in the config, `SCULL_QUARANTINE_BASE`;\nP2-EXEC-13)."
         },
         "outstanding_bytes": {
           "description": "Their recorded size in bytes.",
@@ -288,7 +351,8 @@
         "known",
         "outstanding_items",
         "outstanding_bytes",
-        "folders"
+        "folders",
+        "location"
       ],
       "type": "object"
     },

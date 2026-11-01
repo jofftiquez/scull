@@ -27,7 +27,11 @@
 //!   next start, never resuming a deletion or a move, and closes the operation as interrupted.
 //! * Quarantine (D-3, SAFE-16): S1/S2 items move into `.scull-quarantine/<operation-id>/` on
 //!   their own volume by one atomic no-replace rename, recorded in the database manifest of
-//!   record; only where that is impossible they fall back to the Trash
+//!   record. Its location is the configured base ([`QuarantineSettings::base_for`],
+//!   `[quarantine]` in the user config, P2-EXEC-13) when that is on the item's volume, else
+//!   chosen automatically; under the test harness (`SCULL_TEST_SANDBOX`) nothing outside the
+//!   sandbox is used and the automatic choice is refused. Only where quarantine is impossible
+//!   items fall back to the Trash
 //!   ([`Operation::with_trash`], P2-EXEC-07), and where that is impossible too they are
 //!   blocked, never deleted. [`Executor::purge_quarantine`] removes expired entries and records the freed bytes.
 //!   [`Executor::restore`] moves an entry back to its recorded path only (the database manifest
@@ -68,10 +72,12 @@
 //! gate (`packaging/check_inspect_only.py`) applies to `main`, where this wiring does not exist;
 //! on `phase2` it is expected to fail.
 //!
+//! `scull clean` passes the configured quarantine location and enables the Trash fallback
+//! ([`Operation::with_trash`] with the user's Trash; under the test harness, a Trash inside the
+//! sandbox).
+//!
 //! Still open:
 //!
-//! * `scull clean` does not enable the Trash fallback ([`Operation::with_trash`]) yet: an
-//!   S1/S2 item whose quarantine is impossible is blocked there;
 //! * the Windows quarantine/restore moves (#71/#72) and the CLI tests that execute them are
 //!   implemented but have not run on Windows CI yet.
 mod execution;

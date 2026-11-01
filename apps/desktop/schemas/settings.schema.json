@@ -152,6 +152,14 @@
           },
           "description": "Alert policies for proactive protection (PRD §16)."
         },
+        "quarantine": {
+          "$ref": "#/$defs/QuarantineConfig",
+          "default": {
+            "base": null,
+            "bases": {}
+          },
+          "description": "Where quarantined items are kept."
+        },
         "rules": {
           "$ref": "#/$defs/RulesConfig",
           "default": {
@@ -583,6 +591,29 @@
           "$ref": "#/$defs/DurationSpec",
           "default": "336h",
           "description": "Worktrees idle for longer than this are stale (PRO-02)."
+        }
+      },
+      "type": "object"
+    },
+    "QuarantineConfig": {
+      "additionalProperties": false,
+      "description": "Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).\n\nBy default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is\nchosen automatically: the shallowest directory above the item, on its volume, that the\ncurrent user owns (usually the home directory). These settings replace that choice:\n\n```toml\n[quarantine]\nbase = \"~/.scull-q\"                       # for items on the volume holding this directory\n\n[quarantine.bases]                        # per volume: longest matching prefix wins\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n\"D:\\\\\" = \"D:\\\\Users\\\\me\\\\q\"\n```\n\n* For an item, the entry of `bases` whose key is the longest path prefix of the item's path\n  applies; otherwise `base`; otherwise the automatic choice.\n* A configured base must be on the **same volume** as the item. If it isn't, that item is\n  not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It\n  is never moved across volumes and never deleted instead.\n* The base is created owner-only (`0700` / protected DACL) when missing, must be a real\n  directory (not a link) and must not be inside an item being cleaned; the\n  `.scull-quarantine` folder inside it is created and checked owner-only.\n* Repository files (`.scull.toml`) can't set these (CFG-03).",
+      "properties": {
+        "base": {
+          "default": null,
+          "description": "Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Per volume (or any directory): items under the key use the value as their base.",
+          "type": "object"
         }
       },
       "type": "object"

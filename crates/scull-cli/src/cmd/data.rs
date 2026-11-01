@@ -201,6 +201,59 @@ pub struct QuarantineReport {
     pub outstanding_bytes: u64,
     /// Folders holding them, as recorded (parents of the quarantine paths), sorted.
     pub folders: Vec<FsPath>,
+    /// Where new quarantines go (`[quarantine]` in the config, `SCULL_QUARANTINE_BASE`;
+    /// P2-EXEC-13).
+    pub location: QuarantineLocation,
+}
+
+/// Where new quarantines go: `<base>/.scull-quarantine/` on each item's volume.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuarantineLocation {
+    /// Whether a base is configured; `false`: automatic (the shallowest folder above the item,
+    /// on its volume, that you own).
+    pub configured: bool,
+    /// `quarantine.base`: for items on the volume holding it.
+    pub base: Option<FsPath>,
+    /// `quarantine.bases`: items under `prefix` use `base` (longest prefix wins).
+    pub bases: Vec<QuarantineBase>,
+    /// Why the configuration couldn't be read, if it couldn't (the location is then unknown).
+    pub error: Option<String>,
+}
+
+/// One `quarantine.bases` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuarantineBase {
+    /// Volume mount point or directory.
+    pub prefix: FsPath,
+    /// The base used for items under it.
+    pub base: FsPath,
+}
+
+impl QuarantineLocation {
+    /// The location from the effective configuration (or why it couldn't be loaded).
+    pub fn from_config(config: Result<&scull_core::config::QuarantineConfig, &ScullError>) -> Self {
+        match config {
+            Ok(q) => Self {
+                configured: q.is_configured(),
+                base: q.base.as_deref().map(FsPath::from_path),
+                bases: q
+                    .bases
+                    .iter()
+                    .map(|(k, v)| QuarantineBase {
+                        prefix: FsPath::from_path(k),
+                        base: FsPath::from_path(v),
+                    })
+                    .collect(),
+                error: None,
+            },
+            Err(e) => Self {
+                error: Some(e.message.clone()),
+                ..Self::default()
+            },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,7 +281,10 @@ pub struct DataShowReport {
 /// `scull data show`.
 pub fn run_show(ui: &Ui) -> Result<(), ScullError> {
     let dirs = app_dirs()?;
-    let report = show(&dirs);
+    let mut report = show(&dirs);
+    let loaded = super::pipeline::load_config(&[]);
+    report.quarantine.location =
+        QuarantineLocation::from_config(loaded.as_ref().map(|l| &l.config.quarantine));
     if ui.format.is_machine() {
         return emit_machine(ui.format, DATA_SHOW_SCHEMA, "data", &report);
     }
@@ -244,6 +300,7 @@ pub fn show(dirs: &AppDirs) -> DataShowReport {
         outstanding_items: 0,
         outstanding_bytes: 0,
         folders: Vec::new(),
+        location: QuarantineLocation::default(),
     };
     let database = match open_db(&db_path) {
         Ok(store) => {
@@ -307,6 +364,7 @@ fn quarantine_report(q: &[scull_storage::QuarantineSummary]) -> QuarantineReport
         outstanding_items: q.len() as u64,
         outstanding_bytes: q.iter().fold(0u64, |a, e| a.saturating_add(e.bytes)),
         folders: folders.iter().map(|s| FsPath::from(s.as_str())).collect(),
+        location: QuarantineLocation::default(),
     }
 }
 
@@ -449,6 +507,44 @@ fn render_show(r: &DataShowReport) -> String {
         );
         for f in &q.folders {
             line(&mut out, format!("  {}", esc(f.as_str())));
+        }
+    }
+    let l = &q.location;
+    if let Some(e) = &l.error {
+        line(
+            &mut out,
+            format!(
+                "Quarantine to  unknown (the configuration can't be read: {})",
+                esc(e)
+            ),
+        );
+    } else if !l.configured {
+        line(
+            &mut out,
+            "Quarantine to  automatic: <the shallowest folder you own above the item, on its \
+             volume>/.scull-quarantine"
+                .to_owned(),
+        );
+    } else {
+        if let Some(b) = &l.base {
+            line(
+                &mut out,
+                format!(
+                    "Quarantine to  {}/.scull-quarantine (items on its volume; others: Trash, \
+                     else blocked)",
+                    esc(b.as_str())
+                ),
+            );
+        }
+        for b in &l.bases {
+            line(
+                &mut out,
+                format!(
+                    "  under {}: {}/.scull-quarantine",
+                    esc(b.prefix.as_str()),
+                    esc(b.base.as_str())
+                ),
+            );
         }
     }
     out

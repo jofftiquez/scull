@@ -1993,6 +1993,7 @@ export interface Config {
   mcp?: McpConfig;
   output?: OutputConfig;
   proactive?: ProactiveConfig;
+  quarantine?: QuarantineConfig;
   rules?: RulesConfig;
   scan?: ScanConfig;
 }
@@ -2128,6 +2129,47 @@ export interface Budget {
    * Only candidates inside this directory (`~` allowed).
    */
   path?: string | null;
+}
+/**
+ * Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).
+ *
+ * By default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is
+ * chosen automatically: the shallowest directory above the item, on its volume, that the
+ * current user owns (usually the home directory). These settings replace that choice:
+ *
+ * ```toml
+ * [quarantine]
+ * base = "~/.scull-q"                       # for items on the volume holding this directory
+ *
+ * [quarantine.bases]                        # per volume: longest matching prefix wins
+ * "/Volumes/Data" = "/Volumes/Data/me/.q"
+ * "D:\\" = "D:\\Users\\me\\q"
+ * ```
+ *
+ * * For an item, the entry of `bases` whose key is the longest path prefix of the item's path
+ *   applies; otherwise `base`; otherwise the automatic choice.
+ * * A configured base must be on the **same volume** as the item. If it isn't, that item is
+ *   not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It
+ *   is never moved across volumes and never deleted instead.
+ * * The base is created owner-only (`0700` / protected DACL) when missing, must be a real
+ *   directory (not a link) and must not be inside an item being cleaned; the
+ *   `.scull-quarantine` folder inside it is created and checked owner-only.
+ * * Repository files (`.scull.toml`) can't set these (CFG-03).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuarantineConfig".
+ */
+export interface QuarantineConfig {
+  /**
+   * Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.
+   */
+  base?: string | null;
+  /**
+   * Per volume (or any directory): items under the key use the value as their base.
+   */
+  bases?: {
+    [k: string]: string | undefined;
+  };
 }
 /**
  * Optional (user or community) rules. Disabled until enabled here (CLS-04).

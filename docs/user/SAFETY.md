@@ -160,8 +160,9 @@ Quarantine moves an item aside instead of deleting it. The move is a rename on t
 drive, so it is instant and never copies data across drives.
 
 * Items go to a `.scull-quarantine/<operation>/` folder on the same drive, inside the
-  shallowest folder you own there (usually your home folder). The folder is readable by you
-  only.
+  shallowest folder you own there (usually your home folder), or inside the folder you set
+  with `[quarantine] base` in the config when it is on the item's drive. The folder is
+  readable by you only.
 * Quarantined items stay for **7 days**. Until then `scull restore <operation>` puts them back.
 * **Quarantine does not free space yet**: the bytes have only moved. scull reports them as
   "moved", not "freed". The space comes back when you purge.

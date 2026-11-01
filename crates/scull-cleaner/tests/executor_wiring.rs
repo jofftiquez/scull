@@ -97,7 +97,12 @@ fn run_with(
     let h = harness(false);
     let plan = plan_named(fx, &h.scan(fx), rels, op);
     s.insert_plan(&plan).unwrap();
-    let mut operation = setup(exec.begin_operation(s, &plan, &start(&plan, op)).unwrap());
+    // The fixture's quarantine base unless `setup` sets another (P2-EXEC-13).
+    let mut operation = setup(
+        exec.begin_operation(s, &plan, &start(&plan, op))
+            .unwrap()
+            .with_quarantine(settings(fx)),
+    );
     let r = exec
         .execute_plan(
             &plan,
@@ -199,10 +204,11 @@ fn fx_exec_03_quarantine_impossible_falls_back_to_trash() {
     );
 }
 
-/// FX-EXEC-03 (cross-volume): the quarantine location is on another filesystem, so the
-/// quarantine move fails with EXDEV after its intent was journaled; that attempt is closed as
-/// "changed nothing" and the Trash (same volume) takes the item. (Linux, when `/dev/shm` is a
-/// separate filesystem.)
+/// FX-EXEC-03 (cross-volume): the configured quarantine location is on another filesystem, so
+/// it is refused for this item before anything is journaled or created there (P2-EXEC-13: a
+/// configured base must be on the item's volume), and the Trash (same volume) takes the item.
+/// A move that still hits another volume (e.g. a bind mount on the same device) fails with
+/// EXDEV and falls back the same way. (Linux, when `/dev/shm` is a separate filesystem.)
 #[cfg(target_os = "linux")]
 #[test]
 fn fx_exec_03_cross_volume_quarantine_falls_back_to_trash() {
@@ -241,20 +247,15 @@ fn fx_exec_03_cross_volume_quarantine_falls_back_to_trash() {
         "{r:#?}"
     );
     assert!(
-        leftover.iter().all(|p| !p.ends_with("0001")),
-        "nothing was moved across volumes: {leftover:?}"
+        leftover.is_empty(),
+        "nothing was moved or even created on the other volume: {leftover:?}"
     );
     let op = OperationId::from_suffix("T2").unwrap();
     let steps = s.journal_steps(&op).unwrap();
     let actions: Vec<_> = steps.iter().map(|st| st.intent.action).collect();
+    assert_eq!(actions, vec![JournalAction::Trash], "{steps:#?}");
     assert_eq!(
-        actions,
-        vec![JournalAction::Quarantine, JournalAction::Trash],
-        "{steps:#?}"
-    );
-    assert!(steps[0].close.as_ref().unwrap().outcome.is_none());
-    assert_eq!(
-        steps[1]
+        steps[0]
             .close
             .as_ref()
             .unwrap()

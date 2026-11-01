@@ -9,8 +9,10 @@
 //! root (I-3), the canary is untouched (I-2), nothing S3 was executed (I-1) and no executed
 //! tier is lower than planned (I-8); after an execution, the audit matches the disk (I-4) and
 //! the finished operation records the predicted bytes and the measured free-space delta the
-//! run reported (I-5). Quarantine folders land in the fixture's temp directory
-//! (the shallowest folder on the volume the test user owns), outside the root.
+//! run reported (I-5). Quarantine folders land in the fixture's temp directory, outside the
+//! root: every run gets the fixture's sandbox environment (`SCULL_TEST_SANDBOX` and
+//! `SCULL_QUARANTINE_BASE`, P2-EXEC-13), and I-2 fails if anything appears in the automatic
+//! quarantine or Trash locations above it or a recorded quarantine path lies outside it.
 //!
 //! The fixture tiers depend on what the machine can observe (an uninspectable process of the
 //! test user makes "in use" unknown, hence S2), so the tests name items with `--item` and
@@ -90,6 +92,8 @@ impl Env {
             }
         }
         c.env("SCULL_HOME", self.home());
+        // P2-EXEC-13: quarantine (and the Trash fallback) stay inside the fixture's temp dir.
+        self.fx.sandbox(&mut c);
         c
     }
 

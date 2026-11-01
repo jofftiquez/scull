@@ -424,6 +424,17 @@
         "restorability": {
           "$ref": "#/$defs/Restorability",
           "description": "How what was done can be undone."
+        },
+        "trash_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where a trashed item is now, when known."
         }
       },
       "required": [
@@ -454,6 +465,11 @@
         {
           "const": "quarantined",
           "description": "Moved into quarantine (restorable).",
+          "type": "string"
+        },
+        {
+          "const": "trashed",
+          "description": "Moved to the Trash because quarantine was impossible here (D-3); restorable from the\nTrash, outside scull.",
           "type": "string"
         },
         {

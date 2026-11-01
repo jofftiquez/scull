@@ -679,3 +679,56 @@ fn purge_older_than_removes_only_old_copies() {
     assert!(h.fx.canary().symlink_target_file.is_file());
     h.check();
 }
+
+/// `scull data show` reports where new quarantines go (P2-EXEC-13): automatic by default, the
+/// configured base (`SCULL_QUARANTINE_BASE` over the config file) and per-volume bases.
+#[test]
+fn show_reports_the_quarantine_location() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let d = json_ok(&scull_in(home.path(), &["data", "show", "--json"]));
+    assert_eq!(
+        d["data"]["quarantine"]["location"]["configured"], false,
+        "{d:#}"
+    );
+
+    let base = home.path().join("q");
+    let vol = home.path().join("vol");
+    let vol_base = vol.join("q");
+    std::fs::create_dir_all(home.path().join("config")).unwrap();
+    std::fs::write(
+        home.path().join("config").join("config.toml"),
+        format!(
+            "[quarantine]\nbase = {:?}\n[quarantine.bases]\n{:?} = {:?}\n",
+            home.path().join("from-file").to_str().unwrap(),
+            vol.to_str().unwrap(),
+            vol_base.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scull"));
+    cmd.args(["data", "show", "--json"])
+        .env("SCULL_HOME", home.path())
+        .env("TERM", "dumb");
+    for (k, _) in std::env::vars() {
+        if k.starts_with("SCULL_") && k != "SCULL_HOME" {
+            cmd.env_remove(k);
+        }
+    }
+    cmd.env("SCULL_QUARANTINE_BASE", &base)
+        .stdin(std::process::Stdio::null());
+    let d = json_ok(&cmd.output().expect("run scull"));
+    let l = &d["data"]["quarantine"]["location"];
+    assert_eq!(l["configured"], true, "{d:#}");
+    assert_eq!(
+        l["base"],
+        base.to_str().unwrap(),
+        "the environment wins: {d:#}"
+    );
+    assert_eq!(l["bases"][0]["prefix"], vol.to_str().unwrap(), "{d:#}");
+    assert_eq!(l["bases"][0]["base"], vol_base.to_str().unwrap(), "{d:#}");
+    assert!(l["error"].is_null(), "{d:#}");
+
+    let text =
+        String::from_utf8_lossy(&scull_in(home.path(), &["data", "show"]).stdout).into_owned();
+    assert!(text.contains("Quarantine to"), "{text}");
+}
