@@ -54,6 +54,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Frontend bundle (embedded by generate_context!)
         run: pnpm --filter @scull/desktop build
+      - name: Fetch every target's crates (tests/safe10.rs runs `cargo tree --offline` over all targets)
+        working-directory: apps/desktop/src-tauri
+        run: cargo fetch --locked
       - name: clippy
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
