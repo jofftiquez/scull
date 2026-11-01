@@ -11,6 +11,7 @@
 //! * [`dotnet`]: `bin/` (configuration folders only) and the NuGet global packages folder.
 //! * [`xcode`]: DerivedData, device support files, archives and unavailable simulators (macOS).
 //! * [`android`]: Android Gradle Plugin build output (release-aware) and emulator images.
+//! * [`game_engines`]: Unity and Unreal Engine project folders (engine markers, user data kept).
 //! * [`large_files`]: the inspect-only large-files listing (never a cleanup candidate).
 //! * [`ml`]: Hugging Face, Ollama and PyTorch Hub caches (scan rules plus a per-OS locator).
 //! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
@@ -24,6 +25,7 @@ pub mod caches;
 pub mod cargo;
 pub mod detector;
 pub mod dotnet;
+pub mod game_engines;
 pub mod go;
 pub mod jvm;
 pub mod large_files;
@@ -44,6 +46,7 @@ pub use detector::{
     Detectors, MAX_CONFIG_BYTES, RuleDetector,
 };
 pub use dotnet::DotnetBinDetector;
+pub use game_engines::GameEngineDetector;
 pub use large_files::{
     FileKind, LargeFile, LargeFileOptions, LargeFileReport, LargeFiles, inspect_large_files,
 };

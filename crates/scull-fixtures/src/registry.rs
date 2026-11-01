@@ -155,6 +155,7 @@ const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
 const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
 const LARGE: &str = "crates/scull-detectors/tests/large_files.rs";
+const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
     id: &'static str,
@@ -365,7 +366,22 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         ]),
     ),
     fx("FX-CLS-13", Gate::V1_0, "MLW", Mode::Ci, Status::Deferred),
-    fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-14",
+        Gate::V1x,
+        "MW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                GAME_DET,
+                "fx_cls_14_unity_library_and_unreal_ddc_are_s1_saved_is_s2",
+            ),
+            t(
+                "crates/scull-detectors/tests/jvm_dotnet_detector.rs",
+                "fx_cls_14_unity_and_unreal_folders_are_not_claimed_as_dotnet_or_gradle",
+            ),
+        ]),
+    ),
     // §3.2 Git worktrees (FX-GIT)
     fx(
         "FX-GIT-01",

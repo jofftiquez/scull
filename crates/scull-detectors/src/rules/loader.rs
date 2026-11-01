@@ -50,6 +50,14 @@ pub const BUNDLED_RULE_FILES: &[(&str, &str)] = &[
         "rules/ecosystems/android.toml",
         include_str!("../../../../rules/ecosystems/android.toml"),
     ),
+    (
+        "rules/ecosystems/unity.toml",
+        include_str!("../../../../rules/ecosystems/unity.toml"),
+    ),
+    (
+        "rules/ecosystems/unreal.toml",
+        include_str!("../../../../rules/ecosystems/unreal.toml"),
+    ),
 ];
 
 /// Key fragments and whole key tokens that suggest a command, script or hook. Any of these
