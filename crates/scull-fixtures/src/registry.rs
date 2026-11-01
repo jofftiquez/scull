@@ -1183,38 +1183,28 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         ]),
     )
     .pending_ci(PHASE2_PENDING),
+    // FX-RACE-06/07: green on macOS and Windows in run 41326764895 (journal fixtures only, on a
+    // verification branch while FX-WIN-03 hung the full Windows run) and on Linux in PR CI.
     fx(
         "FX-RACE-06",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "cancel mid-execution, partial audit and a completing rerun are covered through the journal on Unix; the journal fixtures need quarantine moves, which Windows does not have yet",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_06_cancel_mid_execution_consistent_and_rerun_completes",
+        )]),
+    ),
     fx(
         "FX-RACE-07",
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 74,
-            reason: "a process killed during a quarantine move is reconciled by the journal on Unix; Windows has no quarantine moves yet, so there is nothing to kill there",
-            partial: &[t(
-                JOURNAL,
-                "fx_race_07_killed_during_quarantine_move_journal_reconciles",
-            )],
-        },
-    )
-    .pending_ci("M")
-    .missing_os("W"),
+        Status::Implemented(&[t(
+            JOURNAL,
+            "fx_race_07_killed_during_quarantine_move_journal_reconciles",
+        )]),
+    ),
     // §3.5 Executor, plans, quarantine, restore (FX-EXEC)
     fx(
         "FX-EXEC-01",
