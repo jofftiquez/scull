@@ -111,6 +111,51 @@ fn deferred_fixtures_are_not_mvp_ci() {
     }
 }
 
+/// The signed manual release checklist (docs/FIXTURES.md §2.2): the text from its heading to
+/// the next `### ` or `## ` heading.
+fn manual_checklist() -> String {
+    let text = fs::read_to_string(workspace_root().join("docs/FIXTURES.md")).unwrap();
+    let start = text
+        .find("### 2.2 Manual release checklist")
+        .expect("docs/FIXTURES.md has §2.2 Manual release checklist");
+    let rest = &text[start + 4..];
+    let end = [rest.find("\n### "), rest.find("\n## ")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// `ManualChecklist` is only for Manual-mode fixtures, and each has a checklist entry
+/// (a `**FX-...**` item with checkboxes) in docs/FIXTURES.md §2.2.
+#[test]
+fn manual_checklist_fixtures_have_a_checklist_entry() {
+    let checklist = manual_checklist();
+    let mut checked = 0;
+    for r in REGISTRY {
+        if r.status != Status::ManualChecklist {
+            continue;
+        }
+        assert_eq!(r.mode, scull_fixtures::registry::Mode::Manual, "{}", r.id);
+        let entry = format!("**{}**", r.id);
+        let at = checklist
+            .find(&entry)
+            .unwrap_or_else(|| panic!("{}: no {entry} entry in docs/FIXTURES.md §2.2", r.id));
+        let body = &checklist[at..];
+        let body = &body[..body[entry.len()..]
+            .find("\n**FX-")
+            .map_or(body.len(), |i| i + entry.len())];
+        assert!(
+            body.matches("- [ ]").count() >= 3,
+            "{}: the checklist entry needs at least three steps to tick",
+            r.id
+        );
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
 /// Whether `source` defines `#[test] fn name(`: the function exists and one of the attribute
 /// lines right above it is `#[test]`.
 fn defines_test(source: &str, name: &str) -> bool {
@@ -232,6 +277,7 @@ fn per_os_status_is_consistent_and_reported() {
         let kind = match r.status {
             Status::Implemented(_) => "implemented",
             Status::Tracked { .. } => "partial",
+            Status::ManualChecklist => "manual",
             Status::Deferred => "deferred",
         };
         println!("{} [{kind}] {}", r.id, status.join(" "));

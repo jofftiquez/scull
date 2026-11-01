@@ -102,6 +102,11 @@ pub enum Status {
         /// Tests covering part of the scenario today.
         partial: &'static [TestRef],
     },
+    /// A **Manual**-mode fixture (FIXTURES §2): no automated test can produce the state it
+    /// needs (a desktop session, account state, OS permission prompts), so it is covered by an
+    /// entry of the signed manual release checklist (docs/FIXTURES.md §2.2, PRD §21.3).
+    /// `tests/registry.rs` checks the checklist has an entry for the fixture.
+    ManualChecklist,
     /// Not required at the MVP CI gate (later gate, or nightly/manual mode) and not started.
     Deferred,
 }
@@ -112,7 +117,7 @@ impl Status {
         match self {
             Status::Implemented(t) => t,
             Status::Tracked { partial, .. } => partial,
-            Status::Deferred => &[],
+            Status::ManualChecklist | Status::Deferred => &[],
         }
     }
 }
@@ -252,6 +257,8 @@ const AUDIT: &str = "crates/scull-storage/tests/audit.rs";
 const E2E_WIN: &str = "crates/scull-fixtures/tests/fx_win.rs";
 const E2E_MAC: &str = "crates/scull-fixtures/tests/fx_mac.rs";
 const E2E_LNX: &str = "crates/scull-fixtures/tests/fx_lnx.rs";
+/// Nightly OS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`, job `fx-os`).
+const E2E_OS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_os_nightly.rs";
 const E2E_DATA: &str = "crates/scull-fixtures/tests/fx_data.rs";
 const E2E_OUT: &str = "crates/scull-fixtures/tests/fx_out.rs";
 const PLAT_WIN: &str = "crates/scull-platform/tests/windows.rs";
@@ -1812,15 +1819,8 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "M",
         Mode::Manual,
-        Status::Tracked {
-            issue: 250,
-            reason: "manual: needs a real macOS desktop session without Full Disk Access; TCC \
-                     permission prompts can't be scripted on hosted runners, so it goes on the \
-                     signed release checklist",
-            partial: &[],
-        },
-    )
-    .missing_os("M"),
+        Status::ManualChecklist,
+    ),
     fx("FX-MAC-02", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
     fx(
         "FX-MAC-03",
@@ -1853,15 +1853,14 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "M",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 250,
-            reason: "nightly: a real external volume needs a mounted disk image; the Trash \
-                     half runs against an injected volume top in CI (not yet run on macOS)",
-            partial: &[
-                t(TRASH, "fx_mac_05_external_volume_uses_its_trashes"),
-                t(TRASH, "fx_mac_05_missing_trashes_is_created"),
-            ],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_OS_NIGHTLY,
+                "fx_mac_05_trash_on_an_attached_disk_image_uses_its_trashes",
+            ),
+            t(TRASH, "fx_mac_05_external_volume_uses_its_trashes"),
+            t(TRASH, "fx_mac_05_missing_trashes_is_created"),
+        ]),
     )
     .pending_ci(MACOS_PENDING),
     fx("FX-MAC-06", Gate::V1_0, "M", Mode::Manual, Status::Deferred),
@@ -1888,13 +1887,12 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "L",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 250,
-            reason: "nightly: a Trash on a second real mount needs a loop device and sudo; \
-                     CI covers per-volume Trash selection with an injected volume top and \
-                     /dev/shm",
-            partial: &[
-                t(
+        Status::Implemented(&[
+            t(
+                E2E_OS_NIGHTLY,
+                "fx_lnx_02_trash_on_a_real_second_volume_uses_its_topdir",
+            ),
+            t(
                     TRASH,
                     "fx_lnx_02_per_volume_trash_dir_is_created_owner_only",
                 ),
@@ -1907,22 +1905,18 @@ pub const REGISTRY: &[RegisteredFixture] = &[
                     TRASH,
                     "fx_lnx_02_home_trash_on_another_volume_uses_the_items_volume",
                 ),
-            ],
-        },
+        ]),
     ),
     fx(
         "FX-LNX-03",
         Gate::Mvp,
         "L",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 250,
-            reason: "nightly: an NFS, SMB or sshfs mount inside a scan root needs a privileged \
-                     job; no test mounts one yet",
-            partial: &[],
-        },
-    )
-    .missing_os("L"),
+        Status::Implemented(&[t(
+            E2E_OS_NIGHTLY,
+            "fx_lnx_03_network_mount_inside_scan_root_is_skipped_and_never_hangs",
+        )]),
+    ),
     fx(
         "FX-LNX-04",
         Gate::Mvp,
@@ -1942,14 +1936,11 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "L",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 250,
-            reason: "nightly: a real Btrfs subvolume needs mkfs.btrfs on a loop device and \
-                     sudo; only the mount-table parsing is unit-tested today",
-            partial: &[],
-        },
-    )
-    .missing_os("L"),
+        Status::Implemented(&[t(
+            E2E_OS_NIGHTLY,
+            "fx_lnx_06_btrfs_subvolume_inside_candidate_is_a_mount_boundary",
+        )]),
+    ),
     // §3.13 Data store and privacy (FX-DATA)
     fx(
         "FX-DATA-01",
