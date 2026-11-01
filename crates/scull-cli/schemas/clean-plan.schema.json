@@ -1203,6 +1203,11 @@
           "const": "desktop",
           "description": "The desktop Cleanup Review screen.",
           "type": "string"
+        },
+        {
+          "const": "policy",
+          "description": "An opt-in unattended auto-policy run by the scheduled `scull check` (PRO-10, D-11).\nSuch a plan may only hold S0 items whose action is [`Action::Quarantine`]\n([`Plan::new`] and [`Plan::verify`] refuse anything else), and only the auto-policy\nrunner starts an operation for it.",
+          "type": "string"
         }
       ]
     },

@@ -122,9 +122,21 @@ enabled = true
 
 [output]
 color = "always"
+
+[auto]
+max_items_per_run = 1000
+
+[[auto.policy]]
+name = "evil"
+enabled = true
+kind = "build_outputs"
+idle = "7d"
+every = "1d"
 "#,
     );
     for key in [
+        "auto.max_items_per_run",
+        "auto.policy",
         "scan.roots",
         "scan.threads",
         "scan.low_resource",
@@ -578,6 +590,8 @@ fn precedence_table_every_field_every_layer() {
     // Alert policies are user-file settings (no environment variables or flags).
     covered.extend(FIELDS.iter().filter(|f| f.starts_with("proactive.")));
     covered.push("quarantine.bases");
+    // Auto-policies (D-11) are user-file-only settings: see `auto_policies_only_from_user_config_file`.
+    covered.extend(FIELDS.iter().filter(|f| f.starts_with("auto.")));
     covered.sort();
     let mut all = FIELDS.to_vec();
     all.sort();
@@ -672,6 +686,40 @@ fn mcp_agent_limits_only_from_user_config_file() {
     assert_eq!(r.config.mcp.max_pending_plans, 2);
     assert_eq!(r.config.mcp.prepare_per_minute, 3);
     assert_eq!(r.origin("mcp.prepare_per_minute"), &[Origin::UserConfig]);
+}
+
+/// D-11: unattended auto-policies are enabled only by the user config file. The same `[auto]`
+/// table in the CLI or environment layer is ignored, so no flag or variable can enable,
+/// unpause or widen them.
+#[test]
+fn auto_policies_only_from_user_config_file() {
+    let file = ConfigLayer::from_toml(
+        "[auto]\nmax_items_per_run = 5\n\n[[auto.policy]]\nname = \"p\"\nenabled = true\n\
+         kind = \"build_outputs\"\nidle = \"60d\"\nevery = \"7d\"\n",
+    )
+    .unwrap();
+    let env = EnvLayer {
+        layer: file.clone(),
+        ..EnvLayer::default()
+    };
+    let r = resolve(&file, &env, &ConfigLayer::default());
+    assert!(!r.config.auto.any_enabled());
+    assert_eq!(r.config.auto.max_items_per_run, 50);
+    for f in FIELDS.iter().filter(|f| f.starts_with("auto.")) {
+        assert_eq!(r.origin(f), &[Origin::Default], "{f}");
+    }
+    let mut paused = ConfigLayer::default();
+    paused.auto.paused = Some(false);
+    let mut file_paused = file.clone();
+    file_paused.auto.paused = Some(true);
+    let r = resolve(&paused, &EnvLayer::default(), &file_paused);
+    assert!(r.config.auto.paused, "a flag can't unpause");
+    let r = resolve(&ConfigLayer::default(), &EnvLayer::default(), &file);
+    assert!(r.config.auto.any_enabled());
+    assert_eq!(r.config.auto.max_items_per_run, 5);
+    assert_eq!(r.origin("auto.policy"), &[Origin::UserConfig]);
+    // No environment variable names an auto-policy field.
+    assert!(!ENV_VARS.iter().any(|v| v.field.starts_with("auto.")));
 }
 
 #[test]

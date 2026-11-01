@@ -349,6 +349,19 @@ pub(super) fn owner_only_exposures(path: &Path) -> io::Result<Vec<crate::Exposur
     Ok(exposures)
 }
 
+/// Whether `path` carries an extended ACL that permission bits don't show: macOS ACLs. On Linux
+/// a POSIX ACL's mask is reflected in the group bits, which [`owner_only_exposures`] checks.
+#[cfg(target_os = "macos")]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    macos::has_extended_acl(path)
+}
+
+/// See the macOS version.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    fs::symlink_metadata(path).map(|_| false)
+}
+
 /// Known folders are a Windows concept.
 pub(super) fn known_folder(_source: crate::DirSource) -> Option<std::path::PathBuf> {
     None
