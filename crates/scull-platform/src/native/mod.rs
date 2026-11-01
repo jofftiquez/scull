@@ -1,8 +1,8 @@
 //! The real OS implementation of [`Platform`]. Per-OS details live in `unix.rs` / `windows.rs`.
 
 use crate::{
-    Capabilities, DirIter, DirSource, Exposure, Metadata, Operation, Platform, PlatformError,
-    Result,
+    Capabilities, DirEntry, DirIter, DirSource, Exposure, Metadata, Operation, Platform,
+    PlatformError, Result,
 };
 use scull_core::FileIdentity;
 use std::borrow::Cow;
@@ -50,6 +50,11 @@ impl Platform for Native {
 
     fn read_dir<'a>(&'a self, path: &Path) -> Result<DirIter<'a>> {
         os::read_dir(path)
+    }
+
+    fn entry_metadata(&self, entry: &DirEntry) -> Result<Metadata> {
+        os::entry_metadata(entry)
+            .map_err(|e| PlatformError::from_io(Operation::Metadata, &entry.path, e))
     }
 }
 

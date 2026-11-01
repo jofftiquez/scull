@@ -453,12 +453,13 @@ impl Shared {
                 }
                 continue;
             }
-            // lstat: authoritative kind (the listing's hint may be stale) and sizes. Never
-            // follows a link and never opens the entry, so FIFOs and devices are safe. The
+            // lstat semantics (`fstatat` relative to the listed directory on Unix):
+            // authoritative kind (the listing's hint may be stale) and sizes. Never follows a
+            // link and never opens the entry, so FIFOs and devices are safe. The
             // call is published in the slot, so the watchdog can skip just this entry if it
             // hangs (a frozen mount point).
             slot.begin_stat(&de.path);
-            let md = self.platform.metadata(&de.path);
+            let md = self.platform.entry_metadata(&de);
             slot.end_stat();
             let md = match md {
                 Ok(md) => md,

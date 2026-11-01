@@ -356,6 +356,9 @@ pub fn code(kind: &RuleErrorKind) -> &'static str {
         RuleErrorKind::ForbiddenCategory(_) => "forbidden_category",
         RuleErrorKind::DuplicateId => "duplicate_id",
         RuleErrorKind::UnknownRule => "unknown_rule",
+        RuleErrorKind::UserWorkFolder { .. } => "user_work_folder",
+        RuleErrorKind::WildcardName { .. } => "wildcard_name",
+        RuleErrorKind::NoProjectMarker => "no_project_marker",
         _ => "other",
     }
 }

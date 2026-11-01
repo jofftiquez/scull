@@ -92,6 +92,25 @@ pub enum RuleErrorKind {
     DuplicateId,
     /// No rule with that ID is loaded.
     UnknownRule,
+    /// A non-bundled rule's `match.names` pattern matches a folder that holds people's work
+    /// or configuration (`src`, `Documents`, `.ssh`, ...; [`super::PROTECTED_FOLDER_NAMES`]).
+    /// Community rules may never claim such folders (P6-COM-01).
+    UserWorkFolder {
+        /// The pattern as written.
+        pattern: String,
+        /// The protected name it matches.
+        name: String,
+    },
+    /// A non-bundled rule's `match.names` pattern has fewer than two literal characters
+    /// (`*`, `?*`, `{a,b}*`): it would match almost any folder.
+    WildcardName {
+        /// The pattern as written.
+        pattern: String,
+    },
+    /// A non-bundled rule has no marker outside the candidate (`../build.gradle`, ...): every
+    /// community rule must be gated on a project file beside or above the folder it claims, so
+    /// it only ever applies inside a recognizable project.
+    NoProjectMarker,
 }
 
 impl RuleError {
@@ -157,6 +176,20 @@ impl fmt::Display for RuleErrorKind {
             Self::ForbiddenCategory(c) => write!(f, "category `{c}` can't be produced by rules"),
             Self::DuplicateId => f.write_str("duplicate rule id"),
             Self::UnknownRule => f.write_str("no rule with that id"),
+            Self::UserWorkFolder { pattern, name } => write!(
+                f,
+                "`match.names` pattern `{pattern}` matches `{name}`, a folder that holds people's \
+                 work or settings; community rules can never claim it"
+            ),
+            Self::WildcardName { pattern } => write!(
+                f,
+                "`match.names` pattern `{pattern}` is too broad: community rules need at least \
+                 two literal characters in every name"
+            ),
+            Self::NoProjectMarker => f.write_str(
+                "community rules need at least one marker outside the candidate (`../<project \
+                 file>`), so they only apply inside a recognizable project",
+            ),
         }
     }
 }

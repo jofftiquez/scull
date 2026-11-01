@@ -66,6 +66,18 @@ jobs:
           SCULL_FIXTURES_ALLOW_SUDO: ${{ runner.os == 'Linux' && '1' || '' }}
           SCULL_FIXTURES_REQUIRE_PRIVILEGED: ${{ runner.os == 'Linux' && '1' || '' }}
         run: cargo test --workspace --locked --no-fail-fast
+      # The runners are elevated: scull refuses destructive MCP tools and `scull approve` there
+      # (SAFE-14), so those tests skip themselves, and `clean`/`restore` tests add
+      # `--allow-root`. Run them again as a standard user, where they must take the normal
+      # user's path (a skip or an elevated process is a failure, #65).
+      - name: Elevation-gated tests as a standard user (Windows)
+        # Runs even when `test` failed elsewhere: its coverage is independent.
+        if: runner.os == 'Windows' && !cancelled()
+        shell: pwsh
+        run: >-
+          ./scripts/ci/run-as-standard-user.ps1
+          -Tests scull-cli/mcp_approval,scull-cli/clean,scull-cli/clean_caches,scull-cli/history_restore,scull-fixtures/fx_out
+          -MustRun agent_plan_runs_only_after_the_human_approves,approve_prompt_shows_the_plan_and_needs_the_shown_code,approve_without_a_terminal_creates_no_machine_id,revoke_through_the_cli_stops_the_agent,clean,clean_caches,history_restore,fx_out
       - name: doc
         if: runner.os == 'Linux'
         env:

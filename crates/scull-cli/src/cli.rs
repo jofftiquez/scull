@@ -292,6 +292,17 @@ pub struct ScanArgs {
     /// overlay (skipped by default, D-22; backup volumes are never scanned).
     #[arg(long)]
     pub allow_network_roots: bool,
+
+    /// Preview (P6-RES-01): scan PATH on a remote host by running that host's own
+    /// `scull scan --json` over your `ssh` client (host keys verified, no agent forwarding,
+    /// nothing written on the host). Read-only. See docs/REMOTE_SCANNING.md.
+    #[arg(long, value_name = "HOST:PATH",
+          conflicts_with_all = ["paths", "allow_broad_roots", "allow_network_roots"])]
+    pub ssh: Option<String>,
+
+    /// With --ssh: the scull binary on the remote host (default: `scull` on its PATH).
+    #[arg(long, value_name = "PATH", requires = "ssh")]
+    pub remote_bin: Option<String>,
 }
 
 /// Arguments for `scull doctor`.
@@ -600,6 +611,15 @@ pub enum RulesAction {
     Validate {
         /// Rule files to validate (default: the bundled rules).
         paths: Vec<PathBuf>,
+    },
+    /// Test rule files against their cases files (`foo.toml` → `foo.cases.toml`): trees of
+    /// names, never read from or written to disk.
+    Test {
+        /// Rule files to test.
+        paths: Vec<PathBuf>,
+        /// Write a starter cases file beside each rule file (never overwrites one).
+        #[arg(long)]
+        init: bool,
     },
 }
 

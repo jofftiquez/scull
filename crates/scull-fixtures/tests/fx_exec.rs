@@ -257,15 +257,12 @@ fn fx_exec_13_normal_run_audit_append_only_one_outcome_per_item() {
     assert_ran(&inv, &[InvariantId::I1, InvariantId::I8]);
 }
 
-/// FX-EXEC-14 (Unix): five S0 items, one of which can't be fully removed (a folder inside it
-/// is read-only, so the walker may not unlink its entries: permission denied). Exit code 3; the
+/// FX-EXEC-14: five S0 items, one of which can't be fully removed (permission denied on a
+/// folder inside it: read-only on Unix, deny-delete ACEs on Windows). Exit code 3; the
 /// other four complete; the failure is explained (the kept entries with their reason, the
-/// audit's `partial` outcome with a reason code). The Windows variant needs a deny-delete ACL
-/// injection (#68).
+/// audit's `partial` outcome with a reason code).
 #[test]
-#[cfg(unix)]
 fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
-    use std::os::unix::fs::PermissionsExt;
     let mut fx = Fixture::new().unwrap();
     for n in 1..=5 {
         let d = format!("p{n}");
@@ -277,11 +274,11 @@ fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
     fx.file("p3/target/debug/locked/held.bin", b"cannot unlink me")
         .unwrap();
     let locked_dir = fx.root().join("p3/target/debug/locked");
-    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let staged = deny_removal(&locked_dir);
     fx.checkpoint().unwrap();
-    if std::fs::remove_file(locked_dir.join("held.bin")).is_ok() {
-        // Running as root: permissions don't stop unlink, so the failure can't be staged.
-        println!("SKIP: permissions are not enforced for this user");
+    if !staged {
+        println!("SKIP: permission denied can't be staged for this user");
+        allow_removal(&locked_dir);
         fx.check_invariants(&InvariantInputs::new().allow("p3"))
             .assert_ok();
         return;
@@ -327,6 +324,9 @@ fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
         }
     }
     assert_eq!(complete, 4);
+    // Restore access first, so the snapshot (I-3) can read the kept folder and the temp dir
+    // can be removed.
+    allow_removal(&locked_dir);
     assert!(locked_dir.join("held.bin").is_file());
     let audit = s.audit_items(&op).unwrap();
     let p3 = audit
@@ -346,8 +346,58 @@ fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
 
     let inv = check(&fx, &inputs(&p, &r, &s, &op, &rels));
     assert_eq!(inv.outcome(InvariantId::I4), &Outcome::Passed, "{inv}");
-    // Let the temp dir be removed.
-    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Make the entries of `dir` impossible to remove for this user: Unix: a read-only directory
+/// (false when running as root, where permissions don't stop unlink); Windows: ACEs denying
+/// everyone "delete child" on `dir` and "delete" on its files (false if icacls can't set them).
+#[cfg(unix)]
+fn deny_removal(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // A file this process creates is owned by its effective user; root ignores permissions.
+    let probe = tempfile::NamedTempFile::new().unwrap();
+    probe.as_file().metadata().unwrap().uid() != 0
+}
+
+#[cfg(unix)]
+fn allow_removal(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(windows)]
+fn deny_removal(dir: &std::path::Path) -> bool {
+    // Reading stays allowed (the scan must see the folder whole, or it would not be S0); only
+    // removal is denied: "delete child" on the folder and "delete" on each file in it.
+    let mut ok = icacls(&[dir.as_os_str(), "/deny".as_ref(), "*S-1-1-0:(DC)".as_ref()]);
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        ok &= icacls(&[p.as_os_str(), "/deny".as_ref(), "*S-1-1-0:(DE)".as_ref()]);
+    }
+    ok
+}
+
+#[cfg(windows)]
+fn allow_removal(dir: &std::path::Path) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        icacls(&[p.as_os_str(), "/remove:d".as_ref(), "*S-1-1-0".as_ref()]);
+    }
+    assert!(icacls(&[
+        dir.as_os_str(),
+        "/remove:d".as_ref(),
+        "*S-1-1-0".as_ref()
+    ]));
+}
+
+#[cfg(windows)]
+fn icacls(args: &[&std::ffi::OsStr]) -> bool {
+    std::process::Command::new("icacls")
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// FX-CLS-06 (deletion half, through the real Executor): `node_modules` holding a workspace
