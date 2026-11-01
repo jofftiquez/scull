@@ -139,7 +139,7 @@ Ctrl-C stops before the next item. Nothing is left half-done.
 | `scull check` | Light scan, free-space forecast, alerts, a ready-to-review plan | Records history and writes a plan file; never deletes |
 | `scull schedule enable\|disable\|status` | Run `scull check` periodically through the OS scheduler | `enable`/`disable` write or remove scheduler files, with consent |
 | `scull insights [export\|purge]` | Local trends from scull's own history | `purge` deletes history rows only |
-| `scull ask QUESTION` | Optional assistant over scull's read-only tools (off by default; your own model) | No |
+| `scull ask QUESTION` | Optional assistant over scull's read-only tools (off by default; your own model); with `[mcp] destructive = true` it can also prepare a plan for you to approve | No |
 | `scull completions SHELL` | Shell completion script | No |
 | `scull mcp serve` | Read-only MCP server for AI agents | No |
 
@@ -1105,11 +1105,25 @@ until you turn it on.
   sent, and to whom, and asks you to agree. `--show-request` prints the notice and the exact
   first request (key masked) and sends nothing. It works even while the assistant is off.
   `--yes` agrees without a prompt and is required when there is no terminal.
-* **Read-only.** The model can only call scull's read-only tools, the same ones
-  `scull mcp serve` offers minus `register_worktree`, with the same scan-root allowlist and
-  path redaction (`[mcp] redact_home`, `hash_names`). It can't delete, move or change files,
-  and it can't prepare or approve a cleanup. Letting it prepare a plan for your review is
-  tracked in #22.
+* **Read-only.** The model calls scull's read-only tools, the same ones `scull mcp serve`
+  offers minus `register_worktree`, with the same scan-root allowlist and path redaction
+  (`[mcp] redact_home`, `hash_names`). It can't delete, move or change files, and it can't
+  approve or run a cleanup.
+* **Preparing a plan (opt-in).** With `[mcp] destructive = true` in `config.toml` (the same
+  switch as the MCP server's destructive mode; never when scull runs elevated), the model may
+  also prepare a cleanup plan when you ask it to free space. Preparing changes nothing. After
+  the answer, scull itself prints the plan ID and the command to review and approve it:
+
+  ```console
+  The assistant prepared a cleanup plan; nothing has been changed. It runs only after you review and approve it yourself:
+    plan plan_01JC…: 1 item(s), 4.0 KiB reclaimable
+      scull approve plan_01JC…
+  ```
+
+  `scull ask` cannot run the plan: after you approve it, an AI agent connected to
+  `scull mcp serve` in destructive mode can run it. The same limits as for agents apply
+  (`mcp.max_pending_plans`, `mcp.prepare_per_minute`), and consent given while the assistant
+  was read-only is asked again.
 
 What you send goes to the provider you configured. Nothing else leaves your machine.
 
