@@ -23,6 +23,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// An absolute path outside the allowlist (`/etc` is not absolute on Windows).
+const OUTSIDE: &str = if cfg!(windows) { r"C:\Windows" } else { "/etc" };
+
 /// Unique text inside fixture files: must never reach the model.
 const CONTENT_MARKER: &str = "CONTENT-MARKER-ask-7d2c-never-sent";
 
@@ -238,7 +241,7 @@ fn anthropic_loop_runs_only_read_only_tools_and_sends_redacted_results() {
                         "register_worktree",
                         json!({ "path": "~/root/app", "ttl": "1d" }),
                     ),
-                    tool_use("toolu_4", "scan_directory", json!({ "path": "/etc" })),
+                    tool_use("toolu_4", "scan_directory", json!({ "path": OUTSIDE })),
                     tool_use("toolu_5", "delete_everything", json!({})),
                 ],
                 "tool_use",
