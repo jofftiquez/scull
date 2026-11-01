@@ -129,7 +129,8 @@ export interface ExecuteOptions {
 
 export interface PlanBridge {
   readonly kind: 'mock' | 'unavailable';
-  /** Build a desktop plan from the last scan (dry run: nothing changes). */
+  /** Build a desktop plan from the last scan, or from just `items` of it (the Overview basket);
+   *  S3 items are never planned. Dry run: nothing changes. */
   preparePlan(req: { items?: ItemId[] }): Promise<PlanPreview>;
   /** Execute the selected items of a reviewed plan through the core Executor. */
   executePlan(req: { plan_id: string; hash: string; items: ItemId[] }, opts?: ExecuteOptions): Promise<ExecutionResult>;

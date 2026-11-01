@@ -79,8 +79,16 @@ pub fn rel(root: &Path, path: &Path) -> String {
 /// a detected artifact; every directory holding a `Cargo.toml` is offered to the shared
 /// target-dir collector. `explicit` are caller-supplied target dirs (e.g. `CARGO_TARGET_DIR`).
 pub fn scan(root: &Path, explicit: &[(PathBuf, &str)]) -> Scan {
+    scan_with(
+        root,
+        explicit,
+        &Detectors::bundled().expect("bundled detectors"),
+    )
+}
+
+/// [`scan`] with the given detectors instead of the bundled ones.
+pub fn scan_with(root: &Path, explicit: &[(PathBuf, &str)], detectors: &Detectors) -> Scan {
     let platform = Native::new();
-    let detectors = Detectors::bundled().expect("bundled detectors");
     let reader = StdReader;
     let ctx = DetectContext::new().with_config_reader(&reader);
     let mut shared = SharedTargetDirs::new();

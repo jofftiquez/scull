@@ -52,16 +52,21 @@ test('filter the wheel, add items to cleanup, review and confirm the plan', asyn
   await expect(page.getByTestId('basket')).toHaveText('2 items marked for cleanup');
   await shot('cleanup-3-marked');
 
-  // Cleanup Review: nothing changes until the user confirms.
+  const marked = [await s0.first().getAttribute('data-seg'), await s0.nth(1).getAttribute('data-seg')];
+
+  // Cleanup Review plans exactly the marked items (#283); nothing changes until the user confirms.
   await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /Cleanup Review/ }).click();
   await expect(page).toHaveURL(/#\/cleanup$/);
   const confirm = page.getByTestId('confirm');
   await expect(confirm).toBeEnabled();
-  await expect(confirm).toHaveText(/^(Delete|Quarantine) \d+/);
+  await expect(page.getByTestId('plan-line')).toContainText('from 2 items marked on the Overview');
   const plan = page.getByRole('region', { name: 'Plan items' });
-  // S0 is preselected; protected items are listed but can never be selected.
-  await expect(plan.getByRole('checkbox', { checked: true }).first()).toBeVisible();
-  await expect(plan.getByText('Protected · never offered')).toBeVisible();
+  await expect(plan.locator('[data-item]')).toHaveCount(2);
+  expect(await plan.locator('[data-item]').evaluateAll((rows) => rows.map((r) => r.getAttribute('data-item')))).toEqual(marked);
+  // Both are Regenerable, so both are preselected; the refused S3 item is not in the plan.
+  await expect(plan.getByRole('checkbox', { checked: true })).toHaveCount(2);
+  await expect(confirm).toHaveText('Delete 2 items');
+  await expect(plan.getByText('Protected · never offered')).toHaveCount(0);
   await shot('cleanup-4-review');
 
   // Narrow the plan by one item, then confirm.
@@ -81,6 +86,21 @@ test('filter the wheel, add items to cleanup, review and confirm the plan', asyn
 
   await done.getByRole('link', { name: 'Back to overview' }).click();
   await expect(page).toHaveURL(/#\/$/);
+  // The cleaned item left the basket; the unticked one is still marked.
+  await expect(page.getByTestId('basket')).toHaveText('1 item marked for cleanup');
+});
+
+test('with nothing marked, Cleanup Review plans from the whole last scan', async ({ page, shot }) => {
+  await overviewReady(page);
+  await expect(page.getByTestId('basket')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /Cleanup Review/ }).click();
+  await expect(page.getByTestId('confirm')).toBeEnabled();
+  await expect(page.getByTestId('plan-line')).toContainText('from the last scan');
+  const plan = page.getByRole('region', { name: 'Plan items' });
+  // S0 is preselected; protected items are listed but can never be selected.
+  await expect(plan.getByRole('checkbox', { checked: true }).first()).toBeVisible();
+  await expect(plan.getByText('Protected · never offered')).toBeVisible();
+  await shot('cleanup-7-review-from-scan');
 });
 
 test('Escape clears the selection and the filter', async ({ page }) => {

@@ -9,6 +9,7 @@
 // wheel, not the core's rules (e.g. the design's "Source & Git" slice is filed under `other`;
 // the core never lists source as a candidate).
 import type {
+  Action,
   CachesReport,
   Candidate,
   Category,
@@ -21,6 +22,7 @@ import type {
   Tier,
   Totals,
 } from '../../bridge';
+import { registerScanCandidates } from '../../bridge/planMock';
 
 const GiB = 1024 ** 3;
 const HOME = '/Users/ada';
@@ -49,11 +51,19 @@ const ROWS: readonly Row[] = [
 
 const CODE: Record<Tier, ReasonCode> = { S0: 'regenerable', S1: 'costly_to_regenerate', S2: 'no_lockfile', S3: 'git_tracked' };
 
+/** What a plan would do (D-28): delete at S0, quarantine at S1/S2, Docker through Docker itself, nothing at S3. */
+function actionFor(id: string, tier: Tier): Action {
+  if (id === 'docker') return { type: 'tool_command', tool: 'docker', args: ['builder', 'prune'] };
+  if (tier === 'S0') return { type: 'delete' };
+  if (tier === 'S3') return { type: 'none' };
+  return { type: 'quarantine' };
+}
+
 function candidate([id, rel, category, tier, gib, artifact, project, why]: Row): Candidate {
   const path = `${HOME}/${rel}`;
   const bytes = Math.round(gib * GiB);
   return {
-    action: { type: 'none' },
+    action: actionFor(id, tier),
     artifact,
     category,
     evidence: [],
@@ -137,11 +147,14 @@ export function designScenarioBridge(base: ScullBridge, stepMs = 300, secondDriv
         o.onProgress?.(e);
       }
       const template = await pending;
-      return { ...scanReport(template), cancelled: Boolean(o.signal?.aborted) };
+      const report = { ...scanReport(template), cancelled: Boolean(o.signal?.aborted) };
+      registerScanCandidates(report.candidates);
+      return report;
     },
     async caches(o?: OperationOptions): Promise<CachesReport> {
       const r = await base.caches(o);
       const cands = DESIGN_CANDIDATES.filter((c) => CACHE_IDS.has(c.id));
+      registerScanCandidates(cands);
       return { ...r, candidates: structuredClone(cands) as Candidate[], totals: totals(cands) };
     },
     async status(): Promise<DesktopStatus> {

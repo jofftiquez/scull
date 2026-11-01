@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createMockBridge } from './mock';
 import { createUnavailablePlanBridge, planBridgeFor } from './plan';
-import { createMockPlanBridge, MOCK_AGENT_PLAN_ID } from './planMock';
+import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from './planMock';
+import { DESIGN_CANDIDATES } from '../components/overview/designScenario';
 import { BridgeError } from './types';
 import { actionAllowed } from '../components/review/plan';
 
@@ -30,6 +31,27 @@ describe('plan bridge stubs', () => {
       }
       for (const l of plan.left_out) expect(l.tier).toBe('S3');
     }
+  });
+
+  it('a plan asked for by ID holds exactly those scan items; S3 is left out, unknown IDs skipped', async () => {
+    registerScanCandidates(DESIGN_CANDIDATES);
+    const p = createMockPlanBridge();
+    const plan = await p.preparePlan({ items: ['design-target', 'design-npm', 'design-wtun', 'design-gone', 'design-target'] });
+    expect(plan.items.map((i) => i.candidate.id)).toEqual(['design-target', 'design-npm']);
+    expect(plan.left_out).toEqual([expect.objectContaining({ label: '/Users/ada/code/.worktrees/unpushed', tier: 'S3' })]);
+    expect(plan.skipped).toEqual([expect.objectContaining({ label: 'design-gone' })]);
+    for (const it of plan.items) expect(actionAllowed(it.candidate.tier, it.candidate.action)).toBe(true);
+    // Only protected items: no plan at all. Nothing known: not found.
+    await expect(p.preparePlan({ items: ['design-src', 'design-wtun'] })).rejects.toMatchObject({ kind: 'safety_blocked' });
+    await expect(p.preparePlan({ items: ['nope'] })).rejects.toMatchObject({ kind: 'not_found' });
+  });
+
+  it('the mock core bridge registers what its scan returned, so its IDs can be planned', async () => {
+    const report = await createMockBridge().scan({});
+    const plannable = report.candidates.filter((c) => c.tier !== 'S3');
+    expect(plannable.length).toBeGreaterThan(0);
+    const plan = await createMockPlanBridge().preparePlan({ items: plannable.map((c) => c.id) });
+    expect(plan.items.map((i) => i.candidate.id)).toEqual(plannable.map((c) => c.id));
   });
 
   it('executePlan only narrows: unknown items or a changed hash are refused', async () => {

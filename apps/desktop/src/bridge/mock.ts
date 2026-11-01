@@ -39,6 +39,7 @@ import footprintHistory from './fixtures/footprint-history.json';
 import { withDesignWorktrees } from './worktreesMock';
 import { designHistory } from './historyMock';
 import { designSettings } from './settingsMock';
+import { registerScanCandidates } from './planMock';
 
 const GiB = 1024 ** 3;
 
@@ -193,11 +194,16 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
       }
       const report = await operation(MOCK_DATA.scanReport, o);
       if (!report.cancelled) scanned = true;
+      registerScanCandidates(report.candidates);
       return report;
     },
     projects: () => later(MOCK_DATA.projects),
     worktrees: () => later(MOCK_DATA.worktrees),
-    caches: (o?: OperationOptions) => operation(MOCK_DATA.cachesReport, o),
+    caches: async (o?: OperationOptions) => {
+      const report = await operation(MOCK_DATA.cachesReport, o);
+      registerScanCandidates(report.candidates);
+      return report;
+    },
     status: () =>
       later<DesktopStatus>(scanned ? MOCK_DATA.status : { ...MOCK_DATA.status, state: 'no_scan', last_scan: null }),
     capabilities: () => later(MOCK_DATA.capabilities),

@@ -231,6 +231,15 @@ export function registerMockCandidates(items: PlanItem[]): void {
   for (const it of items) extraCandidates.set(it.candidate.id, it);
 }
 
+/** Candidates of the mock's last scan and caches report, by ID (the core plans from its last scan). */
+const scanCandidates = new Map<ItemId, PlanItem>();
+
+/** Remember what a mock scan (or caches report) returned, so a plan can be asked for by ID
+ *  (the Overview's "Add to cleanup" basket). Registered items above take precedence. */
+export function registerScanCandidates(candidates: readonly Candidate[]): void {
+  for (const c of candidates) scanCandidates.set(c.id, { candidate: structuredClone(c) });
+}
+
 type AgentStatus = 'pending' | 'approved' | 'running' | 'done' | 'denied' | 'revoked' | 'void' | 'expired';
 
 export interface MockPlanBridge extends PlanBridge {
@@ -360,9 +369,23 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       let skipped: PlanPreview['skipped'] = [];
       let estimate_notes: string[] = [];
       if (req.items && req.items.length > 0) {
-        const pool = new Map([...desktopItems(nowSecs).map((i) => [i.candidate.id, i] as const), ...extraCandidates]);
-        items = req.items.map((id) => pool.get(id)).filter((i): i is PlanItem => i !== undefined);
-        if (items.length === 0) throw new BridgeError({ kind: 'not_found', message: 'none of these items are in the last scan' });
+        const pool = new Map([
+          ...desktopItems(nowSecs).map((i) => [i.candidate.id, i] as const),
+          ...scanCandidates,
+          ...extraCandidates,
+        ]);
+        items = [];
+        for (const id of new Set(req.items)) {
+          const it = pool.get(id);
+          if (!it) skipped.push({ label: id, reason: 'Not in the last scan · rescan to plan it' });
+          // A plan never holds an S3 item (SAFE-11): it is listed as left out, never offered.
+          else if (it.candidate.tier === 'S3') left_out.push({ label: it.candidate.path, tier: 'S3', reason: `${it.candidate.reasons[0]?.message ?? 'Protected'} · never offered` });
+          else items.push(structuredClone(it));
+        }
+        if (items.length === 0 && left_out.length === 0) {
+          throw new BridgeError({ kind: 'not_found', message: 'none of these items are in the last scan' });
+        }
+        if (items.length === 0) throw new BridgeError({ kind: 'safety_blocked', message: 'protected items are never planned' });
       } else {
         items = desktopItems(nowSecs);
         skipped = [

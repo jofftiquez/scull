@@ -9,6 +9,8 @@
 //! * [`go`]: the Go build and module caches (locations, layouts).
 //! * [`jvm`]: Gradle and Maven caches (inspect-only); the build folders are plain rules.
 //! * [`dotnet`]: `bin/` (configuration folders only) and the NuGet global packages folder.
+//! * [`xcode`]: DerivedData, device support files, archives and unavailable simulators (macOS).
+//! * [`android`]: Android Gradle Plugin build output (release-aware) and emulator images.
 //! * [`large_files`]: the inspect-only large-files listing (never a cleanup candidate).
 //! * [`ml`]: Hugging Face, Ollama and PyTorch Hub caches (scan rules plus a per-OS locator).
 //! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
@@ -17,6 +19,7 @@
 //!
 //! See `docs/PRD.md` and `HANDOVER.md` for responsibilities and boundaries.
 
+pub mod android;
 pub mod caches;
 pub mod cargo;
 pub mod detector;
@@ -28,7 +31,9 @@ pub mod ml;
 pub mod node;
 pub mod python;
 pub mod rules;
+pub mod xcode;
 
+pub use android::AndroidDetector;
 pub use caches::{
     CacheCommands, CacheEnv, CacheProblem, CacheScan, CacheSource, CacheTool, LocatedCache,
     NativeCommand, RefusedCache, commands_for_rule, locate_caches,
@@ -45,6 +50,7 @@ pub use large_files::{
 pub use ml::{MlDetector, MlKind, MlRoot, MlRootKind, MlScan, RefusedMlRoot, locate_ml_caches};
 pub use node::{FrameworkDetector, NodeModulesDetector};
 pub use python::{PycacheDetector, VenvDetector, requirements_pinned};
+pub use xcode::{XcodeDetector, XcodeKind};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");

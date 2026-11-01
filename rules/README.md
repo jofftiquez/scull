@@ -29,6 +29,14 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   file is left alone (FX-CLS-10), and so are `bin/`/`obj/` in Unity and Unreal projects
   (FX-CLS-14). `scull_detectors::dotnet::DotnetBinDetector` raises a `bin/` holding anything but
   configuration folders to S2. Go has no project build folder (its outputs go to the build cache).
+- Xcode (`ecosystems/xcode.toml`, macOS only: per-project DerivedData, device support files,
+  archives, the simulator device set) and Android (`ecosystems/android.toml`: Android Gradle
+  Plugin `build/`, emulator `.avd` folders) are run by `scull_detectors::xcode::XcodeDetector` and
+  `scull_detectors::android::AndroidDetector`. They require the usual parent folder
+  (`DerivedData`, `<OS> DeviceSupport`, `CoreSimulator`, `avd`), read a DerivedData folder's
+  project from its `info.plist` as data, raise Android release outputs (S1) and mapping files
+  (S2), and turn the simulator device set into `xcrun simctl delete unavailable`, chosen in Rust
+  (CLS-04).
 - Package caches (Quick Clean): `scull_detectors::caches::locate_caches` finds the npm, pnpm,
   Bun, Yarn (classic and Berry), pip, uv, conda, Go (build and module), Gradle, Maven and NuGet
   caches per OS from an injected `CacheEnv` (home, environment, OS layout), validates their
