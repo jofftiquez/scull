@@ -505,7 +505,7 @@ fn approve_prompt_shows_the_plan_and_needs_the_shown_code() {
         .map(|c| c["id"].clone())
         .collect();
     assert!(!ids.is_empty(), "{cands:#}");
-    let mut prepare = |s: &mut Session| {
+    let prepare = |s: &mut Session| {
         let (err, plan) = s.call("prepare_cleanup", json!({ "item_ids": ids }));
         assert!(!err, "{plan:#}");
         (
