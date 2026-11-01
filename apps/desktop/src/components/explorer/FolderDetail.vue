@@ -103,7 +103,7 @@ const legendLabel = (t: Tier) => `${TIERS[t].label} ${formatBytes(props.tiers[t]
   background: var(--tier-s1-fill);
 }
 .seg-s2 {
-  background: repeating-linear-gradient(135deg, #ffb547 0 3px, #ffd08a 3px 6px);
+  background: repeating-linear-gradient(135deg, var(--color-tier-s2) 0 3px, var(--color-tier-s2-stripe) 3px 6px);
 }
 .seg-s3 {
   background: var(--color-tier-s3);
@@ -120,16 +120,16 @@ const legendLabel = (t: Tier) => `${TIERS[t].label} ${formatBytes(props.tiers[t]
   flex: none;
 }
 .dot-s0 {
-  background: #7c4dff;
+  background: var(--color-tier-s0);
 }
 .dot-s1 {
-  background: #dccbff;
-  border: 1px solid #b9a3f0;
+  background: var(--color-tier-s1);
+  border: 1px solid var(--color-lilac-border);
 }
 .dot-s2 {
-  background: #ffb547;
+  background: var(--color-tier-s2);
 }
 .dot-s3 {
-  background: #3b2a4f;
+  background: var(--color-tier-s3);
 }
 </style>

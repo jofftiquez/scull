@@ -247,7 +247,9 @@ impl Executor {
     ///   deleted as a fallback. A quarantine refused because the item changed is not retried
     ///   in the Trash ([`ItemOutcome::Refused`]);
     /// * [`Action::Trash`]: a move to the configured Trash, else blocked;
-    /// * anything else is refused per item (tool-native #78).
+    /// * anything else is refused per item (tool-native #78); a Docker command
+    ///   ([`crate::DOCKER_UNSUPPORTED`]) is refused before revalidation, without touching the
+    ///   disk.
     ///
     /// With an operation, the free-space delta of the affected volumes (the scan roots) is
     /// measured before and after ([`Operation::with_meter`]; PHY-02): the accuracy report is
@@ -316,21 +318,27 @@ impl Executor {
                 report.items.push(entry);
                 continue;
             }
-            entry.outcome = match revalidation.revalidate(plan, item, cancel) {
-                Err(Skip::Cancelled) => {
-                    report.cancelled = true;
-                    ItemOutcome::NotRun
-                }
-                Err(skip) => {
-                    entry.fresh_tier = skip.fresh_tier();
-                    ItemOutcome::Skipped(skip)
-                }
-                Ok(ok) => {
-                    entry.fresh_tier = Some(ok.fresh_tier);
-                    sizes = ok.sizes;
-                    self.act(&ok, operation.as_deref_mut())
-                }
-            };
+            // Docker items are refused before revalidation, with their own reason: no
+            // Executor path runs `docker` (P5-DET-03 is read-only).
+            if let Err(e) = crate::executor::refuse_docker(item) {
+                entry.outcome = ItemOutcome::Refused(e);
+            } else {
+                entry.outcome = match revalidation.revalidate(plan, item, cancel) {
+                    Err(Skip::Cancelled) => {
+                        report.cancelled = true;
+                        ItemOutcome::NotRun
+                    }
+                    Err(skip) => {
+                        entry.fresh_tier = skip.fresh_tier();
+                        ItemOutcome::Skipped(skip)
+                    }
+                    Ok(ok) => {
+                        entry.fresh_tier = Some(ok.fresh_tier);
+                        sizes = ok.sizes;
+                        self.act(&ok, operation.as_deref_mut())
+                    }
+                };
+            }
             tally.add(
                 &ActionReclaim::for_action(&sizes, &item.action),
                 &[],

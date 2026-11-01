@@ -1,0 +1,131 @@
+# Haskell (Stack, Cabal) and Elixir (Mix) rules. Format: rules/README.md.
+#
+# Each folder needs the build file beside it and, where the tool writes fixed entries, those
+# entries inside it (CLS-03). Haskell builds are slow to redo (S1); Mix's `_build` is a local
+# compile (S0, like Gradle's `build/`) and its `deps/` is downloaded again (S1).
+
+schema_version = 1
+
+[[rule]]
+id = "stack.work"
+version = 1
+artifact = "Stack build folder (.stack-work)"
+ecosystem = "haskell"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = [".stack-work"]
+
+[rule.markers]
+# `stack.yaml` (project) or `package.yaml` (package) beside it, and Stack's build output inside.
+all = ["../{stack.yaml,package.yaml}"]
+any = ["dist", "install", "stack.sqlite3"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["stack", "ghc", "ghc-pkg", "haskell-language-server", "haskell-language-server-wrapper"]
+
+[rule.regeneration]
+instructions = "Run `stack build` in the project to rebuild (dependencies come from Stack's snapshot store in ~/.stack)."
+network = false
+long_build = true
+
+[[rule]]
+id = "cabal.dist-newstyle"
+version = 1
+artifact = "Cabal build folder (dist-newstyle)"
+ecosystem = "haskell"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["dist-newstyle"]
+
+[rule.markers]
+# Cabal's plan cache inside, and a Cabal project or package file beside it.
+all = ["cache"]
+any = ["../cabal.project", "../*.cabal"]
+
+[rule.exclude]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["cabal", "ghc", "ghc-pkg", "haskell-language-server", "haskell-language-server-wrapper"]
+
+[rule.regeneration]
+instructions = "Run `cabal build` in the project to rebuild (dependencies come from Cabal's store)."
+network = false
+long_build = true
+
+[[rule]]
+id = "mix.build"
+version = 1
+artifact = "Mix build output (_build)"
+ecosystem = "elixir"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["_build"]
+
+[rule.markers]
+# `mix.exs` beside it, and one folder per Mix environment inside.
+all = ["../mix.exs"]
+any = ["dev", "test", "prod"]
+
+[rule.exclude]
+# A CMake or Meson build folder named `_build` is theirs, not Mix's.
+markers = ["CMakeCache.txt", "build.ninja"]
+within = ["node_modules", "deps"]
+
+[rule.activity]
+processes = ["beam.smp", "mix", "elixir", "iex", "elixir-ls"]
+
+[rule.regeneration]
+instructions = "Run `mix compile` in the project to rebuild (dependencies are compiled again from deps/)."
+network = false
+long_build = false
+
+[[rule]]
+id = "mix.deps"
+version = 1
+artifact = "Mix dependencies (deps)"
+ecosystem = "elixir"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "lockfile", "known_artifact"]
+
+[rule.match]
+names = ["deps"]
+
+[rule.markers]
+all = ["../mix.exs"]
+
+[rule.lockfiles]
+# Without `mix.lock` the versions fetched again may differ: at least S2 (PRD §8.3).
+any = ["../mix.lock"]
+
+[rule.exclude]
+within = ["node_modules", "deps"]
+
+[rule.activity]
+processes = ["beam.smp", "mix", "elixir", "iex", "elixir-ls"]
+
+[rule.regeneration]
+instructions = "Run `mix deps.get` in the project: the dependencies pinned by mix.lock are fetched again (from Hex's local cache when present). Local edits made inside deps/ are lost."
+network = true
+long_build = false

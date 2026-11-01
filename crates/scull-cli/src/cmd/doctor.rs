@@ -10,8 +10,12 @@
 //! fixed. It always exits 0 when it could produce a report, since a broken setup is exactly
 //! what it is for. Machine output: `scull/doctor@1` (schema in
 //! `crates/scull-cli/schemas/doctor.schema.json`).
+//!
+//! `--report` builds a shareable, redacted copy for bug reports instead ([`super::doctor_report`]);
+//! it writes only the `--out` file the user asked for, after a preview and consent.
 
 use super::{emit_machine, emit_text, json_name, one_line};
+use crate::cli::DoctorArgs;
 use crate::db::{self, NotOpened, Probe};
 use crate::output::json::SchemaId;
 use crate::output::style::Style;
@@ -277,8 +281,11 @@ pub struct ConfigValue {
     pub origins: Vec<Origin>,
 }
 
-/// `scull doctor`.
-pub fn run(ui: &Ui) -> Result<(), ScullError> {
+/// `scull doctor` (`--report`: [`super::doctor_report`]).
+pub fn run(args: &DoctorArgs, ui: &Ui) -> Result<(), ScullError> {
+    if args.report {
+        return super::doctor_report::run(args, ui);
+    }
     let report = collect();
     if ui.format.is_machine() {
         emit_machine(ui.format, DOCTOR_SCHEMA, "doctor", &report)

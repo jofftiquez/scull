@@ -11,13 +11,16 @@ import {
   toBridgeError,
   useBridge,
   type DesktopStatus,
+  type DigestView,
   type FootprintHistory,
   type FreeSpaceHistory,
+  type MonitorStatus,
   type RegrowthHistory,
   type RollupHistory,
   type WorktreesView,
 } from '../../bridge';
 import { formatBytes } from '../../lib/format';
+import { formatWhen } from '../../monitor/format';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import ForecastChart from '../../components/insights/ForecastChart.vue';
 import { insightsActionsFor } from '../../components/insights/actions';
@@ -50,6 +53,8 @@ const regrowth = ref<RegrowthHistory | null>(null);
 const footprint = ref<FootprintHistory | null>(null);
 const worktrees = ref<WorktreesView | null>(null);
 const status = ref<DesktopStatus | null>(null);
+const digest = ref<DigestView | null>(null);
+const monitor = ref<MonitorStatus | null>(null);
 const loadError = ref('');
 const actionNote = ref('');
 const now = ref(Date.now() / 1000);
@@ -77,14 +82,18 @@ async function load() {
 onMounted(async () => {
   await load();
   // Six months for the mix, the last scan's worktrees and reclaimable bytes: once.
-  const [m, w, s] = await Promise.allSettled([
+  const [m, w, s, d, ms] = await Promise.allSettled([
     bridge.rollupHistory(Math.floor(now.value - 183 * DAY)),
     bridge.worktrees(),
     bridge.status(),
+    bridge.weeklyDigest(),
+    bridge.monitorStatus(),
   ]);
   if (m.status === 'fulfilled') mixRollups.value = m.value;
   if (w.status === 'fulfilled') worktrees.value = w.value;
   if (s.status === 'fulfilled') status.value = s.value;
+  if (d.status === 'fulfilled') digest.value = d.value;
+  if (ms.status === 'fulfilled') monitor.value = ms.value;
 });
 watch(range, load);
 
@@ -100,18 +109,27 @@ const agents = computed(() => agentModel(worktrees.value?.worktrees ?? [], now.v
 const fp = computed(() => footprintModel(footprint.value?.samples ?? []));
 const reclaimable = computed(() => status.value?.last_scan?.reclaimable_bytes ?? 0);
 
+// The weekly digest (INS-04): the same lines the Monday notification carries.
+const digestLines = computed(() => digest.value?.digest?.lines ?? []);
+const digestOn = computed(() => monitor.value?.settings.digest?.enabled === true);
+const digestNote = computed(() => {
+  if (!digestOn.value) return 'The weekly digest is off. Turn it on to get these lines as a notification every Monday. It never leaves this computer.';
+  const next = monitor.value?.next_digest;
+  return next ? `Sent as a notification every Monday morning. Next: ${formatWhen(next)}.` : 'Sent as a notification every Monday morning.';
+});
+
 const rateText = computed(() => (fs.value.trend ? `−${formatBytes(fs.value.trend.perDay)}/day` : 'Not shrinking'));
 
 /** Mix colors: ML caches carry the amber stripes (design 05), the rest ink, violet, plum. */
-const STRIPES = 'repeating-linear-gradient(135deg, #FFB547 0 4px, #FFD08A 4px 8px)';
-const STRIPES_SM = 'repeating-linear-gradient(135deg, #FFB547 0 3px, #FFD08A 3px 6px)';
+const STRIPES = 'var(--tier-s2-fill)';
+const STRIPES_SM = 'repeating-linear-gradient(135deg, var(--color-tier-s2) 0 3px, var(--color-tier-s2-stripe) 3px 6px)';
 const mixLook = computed(() => {
-  const solid = ['#15121A', '#7C4DFF', '#5A4772'];
+  const solid = ['var(--color-ink)', 'var(--color-tier-s0)', 'var(--color-tier-s3-swatch)'];
   let i = 0;
   return Object.fromEntries(
     (mix.value?.groups ?? []).map((g) => {
       if (g.key === 'ml_cache') return [g.key, { bar: STRIPES, swatch: STRIPES_SM, pattern: 'striped' }];
-      if (g.key === 'rest') return [g.key, { bar: '#5A4772', swatch: '#5A4772', pattern: 'solid' }];
+      if (g.key === 'rest') return [g.key, { bar: 'var(--color-tier-s3-swatch)', swatch: 'var(--color-tier-s3-swatch)', pattern: 'solid' }];
       const c = solid[Math.min(i++, solid.length - 1)]!;
       return [g.key, { bar: c, swatch: c, pattern: 'solid' }];
     }),
@@ -189,13 +207,37 @@ async function exportHistory() {
     <p v-if="actionNote" role="status" class="m-0 rounded-card bg-violet-tint px-4 py-3 text-label">{{ actionNote }}</p>
 
     <div class="grid grid-cols-12 gap-page-gap">
+      <section
+        v-if="digestLines.length"
+        aria-label="This week"
+        class="tile col-span-12 flex flex-wrap items-start gap-x-10 gap-y-4 rounded-tile bg-surface p-tile-padding"
+        data-testid="digest"
+      >
+        <div class="flex flex-[2_1_480px] flex-col gap-2">
+          <h2 class="m-0 text-label font-medium text-text-secondary">This week · weekly digest</h2>
+          <p class="m-0 text-h3 leading-[1.3] font-semibold">{{ digestLines[0] }}</p>
+          <ul v-if="digestLines.length > 1" class="m-0 flex list-none flex-col gap-1 p-0 text-label text-text-strong-muted">
+            <li v-for="l in digestLines.slice(1)" :key="l">{{ l }}</li>
+          </ul>
+        </div>
+        <div class="flex flex-[1_1_260px] flex-col items-start gap-3">
+          <span class="text-label text-text-secondary" data-testid="digest-note">{{ digestNote }}</span>
+          <RouterLink
+            :to="{ path: '/settings', query: { tab: 'alerts' } }"
+            class="flex min-h-11 items-center rounded-button border border-border bg-surface px-4 font-medium text-ink no-underline hover:bg-surface-raised"
+          >
+            {{ digestOn ? 'Digest settings' : 'Turn on the weekly digest' }}
+          </RouterLink>
+        </div>
+      </section>
+
       <section aria-label="Free space forecast" class="tile col-span-12 flex flex-col gap-4 rounded-tile bg-surface p-tile-padding xl:col-span-8">
         <div class="flex flex-wrap justify-between gap-3">
           <h2 class="m-0 text-label font-medium text-text-secondary">Free space · history and forecast</h2>
           <div class="flex gap-4 text-caption" aria-hidden="true">
             <span class="flex items-center gap-1.5"><span class="h-0.5 w-4 bg-ink"></span>Measured</span>
-            <span class="flex items-center gap-1.5"><span class="h-0 w-4 border-t-2 border-dashed border-[#7C4DFF]"></span>Forecast</span>
-            <span class="flex items-center gap-1.5"><span class="size-2 rounded-full bg-[#7C4DFF]"></span>Cleanup</span>
+            <span class="flex items-center gap-1.5"><span class="h-0 w-4 border-t-2 border-dashed border-violet-figure"></span>Forecast</span>
+            <span class="flex items-center gap-1.5"><span class="size-2 rounded-full bg-violet-figure"></span>Cleanup</span>
           </div>
         </div>
         <ForecastChart v-if="fs.points.length >= 2" :model="fs" />
@@ -228,7 +270,7 @@ async function exportHistory() {
         </dl>
         <RouterLink
           to="/cleanup"
-          class="mt-auto flex min-h-12 items-center justify-center rounded-button bg-[#7C4DFF] font-semibold text-on-ink no-underline hover:bg-violet-text"
+          class="mt-auto flex min-h-12 items-center justify-center rounded-button bg-tier-s0 font-semibold text-tier-s0-text no-underline hover:bg-violet-hover"
         >
           {{ reclaimable > 0 ? `Review ${formatBytes(reclaimable)} now` : 'Open Cleanup Review' }}
         </RouterLink>
@@ -247,7 +289,7 @@ async function exportHistory() {
               v-for="(b, i) in regrow.bars"
               :key="i"
               class="flex-1 rounded-[6px]"
-              :class="b === 'present' ? 'h-full bg-ink' : 'h-[8%] bg-[#5A4772]'"
+              :class="b === 'present' ? 'h-full bg-ink' : 'h-[8%] bg-tier-s3-swatch'"
             ></div>
           </div>
           <p class="m-0 text-label text-text-secondary">
@@ -293,7 +335,7 @@ async function exportHistory() {
               v-for="(n, i) in agents.weeks"
               :key="i"
               class="flex-1 rounded-[6px]"
-              :class="i === agents.weeks.length - 1 ? 'bg-[#7C4DFF]' : 'bg-tier-s1'"
+              :class="i === agents.weeks.length - 1 ? 'bg-violet-figure' : 'bg-tier-s1'"
               :style="{ height: `${Math.max(4, (n / agentMax) * 100)}%` }"
             ></div>
           </div>
@@ -323,7 +365,7 @@ async function exportHistory() {
                 <th scope="row" class="w-16 py-1.5 text-left font-mono text-caption font-normal">{{ r.date }}</th>
                 <td class="px-3 py-1.5" aria-hidden="true">
                   <div class="flex flex-col gap-[3px]">
-                    <div class="h-2 rounded-chip bg-[#5A4772]" :style="{ width: `${(r.predicted / accuracyMax) * 100}%` }"></div>
+                    <div class="h-2 rounded-chip bg-tier-s3-swatch" :style="{ width: `${(r.predicted / accuracyMax) * 100}%` }"></div>
                     <div class="h-2 rounded-chip bg-ink" :style="{ width: `${(r.measured / accuracyMax) * 100}%` }"></div>
                   </div>
                 </td>
@@ -332,7 +374,7 @@ async function exportHistory() {
             </tbody>
           </table>
           <div class="flex gap-4 text-caption" aria-hidden="true">
-            <span class="flex items-center gap-1.5"><span class="h-2 w-3 rounded-[4px] bg-[#5A4772]"></span>Predicted</span>
+            <span class="flex items-center gap-1.5"><span class="h-2 w-3 rounded-[4px] bg-tier-s3-swatch"></span>Predicted</span>
             <span class="flex items-center gap-1.5"><span class="h-2 w-3 rounded-[4px] bg-ink"></span>Measured</span>
           </div>
           <p class="m-0 text-label text-text-secondary">{{ DESIGN_ACCURACY.note }}</p>

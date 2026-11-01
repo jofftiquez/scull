@@ -388,6 +388,27 @@ export type OperationStatus =
  */
 export type HistoryReadState = "ok" | "no_database" | "unavailable";
 /**
+ * How urgent an alert is. Ordered: `Info < Warning < Critical`.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Severity".
+ */
+export type Severity = "info" | "warning" | "critical";
+/**
+ * What an alert is about.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AlertKind".
+ */
+export type AlertKind =
+  | "disk_full_forecast"
+  | "low_space"
+  | "stale"
+  | "worktree_ttl_expired"
+  | "budget_exceeded"
+  | "growth_spike"
+  | "free_space_drop";
+/**
  * Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,
  * and `cancel_operation` takes it.
  *
@@ -824,6 +845,9 @@ export interface BridgePayloads {
   FootprintHistory: FootprintHistory;
   FreeSpaceHistory: FreeSpaceHistory;
   HistoryView: HistoryView;
+  MonitorConfig: MonitorConfig;
+  MonitorSnapshot: MonitorSnapshot;
+  MonitorStatus: MonitorStatus;
   ProgressEvent: ProgressEvent;
   ProjectsView: ProjectsView;
   RegrowthHistory: RegrowthHistory;
@@ -832,6 +856,7 @@ export interface BridgePayloads {
   ScanReport: ScanReport;
   SettingsView: SettingsView;
   DesktopStatus: DesktopStatus;
+  DigestView: DigestView;
   WorktreesView: WorktreesView;
 }
 /**
@@ -1590,6 +1615,175 @@ export interface AuditLine {
    * Text, e.g. `plan 7f3a·c21e approved · desktop`.
    */
   text: string;
+}
+/**
+ * `configure_monitor`'s argument: the user's settings and, on the first call after start,
+ * the memory the app kept from its previous run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "MonitorConfig".
+ */
+export interface MonitorConfig {
+  /**
+   * Memory from the previous run; ignored after the first `configure_monitor`, so a
+   * settings change never rewinds what was already notified.
+   */
+  memory?: MonitorMemory | null;
+  settings?: MonitorSettings;
+}
+/**
+ * What the monitor remembers between checks. Plain data: the app keeps it across restarts so
+ * a restart doesn't repeat yesterday's notifications.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "MonitorMemory".
+ */
+export interface MonitorMemory {
+  /**
+   * When the digest was found turned on without having been sent (its first slot is the
+   * next one after this).
+   */
+  digest_since?: number | null;
+  /**
+   * When the last check ran.
+   */
+  last_check?: number | null;
+  /**
+   * When the last digest was sent.
+   */
+  last_digest?: number | null;
+  /**
+   * Notified alerts by key.
+   */
+  notified?: {
+    [k: string]: Notified | undefined;
+  };
+}
+/**
+ * One alert the monitor notified.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Notified".
+ */
+export interface Notified {
+  /**
+   * When it was notified.
+   */
+  at: number;
+  severity: Severity;
+}
+/**
+ * What the user chose for tray monitoring. Every field has a default, so a partial JSON
+ * object (or `{}`) is valid; [`MonitorSettings::normalized`] clamps out-of-range values.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "MonitorSettings".
+ */
+export interface MonitorSettings {
+  /**
+   * Days ahead a disk-full forecast alerts (overrides `[proactive] alert_days` for the
+   * tray's own forecast; `None`: the configured value).
+   */
+  alert_days?: number | null;
+  /**
+   * Notify about alerts at all (the digest has its own switch).
+   */
+  alerts?: boolean;
+  /**
+   * Seconds before the same alert (same key and severity) is notified again
+   * ([`MIN_COOLDOWN_SECS`]..=[`MAX_COOLDOWN_SECS`]). A worse severity notifies at once.
+   */
+  cooldown_secs?: number;
+  digest?: DigestSchedule;
+  /**
+   * Seconds between two checks ([`MIN_INTERVAL_SECS`]..=[`MAX_INTERVAL_SECS`]).
+   */
+  interval_secs?: number;
+  min_severity?: Severity;
+  /**
+   * Alert kinds that never notify (e.g. growth spikes when "Sudden growth" is off).
+   */
+  muted_kinds?: AlertKind[];
+  /**
+   * Subjects that never notify: a volume, category or folder; a folder also mutes
+   * everything below it.
+   */
+  muted_subjects?: string[];
+  /**
+   * Nothing is notified before this time (Unix seconds); `None`: not paused.
+   */
+  paused_until?: number | null;
+}
+/**
+ * When the weekly digest is sent, in the user's local time.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DigestSchedule".
+ */
+export interface DigestSchedule {
+  /**
+   * Whether the digest is sent at all. **Off by default** (opt-in, INS-04).
+   */
+  enabled?: boolean;
+  /**
+   * Hour of the day, `0..=23`.
+   */
+  hour?: number;
+  /**
+   * The user's offset from UTC in seconds (east positive), as the app's clock reports it.
+   */
+  utc_offset_secs?: number;
+  /**
+   * Day of the week, `0` = Monday … `6` = Sunday.
+   */
+  weekday?: number;
+}
+/**
+ * What the main window keeps between runs ([`MONITOR_EVENT`]'s payload).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "MonitorSnapshot".
+ */
+export interface MonitorSnapshot {
+  memory: MonitorMemory;
+  settings: MonitorSettings;
+}
+/**
+ * `monitor_status`: what the monitor is doing.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "MonitorStatus".
+ */
+export interface MonitorStatus {
+  /**
+   * Whether the main window sent its settings yet.
+   */
+  configured: boolean;
+  /**
+   * When the last check ran.
+   */
+  last_check?: number | null;
+  /**
+   * When the last digest was sent.
+   */
+  last_digest?: number | null;
+  /**
+   * When the next check is due.
+   */
+  next_check: number;
+  /**
+   * When the next digest goes out (`None`: the digest is off).
+   */
+  next_digest?: number | null;
+  /**
+   * Alerts currently remembered as notified.
+   */
+  notified: number;
+  /**
+   * Whether notifications are paused now.
+   */
+  paused: boolean;
+  settings: MonitorSettings;
 }
 /**
  * The `scull://progress` event.
@@ -2527,6 +2721,11 @@ export interface OwnFile {
  */
 export interface DesktopStatus {
   /**
+   * Alerts `scull check` raised in the last [`RECENT_ALERTS_SECS`], one per key (the newest),
+   * most severe first, at most [`MAX_STATUS_ALERTS`]. Alerts never act (PRO-08).
+   */
+  alerts: Alert[];
+  /**
    * Why the status is unavailable, when it is.
    */
   detail?: string | null;
@@ -2538,11 +2737,50 @@ export interface DesktopStatus {
    * When this report was produced (Unix seconds).
    */
   now: number;
+  /**
+   * The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.
+   * Never executed from here: reviewing it is `scull clean --plan <file>`.
+   */
+  review_plan?: ReviewPlanView | null;
   state: StatusState;
   /**
    * Latest free-space sample of every volume ever sampled.
    */
   volumes: VolumeSampleView[];
+}
+/**
+ * One alert.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Alert".
+ */
+export interface Alert {
+  /**
+   * The bytes concerned (stale total, budget usage, growth), when there is such a number.
+   */
+  bytes?: number | null;
+  /**
+   * Stable identity for de-duplication and responses: `<kind>:<subject>`.
+   */
+  key: string;
+  kind: AlertKind;
+  /**
+   * One plain sentence for people (not terminal-escaped: callers escape on output).
+   */
+  message: string;
+  /**
+   * The folders responsible (largest first, at most [`MAX_ALERT_PATHS`]); may be empty.
+   */
+  paths: string[];
+  /**
+   * When it was raised (Unix seconds).
+   */
+  raised_at: number;
+  severity: Severity;
+  /**
+   * The volume, category or path it concerns.
+   */
+  subject: string;
 }
 /**
  * The latest usable scan.
@@ -2587,6 +2825,221 @@ export interface LastScan {
    * `completed`, `partial` or `cancelled`.
    */
   status: string;
+}
+/**
+ * A ready-to-review cleanup plan, as `scull status --json` reports it (`review_plan`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "ReviewPlanView".
+ */
+export interface ReviewPlanView {
+  /**
+   * When it was prepared (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * The plan file.
+   */
+  file: string;
+  /**
+   * Whether S1 (costly to recreate) items were included (opt-in).
+   */
+  includes_s1: boolean;
+  /**
+   * Items in the plan.
+   */
+  items: number;
+  /**
+   * The plan's ID (in the history database's `plans` table).
+   */
+  plan_id: string;
+  /**
+   * Estimated reclaimable bytes of all items.
+   */
+  reclaimable_bytes: number;
+  /**
+   * The command that reviews it (`scull clean --plan <file>`).
+   */
+  review_command: string;
+}
+/**
+ * `weekly_digest`: the digest of the last 7 days, read from the history database.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DigestView".
+ */
+export interface DigestView {
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * The digest (also without a database: it then says there is no history).
+   */
+  digest?: WeeklyDigest | null;
+  state: HistoryRead;
+}
+/**
+ * The weekly digest.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "WeeklyDigest".
+ */
+export interface WeeklyDigest {
+  alerts: AlertCounts;
+  /**
+   * Cleanups with measured results this week.
+   */
+  cleanups: number;
+  /**
+   * When it was computed (Unix seconds).
+   */
+  generated_at: number;
+  /**
+   * Sum of the growth of everything that grew.
+   */
+  grown_bytes: number;
+  /**
+   * Whether there is any recorded history in the week (free-space samples or tracked
+   * items). Without it the digest only says so.
+   */
+  has_history: boolean;
+  /**
+   * One plain sentence per fact, most important first (the notification body is the first
+   * three).
+   */
+  lines: string[];
+  /**
+   * Net change of all tracked bytes over the week (negative after cleanups).
+   */
+  net_bytes: number;
+  /**
+   * Bytes the ready-to-review plan would reclaim, when one is current.
+   */
+  reclaimable_bytes?: number | null;
+  /**
+   * Bytes measured as freed by cleanups this week.
+   */
+  reclaimed_bytes: number;
+  /**
+   * Items in that plan.
+   */
+  review_items?: number | null;
+  /**
+   * Start of the week it covers (`generated_at` − 7 days).
+   */
+  since: number;
+  /**
+   * The notification title ([`DIGEST_TITLE`]).
+   */
+  title: string;
+  /**
+   * The projects (or, without projects, categories) that grew most, at most
+   * [`DIGEST_GROWERS`].
+   */
+  top_growers: Grower[];
+  /**
+   * Free space per volume: the preferred volume (the home folder's) first, then those below
+   * their reserve, then by days left, then by how much free space shrank this week.
+   */
+  volumes: DigestVolume[];
+}
+/**
+ * Alerts by severity.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AlertCounts".
+ */
+export interface AlertCounts {
+  /**
+   * Critical.
+   */
+  critical: number;
+  /**
+   * Info.
+   */
+  info: number;
+  /**
+   * Warning.
+   */
+  warning: number;
+}
+/**
+ * One category or project that grew.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Grower".
+ */
+export interface Grower {
+  /**
+   * The project's ecosystem, when every one of its items agrees.
+   */
+  ecosystem?: string | null;
+  /**
+   * Bytes now.
+   */
+  end_bytes: number;
+  /**
+   * `end_bytes - start_bytes` (always positive here).
+   */
+  growth_bytes: number;
+  /**
+   * Category (snake_case, e.g. `project_artifact`) or project root path.
+   */
+  key: string;
+  /**
+   * Display name: the category key, or the project folder name.
+   */
+  label: string;
+  /**
+   * Share of [`GrowthWindow::grown_bytes`] (0..=1).
+   */
+  share_of_growth: number;
+  /**
+   * Bytes at the window start.
+   */
+  start_bytes: number;
+}
+/**
+ * One volume in the digest.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DigestVolume".
+ */
+export interface DigestVolume {
+  /**
+   * Whether it is already below the reserve.
+   */
+  below_reserve: boolean;
+  /**
+   * Change of free space over the week (negative: it shrank).
+   */
+  change_bytes: number;
+  /**
+   * Whole days until the reserve, when a forecast with at least medium confidence says
+   * the volume is filling.
+   */
+  days_left?: number | null;
+  /**
+   * Bytes free at the latest sample.
+   */
+  free_bytes: number;
+  /**
+   * The forecast's reserve (bytes).
+   */
+  reserve_bytes: number;
+  /**
+   * Volume size.
+   */
+  total_bytes: number;
+  /**
+   * Volume identifier (mount point).
+   */
+  volume_id: string;
 }
 /**
  * `worktrees`: the Git worktrees of the last scan. Same shape as `scull worktrees --json`.

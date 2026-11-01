@@ -50,6 +50,42 @@ pub const BUNDLED_RULE_FILES: &[(&str, &str)] = &[
         "rules/ecosystems/android.toml",
         include_str!("../../../../rules/ecosystems/android.toml"),
     ),
+    (
+        "rules/ecosystems/unity.toml",
+        include_str!("../../../../rules/ecosystems/unity.toml"),
+    ),
+    (
+        "rules/ecosystems/unreal.toml",
+        include_str!("../../../../rules/ecosystems/unreal.toml"),
+    ),
+    (
+        "rules/ecosystems/native.toml",
+        include_str!("../../../../rules/ecosystems/native.toml"),
+    ),
+    (
+        "rules/ecosystems/apple.toml",
+        include_str!("../../../../rules/ecosystems/apple.toml"),
+    ),
+    (
+        "rules/ecosystems/functional.toml",
+        include_str!("../../../../rules/ecosystems/functional.toml"),
+    ),
+    (
+        "rules/ecosystems/ruby.toml",
+        include_str!("../../../../rules/ecosystems/ruby.toml"),
+    ),
+    (
+        "rules/ecosystems/zig.toml",
+        include_str!("../../../../rules/ecosystems/zig.toml"),
+    ),
+    (
+        "rules/ecosystems/infra.toml",
+        include_str!("../../../../rules/ecosystems/infra.toml"),
+    ),
+    (
+        "rules/ecosystems/ide.toml",
+        include_str!("../../../../rules/ecosystems/ide.toml"),
+    ),
 ];
 
 /// Key fragments and whole key tokens that suggest a command, script or hook. Any of these

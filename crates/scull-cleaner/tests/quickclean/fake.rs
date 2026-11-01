@@ -31,8 +31,27 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Tool names the fake answers to.
-pub const TOOLS: [&str; 11] = [
-    "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda", "go", "dotnet", "gradle", "mvn",
+pub const TOOLS: [&str; 19] = [
+    "npm",
+    "pnpm",
+    "bun",
+    "yarn",
+    "pip",
+    "uv",
+    "conda",
+    "go",
+    "dotnet",
+    "gradle",
+    "mvn",
+    // Long-tail tools (P5-DET-05), never run on this branch: a fake records any start.
+    "ccache",
+    "conan",
+    "arduino-cli",
+    "pod",
+    "deno",
+    "playwright",
+    "cypress",
+    "puppeteer",
 ];
 
 /// The guard file a fake requires in a cache before touching it.

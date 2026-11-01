@@ -29,6 +29,51 @@ function tierKey(name) {
 }
 
 /**
+ * The tier variables of one tier entry: the solid color (`bg-tier-s0`), the text on it, the
+ * tier-colored text on the page (`fg`), the second stripe color of a pattern and the swatch
+ * (a small dot that has to stand out from the page).
+ * @param {string} k
+ * @param {any} t
+ * @returns {[string, string][]}
+ */
+function tierVars(k, t) {
+  const key = tierKey(k);
+  const solid = t.solid ?? t.fill;
+  const vars = [
+    [`--color-tier-${key}`, solid],
+    [`--color-tier-${key}-text`, t.text],
+    [`--color-tier-${key}-fg`, t.fg],
+  ];
+  if (t.stripe) vars.push([`--color-tier-${key}-stripe`, t.stripe]);
+  vars.push([`--color-tier-${key}-swatch`, t.swatch ?? solid]);
+  return vars;
+}
+
+/**
+ * The dark palette (P5-UI-01): `dark.color` and `dark.tier` merged over the light values. Every
+ * light color needs a dark value, so a new token can't silently keep its light value in dark.
+ * @param {any} tokens
+ * @returns {string[]} declarations, one per line
+ */
+export function darkDeclarations(tokens) {
+  const dark = tokens.dark;
+  if (!dark?.color) throw new Error('design/tokens.json: missing dark.color (P5-UI-01)');
+  const missing = Object.keys(tokens.color).filter((k) => !(k in dark.color));
+  const extra = Object.keys(dark.color).filter((k) => !(k in tokens.color));
+  if (missing.length || extra.length) {
+    throw new Error(`design/tokens.json: dark.color must have exactly the light keys (missing: ${missing.join(', ') || '-'}; unknown: ${extra.join(', ') || '-'})`);
+  }
+  const out = ['color-scheme: dark;'];
+  for (const [k, v] of Object.entries(dark.color)) out.push(`--color-${kebab(k)}: ${v};`);
+  for (const [k, light] of Object.entries(tokens.tier)) {
+    const t = { ...light, ...(dark.tier?.[k] ?? {}) };
+    for (const [name, v] of tierVars(k, t)) out.push(`${name}: ${v};`);
+    out.push(`--tier-${tierKey(k)}-fill: ${t.fill};`);
+  }
+  return out;
+}
+
+/**
  * Render the theme stylesheet for a parsed tokens.json.
  * @param {any} tokens
  * @returns {string}
@@ -54,10 +99,7 @@ export function renderTheme(tokens) {
   }
   line();
   for (const [k, t] of Object.entries(tokens.tier)) {
-    const key = tierKey(k);
-    const solid = t.solid ?? t.fill;
-    line(`  --color-tier-${key}: ${solid};`);
-    line(`  --color-tier-${key}-text: ${t.text};`);
+    for (const [name, v] of tierVars(k, t)) line(`  ${name}: ${v};`);
   }
   line();
   line(`  --font-sans: ${tokens.font.sans};`);
@@ -83,9 +125,24 @@ export function renderTheme(tokens) {
   line();
   line('/* Tier patterns: tiers are never encoded by color alone (design/README.md). */');
   line(':root {');
+  line('  color-scheme: light;');
   for (const [k, t] of Object.entries(tokens.tier)) {
     line(`  --tier-${tierKey(k)}-fill: ${t.fill};`);
   }
+  line('}');
+  line();
+  // Dark (P5-UI-01): the system preference decides unless Settings forced a theme, which sets
+  // <html data-theme="light|dark"> (src/lib/theme.ts). The same block is emitted twice because
+  // a media query can't be OR-ed with an attribute selector.
+  const dark = darkDeclarations(tokens);
+  line('/* Dark theme: system preference, unless Settings > Appearance forces light or dark. */');
+  line('@media (prefers-color-scheme: dark) {');
+  line("  :root:not([data-theme='light']) {");
+  for (const d of dark) line(`    ${d}`);
+  line('  }');
+  line('}');
+  line("[data-theme='dark']:root {");
+  for (const d of dark) line(`  ${d}`);
   line('}');
   line();
   return out.join('\n');

@@ -33,12 +33,15 @@ pub struct Env<'a> {
 }
 
 impl Env<'_> {
-    /// An absolute, non-empty environment value (by `layout`'s rules), else `None`.
+    /// An absolute, non-empty environment value (by `layout`'s rules, not the host's: `/x`
+    /// is absolute for a Unix layout even when checked on Windows), else `None`.
     fn abs_var(&self, name: &str) -> Option<PathBuf> {
         let v = (self.var)(name).filter(|v| !v.is_empty())?;
-        let p = PathBuf::from(&v);
-        let abs = p.is_absolute() || (self.layout == DirLayout::Windows && windows_absolute(&v));
-        abs.then_some(p)
+        let abs = match self.layout {
+            DirLayout::Windows => windows_absolute(&v),
+            _ => v.as_encoded_bytes().starts_with(b"/"),
+        };
+        abs.then(|| PathBuf::from(&v))
     }
 }
 

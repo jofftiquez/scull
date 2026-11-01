@@ -37,6 +37,36 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   project from its `info.plist` as data, raise Android release outputs (S1) and mapping files
   (S2), and turn the simulator device set into `xcrun simctl delete unavailable`, chosen in Rust
   (CLS-04).
+- Game engines (`ecosystems/unity.toml`: `Library/` S1, `Temp/` S0, `obj/` S0;
+  `ecosystems/unreal.toml`: `Intermediate/`, `Binaries/`, `DerivedDataCache/` S1, `Saved/` S2)
+  are run by `scull_detectors::game_engines::GameEngineDetector`. Every folder needs the
+  engine's project markers beside it (Unity: `ProjectSettings/` holding `ProjectVersion.txt`
+  and `Assets/`; Unreal: a `.uproject` file), FX-CLS-14. Scene backups in Unity's `Temp/` and
+  Unreal `Binaries/` without a `Source/` folder raise the tier to S2, and the editor's
+  `Temp/UnityLockfile` is checked as an activity lock. Folders holding the user's work
+  (`Assets/`, `Content/`, `Source/`, `Config/`, ...), plugin and engine folders, and the shared
+  DerivedDataCache outside projects are never candidates.
+- Long-tail ecosystems (P5-DET-05). Project folders need the build file beside them **and**
+  what the tool writes inside them; only the usual folder names are considered:
+  - C/C++/embedded (`ecosystems/native.toml`): CMake build folders (`CMakeCache.txt` and
+    `CMakeFiles/` inside, FX-CLS-10; `scull_detectors::long_tail` reads the source folder from
+    `CMAKE_HOME_DIRECTORY` and never takes an in-source build), Meson build folders, PlatformIO
+    `.pio/`. S1: they hold the configure options, and C/C++ rebuilds are long.
+  - SwiftPM `.build/` and CocoaPods `Pods/` (`ecosystems/apple.toml`, S1, lockfile-aware).
+  - JVM extras (`ecosystems/jvm.toml`): sbt `target/` and `project/target/` (S0, like Maven),
+    `.bloop/` and `.metals/` (S1).
+  - Haskell and Elixir (`ecosystems/functional.toml`): `.stack-work/`, `dist-newstyle/` (S1),
+    Mix `_build/` (S0) and `deps/` (S1; S2 without `mix.lock`).
+  - Ruby `vendor/bundle` (`ecosystems/ruby.toml`, S1, must sit in `vendor/`), Zig `.zig-cache/`
+    and `zig-out/` (`ecosystems/zig.toml`, S0).
+  - Infrastructure (`ecosystems/infra.toml`): Terraform `.terraform/` (S1; S2 when it records a
+    backend or a selected workspace), Bazel output bases (inspect-only, workspace read from
+    `DO_NOT_BUILD_HERE`; `bazel clean --expunge` is the user's), Podman storage and the minikube
+    cache (inspect-only). kind's images live in Docker.
+  - IDE caches (`ecosystems/ide.toml`, run by `scull_detectors::ide`): JetBrains caches and
+    indexes in the OS cache folder only (S1; never settings), editor workspace storage only when
+    its workspace no longer exists (S2), and extension versions the editor itself listed in
+    `.obsolete` that nothing refers to (S1).
 - Package caches (Quick Clean): `scull_detectors::caches::locate_caches` finds the npm, pnpm,
   Bun, Yarn (classic and Berry), pip, uv, conda, Go (build and module), Gradle, Maven and NuGet
   caches per OS from an injected `CacheEnv` (home, environment, OS layout), validates their
@@ -44,6 +74,14 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   `pnpm.store`, `bun.cache`, `yarn.classic-cache`, `yarn.berry-cache`, `pip.cache`, `uv.cache`,
   `conda.pkgs`, `go.build-cache`, `go.modcache`, `nuget.packages`). Gradle (`gradle.caches`) and
   Maven (`maven.repository`) have no cleanup command: located and measured, inspect-only.
+  The long-tail tool caches are located the same way (`scull_detectors::tool_caches` lists the
+  locations): ccache (`ccache --clear`), Conan (`conan cache clean`), Arduino (`arduino-cli
+  cache clean`), CocoaPods (`pod cache clean --all`), Deno (`deno clean`; S2 when it holds
+  `location_data/`), Playwright (`playwright uninstall --all`), Cypress (`cypress cache prune`),
+  and Puppeteer (`puppeteer browsers clear`); vcpkg, PlatformIO, ESP-IDF, SwiftPM, Coursier,
+  Zig, Electron, Homebrew and the Nix store are located and measured but inspect-only (no
+  command that cleans exactly that folder: `brew cleanup`, for one, also uninstalls old formula
+  versions).
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.

@@ -229,6 +229,8 @@ const GIT_STATE: &str = "crates/scull-git/tests/state.rs";
 const GIT_DISC: &str = "crates/scull-git/tests/discovery.rs";
 const GIT_HARD: &str = "crates/scull-git/tests/hardened.rs";
 const E2E_FS: &str = "crates/scull-fixtures/tests/fx_fs.rs";
+/// Nightly FX-FS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`).
+const E2E_FS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_fs_nightly.rs";
 const SCAN_SPECIAL: &str = "crates/scull-scanner/tests/special_files.rs";
 const SCAN_UNIX: &str = "crates/scull-scanner/tests/unix.rs";
 const SCAN_WIN: &str = "crates/scull-scanner/tests/windows.rs";
@@ -257,7 +259,7 @@ const AUDIT: &str = "crates/scull-storage/tests/audit.rs";
 const E2E_WIN: &str = "crates/scull-fixtures/tests/fx_win.rs";
 const E2E_MAC: &str = "crates/scull-fixtures/tests/fx_mac.rs";
 const E2E_LNX: &str = "crates/scull-fixtures/tests/fx_lnx.rs";
-/// Nightly OS fixtures (`#[ignore]`d; `.github/workflows/nightly-fixtures.yml`, job `fx-os`).
+/// Nightly OS fixtures (`#[ignore]`d; `.github/workflows/nightly-os-fixtures.yml`, job `fx-os`).
 const E2E_OS_NIGHTLY: &str = "crates/scull-fixtures/tests/fx_os_nightly.rs";
 const E2E_DATA: &str = "crates/scull-fixtures/tests/fx_data.rs";
 const E2E_OUT: &str = "crates/scull-fixtures/tests/fx_out.rs";
@@ -269,6 +271,8 @@ const STORE_DATA: &str = "crates/scull-storage/tests/data_fixtures.rs";
 const STORE_UNIT: &str = "crates/scull-storage/src/tests/mod.rs";
 const HISTORY: &str = "crates/scull-storage/tests/history.rs";
 const CLI_DATA: &str = "crates/scull-cli/tests/data.rs";
+const CLI_DOCTOR_REPORT: &str = "crates/scull-cli/tests/doctor_report.rs";
+const ENGINE_ROOTS: &str = "crates/scull-engine/tests/roots.rs";
 
 /// Phase 2 tests (on the `phase2` branch) have run green locally on Linux; the macOS and
 /// Windows runs wait for the 3-OS CI (GitHub Actions minutes exhausted since 2026-10-31).
@@ -281,6 +285,7 @@ const WINDOWS_PENDING: &str = "W";
 /// macOS fixtures written while the macOS CI was unavailable: type-checked and clippy-clean for
 /// `aarch64-apple-darwin`; any of them not gated on macOS also ran green on Linux.
 const MACOS_PENDING: &str = "M";
+const GAME_DET: &str = "crates/scull-detectors/tests/game_engines_detector.rs";
 
 const fn fx(
     id: &'static str,
@@ -515,7 +520,22 @@ pub const REGISTRY: &[RegisteredFixture] = &[
             t(ML_DET, "fx_cls_13_ollama_models_s1_with_ollama_rm"),
         ]),
     ),
-    fx("FX-CLS-14", Gate::V1x, "MW", Mode::Ci, Status::Deferred),
+    fx(
+        "FX-CLS-14",
+        Gate::V1x,
+        "MW",
+        Mode::Ci,
+        Status::Implemented(&[
+            t(
+                GAME_DET,
+                "fx_cls_14_unity_library_and_unreal_ddc_are_s1_saved_is_s2",
+            ),
+            t(
+                "crates/scull-detectors/tests/jvm_dotnet_detector.rs",
+                "fx_cls_14_unity_and_unreal_folders_are_not_claimed_as_dotnet_or_gradle",
+            ),
+        ]),
+    ),
     // §3.2 Git worktrees (FX-GIT)
     fx(
         "FX-GIT-01",
@@ -840,14 +860,13 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "L (M via disk image)",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "needs a privileged nightly job (bind/loop mounts); no nightly workflow exists yet. The Executor walker's abort at a mount point runs where an unprivileged mount namespace exists (skipped with the reason elsewhere) and is simulated in scull-platform's walker unit tests",
-            partial: &[t(
-                EXEC_UNIX,
-                "fx_fs_04_mount_inside_candidate_is_never_crossed",
-            )],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_FS_NIGHTLY,
+                "fx_fs_04_mount_inside_candidate_is_s3_and_mounted_content_untouched",
+            ),
+            t(EXEC_UNIX, "fx_fs_04_mount_inside_candidate_is_never_crossed"),
+        ]),
     ),
     fx(
         "FX-FS-05",
@@ -1032,11 +1051,10 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Nightly,
-        Status::Tracked {
-            issue: 189,
-            reason: "a 1M-entry tree takes minutes; it belongs in the nightly job, which doesn't exist yet",
-            partial: &[],
-        },
+        Status::Implemented(&[t(
+            E2E_FS_NIGHTLY,
+            "fx_fs_15_one_million_entries_within_time_and_memory_targets",
+        )]),
     ),
     // §3.4 Races and crash recovery (FX-RACE)
     fx(
@@ -1827,16 +1845,19 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "M",
         Mode::Ci,
-        Status::Tracked {
-            issue: 249,
-            reason: "the engine dedupes scan roots by path only (canonicalize does not translate \
-                     firmlinks) and candidate IDs include the path, so a root reached through \
-                     /System/Volumes/Data would be counted twice; the fixture is written when \
-                     the engine dedupes by file identity",
-            partial: &[],
-        },
+        Status::Implemented(&[
+            t(ENGINE_ROOTS, "fx_mac_03_firmlinked_root_is_not_counted_twice"),
+            t(
+                ENGINE_ROOTS,
+                "fx_mac_03_root_nested_through_an_alias_is_not_counted_twice",
+            ),
+            t(
+                ENGINE_ROOTS,
+                "fx_mac_03_system_volumes_data_alias_is_not_counted_twice",
+            ),
+        ]),
     )
-    .missing_os("M"),
+    .pending_ci(MACOS_PENDING),
     fx(
         "FX-MAC-04",
         Gate::Mvp,
@@ -2061,22 +2082,24 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 248,
-            reason: "audit logs, history, exports and every command's output are checked end \
-                     to end for file contents and environment values; `scull doctor --report` \
-                     and its redaction preview do not exist yet",
-            partial: &[
-                t(
-                    E2E_DATA,
-                    "fx_data_07_no_file_contents_or_environment_values_in_data_audit_or_output",
-                ),
-                t(
-                    HISTORY,
-                    "fx_data_07_history_never_records_contents_evidence_or_environment_values",
-                ),
-            ],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_DATA,
+                "fx_data_07_no_file_contents_or_environment_values_in_data_audit_or_output",
+            ),
+            t(
+                HISTORY,
+                "fx_data_07_history_never_records_contents_evidence_or_environment_values",
+            ),
+            t(
+                CLI_DOCTOR_REPORT,
+                "fx_data_07_doctor_report_has_no_file_contents_or_environment_values",
+            ),
+            t(
+                CLI_DOCTOR_REPORT,
+                "fx_data_07_doctor_report_preview_then_consent_to_write",
+            ),
+        ]),
     )
     .pending_ci(PHASE2_PENDING),
     // §3.14 Output contracts (FX-OUT)
@@ -2085,27 +2108,20 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 247,
-            reason: "every --json document and every published NDJSON line schema validates \
-                     against real output (scan to clean, history and restore), as do error \
-                     envelopes, plan files and the config; sixteen commands print NDJSON lines \
-                     with no published line schema yet (the test pins the list)",
-            partial: &[
-                t(
-                    E2E_OUT,
-                    "fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas",
-                ),
-                t(
-                    E2E_OUT,
-                    "fx_out_01_hostile_names_keep_json_and_ndjson_valid_and_terminal_output_escaped",
-                ),
-                t(
-                    E2E_OUT,
-                    "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
-                ),
-            ],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_OUT,
+                "fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas",
+            ),
+            t(
+                E2E_OUT,
+                "fx_out_01_hostile_names_keep_json_and_ndjson_valid_and_terminal_output_escaped",
+            ),
+            t(
+                E2E_OUT,
+                "fx_out_01_plan_from_a_real_scan_validates_against_the_plan_schema",
+            ),
+        ]),
     )
     .pending_ci(PHASE2_PENDING),
     fx(
@@ -2116,8 +2132,8 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Status::Tracked {
             issue: 251,
             reason: "the binary returns every documented code (0, 1, 2, 3, 4, 5, 6, and 130 on \
-                     Unix); Ctrl-C before the MCP handshake exits 1 instead of 130 (#251), and \
-                     130 is not exercised on Windows (no console Ctrl-C injection in the test)",
+                     Unix, also for Ctrl-C before the MCP handshake); 130 is not exercised on \
+                     Windows (no console Ctrl-C injection in the test)",
             partial: &[
                 t(
                     E2E_OUT,

@@ -1,0 +1,123 @@
+# Unity rules. Format: rules/README.md.
+#
+# Every rule needs the project's `ProjectSettings/` and `Assets/` beside the folder (CLS-03).
+# The Rust detector in `scull_detectors::game_engines` adds to these rules, never loosens them:
+# * `ProjectSettings/` must be a directory holding `ProjectVersion.txt` (the file Unity writes
+#   into every project), and `Assets/` must be a directory;
+# * while the editor has the project open it holds `Temp/UnityLockfile`: that lock is checked
+#   for every Unity folder (in use);
+# * `unity.temp`: scene backups (`__Backupscenes/`), which the editor offers to restore after a
+#   crash, make it S2.
+#
+# `Assets/`, `Packages/`, `ProjectSettings/` and `UserSettings/` hold the user's work and
+# settings: no rule ever matches them. `Builds/` (player builds) is left alone too. A `bin/` in
+# a Unity project is not written by Unity (its generated C# projects build into `Temp/`), so it
+# is no one's candidate; the .NET rules exclude Unity projects (FX-CLS-14).
+
+schema_version = 1
+
+[[rule]]
+id = "unity.library"
+version = 1
+artifact = "Unity Library (asset import cache)"
+ecosystem = "unity"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Library"]
+
+[rule.markers]
+# The project beside it, and the asset database or compiled scripts inside (Unity 2019.3+
+# writes ArtifactDB/SourceAssetDB; older versions assetDatabase3/AssetImportState).
+all = ["../ProjectSettings", "../Assets"]
+any = [
+  "ArtifactDB",
+  "SourceAssetDB",
+  "assetDatabase3",
+  "AssetImportState",
+  "ScriptAssemblies",
+  "PackageCache",
+  "ShaderCache",
+  "LibraryFormatVersion.txt",
+]
+
+[rule.activity]
+processes = ["Unity", "UnityShaderCompiler", "Unity.Licensing.Client"]
+lock_files = ["ArtifactDB-lock", "SourceAssetDB-lock"]
+
+[rule.regeneration]
+instructions = "Open the project in the Unity Editor: it re-imports every asset and re-downloads registry packages, which can take a long time for a large project."
+network = true
+long_build = true
+
+[[rule]]
+id = "unity.temp"
+version = 1
+artifact = "Unity Temp folder"
+ecosystem = "unity"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["Temp"]
+
+[rule.markers]
+# The project and its Library beside it, and editor-written entries inside.
+all = ["../ProjectSettings", "../Assets", "../Library"]
+any = [
+  "UnityLockfile",
+  "__Backupscenes",
+  "StagingArea",
+  "ProcessJobs",
+  "gradleOut",
+  "bin",
+  "obj",
+]
+
+[rule.activity]
+processes = ["Unity", "UnityShaderCompiler"]
+lock_files = ["UnityLockfile"]
+
+[rule.regeneration]
+instructions = "Unity recreates it whenever the editor opens the project (and removes it on a clean exit)."
+network = false
+long_build = false
+
+[[rule]]
+id = "unity.obj"
+version = 1
+artifact = "Unity C# IDE build output"
+ecosystem = "unity"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["obj"]
+
+[rule.markers]
+# The project and its generated C# project files beside it, and MSBuild output inside.
+all = ["../ProjectSettings", "../Assets", "../*.csproj"]
+any = [
+  "project.assets.json",
+  "*.nuget.dgspec.json",
+  "*.nuget.g.props",
+  "{Debug,Release}",
+]
+
+[rule.activity]
+processes = ["Unity", "dotnet", "MSBuild", "msbuild", "VBCSCompiler", "devenv", "rider64", "rider"]
+
+[rule.regeneration]
+instructions = "Build the solution in your IDE (Rider, Visual Studio, VS Code): it recreates it."
+network = false
+long_build = false

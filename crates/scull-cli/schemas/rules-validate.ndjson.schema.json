@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "FileResult": {
+      "additionalProperties": false,
+      "description": "The result for one file.",
+      "properties": {
+        "path": {
+          "description": "The file (a bundled origin such as `rules/ecosystems/rust.toml`, or the path given).",
+          "type": "string"
+        },
+        "rejection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rejection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it was rejected."
+        },
+        "rules": {
+          "description": "IDs of the rules it declares (empty when invalid).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/Source",
+          "description": "Trust level it was validated with."
+        },
+        "valid": {
+          "description": "Whether it loads.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "source",
+        "valid",
+        "rules"
+      ],
+      "type": "object"
+    },
+    "Rejection": {
+      "additionalProperties": false,
+      "description": "Why a rule file was rejected.",
+      "properties": {
+        "code": {
+          "description": "Stable machine code, e.g. `name_only`, `s0_not_allowed`, `command_field`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human explanation.",
+          "type": "string"
+        },
+        "rule_id": {
+          "description": "The rule concerned, if the problem is about one rule.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RulesValidation": {
+      "additionalProperties": false,
+      "description": "`scull rules validate` output.",
+      "properties": {
+        "files": {
+          "description": "One entry per file, in the order given.",
+          "items": {
+            "$ref": "#/$defs/FileResult"
+          },
+          "type": "array"
+        },
+        "valid": {
+          "description": "Whether every file is valid.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid",
+        "files"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "Where a rule came from.",
+      "oneOf": [
+        {
+          "const": "bundled",
+          "description": "Compiled into this binary.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "A user or community rule file (untrusted: capped at S1, disabled until enabled).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/rules-validate@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/RulesValidation",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/rules-validate@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "validation",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/rules-validate@1 (NDJSON line)",
+  "type": "object"
+}

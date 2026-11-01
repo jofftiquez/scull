@@ -519,14 +519,16 @@ mod tests {
             unit_dir(Scheduler::SystemdUser, home, None, data),
             Path::new("/home/me/.config/systemd/user")
         );
+        // An absolute XDG_CONFIG_HOME by the host's rules (only Linux uses systemd; a Windows
+        // host checking this needs a drive letter).
+        let xdg = if cfg!(windows) {
+            Path::new(r"C:\x\cfg")
+        } else {
+            Path::new("/x/cfg")
+        };
         assert_eq!(
-            unit_dir(
-                Scheduler::SystemdUser,
-                home,
-                Some(Path::new("/x/cfg")),
-                data
-            ),
-            Path::new("/x/cfg/systemd/user")
+            unit_dir(Scheduler::SystemdUser, home, Some(xdg), data),
+            xdg.join("systemd").join("user")
         );
         // A relative XDG_CONFIG_HOME is invalid per the spec and ignored.
         assert_eq!(

@@ -110,12 +110,12 @@ const empty = computed(() => props.arcs.length === 0);
   >
     <defs>
       <pattern :id="ids.stripes" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
-        <rect width="10" height="10" fill="#FFB547" />
-        <rect width="5" height="10" fill="#FFD08A" />
+        <rect width="10" height="10" fill="var(--color-tier-s2)" />
+        <rect width="5" height="10" fill="var(--color-tier-s2-stripe)" />
       </pattern>
       <pattern :id="ids.hatch" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
-        <rect width="8" height="8" fill="#3B2A4F" />
-        <rect width="2" height="8" fill="#5A4772" />
+        <rect width="8" height="8" fill="var(--color-tier-s3)" />
+        <rect width="2" height="8" fill="var(--color-tier-s3-stripe)" />
       </pattern>
       <mask :id="ids.reveal" maskUnits="userSpaceOnUse" x="0" y="0" :width="G.size" :height="G.size">
         <circle
@@ -123,7 +123,7 @@ const empty = computed(() => props.arcs.length === 0);
           :cy="G.c"
           :r="G.maskRadius"
           fill="none"
-          stroke="#FFFFFF"
+          stroke="white"
           :stroke-width="G.maskWidth"
           :stroke-dasharray="reveal"
           :transform="`rotate(-90 ${G.c} ${G.c})`"
@@ -139,28 +139,28 @@ const empty = computed(() => props.arcs.length === 0);
       :cy="G.c"
       :r="G.dotted"
       fill="none"
-      stroke="#D6268A"
+      stroke="var(--color-accent)"
       :stroke-opacity="scanning ? 0.9 : 0.45"
       stroke-width="1.5"
       stroke-dasharray="1 7"
       stroke-linecap="round"
       data-testid="ring"
     />
-    <circle :cx="G.c" :cy="G.c" :r="G.faint" fill="none" stroke="#7C4DFF" stroke-opacity="0.18" stroke-width="1" />
+    <circle :cx="G.c" :cy="G.c" :r="G.faint" fill="none" stroke="var(--color-tier-s0)" stroke-opacity="0.18" stroke-width="1" />
 
     <!-- Empty track: the wheel's shape before the first result. -->
     <g v-if="empty" aria-hidden="true">
-      <circle :cx="G.c" :cy="G.c" :r="(G.categoryInner + G.categoryOuter) / 2" fill="none" stroke="#F2EFEA" :stroke-width="G.categoryOuter - G.categoryInner" />
-      <circle :cx="G.c" :cy="G.c" :r="(G.itemInner + G.itemOuter) / 2" fill="none" stroke="#F7F5F2" :stroke-width="G.itemOuter - G.itemInner" />
+      <circle :cx="G.c" :cy="G.c" :r="(G.categoryInner + G.categoryOuter) / 2" fill="none" stroke="var(--color-surface-raised)" :stroke-width="G.categoryOuter - G.categoryInner" />
+      <circle :cx="G.c" :cy="G.c" :r="(G.itemInner + G.itemOuter) / 2" fill="none" stroke="var(--color-ground)" :stroke-width="G.itemOuter - G.itemInner" />
     </g>
 
     <g :mask="`url(#${ids.reveal})`">
       <template v-for="cat in arcs" :key="cat.category.key">
         <path
           :d="cat.d"
-          fill="#EEEAF4"
+          fill="var(--color-category-ring)"
           class="seg"
-          :stroke="!scanning && selected === cat.category.key ? '#D6268A' : 'none'"
+          :stroke="!scanning && selected === cat.category.key ? 'var(--color-accent)' : 'none'"
           stroke-width="3"
           role="button"
           :tabindex="tabTarget === cat.category.key ? 0 : -1"
@@ -181,7 +181,7 @@ const empty = computed(() => props.arcs.length === 0);
           dominant-baseline="middle"
           font-size="11"
           font-weight="500"
-          fill="#4A4450"
+          fill="var(--color-text-strong-muted)"
           pointer-events="none"
           aria-hidden="true"
           :transform="`rotate(${cat.label.rotate} ${cat.label.x} ${cat.label.y})`"
@@ -192,7 +192,7 @@ const empty = computed(() => props.arcs.length === 0);
           :d="a.d"
           :fill="FILL[a.item.tier]"
           :opacity="itemOpacity(a.item, { filter, selected, cleaned })"
-          :stroke="!scanning && selected === a.item.id ? '#D6268A' : 'none'"
+          :stroke="!scanning && selected === a.item.id ? 'var(--color-accent)' : 'none'"
           stroke-width="3"
           class="seg item"
           role="button"
@@ -211,15 +211,15 @@ const empty = computed(() => props.arcs.length === 0);
     </g>
 
     <g aria-hidden="true" class="arm" :style="{ opacity: scanning ? 1 : 0 }" data-testid="arm">
-      <line :x1="G.c" :y1="G.c" :x2="arm.x" :y2="arm.y" stroke="#D6268A" stroke-width="2.5" stroke-linecap="round" />
-      <circle :cx="arm.x" :cy="arm.y" r="6" fill="#D6268A" />
+      <line :x1="G.c" :y1="G.c" :x2="arm.x" :y2="arm.y" stroke="var(--color-accent)" stroke-width="2.5" stroke-linecap="round" />
+      <circle :cx="arm.x" :cy="arm.y" r="6" fill="var(--color-accent)" />
     </g>
 
-    <circle :cx="G.c" :cy="G.c" :r="G.hub" fill="#F7F5F2" />
+    <circle :cx="G.c" :cy="G.c" :r="G.hub" fill="var(--color-ground)" />
     <g :key="bounceKey ?? 0" :class="{ bounce: (bounceKey ?? 0) > 0 }" aria-live="polite" data-testid="center">
       <text :x="G.c" y="276" text-anchor="middle" font-size="13" font-weight="600" :fill="center.kColor">{{ center.k }}</text>
-      <text :x="G.c" y="322" text-anchor="middle" font-size="40" font-weight="700" fill="#15121A" class="tabular-nums">{{ center.v }}</text>
-      <text :x="G.c" y="352" text-anchor="middle" font-size="13" fill="#615B66">{{ center.n }}</text>
+      <text :x="G.c" y="322" text-anchor="middle" font-size="40" font-weight="700" fill="var(--color-ink)" class="tabular-nums">{{ center.v }}</text>
+      <text :x="G.c" y="352" text-anchor="middle" font-size="13" fill="var(--color-text-secondary)">{{ center.n }}</text>
     </g>
   </svg>
 </template>

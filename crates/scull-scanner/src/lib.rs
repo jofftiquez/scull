@@ -84,6 +84,21 @@
 //!   its [`DirSummary`]) and never listed or opened: a FIFO without a writer can't block a
 //!   scan, and opening a device can't have side effects.
 //! * A root that is a link or special file is refused with [`ScanError::RootNotADirectory`].
+//!
+//! # Stalled mounts (T-53)
+//!
+//! A frozen network or FUSE mount costs only itself, never its siblings:
+//!
+//! * mount points the caller lists in [`ScanOptions::skip_mounts`] (the engine passes the
+//!   network mounts of the OS mount table) are never touched, not even with `lstat`: they are
+//!   counted from the listing and reported as [`BoundaryReason::OtherVolume`] boundaries;
+//! * any other entry whose metadata call hangs for longer than [`ScanOptions::dir_timeout`]
+//!   is reported as an [`IssueKind::TimedOut`] issue on its own, and its directory is listed
+//!   again without it, so its siblings are still counted, listed and descended;
+//! * a directory whose listing itself hangs is given up as a whole and reported.
+//!
+//! None of this adds a system call per entry: the scan makes exactly one metadata call per
+//! entry (plus the root's) and one listing per directory.
 
 mod cancel;
 mod estimate;

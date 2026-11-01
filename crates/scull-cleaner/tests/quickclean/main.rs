@@ -205,6 +205,14 @@ const TESTS: &[Test] = &[
         "forged_gradle_and_maven_plan_entries_never_run",
         forged_gradle_and_maven_plan_entries_never_run,
     ),
+    (
+        "long_tail_tools_are_not_supported_and_never_run",
+        long_tail_tools_are_not_supported_and_never_run,
+    ),
+    (
+        "forged_long_tail_plan_entries_never_run",
+        forged_long_tail_plan_entries_never_run,
+    ),
 ];
 
 fn main() {
@@ -3296,4 +3304,210 @@ fn forged_gradle_and_maven_plan_entries_never_run() {
     assert!(pip.join("wheels").is_dir());
     assert!(uv.join("wheels-v5/pypi/keep01").is_file());
     check(&fx, &plan, &cands, &[], &[&report.rec]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// P5-DET-05 long-tail tool caches: located on main, not run on phase2
+// ---------------------------------------------------------------------------------------------
+
+/// The long-tail tools with a native command (P5-DET-05), their binaries and their macOS
+/// default cache folders (macOS, so CocoaPods is located too; the layouts are the tools' own).
+const LONG_TAIL_RUNNABLE: [(CacheTool, &str, &str); 8] = [
+    (CacheTool::Ccache, "ccache", "home/Library/Caches/ccache"),
+    (CacheTool::Conan, "conan", "home/.conan2/p"),
+    (
+        CacheTool::Arduino,
+        "arduino-cli",
+        "home/Library/Arduino15/staging",
+    ),
+    (CacheTool::CocoaPods, "pod", "home/Library/Caches/CocoaPods"),
+    (CacheTool::Deno, "deno", "home/Library/Caches/deno"),
+    (
+        CacheTool::Playwright,
+        "playwright",
+        "home/Library/Caches/ms-playwright",
+    ),
+    (CacheTool::Cypress, "cypress", "home/Library/Caches/Cypress"),
+    (CacheTool::Puppeteer, "puppeteer", "home/.cache/puppeteer"),
+];
+
+/// `tool`'s cache layout at `dir` (relative to the root), with the fake's guard file; returns
+/// the folder.
+fn long_tail_cache(fx: &mut Fixture, tool: CacheTool, dir: &str) -> PathBuf {
+    let files: &[(&str, u64)] = match tool {
+        CacheTool::Ccache => &[("0/1/23456789abcdefR", 2048), ("ccache.conf", 16)],
+        CacheTool::Conan => &[
+            ("cache.sqlite3", 4096),
+            ("zlib1a2b3c4d5e6f7/s/zlib.c", 2048),
+        ],
+        CacheTool::Arduino => &[
+            ("packages/esp32-3.0.4.zip", 4096),
+            ("libraries/Servo-1.2.1.zip", 1024),
+        ],
+        CacheTool::CocoaPods => &[
+            ("Pods/Release/Alamofire/5.9.1-abc12/Source/AF.swift", 2048),
+            ("Pods/Specs/Release/Alamofire/5.9.podspec.json", 512),
+            ("Pods/VERSION", 6),
+        ],
+        CacheTool::Deno => &[
+            ("deps/https/deno.land/abcdef0123", 1024),
+            ("gen/file/abc.js", 512),
+        ],
+        CacheTool::Playwright => &[
+            ("chromium-1140/chrome-linux/chrome", 4096),
+            ("ffmpeg-1010/ffmpeg-linux", 1024),
+        ],
+        CacheTool::Cypress => &[("13.6.0/Cypress/Cypress", 4096)],
+        CacheTool::Puppeteer => &[("chrome/linux-127.0.6533.88/chrome-linux64/chrome", 4096)],
+        other => panic!("{other:?} is not a runnable long-tail tool"),
+    };
+    for (rel, size) in files {
+        fx.file_of_size(format!("{dir}/{rel}"), *size).unwrap();
+    }
+    fx.file(format!("{dir}/{}", fake::GUARD), "").unwrap();
+    fx.root().join(dir)
+}
+
+fn locate_macos(fx: &Fixture) -> CacheScan {
+    let env = CacheEnv::with_vars(home(fx), Os::Macos, std::iter::empty::<(&str, String)>());
+    locate_on(&env, &Native::new())
+}
+
+/// The long-tail tool caches are located, but Quick Clean on this branch never runs their
+/// commands: with their binaries trusted and every tool asked to wipe, or with no binary at
+/// all, it plans nothing for them, skips each as `NotSupportedYet`, never offers one as
+/// orphaned (D-36) and starts nothing.
+fn long_tail_tools_are_not_supported_and_never_run() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let dirs: Vec<(CacheTool, &str, PathBuf)> = LONG_TAIL_RUNNABLE
+        .iter()
+        .map(|(t, bin, dir)| (*t, *bin, long_tail_cache(&mut fx, *t, dir)))
+        .collect();
+    fx.checkpoint().unwrap();
+    let scan = locate_macos(&fx);
+    let cands = candidates(&scan);
+    for (tool, _, dir) in &dirs {
+        assert!(
+            scan.found.iter().any(|c| c.tool == *tool && c.path == *dir),
+            "{tool:?} located: {scan:#?}"
+        );
+        assert!(!scull_cleaner::quickclean::is_supported(*tool), "{tool:?}");
+        assert!(scull_detectors::caches::commands_for_rule(tool.rule_id()).is_some());
+    }
+    let forced = QuickCleanRequest {
+        wipe: dirs.iter().map(|(t, _, _)| *t).collect(),
+        ..QuickCleanRequest::default()
+    };
+    let empty = fx.base().join("empty-tools");
+    fs::create_dir_all(&empty).unwrap();
+    for dir in [empty, tools(&fx)] {
+        if dir == tools(&fx) {
+            for (_, bin, _) in &dirs {
+                fake::install(&dir, bin);
+            }
+        }
+        let q = quick(options(&fx, std::slice::from_ref(&dir)));
+        for request in [&QuickCleanRequest::default(), &forced] {
+            let plan = q.plan(&scan, &cands, request, &Probe::idle());
+            assert!(plan.tools.is_empty(), "{plan:#?}");
+            assert!(plan.orphaned.is_empty(), "{plan:#?}");
+            assert!(plan.spawned.is_empty(), "{plan:#?}");
+            for (tool, _, _) in &dirs {
+                assert_eq!(
+                    skip_reason(&plan.skipped, *tool),
+                    SkipReason::NotSupportedYet
+                );
+            }
+            check(&fx, &plan, &cands, &[], &[]);
+        }
+    }
+    assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+    for (tool, _, dir) in &dirs {
+        assert!(dir.join(fake::GUARD).is_file(), "{tool:?} untouched");
+    }
+}
+
+/// A plan is data: each long-tail tool with a native command, forged into an approved plan
+/// (from pip's and uv's planned tools, pointing at the real cache, its identity and a trusted
+/// fake binary, so every other run-time check would pass), is refused at run time as
+/// `NotSupportedYet`, audited as `refused`, and nothing starts or changes.
+fn forged_long_tail_plan_entries_never_run() {
+    if !identity_available() {
+        return;
+    }
+    for pair in LONG_TAIL_RUNNABLE.chunks(2) {
+        let mut fx = Fixture::new().unwrap();
+        let pip = pip_cache(&mut fx);
+        let uv = uv_cache(&mut fx);
+        let forged: Vec<(CacheTool, PathBuf)> = pair
+            .iter()
+            .map(|(t, _, dir)| (*t, long_tail_cache(&mut fx, *t, dir)))
+            .collect();
+        fx.checkpoint().unwrap();
+        fake::install(&tools(&fx), "pip");
+        fake::install(&tools(&fx), "uv");
+        let bins: Vec<PathBuf> = pair
+            .iter()
+            .map(|(_, bin, _)| fake::install(&tools(&fx), bin))
+            .collect();
+        // pip and uv from the Linux layout, the long-tail caches from the macOS one.
+        let mut scan = locate(&fx);
+        scan.found.extend(
+            locate_macos(&fx)
+                .found
+                .into_iter()
+                .filter(|c| forged.iter().any(|(t, _)| *t == c.tool)),
+        );
+        let cands = candidates(&scan);
+        let q = quick(options(&fx, &[tools(&fx)]));
+        let mut plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        let mut planned = planned_tools(&plan);
+        planned.sort();
+        assert_eq!(planned, [CacheTool::Pip, CacheTool::Uv]);
+        plan.tools.sort_by_key(|t| t.tool);
+        for ((t, (tool, dir)), bin) in plan.tools.iter_mut().zip(&forged).zip(&bins) {
+            let cand = cands.iter().find(|c| c.rule.id == tool.rule_id()).unwrap();
+            t.tool = *tool;
+            t.cache = dir.clone();
+            t.location = dir.clone();
+            t.identity = cand.identity;
+            t.binary = canonical(bin);
+            t.script = None;
+            t.args = os(&["clean"]);
+            t.env = Vec::new();
+        }
+        plan.skipped.clear();
+
+        let report = run_ok(&fx, &q, &plan);
+        assert!(report.results.is_empty(), "{report:#?}");
+        assert!(report.spawned.is_empty(), "{report:#?}");
+        assert_eq!(report.skipped.len(), 2, "{report:#?}");
+        for (tool, _) in &forged {
+            assert_eq!(
+                skip_reason(&report.skipped, *tool),
+                SkipReason::NotSupportedYet
+            );
+        }
+        assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+        let rows = rows(&fx, &report.rec);
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert!(
+            rows.iter().all(|r| r.outcome == ItemOutcome::Refused
+                && r.reason.as_deref() == Some("not_supported_yet")),
+            "{rows:#?}"
+        );
+        for (tool, dir) in &forged {
+            assert!(dir.join(fake::GUARD).is_file(), "{tool:?} untouched");
+        }
+        assert!(pip.join("wheels").is_dir());
+        assert!(uv.join("wheels-v5/pypi/keep01").is_file());
+        check(&fx, &plan, &cands, &[], &[&report.rec]);
+        println!(
+            "  forged {:?}: refused as not_supported_yet, nothing started",
+            forged.iter().map(|(t, _)| *t).collect::<Vec<_>>()
+        );
+    }
 }

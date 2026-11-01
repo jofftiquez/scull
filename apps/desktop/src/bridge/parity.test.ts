@@ -47,6 +47,7 @@ describe('recorded real payloads (fixtures)', () => {
     'rollup-history': 'rollup-history',
     regrowth: 'regrowth',
     'footprint-history': 'footprint-history',
+    'weekly-digest': 'weekly-digest',
   };
   for (const file of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
     const stem = file.replace(/\.json$/, '');
@@ -90,6 +91,8 @@ describe('mock bridge answers in the real shapes', () => {
     expectValid('rollup-history', await b.rollupHistory(since));
     expectValid('regrowth', await b.regrowth(since));
     expectValid('footprint-history', await b.footprintHistory(since));
+    expectValid('weekly-digest', await b.weeklyDigest());
+    expectValid('monitor-status', await b.monitorStatus());
   });
 
   it('streams progress events that validate, tagged with one operation ID', async () => {

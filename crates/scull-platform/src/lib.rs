@@ -38,6 +38,8 @@
 //!   Unix only for now (Windows: `Unsupported`, the item is blocked).
 //! * `exec_lock` (same feature): the per-user execution lock, an OS file lock (`flock` /
 //!   `LockFileEx`) released by the OS when its holder exits (SAFE-09, P2-EXEC-04).
+//! * [`docker`]: the read-only Docker Engine API transport (Unix socket, Windows named pipe,
+//!   loopback TCP): `GET` on allow-listed endpoints only, with a hard deadline (P5-DET-03).
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -59,6 +61,7 @@
 pub mod activity;
 pub mod app_dirs;
 pub mod cloud;
+pub mod docker;
 pub mod elevation;
 mod error;
 #[cfg(feature = "delete")]

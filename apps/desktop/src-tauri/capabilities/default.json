@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: scull's own commands and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: the desktop never mutates the filesystem).",
-  "windows": ["main"],
+  "description": "The main window and the menu bar widget (menubar): scull's own commands and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: the desktop never mutates the filesystem).",
+  "windows": ["main", "menubar"],
   "permissions": ["core:default"]
 }

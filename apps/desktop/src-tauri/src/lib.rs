@@ -8,10 +8,21 @@
 //!
 //! Frontend side: `apps/desktop/src/bridge/tauri.ts` (types generated from the same Rust
 //! types, see `apps/desktop/schemas/`).
+//!
+//! The menu bar / tray widget lives in [`tray`]: a tray icon, a small widget window and two
+//! window commands (`open_main_window`, `hide_menu_bar`); it never runs a cleanup.
+//!
+//! Tray monitoring and the weekly digest live in [`monitor`]: a background thread that reads
+//! free space, history and recorded alerts and shows OS notifications through Tauri's
+//! notification plugin (the plugin is used from Rust only; the windows get no notification
+//! permission). It never runs a cleanup either.
+
+pub mod monitor;
+pub mod tray;
 
 use scull_core::{ErrorKind, ScullError};
 use scull_desktop_bridge::{
-    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, Drive, FootprintHistory,
+    AppInfo, CachesReport, CapabilitiesReport, DesktopStatus, DigestView, Drive, FootprintHistory,
     FreeSpaceHistory, HistoryView, OpId, ProgressEvent, ProjectsView, RegrowthHistory,
     RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
 };
@@ -146,8 +157,15 @@ async fn footprint_history(
     blocking(move || Ok(session.footprint_history(since))).await
 }
 
+/// `weekly_digest`: the last 7 days in a few lines (Insights "This week"; read-only).
+#[tauri::command]
+async fn weekly_digest(session: Shared<'_>) -> Result<DigestView, ScullError> {
+    let session = Arc::clone(&session);
+    blocking(move || Ok(session.weekly_digest(now_unix()))).await
+}
+
 /// Run a blocking bridge call on Tauri's blocking pool.
-async fn blocking<T, F>(f: F) -> Result<T, ScullError>
+pub(crate) async fn blocking<T, F>(f: F) -> Result<T, ScullError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, ScullError> + Send + 'static,
@@ -160,7 +178,14 @@ where
 /// Start the app.
 pub fn run() {
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(Session::new(Setup::native())))
+        .setup(|app| {
+            monitor::start(app.handle())?;
+            tray::install(app.handle())?;
+            Ok(())
+        })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             app_info,
             drives,
@@ -176,7 +201,14 @@ pub fn run() {
             free_space_history,
             rollup_history,
             regrowth,
-            footprint_history
+            footprint_history,
+            weekly_digest,
+            monitor::monitor_status,
+            monitor::configure_monitor,
+            monitor::pause_monitor,
+            monitor::send_digest_now,
+            tray::open_main_window,
+            tray::hide_menu_bar
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

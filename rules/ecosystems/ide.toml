@@ -1,0 +1,103 @@
+# IDE and editor caches: JetBrains, VS Code and its forks. Format: rules/README.md.
+#
+# Never settings or extension state (PRD §7.1). `scull_detectors::ide` adds to these rules,
+# never loosens them:
+# * `jetbrains.caches`: the product folder (`IntelliJIdea2024.2`, `PyCharm2023.3`, …) must sit
+#   in a `JetBrains` folder inside the OS cache folder (`~/.cache`, `~/Library/Caches`,
+#   `%LocalAppData%`); settings folders (`~/.config`, `Application Support`, `Roaming`) never
+#   match, and a folder holding settings (`options/`, `keymaps/`, …) is excluded. A note says
+#   when a newer version of the same product exists (the folder is a leftover).
+# * `vscode.workspace-storage`: one folder per opened workspace in `User/workspaceStorage` of
+#   VS Code, VS Code Insiders, VSCodium, Cursor or Windsurf. It holds that workspace's UI and
+#   extension state (some extensions keep chat or task history there), so it is only a
+#   candidate when the workspace it records (`workspace.json`, read as data) **no longer
+#   exists**, and then S2 (quarantined, restorable).
+# * `vscode.obsolete-extension`: an extension version the editor itself has marked obsolete
+#   (listed in `extensions/.obsolete`) and that no installed extension refers to
+#   (`extensions/extensions.json`). The editor deletes these on its next start; S1.
+
+schema_version = 1
+
+[[rule]]
+id = "jetbrains.caches"
+version = 1
+artifact = "JetBrains IDE caches and indexes"
+ecosystem = "jetbrains"
+category = "other"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# Product name and version, e.g. `IntelliJIdea2024.2`, `PyCharmCE2023.3`, `Rider2024.1`.
+names = ["*20??.*"]
+
+[rule.markers]
+all = ["caches"]
+any = ["index", "log", "tmp", "jcef_cache", "compile-server", "frameworks"]
+
+[rule.exclude]
+# Settings live elsewhere; a folder holding any of them is never a candidate.
+markers = ["{options,keymaps,codestyles,colors,templates,eval,plugins}"]
+
+[rule.activity]
+processes = [
+  "idea", "pycharm", "clion", "goland", "webstorm", "rider", "phpstorm", "rubymine",
+  "datagrip", "rustrover", "dataspell", "fsnotifier", "jetbrains_client",
+]
+
+[rule.regeneration]
+instructions = "The IDE rebuilds its caches and indexes the next time it opens a project (indexing takes a while; nothing needs downloading)."
+network = false
+long_build = true
+
+[[rule]]
+id = "vscode.workspace-storage"
+version = 1
+artifact = "Editor workspace storage (workspace no longer exists)"
+ecosystem = "vscode"
+category = "other"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S2"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# The MD5 of the workspace URI.
+names = ["????????????????????????????????"]
+
+[rule.markers]
+all = ["workspace.json"]
+
+[rule.activity]
+processes = ["code", "Code", "code-insiders", "codium", "cursor", "Cursor", "windsurf", "Windsurf", "Electron"]
+
+[rule.regeneration]
+instructions = "Not regenerable: it is the editor's saved state (open editors, layout, extension workspace data) for a workspace that no longer exists. Opening a workspace again starts with fresh state."
+
+[[rule]]
+id = "vscode.obsolete-extension"
+version = 1
+artifact = "Obsolete editor extension version"
+ecosystem = "vscode"
+category = "other"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S1"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+# `<publisher>.<name>-<version>[-<target>]`.
+names = ["*.*-*"]
+
+[rule.markers]
+all = ["package.json", "../.obsolete", "../extensions.json"]
+
+[rule.activity]
+processes = ["code", "Code", "code-insiders", "codium", "cursor", "Cursor", "windsurf", "Windsurf", "Electron"]
+
+[rule.regeneration]
+instructions = "The editor has already replaced or uninstalled this version and removes it itself on its next start; reinstalling it downloads it again."
+network = true
+long_build = false

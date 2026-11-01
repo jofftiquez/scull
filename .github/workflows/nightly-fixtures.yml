@@ -1,0 +1,101 @@
+name: Nightly fixtures
+
+# P1-FX-06: the fixtures of docs/FIXTURES.md with mode "Nightly" that need mount privileges or
+# minutes of runtime, so they are #[ignore]d in the per-PR `cargo test --workspace`:
+#   FX-FS-04  a mount inside a candidate is S3, mounted content untouched (Linux: tmpfs, bind,
+#             loop-mounted ext4 as root; macOS: hdiutil disk image)
+#   FX-FS-15  1M-entry tree within the PRD §21.2 targets (time and peak memory; all OSs)
+# Privileges: SCULL_FIXTURES_ALLOW_SUDO=1 lets a Linux test re-run itself as root in a private
+# mount namespace (`sudo -n unshare --mount`), so nothing it mounts outlives it; macOS attaches
+# disk images without root. SCULL_FIXTURES_REQUIRE_PRIVILEGED=1 turns "skipped: no privileges"
+# into a failure. See crates/scull-fixtures/src/privileged.rs and docs/FIXTURES.md §2.1.
+#
+# Cost (private repo, macOS minutes count 10x): the scheduled run is skipped when main has had
+# no commit in the last 25 hours. Run it by hand with `gh workflow run nightly-fixtures.yml`
+# (add `--ref <branch>` to run a branch's copy of this workflow).
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-fixtures-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  SCULL_FIXTURES_REQUIRE_PRIVILEGED: "1"
+  SCULL_FIXTURES_ALLOW_SUDO: "1"
+
+jobs:
+  changes:
+    name: changed since the last run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 200
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          n=$(git log --since='25 hours ago' --oneline | wc -l)
+          echo "commits in the last 25 hours: $n"
+          if [ "$n" -gt 0 ]; then echo "run=true"; else echo "run=false"; fi >> "$GITHUB_OUTPUT"
+
+  fx-fs:
+    name: fx-fs nightly (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable long paths and keep LF on Windows
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-fixtures
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Hardware
+        run: |
+          echo "runner: $RUNNER_OS $RUNNER_ARCH"
+          df -h "$RUNNER_TEMP" || true
+      - name: FX-FS-04, FX-FS-15 (release build)
+        # FX-FS-04 is compiled for Linux and macOS only; Windows runs FX-FS-15.
+        run: |
+          cargo test -p scull-fixtures --release --locked --test fx_fs_nightly -- \
+            --ignored --nocapture --test-threads=1 2>&1 | tee fx-fs-nightly.log
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Nightly FX-FS fixtures (${{ matrix.os }})"
+            echo '```'
+            grep -E 'FX-FS-|SKIPPED|^test |test result' fx-fs-nightly.log || echo "no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

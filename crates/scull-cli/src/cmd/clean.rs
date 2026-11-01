@@ -68,8 +68,9 @@ use scull_cleaner::measure::{
     ItemExecution, MeasureOptions, PlatformFreeSpace, Tally, VolumeMeter,
 };
 use scull_cleaner::{
-    DEFAULT_RETENTION_SECS, ExecutionReport, ItemOutcome, ItemReport, PlanContext, RemoveOutcome,
-    Revalidation, Skip, TOOL_NATIVE_UNSUPPORTED, is_quick_clean_tool,
+    DEFAULT_RETENTION_SECS, DOCKER_UNSUPPORTED, ExecutionReport, ItemOutcome, ItemReport,
+    PlanContext, RemoveOutcome, Revalidation, Skip, TOOL_NATIVE_UNSUPPORTED, is_docker_command,
+    is_quick_clean_tool,
 };
 use scull_core::{
     Action, Candidate, Category, ContentHash, DropReason, ErrorKind, Evidence, FsPath, ItemId,
@@ -696,6 +697,20 @@ fn ineligible(c: &Candidate) -> Option<(ExcludeReason, String)> {
                 format!("package cache: `scull clean caches` cleans it with {tool}'s own command"),
             ))
         }
+        // `docker builder prune` / `docker image prune` (P5-DET-03): Docker is read-only.
+        a @ Action::ToolCommand { .. } if is_docker_command(a) => {
+            Some((ExcludeReason::NotSupported, DOCKER_UNSUPPORTED.to_owned()))
+        }
+        // A long-tail tool cache (P5-DET-05, e.g. `ccache --clear`): Quick Clean doesn't run
+        // its command in this build, and `scull clean` never does.
+        Action::ToolCommand { tool, .. } if c.category == Category::PackageCache => Some((
+            ExcludeReason::NotSupported,
+            format!(
+                "package cache: Quick Clean does not run `{}` in this build yet, and `scull \
+                 clean` never runs tool commands",
+                escape_for_terminal(tool)
+            ),
+        )),
         // E.g. `ollama rm` for Ollama models (P4-DET-01): no trusted-tool runner allow-lists it.
         Action::ToolCommand { tool, .. } => Some((
             ExcludeReason::NotSupported,
@@ -1948,6 +1963,54 @@ mod tests {
         let err = select(&cands, true, &[cands[0].id.to_string()], Path::new("/")).unwrap_err();
         assert_eq!(err.kind, ErrorKind::SafetyBlocked);
         assert!(err.message.contains(TOOL_NATIVE_UNSUPPORTED), "{err}");
+    }
+
+    /// A long-tail tool cache (P5-DET-05) is a package cache Quick Clean doesn't run yet: it
+    /// is excluded as not supported, never pointed at `scull clean caches`, never planned.
+    #[test]
+    fn long_tail_tool_caches_are_never_planned() {
+        let ccache = tool_candidate(
+            Category::PackageCache,
+            "ccache.cache",
+            Action::ToolCommand {
+                tool: "ccache".into(),
+                args: vec!["--clear".into()],
+            },
+        );
+        assert!(!is_quick_clean_tool("ccache"));
+        let (reason, why) = ineligible(&ccache).unwrap();
+        assert_eq!(reason, ExcludeReason::NotSupported);
+        assert!(why.contains("does not run `ccache`"), "{why}");
+        let cands = [ccache];
+        assert!(
+            select(&cands, true, &[], Path::new("/"))
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        let err = select(&cands, true, &[cands[0].id.to_string()], Path::new("/")).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::SafetyBlocked);
+    }
+
+    /// Docker's proposed prunes (P5-DET-03) are never planned: excluded with the Docker
+    /// reason, and naming one is refused.
+    #[test]
+    fn docker_commands_are_never_planned() {
+        for kind in [
+            scull_detectors::DockerKind::BuildCache,
+            scull_detectors::DockerKind::DanglingImages,
+        ] {
+            let c = tool_candidate(Category::Other, "docker", kind.action());
+            let (reason, why) = ineligible(&c).unwrap();
+            assert_eq!(reason, ExcludeReason::NotSupported);
+            assert_eq!(why, DOCKER_UNSUPPORTED);
+            let cands = [c];
+            let sel = select(&cands, true, &[], Path::new("/")).unwrap();
+            assert!(sel.items.is_empty());
+            let err = select(&cands, true, &[cands[0].id.to_string()], Path::new("/")).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::SafetyBlocked);
+            assert!(err.message.contains(DOCKER_UNSUPPORTED), "{err}");
+        }
     }
 
     #[test]

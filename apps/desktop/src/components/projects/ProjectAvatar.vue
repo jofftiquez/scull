@@ -26,12 +26,12 @@ const a = computed(() => avatar(props.project));
   color: var(--color-violet-text);
 }
 .tone-ml {
-  background: #fff1dc;
-  color: #8a5200;
+  background: var(--color-amber-tint);
+  color: var(--color-amber-text);
 }
 .tone-game {
   background: var(--color-category-ring);
-  color: var(--color-tier-s3);
+  color: var(--color-tier-s3-fg);
 }
 .tone-other {
   background: var(--color-surface-raised);

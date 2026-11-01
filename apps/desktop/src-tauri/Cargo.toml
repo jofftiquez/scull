@@ -31,7 +31,11 @@ scull-desktop-bridge = { path = "../bridge" }
 scull-core = { path = "../../../crates/scull-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tauri = { version = "2", features = [] }
+# tray-icon: the menu bar / tray widget (P4-UI-01; src/tray.rs).
+tauri = { version = "2", features = ["tray-icon"] }
+# OS notifications for tray monitoring and the weekly digest (P5-PRO-01; src/monitor.rs). Used
+# from Rust only: no window gets the notification permission.
+tauri-plugin-notification = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

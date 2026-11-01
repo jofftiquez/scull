@@ -54,6 +54,18 @@ export const CHECK_EVERY: readonly [string, string][] = [
   ['6h', '6 h'],
   ['24h', '24 h'],
 ];
+/** Tray monitoring (P5-PRO-01): how often the menu bar app looks, and how long an alert stays
+ * quiet before it may notify again. */
+export const MONITOR_EVERY: readonly [string, string][] = [
+  ['15m', '15 min'],
+  ['1h', '1 h'],
+  ['6h', '6 h'],
+];
+export const ALERT_COOLDOWN: readonly [string, string][] = [
+  ['6h', '6 hours'],
+  ['24h', '1 day'],
+  ['7d', '7 days'],
+];
 export const CAUTION: readonly [string, string][] = [
   ['very', 'Very'],
   ['balanced', 'Balanced'],
@@ -87,6 +99,8 @@ export const APP_DEFAULTS = {
   'app.alert_days': 14,
   'app.sudden_growth': true,
   'app.weekly_digest': false,
+  'app.monitor_every': '1h',
+  'app.alert_cooldown': '24h',
   'app.history_keep': '12m',
   'app.check_updates': false,
 } as const;

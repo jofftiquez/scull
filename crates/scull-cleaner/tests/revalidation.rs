@@ -3,7 +3,8 @@
 //! [`Executor::execute_plan`] must skip (and report) every item that no longer qualifies while
 //! still executing the others. Every test checks the invariants (I-1, I-2, I-3, I-8).
 //!
-//! Fixture IDs (docs/FIXTURES.md): FX-RACE-01, FX-RACE-03, FX-RACE-04, FX-EXEC-10.
+//! Fixture IDs (docs/FIXTURES.md): FX-RACE-01, FX-RACE-03, FX-RACE-04, FX-EXEC-10. Docker items
+//! (P5-DET-03, read-only) are refused before revalidation.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "common/planning.rs"]
@@ -11,8 +12,8 @@ mod planning;
 
 use planning::*;
 use scull_cleaner::{ItemOutcome, PlanContext, Revalidation, Skip};
-use scull_core::{DropReason, ErrorKind, Tier};
-use scull_engine::CancelToken;
+use scull_core::{DropReason, ErrorKind, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, Tier};
+use scull_engine::{CancelToken, now_unix};
 use scull_fixtures::{Fixture, InvariantInputs};
 use std::sync::atomic::Ordering;
 
@@ -276,4 +277,57 @@ fn cancelled_operation_runs_no_item() {
     assert!(r.items.iter().all(|i| i.outcome == ItemOutcome::NotRun));
     assert_eq!(r.error_kind(), Some(ErrorKind::Cancelled));
     check(&fx, &plan, &r, &[]);
+}
+
+/// Docker's proposed prunes (P5-DET-03: `docker builder prune`, `docker image prune`) never
+/// run: a Docker item that reaches `execute_plan` is refused with the Docker reason before
+/// revalidation, nothing behind it is touched, and the other item still runs.
+#[test]
+fn docker_items_are_refused_with_the_docker_reason() {
+    let fx = two_cargo_projects();
+    let h = harness(false);
+    let scan = h.scan(&fx);
+    let mut items: Vec<PlanItem> = ["app/target", "lib/target"]
+        .iter()
+        .map(|p| PlanItem::from_candidate(at(&fx, &scan, p)).unwrap())
+        .collect();
+    assert!(!scull_cleaner::is_quick_clean_tool("docker"));
+    for kind in [
+        scull_detectors::DockerKind::BuildCache,
+        scull_detectors::DockerKind::DanglingImages,
+    ] {
+        assert!(scull_cleaner::is_docker_command(&kind.action()), "{kind:?}");
+    }
+    // The S0 build-cache action (S0 allows any action), on `app/target`.
+    items[0].action = scull_detectors::DockerKind::BuildCache.action();
+    let plan = Plan::new(
+        PlanParams {
+            id: PlanId::from_suffix("01JDOCKER").unwrap(),
+            scan_id: scan.scan_id.clone(),
+            created_unix: now_unix(),
+            ttl_secs: None,
+            machine_id: MACHINE.into(),
+            user: USER.into(),
+            origin: PlanOrigin::Cli,
+        },
+        items,
+    )
+    .unwrap();
+    let r = h.execute(&fx, &plan);
+    let docker = r
+        .items
+        .iter()
+        .find(|i| rel(&fx, &i.path.to_path_buf()) == "app/target")
+        .unwrap();
+    match &docker.outcome {
+        ItemOutcome::Refused(e) => {
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+            assert_eq!(e.message, scull_cleaner::DOCKER_UNSUPPORTED);
+        }
+        other => panic!("the Docker item was not refused: {other:?}"),
+    }
+    assert_eq!(docker.fresh_tier, None, "refused before revalidation");
+    assert!(fx.root().join("app/target/debug/app").is_file());
+    assert_executed(&fx, &r, "lib/target");
+    check(&fx, &plan, &r, &["lib/target"]);
 }

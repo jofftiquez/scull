@@ -74,6 +74,27 @@ pub fn not_orphan_removable(tool: CacheTool) -> Option<&'static str> {
             "inspect-only: this cache has no command that cleans it, and scull never removes \
              it itself (D-36 excludes it)",
         ),
+        // The long-tail tool caches (P5-DET-05): not run or removed on this branch yet.
+        CacheTool::Ccache
+        | CacheTool::Conan
+        | CacheTool::Vcpkg
+        | CacheTool::PlatformIo
+        | CacheTool::Arduino
+        | CacheTool::EspIdf
+        | CacheTool::SwiftPm
+        | CacheTool::CocoaPods
+        | CacheTool::Coursier
+        | CacheTool::Deno
+        | CacheTool::Zig
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron
+        | CacheTool::Homebrew
+        | CacheTool::Nix => Some(
+            "not supported yet: Quick Clean does not handle this tool's cache in this build, \
+             and scull never removes it itself (D-36 excludes it)",
+        ),
         CacheTool::Npm
         | CacheTool::Pnpm
         | CacheTool::Bun
@@ -438,11 +459,19 @@ mod tests {
             CacheTool::Maven,
         ];
         for t in CacheTool::ALL {
+            // The long-tail tools (P5-DET-05) are not supported on this branch at all.
+            let unsupported = !crate::quickclean::is_supported(t);
             assert_eq!(
                 not_orphan_removable(t).is_some(),
-                excluded.contains(&t),
+                excluded.contains(&t) || unsupported,
                 "{t:?}"
             );
+            if unsupported {
+                assert!(
+                    not_orphan_removable(t).is_some_and(|w| w.contains("not supported yet")),
+                    "{t:?}"
+                );
+            }
         }
         assert!(not_orphan_removable(CacheTool::GoMod).is_some_and(|w| w.contains("read-only")));
         for t in [CacheTool::Gradle, CacheTool::Maven] {
@@ -494,13 +523,11 @@ mod tests {
         let Some(fx) = fixture() else { return };
         assert!(!crate::is_quick_clean_tool("ollama"));
         for t in CacheTool::ALL {
-            // Gradle and Maven are inspect-only: their binaries are never run either.
-            let inspect_only = matches!(t, CacheTool::Gradle | CacheTool::Maven);
-            assert_eq!(
-                crate::is_quick_clean_tool(t.binary()),
-                !inspect_only,
-                "{t:?}"
-            );
+            // Gradle and Maven are inspect-only, and the long-tail tools (P5-DET-05) are not
+            // supported on this branch: their binaries are never run either.
+            let never = matches!(t, CacheTool::Gradle | CacheTool::Maven)
+                || !crate::quickclean::is_supported(t);
+            assert_eq!(crate::is_quick_clean_tool(t.binary()), !never, "{t:?}");
         }
         let cache = fx.root().join(CACHE);
         let anchor = fx.root().join("home");
@@ -543,6 +570,30 @@ mod tests {
             let e = exec
                 .delete_orphaned_cache(&it, &target, evidence(&fx))
                 .expect_err("tool command via D-36");
+            assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
+        }
+        // Docker's prunes (P5-DET-03) act on the whole daemon: refused by every path with the
+        // Docker reason, whatever the item's category.
+        for kind in [
+            scull_detectors::DockerKind::BuildCache,
+            scull_detectors::DockerKind::DanglingImages,
+        ] {
+            let it = item(&fx, Tier::S0, Category::PackageCache, kind.action());
+            let e = exec.delete(&it, &target).expect_err("docker via delete");
+            assert_eq!(e.message, crate::DOCKER_UNSUPPORTED, "{e}");
+            for executing in [
+                Action::Quarantine,
+                Action::Trash,
+                Action::Delete,
+                it.action.clone(),
+            ] {
+                let e = crate::executor::check_item_for(&it, &executing)
+                    .expect_err("docker via any action");
+                assert_eq!(e.message, crate::DOCKER_UNSUPPORTED, "{e}");
+            }
+            let e = exec
+                .delete_orphaned_cache(&it, &target, evidence(&fx))
+                .expect_err("docker via D-36");
             assert_eq!(e.kind, ErrorKind::SafetyBlocked, "{e}");
         }
         assert!(cache.join("a1b2c3.npm").is_file(), "nothing removed");

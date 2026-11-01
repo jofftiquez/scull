@@ -33,13 +33,14 @@ use scull_git::{
     worktree_candidate,
 };
 use scull_platform::activity::Limits;
-use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo};
+use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo, VolumeKind};
 use scull_safety::{
     ActivityWindow, GitTracking, MtimeSample, NativeActivityProbe, ProtectedSet, Regen,
     Signals as RubricSignals, Tri, classify, recent_activity,
 };
 use scull_scanner::{
-    BoundaryReason, CancelToken, DirSummary, EstimateContext, Snapshots, VolumeFs, estimate,
+    BoundaryReason, CancelToken, DirSummary, EstimateContext, ScanOptions, Snapshots, VolumeFs,
+    estimate,
 };
 use scull_storage::{
     ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store, VolumeSample,
@@ -48,7 +49,7 @@ use scull_storage::{
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// What the engine needs from its caller. Everything machine-specific comes in here; the
 /// engine reads no environment variables.
@@ -77,6 +78,11 @@ pub struct EngineConfig {
     pub in_use: InUseSource,
     /// The mounted-volume list ([`NativeVolumes`] by default).
     pub volumes: Arc<dyn VolumeSource>,
+    /// How long one directory listing, or one entry's metadata call, may take before the
+    /// walk gives up on it (default 60 s; see [`ScanOptions::dir_timeout`]). A hung entry
+    /// (a frozen mount point) costs only itself: it is reported as timed out and its siblings
+    /// are still scanned. `None` waits forever.
+    pub dir_timeout: Option<Duration>,
 }
 
 impl EngineConfig {
@@ -92,6 +98,7 @@ impl EngineConfig {
             explicit_target_dirs: Vec::new(),
             in_use: InUseSource::Unavailable,
             volumes: Arc::new(NativeVolumes),
+            dir_timeout: ScanOptions::default().dir_timeout,
         }
     }
 }
@@ -148,6 +155,8 @@ pub struct Engine {
     explicit_target_dirs: Vec<(PathBuf, String)>,
     in_use: InUseSource,
     volume_source: Arc<dyn VolumeSource>,
+    /// See [`EngineConfig::dir_timeout`].
+    dir_timeout: Option<Duration>,
     /// Mounted volumes, re-read at the start of each run.
     volumes: Mutex<Vec<VolumeInfo>>,
     /// Why the last volume list could not be read, if it couldn't.
@@ -195,6 +204,7 @@ impl Engine {
             explicit_target_dirs: cfg.explicit_target_dirs,
             in_use: cfg.in_use,
             volume_source: cfg.volumes,
+            dir_timeout: cfg.dir_timeout,
             volumes: Mutex::new(Vec::new()),
             volumes_error: Mutex::new(None),
         })
@@ -211,7 +221,10 @@ impl Engine {
     }
 
     /// Canonicalize and check scan roots: each must be an existing directory (not a link).
-    /// Roots inside another root are dropped.
+    /// Duplicates and roots inside another root are dropped, compared by path and by file
+    /// identity (volume + file ID), so two paths to one folder that `canonicalize` keeps apart
+    /// (macOS firmlinks: `~/x` and `/System/Volumes/Data/Users/<me>/x`) are scanned once
+    /// (FX-MAC-03, #249). The first of two aliases is kept.
     pub fn prepare_roots(&self, roots: &[PathBuf]) -> Result<Vec<PathBuf>, ScullError> {
         let mut out: Vec<PathBuf> = Vec::new();
         for r in roots {
@@ -265,7 +278,35 @@ impl Engine {
         }
         let all = out.clone();
         out.retain(|r| !all.iter().any(|o| o != r && is_within(r, o)));
-        Ok(out)
+        Ok(self.dedupe_roots_by_identity(out))
+    }
+
+    /// Drop roots that are the same folder as, or lie inside, another root by file identity:
+    /// a root whose own identity, or one of its ancestors' identities, is another root's. Of
+    /// two roots with the same identity the earlier one is kept. Roots without an identity
+    /// (the platform can't tell) are compared by path only.
+    fn dedupe_roots_by_identity(&self, roots: Vec<PathBuf>) -> Vec<PathBuf> {
+        let identity = |p: &Path| self.platform.metadata(p).ok().and_then(|md| md.identity);
+        let own: Vec<_> = roots.iter().map(|r| identity(r)).collect();
+        let mut keep = Vec::with_capacity(roots.len());
+        for (i, root) in roots.iter().enumerate() {
+            // Same folder as an earlier root.
+            let alias = own[i].is_some() && own[..i].contains(&own[i]);
+            // Inside another root through an ancestor that is that root by identity.
+            let nested = || {
+                root.ancestors().skip(1).any(|a| {
+                    identity(a).is_some_and(|id| {
+                        own.iter()
+                            .enumerate()
+                            .any(|(j, o)| j != i && *o == Some(id))
+                    })
+                })
+            };
+            if !alias && !nested() {
+                keep.push(root.clone());
+            }
+        }
+        keep
     }
 
     /// Scan `roots` and classify everything found. Read-only: nothing on disk changes except
@@ -301,6 +342,7 @@ impl Engine {
         let collector = Collector::new(
             Arc::clone(&self.platform),
             Some(Arc::clone(&self.detectors)),
+            self.walk_options(),
             Arc::clone(&progress),
         );
         {
@@ -474,7 +516,12 @@ impl Engine {
             if cancel.is_cancelled() {
                 return;
             }
-            let c = Collector::new(Arc::clone(&self.platform), None, Arc::new(|_| {}));
+            let c = Collector::new(
+                Arc::clone(&self.platform),
+                None,
+                self.walk_options(),
+                Arc::new(|_| {}),
+            );
             if let Ok(outcome) = c.walk(d, threads, cancel)
                 && !outcome.is_cancelled()
                 && let Some(s) = outcome.root
@@ -563,6 +610,33 @@ impl Engine {
             }
         }
         estimate(s, &ctx)
+    }
+
+    /// Base options of every walk this run: the configured timeout, and the network mount
+    /// points to leave untouched ([`Engine::skip_mounts`]).
+    fn walk_options(&self) -> ScanOptions {
+        let mut opts = ScanOptions::default();
+        opts.dir_timeout = self.dir_timeout;
+        opts.skip_mounts = self.skip_mounts();
+        opts
+    }
+
+    /// Network mount points (NFS, SMB, sshfs, every FUSE filesystem on Linux, ...) from the
+    /// mount table read for this run: the walk reports them as other-volume boundaries
+    /// without touching them, so a stale or frozen one costs nothing and its siblings are
+    /// still scanned (T-53, #301). A later mount at the same point hides an earlier one.
+    /// Empty when the table could not be read; the walk's per-entry deadline then still
+    /// confines a hung mount point to itself.
+    fn skip_mounts(&self) -> Vec<PathBuf> {
+        let mut by_point: BTreeMap<PathBuf, VolumeKind> = BTreeMap::new();
+        for v in lock(&self.volumes).iter() {
+            by_point.insert(v.mount_point.clone(), v.kind);
+        }
+        by_point
+            .into_iter()
+            .filter(|(_, kind)| *kind == VolumeKind::Network)
+            .map(|(point, _)| point)
+            .collect()
     }
 
     /// Whether a volume is mounted strictly inside `dir` (bind mounts and mounted folders keep
@@ -742,7 +816,12 @@ impl Engine {
         // placeholders and whether every folder could be read. A failed walk leaves it
         // unmeasured, which the protection step treats as unknown (at least S2).
         self.refresh_volumes();
-        let collector = Collector::new(Arc::clone(&self.platform), None, Arc::new(|_| {}));
+        let collector = Collector::new(
+            Arc::clone(&self.platform),
+            None,
+            self.walk_options(),
+            Arc::new(|_| {}),
+        );
         if let Err(e) = collector.walk(&want, 0, &CancelToken::new()) {
             lock(&collector.state).issue(&want, IssueKind::ReadError, e.to_string());
         }
@@ -777,7 +856,12 @@ impl Engine {
         let ctx = DetectContext::new().with_config_reader(&reader);
         let located = locate_caches(env, self.platform.as_ref(), &ctx);
         self.refresh_volumes();
-        let collector = Collector::new(Arc::clone(&self.platform), None, progress);
+        let collector = Collector::new(
+            Arc::clone(&self.platform),
+            None,
+            self.walk_options(),
+            progress,
+        );
         let mut cancelled = false;
         let mut found = Vec::new();
         for c in located.found {
@@ -1007,6 +1091,33 @@ impl UnresolvedEntry {
     }
 }
 
+/// Where an unresolvable protection entry really is, if that can be known for sure: its real
+/// path, or else its parent's real path plus its name when the parent's listing shows it as a
+/// plain folder or file. Not a link, it can't stand for any other location.
+///
+/// The second form is for entries that refuse even an attribute-only open, which Windows'
+/// own `C:\System Volume Information` does: neither its metadata nor its real path can be
+/// read, but the listing of `C:\` (no open of the entry) says it is an ordinary folder. A
+/// link, an unknown kind, or a name the listing doesn't show as spelled (e.g. a short 8.3
+/// name) leaves the location undecided, which keeps every candidate at least S2.
+fn real_location(platform: &dyn Platform, path: &Path) -> Option<PathBuf> {
+    if let Some(real) = canon_exact(path) {
+        return Some(real);
+    }
+    let name = path.file_name()?;
+    let parent = canon_exact(path.parent()?)?;
+    let listed = platform
+        .read_dir(&parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|e| e.file_name == name)?;
+    matches!(
+        listed.kind,
+        scull_platform::EntryKind::Dir | scull_platform::EntryKind::File
+    )
+    .then(|| parent.join(name))
+}
+
 /// Classification context after the walk.
 struct Post<'a> {
     engine: &'a Engine,
@@ -1043,7 +1154,7 @@ impl<'a> Post<'a> {
             .unresolved()
             .iter()
             .map(|u| {
-                let real = canon_exact(&u.path);
+                let real = real_location(platform, &u.path);
                 let mut forms = vec![u.path.clone(), canon(&u.path)];
                 forms.extend(real.clone());
                 UnresolvedEntry {

@@ -24,7 +24,7 @@
 mod cli;
 mod exec;
 
-use cli::{Cli, Schemas, assert_exit, schema_path, stdout, toml_path, workspace};
+use cli::{Cli, Schemas, assert_exit, stdout, toml_path, workspace};
 use scull_core::ExitCode;
 use scull_fixtures::{Fixture, InvariantId, InvariantInputs, InvariantReport, NodeLock, days_ago};
 use serde_json::{Value, json};
@@ -99,75 +99,6 @@ fn tree(with_git: bool) -> Fixture {
     fx
 }
 
-/// Commands whose `--ndjson` output has no published line schema yet (tracked in the
-/// registry): `(args after the command name are added by the caller, document schema name)`.
-/// Their NDJSON line is the `--json` document plus a `type` tag; the test checks exactly that.
-const NDJSON_WITHOUT_LINE_SCHEMA: &[&str] = &[
-    "status",
-    "doctor",
-    "init",
-    "rules-list",
-    "rules-validate",
-    "data-show",
-    "data-export",
-    "data-purge",
-    "large-files",
-    "clean-plan",
-    "clean-run",
-    "clean-caches",
-    "quarantine-purge",
-    "history",
-    "history-operation",
-    "restore",
-];
-
-/// `--ndjson` of a command without a published line schema: every line parses, names
-/// `scull/<name>@1`, carries `version`, a string `type` and `data`; a single-record line minus
-/// `type` validates against the document schema, and candidate records against the candidate
-/// schema. Returns the lines.
-fn ndjson_without_line_schema(
-    schemas: &Schemas,
-    cli: &Cli,
-    args: &[&str],
-    name: &str,
-) -> Vec<Value> {
-    assert!(NDJSON_WITHOUT_LINE_SCHEMA.contains(&name), "{name}");
-    assert!(
-        !schema_path(&format!("{name}.ndjson.schema.json")).exists(),
-        "{name}.ndjson.schema.json is published now: validate against it (use Schemas::ndjson) \
-         and update the registry entry of FX-OUT-01"
-    );
-    let mut a = args.to_vec();
-    a.push("--ndjson");
-    let o = cli.run(&a);
-    assert_exit(&o, 0);
-    let text = stdout(&o);
-    assert!(text.ends_with('\n'), "{text:?}");
-    let lines: Vec<Value> = text
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l:?}")))
-        .collect();
-    assert!(!lines.is_empty());
-    for l in &lines {
-        assert_eq!(l["schema"], format!("scull/{name}@1"), "{l}");
-        assert!(l["version"].is_string() && l["type"].is_string(), "{l}");
-        assert!(l.get("data").is_some(), "{l}");
-        if l["type"] == "candidate" {
-            schemas.validate("v1/candidate.schema.json", &l["data"], "candidate line");
-        }
-    }
-    if let [one] = &lines[..] {
-        let mut doc = one.clone();
-        doc.as_object_mut().unwrap().remove("type");
-        schemas.validate(
-            &format!("{name}.schema.json"),
-            &doc,
-            &format!("{name} NDJSON line"),
-        );
-    }
-    lines
-}
-
 /// FX-OUT-01: every command with machine output, in both modes, over one fixture tree, against
 /// the published schemas; every published command schema is used; nothing on disk changes
 /// except scull's own temp directories.
@@ -223,27 +154,21 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     for f in large["data"]["files"].as_array().unwrap() {
         schemas.validate("v1/candidate.schema.json", f, "large file");
     }
-    ndjson_without_line_schema(
-        &schemas,
+    schemas.ndjson(
         &cli,
         &["large-files", &r, "--min-size", "256K"],
         "large-files",
     );
     schemas.json(&cli, &["status"], "status");
-    ndjson_without_line_schema(&schemas, &cli, &["status"], "status");
+    schemas.ndjson(&cli, &["status"], "status");
     schemas.json(&cli, &["doctor"], "doctor");
-    ndjson_without_line_schema(&schemas, &cli, &["doctor"], "doctor");
+    schemas.ndjson(&cli, &["doctor"], "doctor");
     schemas.json(&cli, &["rules", "list"], "rules-list");
-    ndjson_without_line_schema(&schemas, &cli, &["rules", "list"], "rules-list");
+    schemas.ndjson(&cli, &["rules", "list"], "rules-list");
     schemas.json(&cli, &["rules", "validate"], "rules-validate");
-    ndjson_without_line_schema(&schemas, &cli, &["rules", "validate"], "rules-validate");
+    schemas.ndjson(&cli, &["rules", "validate"], "rules-validate");
     schemas.json(&cli, &["init", "--yes", "--roots", &r], "init");
-    ndjson_without_line_schema(
-        &schemas,
-        &cli,
-        &["init", "--yes", "--force", "--roots", &r],
-        "init",
-    );
+    schemas.ndjson(&cli, &["init", "--yes", "--force", "--roots", &r], "init");
     // The config file `init` wrote validates against the published config schema.
     let config_file = cli.scull_home().join("config").join("config.toml");
     let config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_file).unwrap())
@@ -254,7 +179,7 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         "config.toml written by init",
     );
     schemas.json(&cli, &["data", "show"], "data-show");
-    ndjson_without_line_schema(&schemas, &cli, &["data", "show"], "data-show");
+    schemas.ndjson(&cli, &["data", "show"], "data-show");
     let out1 = cli.home().join("export-json");
     let export = schemas.json(&cli, &["data", "export", "--out", &s(&out1)], "data-export");
     println!("export: {}", export["data"]);
@@ -263,34 +188,37 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     assert_eq!(dump["schema"], "scull/data-dump@1");
     schemas.validate("data-dump.schema.json", &dump, "scull-data.json");
     let out2 = cli.home().join("export-ndjson");
-    ndjson_without_line_schema(
-        &schemas,
-        &cli,
-        &["data", "export", "--out", &s(&out2)],
-        "data-export",
-    );
+    schemas.ndjson(&cli, &["data", "export", "--out", &s(&out2)], "data-export");
     schemas.json(&cli, &["data", "purge", "--all", "--confirm"], "data-purge");
-    ndjson_without_line_schema(
-        &schemas,
-        &cli,
-        &["data", "purge", "--all", "--confirm"],
-        "data-purge",
-    );
+    schemas.ndjson(&cli, &["data", "purge", "--all", "--confirm"], "data-purge");
 
     // Phase 4 read-only commands from main: forecast check and insights (exit 0 whether or not
     // an alert fired; both only read history and the volumes' free space).
     schemas.json(&cli, &["check"], "check");
+    schemas.ndjson(&cli, &["check"], "check");
     schemas.json(&cli, &["insights"], "insights");
+    schemas.ndjson(&cli, &["insights"], "insights");
     // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
     // config and writes nothing.
     schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
+    schemas.ndjson(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
     // `schedule` (main, #281) without registering anything: `enable --dry-run` shows the unit
     // files and commands for the fixture home and stops; `status` with nothing registered runs
     // no tool.
     let dry = schemas.json(&cli, &["schedule", "enable", "--dry-run"], "schedule");
     assert_eq!(dry["data"]["dry_run"], true, "{dry:#}");
     assert_eq!(dry["data"]["applied"], false, "{dry:#}");
+    schemas.ndjson(&cli, &["schedule", "enable", "--dry-run"], "schedule");
     let status = schemas.json(&cli, &["schedule", "status"], "schedule");
+    schemas.ndjson(&cli, &["schedule", "status"], "schedule");
+    // `doctor --report` (main, #248): the shareable report, printed and never written without
+    // `--out`; `--hash-names` hides project names too.
+    for extra in [&[][..], &["--hash-names"][..]] {
+        let mut a = vec!["doctor", "--report"];
+        a.extend_from_slice(extra);
+        schemas.json(&cli, &a, "doctor-report");
+        schemas.ndjson(&cli, &a, "doctor-report");
+    }
     assert_eq!(status["data"]["registered"], false, "{status:#}");
 
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
@@ -330,7 +258,6 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         assert!(used.contains(core), "{core} unused");
     }
     println!("schemas validated against real output: {used:#?}");
-    println!("NDJSON without a published line schema: {NDJSON_WITHOUT_LINE_SCHEMA:?}");
     check(&fx);
 }
 
@@ -390,8 +317,7 @@ fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
         &serde_json::from_slice(&std::fs::read(&plan_file).unwrap()).unwrap(),
         "plan file written by scull clean --output",
     );
-    ndjson_without_line_schema(
-        schemas,
+    schemas.ndjson(
         cli,
         &[
             "clean",
@@ -451,11 +377,11 @@ fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
     }
 
     schemas.json(cli, &["history"], "history");
-    ndjson_without_line_schema(schemas, cli, &["history"], "history");
+    schemas.ndjson(cli, &["history"], "history");
     schemas.json(cli, &["history", &op], "history-operation");
-    ndjson_without_line_schema(schemas, cli, &["history", &op], "history-operation");
+    schemas.ndjson(cli, &["history", &op], "history-operation");
     schemas.json(cli, &["restore", &op, "--dry-run"], "restore");
-    ndjson_without_line_schema(schemas, cli, &["restore", &op, "--dry-run"], "restore");
+    schemas.ndjson(cli, &["restore", &op, "--dry-run"], "restore");
     let restored = schemas.json(cli, &["restore", &op, "--confirm"], "restore");
     println!("restore: {:#}", restored["data"]);
     assert!(
@@ -465,19 +391,9 @@ fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
         "the quarantined item is back"
     );
     schemas.json(cli, &["clean", "--purge-quarantine"], "quarantine-purge");
-    ndjson_without_line_schema(
-        schemas,
-        cli,
-        &["clean", "--purge-quarantine"],
-        "quarantine-purge",
-    );
+    schemas.ndjson(cli, &["clean", "--purge-quarantine"], "quarantine-purge");
     schemas.json(cli, &["clean", "caches", "--dry-run"], "clean-caches");
-    ndjson_without_line_schema(
-        schemas,
-        cli,
-        &["clean", "caches", "--dry-run"],
-        "clean-caches",
-    );
+    schemas.ndjson(cli, &["clean", "caches", "--dry-run"], "clean-caches");
     // An execution's NDJSON: plan the restored item again and run it.
     let plan2 = s(&fx.base().join("plan2.json"));
     schemas.json(
@@ -494,8 +410,7 @@ fn clean_history_restore_outputs(schemas: &Schemas, _shared: &Cli) {
         ],
         "clean-plan",
     );
-    ndjson_without_line_schema(
-        schemas,
+    schemas.ndjson(
         cli,
         &[
             "clean",

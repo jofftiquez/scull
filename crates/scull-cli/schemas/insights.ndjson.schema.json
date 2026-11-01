@@ -1,0 +1,1050 @@
+{
+  "$defs": {
+    "Accuracy": {
+      "additionalProperties": false,
+      "description": "Predicted vs. measured bytes of cleanups.",
+      "properties": {
+        "measured_bytes": {
+          "description": "Bytes measured, all operations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "median_abs_error": {
+          "description": "Median of `|error|` over those operations (0..), if any.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "operations": {
+          "description": "Operations in the window with measured results, oldest first.",
+          "items": {
+            "$ref": "#/$defs/OperationPoint"
+          },
+          "type": "array"
+        },
+        "predicted_bytes": {
+          "description": "Bytes predicted, all operations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regrown_items": {
+          "description": "Items rebuilt after a cleanup (the rebuild cost paid afterwards).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operations",
+        "predicted_bytes",
+        "measured_bytes",
+        "regrown_items"
+      ],
+      "type": "object"
+    },
+    "AgentCount": {
+      "additionalProperties": false,
+      "description": "Agent worktrees present now for one agent.",
+      "properties": {
+        "agent": {
+          "description": "Agent, e.g. `claude-code`, `codex`.",
+          "type": "string"
+        },
+        "bytes": {
+          "description": "Bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worktrees": {
+          "description": "Worktrees.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent",
+        "worktrees",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "AgentFootprint": {
+      "additionalProperties": false,
+      "description": "Worktrees and the share created by AI agents.",
+      "properties": {
+        "agent_bytes": {
+          "description": "Bytes held by agent worktrees present now.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "agent_worktrees": {
+          "description": "Agent worktrees present now.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "average_agent_lifetime_secs": {
+          "description": "Average lifetime of agent worktrees that went away in those weeks (seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "by_agent": {
+          "description": "Agent worktrees present now, per agent, most first.",
+          "items": {
+            "$ref": "#/$defs/AgentCount"
+          },
+          "type": "array"
+        },
+        "weeks": {
+          "description": "Worktrees first seen per week, the last [`AGENT_WEEKS`] weeks, oldest first.",
+          "items": {
+            "$ref": "#/$defs/WeekCount"
+          },
+          "type": "array"
+        },
+        "worktree_bytes": {
+          "description": "Bytes they hold.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worktrees": {
+          "description": "Worktrees present now.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "worktrees",
+        "worktree_bytes",
+        "agent_worktrees",
+        "agent_bytes",
+        "by_agent",
+        "weeks"
+      ],
+      "type": "object"
+    },
+    "Category": {
+      "description": "Broad category of a candidate, used for grouping in the CLI, charts and Quick Clean.",
+      "oneOf": [
+        {
+          "const": "project_artifact",
+          "description": "Build output or dependencies inside a project (`target/`, `node_modules`, `.next`, …).",
+          "type": "string"
+        },
+        {
+          "const": "package_cache",
+          "description": "Global package-manager cache (Quick Clean, QC-01).",
+          "type": "string"
+        },
+        {
+          "const": "worktree",
+          "description": "A Git worktree, whole or stale registration.",
+          "type": "string"
+        },
+        {
+          "const": "ml_cache",
+          "description": "ML/AI model or dataset cache.",
+          "type": "string"
+        },
+        {
+          "const": "container",
+          "description": "Docker / container data.",
+          "type": "string"
+        },
+        {
+          "const": "large_file",
+          "description": "Large file surfaced for inspection only.",
+          "type": "string"
+        },
+        {
+          "const": "scull_data",
+          "description": "scull's own data (database, logs, quarantine; DATA-05).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "Confidence": {
+      "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "Not enough history to say anything.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "Short history, noisy data or a long extrapolation; not shown in status lines.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Shown in status lines and may alert.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Long, regular history and a short extrapolation.",
+          "type": "string"
+        }
+      ]
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "description": "How much history a report rests on.",
+      "properties": {
+        "covers_window": {
+          "description": "Whether recorded history reaches back to the start of the window. When it does not\n(scull is new here, or history was purged), growth compares against the oldest data.",
+          "type": "boolean"
+        },
+        "history_starts_at": {
+          "description": "Oldest recorded item event or free-space sample considered, if any.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "items": {
+          "description": "Candidates tracked at some point in the window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "covers_window"
+      ],
+      "type": "object"
+    },
+    "DuplicationInsight": {
+      "additionalProperties": false,
+      "description": "One artifact kind present in many projects.",
+      "properties": {
+        "artifact": {
+          "description": "Artifact type, e.g. \"Installed npm dependencies\".",
+          "type": "string"
+        },
+        "copies": {
+          "description": "Copies (live items).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ecosystem": {
+          "description": "Ecosystem, e.g. \"node\".",
+          "type": "string"
+        },
+        "largest_bytes": {
+          "description": "Bytes of the largest copy.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "projects": {
+          "description": "Projects holding one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "suggestion": {
+          "description": "Store-once suggestion, if one fits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_bytes": {
+          "description": "Bytes of all copies.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ecosystem",
+        "artifact",
+        "projects",
+        "copies",
+        "total_bytes",
+        "largest_bytes"
+      ],
+      "type": "object"
+    },
+    "EcosystemMonth": {
+      "additionalProperties": false,
+      "description": "Bytes per ecosystem at the end of one month.",
+      "properties": {
+        "at": {
+          "description": "The moment sampled: the month's end, or now for the current month.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "ecosystems": {
+          "description": "Per ecosystem, largest first. Items outside any project count as `other`.",
+          "items": {
+            "$ref": "#/$defs/EcosystemShare"
+          },
+          "type": "array"
+        },
+        "month": {
+          "description": "`YYYY-MM`.",
+          "type": "string"
+        },
+        "total_bytes": {
+          "description": "All tracked bytes then.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "month",
+        "at",
+        "total_bytes",
+        "ecosystems"
+      ],
+      "type": "object"
+    },
+    "EcosystemShare": {
+      "additionalProperties": false,
+      "description": "One ecosystem's bytes in a month.",
+      "properties": {
+        "bytes": {
+          "description": "Bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ecosystem": {
+          "description": "Ecosystem, e.g. \"node\", \"rust\", or `other`.",
+          "type": "string"
+        },
+        "share": {
+          "description": "Share of the month's total (0..=1).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ecosystem",
+        "bytes",
+        "share"
+      ],
+      "type": "object"
+    },
+    "FootprintPoint": {
+      "additionalProperties": false,
+      "description": "A recorded footprint total.",
+      "properties": {
+        "at": {
+          "description": "When it was measured.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "Total bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "at",
+        "total_bytes"
+      ],
+      "type": "object"
+    },
+    "Forecast": {
+      "additionalProperties": false,
+      "description": "The forecast of one volume.",
+      "properties": {
+        "as_of": {
+          "description": "When the latest sample in the window was taken (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence",
+          "description": "How much to trust it."
+        },
+        "days_until_threshold": {
+          "description": "Days from `now` until free space drops below the reserve (`Filling`; 0 for\n`BelowReserve`).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "fill_bytes_per_day": {
+          "description": "Free space lost per day by the trend (negative when free space grows). Present once\nthere is enough history.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "free_bytes": {
+          "description": "Latest free space, plus releases recorded after that sample (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jumps_ignored": {
+          "description": "Steps levelled out of the trend: known releases plus detected cleanups and one-off\ndrops.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "noise_ratio": {
+          "description": "Residual spread relative to the change the trend explains over the span (lower is\nsteadier).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "outliers_ignored": {
+          "description": "Transient outliers dropped.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserve_bytes": {
+          "description": "The reserve the forecast counts down to (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "samples_used": {
+          "description": "Samples fitted (after dropping outliers).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "span_secs": {
+          "description": "Seconds between the first and the latest sample in the window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ForecastState",
+          "description": "What the forecast concluded."
+        },
+        "threshold_at": {
+          "description": "When free space is forecast to drop below the reserve (Unix seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_bytes": {
+          "description": "Volume size at the latest sample (bytes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "volume_id": {
+          "description": "Volume identifier, as recorded in history (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "state",
+        "confidence",
+        "reserve_bytes",
+        "samples_used",
+        "span_secs",
+        "outliers_ignored",
+        "jumps_ignored"
+      ],
+      "type": "object"
+    },
+    "ForecastState": {
+      "description": "What the forecast concluded.",
+      "oneOf": [
+        {
+          "const": "not_enough_history",
+          "description": "Too few samples or too short a span in the window; no extrapolation.",
+          "type": "string"
+        },
+        {
+          "const": "not_filling",
+          "description": "Free space is stable or growing, or would take longer than the horizon to run out.",
+          "type": "string"
+        },
+        {
+          "const": "filling",
+          "description": "Free space is shrinking: see `days_until_threshold`.",
+          "type": "string"
+        },
+        {
+          "const": "below_reserve",
+          "description": "Free space is already at or below the reserve (measured, not forecast).",
+          "type": "string"
+        }
+      ]
+    },
+    "FreePoint": {
+      "additionalProperties": false,
+      "description": "A free-space sample.",
+      "properties": {
+        "at": {
+          "description": "When it was measured.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "free_bytes": {
+          "description": "Bytes free.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "at",
+        "free_bytes"
+      ],
+      "type": "object"
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "Grower": {
+      "additionalProperties": false,
+      "description": "One category or project that grew.",
+      "properties": {
+        "ecosystem": {
+          "description": "The project's ecosystem, when every one of its items agrees.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "end_bytes": {
+          "description": "Bytes now.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "growth_bytes": {
+          "description": "`end_bytes - start_bytes` (always positive here).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "description": "Category (snake_case, e.g. `project_artifact`) or project root path.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Display name: the category key, or the project folder name.",
+          "type": "string"
+        },
+        "share_of_growth": {
+          "description": "Share of [`GrowthWindow::grown_bytes`] (0..=1).",
+          "format": "double",
+          "type": "number"
+        },
+        "start_bytes": {
+          "description": "Bytes at the window start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "start_bytes",
+        "end_bytes",
+        "growth_bytes",
+        "share_of_growth"
+      ],
+      "type": "object"
+    },
+    "GrowthWindow": {
+      "additionalProperties": false,
+      "description": "Top growers over one window.",
+      "properties": {
+        "categories": {
+          "description": "Categories that grew, most first (at most [`TOP_GROWERS`]).",
+          "items": {
+            "$ref": "#/$defs/Grower"
+          },
+          "type": "array"
+        },
+        "days": {
+          "description": "Window length in days.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grown_bytes": {
+          "description": "Sum of the growth of everything that grew.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "net_bytes": {
+          "description": "Net change of all tracked bytes over the window (negative after cleanups).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "projects": {
+          "description": "Projects that grew, most first (at most [`TOP_GROWERS`]).",
+          "items": {
+            "$ref": "#/$defs/Grower"
+          },
+          "type": "array"
+        },
+        "start": {
+          "description": "Window start.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "days",
+        "start",
+        "net_bytes",
+        "grown_bytes",
+        "categories",
+        "projects"
+      ],
+      "type": "object"
+    },
+    "InsightsReport": {
+      "additionalProperties": false,
+      "description": "Local insights over a window ending now (`scull insights --json`, `scull/insights@1`).\n\nByte counts are allocated bytes unless a field says otherwise. Times are Unix seconds;\nday, week and month buckets are UTC.",
+      "properties": {
+        "accuracy": {
+          "$ref": "#/$defs/Accuracy",
+          "description": "Predicted vs. measured bytes of cleanups in the window."
+        },
+        "agent_footprint": {
+          "$ref": "#/$defs/AgentFootprint",
+          "description": "Worktrees, and those created by AI agents."
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage",
+          "description": "How much history the report rests on."
+        },
+        "duplication": {
+          "description": "Artifact kinds present in many projects now, largest first.",
+          "items": {
+            "$ref": "#/$defs/DuplicationInsight"
+          },
+          "type": "array"
+        },
+        "ecosystem_mix": {
+          "description": "Bytes per ecosystem at the end of each of the last [`MIX_MONTHS`] months, oldest first.",
+          "items": {
+            "$ref": "#/$defs/EcosystemMonth"
+          },
+          "type": "array"
+        },
+        "free_space": {
+          "description": "Free space per volume over the window.",
+          "items": {
+            "$ref": "#/$defs/VolumeTrend"
+          },
+          "type": "array"
+        },
+        "generated_at": {
+          "description": "When the report was computed.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "growth": {
+          "description": "Top growers over the last [`SHORT_WINDOW_DAYS`] days and over the whole window\n(shortest first; one entry when they coincide).",
+          "items": {
+            "$ref": "#/$defs/GrowthWindow"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "description": "Plain-language caveats (what is not included and why).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "own_footprint": {
+          "$ref": "#/$defs/OwnFootprint",
+          "description": "scull's own disk use against its storage budget."
+        },
+        "regrowth": {
+          "description": "Artifacts that came back after being removed in the window, most rebuilds first.",
+          "items": {
+            "$ref": "#/$defs/RegrowthInsight"
+          },
+          "type": "array"
+        },
+        "since": {
+          "description": "Start of the report window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "window_days": {
+          "description": "Length of the window in whole days (rounded up).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "since",
+        "window_days",
+        "coverage",
+        "growth",
+        "regrowth",
+        "duplication",
+        "agent_footprint",
+        "accuracy",
+        "ecosystem_mix",
+        "free_space",
+        "own_footprint",
+        "notes"
+      ],
+      "type": "object"
+    },
+    "OperationPoint": {
+      "additionalProperties": false,
+      "description": "One operation's predicted vs. measured bytes.",
+      "properties": {
+        "at": {
+          "description": "When it ran.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "error": {
+          "description": "`(measured - predicted) / predicted`; negative when less was freed. `None` when\nnothing was predicted.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "items": {
+          "description": "Items compared.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measured_bytes": {
+          "description": "Bytes measured.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "description": "Operation ID (as in `scull history`).",
+          "type": "string"
+        },
+        "predicted_bytes": {
+          "description": "Bytes predicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regrown_items": {
+          "description": "Items of this operation rebuilt afterwards.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "at",
+        "items",
+        "predicted_bytes",
+        "measured_bytes",
+        "regrown_items"
+      ],
+      "type": "object"
+    },
+    "OwnFootprint": {
+      "additionalProperties": false,
+      "description": "scull's own disk use (DATA-05) against its storage budget (INS-02).",
+      "properties": {
+        "backup_bytes": {
+          "description": "Migration backups.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "budget_bytes": {
+          "description": "The budget, if one applies.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "budget_used_bytes": {
+          "description": "Bytes counted against the budget (database pages in use, backups, damaged copies).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "damaged_bytes": {
+          "description": "Damaged copies set aside.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "database_bytes": {
+          "description": "Database file.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "points": {
+          "description": "Recorded footprint totals in the window, last of each UTC day, oldest first.",
+          "items": {
+            "$ref": "#/$defs/FootprintPoint"
+          },
+          "type": "array"
+        },
+        "total_bytes": {
+          "description": "All of the above.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wal_bytes": {
+          "description": "`-wal` and `-shm` files.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "database_bytes",
+        "wal_bytes",
+        "backup_bytes",
+        "damaged_bytes",
+        "total_bytes",
+        "budget_used_bytes",
+        "points"
+      ],
+      "type": "object"
+    },
+    "RegrowthInsight": {
+      "additionalProperties": false,
+      "description": "An artifact that came back after being removed.",
+      "properties": {
+        "artifact": {
+          "description": "Artifact type, e.g. \"Installed npm dependencies\".",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/Category",
+          "description": "Its category."
+        },
+        "last_back_at": {
+          "description": "Last time it came back.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "median_back_within_secs": {
+          "description": "Median upper bound on how fast it came back: from its last sighting before removal to\nits first sighting after (seconds).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it lives."
+        },
+        "project": {
+          "description": "Owning project folder name, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Owning project root, when known."
+        },
+        "rebuilds": {
+          "description": "Times it was rebuilt (a new object at the same path) in the window.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restores": {
+          "description": "Times the same object came back (e.g. restored from quarantine) in the window.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "suggest_exclude": {
+          "description": "Whether excluding it from cleanup suggestions is advised (rebuilt at least\n[`REGROWTH_SUGGEST_MIN`] times).",
+          "type": "boolean"
+        },
+        "suggestion": {
+          "description": "Plain-language suggestion, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "category",
+        "artifact",
+        "rebuilds",
+        "restores",
+        "last_back_at",
+        "suggest_exclude"
+      ],
+      "type": "object"
+    },
+    "VolumeTrend": {
+      "additionalProperties": false,
+      "description": "Free space of one volume over the window, with its forecast.",
+      "properties": {
+        "change_bytes": {
+          "description": "Change of free space over the window (latest minus first point).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "forecast": {
+          "$ref": "#/$defs/Forecast",
+          "description": "Disk-full forecast from the last 30 days of samples (PRO-01; the same as `scull\ncheck`), independent of the report window."
+        },
+        "points": {
+          "description": "The last sample of each UTC day, oldest first.",
+          "items": {
+            "$ref": "#/$defs/FreePoint"
+          },
+          "type": "array"
+        },
+        "total_bytes": {
+          "description": "Volume size at the latest sample.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "volume_id": {
+          "description": "Volume identifier (mount point or volume GUID path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "volume_id",
+        "total_bytes",
+        "points",
+        "change_bytes",
+        "forecast"
+      ],
+      "type": "object"
+    },
+    "WeekCount": {
+      "additionalProperties": false,
+      "description": "Worktrees first seen in one week.",
+      "properties": {
+        "agent_created": {
+          "description": "Agent worktrees first seen that week.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created": {
+          "description": "All worktrees first seen that week.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "week_start": {
+          "description": "Monday 00:00 UTC.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "week_start",
+        "created",
+        "agent_created"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/insights@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/InsightsReport",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/insights@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "insights",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/insights@1 (NDJSON line)",
+  "type": "object"
+}

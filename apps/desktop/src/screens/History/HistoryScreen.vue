@@ -279,9 +279,9 @@ function exportLog() {
               {{ current.chain.intact ? `hash chain verified · ${current.chain.rows} rows` : `chain damaged: ${current.chain.problems.join(', ')}` }}
             </span>
           </div>
-          <div class="flex flex-col rounded-[14px] bg-ink p-3.5 font-mono text-caption leading-[1.7] text-[#E8E3EE]" data-testid="log">
+          <div class="flex flex-col rounded-[14px] bg-ink p-3.5 font-mono text-caption leading-[1.7] text-on-ink-soft" data-testid="log">
             <span v-for="(l, i) in current.log" :key="i">
-              <span class="text-[#9C93A6]">{{ clockSeconds(l.at) }}</span>&nbsp; <span :style="{ color: LOG_COLORS[l.kind] }">{{ l.text }}</span>
+              <span class="text-on-ink-subtle">{{ clockSeconds(l.at) }}</span>&nbsp; <span :style="{ color: LOG_COLORS[l.kind] }">{{ l.text }}</span>
             </span>
           </div>
         </div>

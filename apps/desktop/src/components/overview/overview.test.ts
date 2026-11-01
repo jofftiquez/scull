@@ -6,6 +6,7 @@ import { BRIDGE_KEY, type ScullBridge } from '../../bridge';
 import { createMockBridge } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { core, resetCore } from '../../state/core';
+import { until } from '../../test/until';
 import StorageWheel from './StorageWheel.vue';
 import TierToolbar from './TierToolbar.vue';
 import { cleanupBasket } from './basket';
@@ -36,9 +37,9 @@ async function mountOverview(bridge: ScullBridge = designScenarioBridge(createMo
 
 /** The Overview decides asynchronously whether to auto-scan (not on first run, CFG-04), so wait
  *  for the scan report itself, then for the sweep to finish. */
-async function scanned(w: Awaited<ReturnType<typeof mountOverview>>, timeout = 5000) {
-  await vi.waitFor(() => expect(core.report).not.toBeNull(), { timeout });
-  await vi.waitFor(() => expect(w.get('[data-testid="rescan"]').text()).toBe('Rescan'), { timeout });
+async function scanned(w: Awaited<ReturnType<typeof mountOverview>>) {
+  await until(() => core.report !== null);
+  await until(() => w.get('[data-testid="rescan"]').text() === 'Rescan');
 }
 
 beforeEach(() => {
@@ -66,7 +67,7 @@ describe('tier toolbar', () => {
 
 describe('storage wheel', () => {
   const arcs = layoutWheel(buildWheelModel(DESIGN_CANDIDATES));
-  const center = { k: 'Development', kColor: '#B81E74', v: '186.0 GiB', n: '' };
+  const center = { k: 'Development', kColor: 'var(--color-accent-text)', v: '186.0 GiB', n: '' };
 
   it('patterns uncertain and protected items, solid fills for the others', () => {
     const w = mount(StorageWheel, { props: { arcs, filter: 'all', selected: null, center, sweep: 1, scanning: false } });
@@ -74,7 +75,7 @@ describe('storage wheel', () => {
       const fill = p.attributes('fill')!;
       const tier = p.attributes('data-tier');
       if (tier === 'S2' || tier === 'S3') expect(fill).toMatch(/^url\(#/);
-      else expect(fill).toMatch(/^#/);
+      else expect(fill).toMatch(/^var\(--color-tier-s[01]-swatch\)$/);
     }
     expect(w.findAll('path[data-kind="category"]')).toHaveLength(arcs.length);
   });

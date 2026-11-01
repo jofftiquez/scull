@@ -126,6 +126,10 @@ impl State {
 pub(crate) struct Collector {
     pub platform: Arc<dyn Platform>,
     pub detectors: Option<Arc<Detectors>>,
+    /// Base options of every walk: the network mount points never to touch (so a stale one
+    /// can't stall the listing of its parent, T-53, #301) and the per-directory / per-entry
+    /// timeout.
+    pub walk_opts: ScanOptions,
     pub state: Mutex<State>,
     pub progress: ProgressFn,
 }
@@ -139,11 +143,13 @@ impl Collector {
     pub fn new(
         platform: Arc<dyn Platform>,
         detectors: Option<Arc<Detectors>>,
+        walk_opts: ScanOptions,
         progress: ProgressFn,
     ) -> Arc<Self> {
         Arc::new(Self {
             platform,
             detectors,
+            walk_opts,
             state: Mutex::new(State::default()),
             progress,
         })
@@ -157,7 +163,7 @@ impl Collector {
         cancel: &CancelToken,
     ) -> Result<ScanOutcome, scull_scanner::ScanError> {
         self.note_ancestors(root);
-        let mut opts = ScanOptions::default();
+        let mut opts = self.walk_opts.clone();
         opts.emit_listings = true;
         opts.threads = threads;
         let me = Arc::clone(self);

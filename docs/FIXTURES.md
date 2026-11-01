@@ -36,6 +36,27 @@ The MVP release gate (PRD §21.3) is: **every MVP-gated fixture passes on macOS,
   - **macOS:** APFS clones via `cp -c`; local snapshots via `tmutil localsnapshot` (needs sudo; nightly or manual).
 - **Gate column:** the release that first requires the fixture to pass. OS column: **M** macOS, **L** Linux, **W** Windows.
 
+### 2.1 Running the Nightly fixtures
+
+Nightly fixtures are ordinary tests marked `#[ignore]`, so `cargo test --workspace` (and the per-PR CI) never runs them. The scheduled workflow `.github/workflows/nightly-fixtures.yml` runs them every night on Linux and macOS (and on Windows for the OS-independent ones). It skips the scheduled run when `main` has had no commit in 25 hours, and it can be started by hand with `gh workflow run nightly-fixtures.yml`.
+
+Run them locally with:
+
+```sh
+cargo test -p scull-fixtures --release --test fx_fs_nightly -- --ignored --nocapture --test-threads=1
+```
+
+- **Privileges.** A fixture that mounts filesystems opts in with `scull_fixtures::require_privileges!`. The test binary then re-runs that one test in a child that can mount: in-process if it already runs as real root; otherwise in an unprivileged user and mount namespace (`unshare --user --map-root-user --mount`); otherwise, only when `SCULL_FIXTURES_ALLOW_SUDO=1`, as root through `sudo -n unshare --mount`. Every Linux child gets a private mount namespace, so a forgotten mount disappears with it. macOS attaches disk images with `hdiutil`, which needs no root.
+- **Skips are loud.** When none of those works, the test prints `SKIPPED <test>: <reason>` and passes. With `SCULL_FIXTURES_REQUIRE_PRIVILEGED=1` (set by the nightly workflow), it fails instead. Ubuntu 23.10 and later block unprivileged uid mapping (`kernel.apparmor_restrict_unprivileged_userns=1`), so on a default desktop install these fixtures skip unless sudo is allowed.
+- **Running as root without sudo on the host.** Run the test binary in a disposable privileged container. Only the binary is shared, read-only, and every fixture tree lives in the container's own `/tmp`:
+  ```sh
+  cargo test -p scull-fixtures --test fx_fs_nightly --no-run   # prints the binary path
+  docker run --rm --privileged -e SCULL_FIXTURES_REQUIRE_PRIVILEGED=1 \
+    -v "$PWD/target/debug/deps/fx_fs_nightly-<hash>:/fx:ro" ubuntu:24.04 /fx --ignored --nocapture
+  ```
+- **Mounts stay inside the fixture.** `scull_fixtures::Mounts` refuses mount points and sources outside the fixture's temporary directory. It unmounts everything (innermost first) before that directory is removed, and it falls back to a lazy unmount. If even that fails, it aborts the process, so the cleanup can never walk into a mounted filesystem.
+- **FX-FS-15 knobs.** `SCULL_FX_FS15_ENTRIES` (default 1,000,000), `SCULL_FX_FS15_MAX_SECS` (15) and `SCULL_FX_FS15_MAX_MB` (400) set the size and the PRD §21.2 budgets. The scan runs in a child process, once to warm the cache and once to be judged. Its peak memory comes from `VmHWM` on Linux, `/usr/bin/time -l` on macOS and `PeakWorkingSet64` on Windows. The time budget is enforced only in optimized builds (`--release`), or always when `SCULL_FX_FS15_ENFORCE_TIME=1`.
+
 ### 2.2 Manual release checklist
 
 Manual fixtures can't be automated: they need a real desktop session, an account state, or OS permission prompts that hosted runners can't produce. Before each release, a maintainer runs this checklist on a real machine with the **release build**, ticks every box, and signs it (PRD §21.3). The signed copy is attached to the release's tracking issue. A box that can't be ticked blocks the release if the fixture's gate is that release or earlier. The fixture registry marks these fixtures `ManualChecklist`, and `tests/registry.rs` fails if a registered one has no entry here.

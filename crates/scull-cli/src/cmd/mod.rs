@@ -9,6 +9,7 @@ pub mod clean;
 pub mod clean_caches;
 pub mod data;
 pub mod doctor;
+pub mod doctor_report;
 pub mod exec;
 pub mod forecast;
 pub mod history;

@@ -102,10 +102,30 @@ pub fn parse_tool(s: &str) -> Result<Untick, String> {
         // Inspect-only (never run); accepted so every reported name round-trips.
         "gradle" => vec![CacheTool::Gradle],
         "maven" => vec![CacheTool::Maven],
+        // Long-tail tool caches (P5-DET-05): shown, never run in this build.
+        "ccache" => vec![CacheTool::Ccache],
+        "conan" => vec![CacheTool::Conan],
+        "vcpkg" => vec![CacheTool::Vcpkg],
+        "platformio" => vec![CacheTool::PlatformIo],
+        "arduino" => vec![CacheTool::Arduino],
+        "esp-idf" => vec![CacheTool::EspIdf],
+        "swiftpm" => vec![CacheTool::SwiftPm],
+        "cocoapods" => vec![CacheTool::CocoaPods],
+        "coursier" => vec![CacheTool::Coursier],
+        "deno" => vec![CacheTool::Deno],
+        "zig" => vec![CacheTool::Zig],
+        "playwright" => vec![CacheTool::Playwright],
+        "cypress" => vec![CacheTool::Cypress],
+        "puppeteer" => vec![CacheTool::Puppeteer],
+        "electron" => vec![CacheTool::Electron],
+        "homebrew" => vec![CacheTool::Homebrew],
+        "nix" => vec![CacheTool::Nix],
         _ => {
             return Err(
                 "expected one of npm, pnpm, bun, yarn, yarn-classic, yarn-berry, pip, uv, conda, \
-                 go, go-build, go-mod, nuget, gradle, maven"
+                 go, go-build, go-mod, nuget, gradle, maven, ccache, conan, vcpkg, platformio, \
+                 arduino, esp-idf, swiftpm, cocoapods, coursier, deno, zig, playwright, \
+                 cypress, puppeteer, electron, homebrew, nix"
                     .into(),
             );
         }
@@ -129,6 +149,23 @@ pub fn tool_name(t: CacheTool) -> &'static str {
         CacheTool::Gradle => "gradle",
         CacheTool::Maven => "maven",
         CacheTool::NuGet => "nuget",
+        CacheTool::Ccache => "ccache",
+        CacheTool::Conan => "conan",
+        CacheTool::Vcpkg => "vcpkg",
+        CacheTool::PlatformIo => "platformio",
+        CacheTool::Arduino => "arduino",
+        CacheTool::EspIdf => "esp-idf",
+        CacheTool::SwiftPm => "swiftpm",
+        CacheTool::CocoaPods => "cocoapods",
+        CacheTool::Coursier => "coursier",
+        CacheTool::Deno => "deno",
+        CacheTool::Zig => "zig",
+        CacheTool::Playwright => "playwright",
+        CacheTool::Cypress => "cypress",
+        CacheTool::Puppeteer => "puppeteer",
+        CacheTool::Electron => "electron",
+        CacheTool::Homebrew => "homebrew",
+        CacheTool::Nix => "nix",
     }
 }
 
@@ -330,6 +367,7 @@ fn skip_code(r: &SkipReason) -> &'static str {
         SkipReason::NotApproved => "not_approved",
         SkipReason::NotOrphanRemovable(_) => "d36_excluded",
         SkipReason::InspectOnly => "inspect_only",
+        SkipReason::NotSupportedYet => "not_supported_yet",
     }
 }
 
