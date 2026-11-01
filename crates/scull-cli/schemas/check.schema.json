@@ -127,6 +127,17 @@
           "format": "int64",
           "type": "integer"
         },
+        "review_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewPlanReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ready-to-review reclaim plan (PRO-05), when one is current. Never executed."
+        },
         "sampled": {
           "description": "Free space sampled now (and recorded in history).",
           "items": {
@@ -401,6 +412,66 @@
       "required": [
         "volume_id",
         "reason"
+      ],
+      "type": "object"
+    },
+    "ReviewPlanReport": {
+      "additionalProperties": false,
+      "description": "The review plan as reported by `scull check` / `scull status`.",
+      "properties": {
+        "created_at": {
+          "description": "When it was prepared (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "description": "When it expires (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "file": {
+          "description": "The plan file.",
+          "type": "string"
+        },
+        "includes_s1": {
+          "description": "Whether S1 items were included (`--include-s1`).",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "Items in the plan.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_id": {
+          "description": "The plan's ID (in the database's `plans` table).",
+          "type": "string"
+        },
+        "reclaimable_bytes": {
+          "description": "Estimated reclaimable bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reused": {
+          "description": "True when this check kept the existing plan (same work) instead of making a new one.",
+          "type": "boolean"
+        },
+        "review_command": {
+          "description": "The command that reviews it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "file",
+        "items",
+        "reclaimable_bytes",
+        "created_at",
+        "expires_at",
+        "includes_s1",
+        "review_command",
+        "reused"
       ],
       "type": "object"
     },

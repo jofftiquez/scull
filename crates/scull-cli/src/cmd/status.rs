@@ -15,6 +15,9 @@
 //!   lines add it: `… · 41.0 GiB free on / · full in ~9 days · last scan 2h ago` and
 //!   `☠ 41G free · full ~9d · 2h · 18G reclaimable` (the volume is named when it is not the
 //!   fullest one: `/data full in ~9 days`, `/data full ~9d`).
+//! * When `scull check` has prepared a ready-to-review cleanup plan that has not expired
+//!   (PRO-05), the human line ends with it: `… · 12.0 GiB cleanup plan ready to review:
+//!   scull clean --plan <file>` (one more indexed query; the prompt line is unchanged).
 //! * `--json` / `--ndjson`: `scull/status@1` (with every volume's forecast in `forecasts`).
 //!
 //! **Prompt contract:** `--short` always exits 0 and prints nothing at all (not even a newline)
@@ -24,6 +27,7 @@
 //! with exit 0.
 
 use super::forecast::{ForecastReport, headline};
+use super::review_plan::ReviewPlanReport;
 use super::{emit_machine, emit_text};
 use crate::db::{self, NotOpened, Probe};
 use crate::output::Ui;
@@ -77,6 +81,9 @@ pub struct StatusReport {
     pub line: String,
     /// The prompt line (`scull status --short`), empty when there is nothing to show.
     pub short: String,
+    /// The ready-to-review cleanup plan `scull check` prepared (PRO-05), while it is current.
+    /// The human line mentions it; the prompt line does not.
+    pub review_plan: Option<ReviewPlanReport>,
 }
 
 /// The latest usable scan.
@@ -152,7 +159,11 @@ pub fn collect(now: i64) -> StatusReport {
                     &scull_proactive::ForecastPolicy::default(),
                 )
                 .unwrap_or_default();
-                from_parts(&summary, &forecasts, now)
+                let mut r = from_parts(&summary, &forecasts, now);
+                if let Some(p) = super::review_plan::current(&store, now) {
+                    add_review_plan(&mut r, p);
+                }
+                r
             }
             Err(e) => unavailable(now, StatusState::Unavailable, Some(e.to_string())),
         },
@@ -203,6 +214,7 @@ fn unavailable(now: i64, state: StatusState, detail: Option<String>) -> StatusRe
         forecasts: Vec::new(),
         line,
         short: String::new(),
+        review_plan: None,
     }
 }
 
@@ -314,7 +326,20 @@ pub fn from_parts(
         forecasts,
         line,
         short,
+        review_plan: None,
     }
+}
+
+/// Mention a current review plan in the human line (only when a scan is shown).
+pub fn add_review_plan(r: &mut StatusReport, p: ReviewPlanReport) {
+    if r.state == StatusState::Ok {
+        r.line.push_str(&format!(
+            " \u{b7} {} cleanup plan ready to review: {}",
+            format_bytes(p.reclaimable_bytes),
+            p.review_command
+        ));
+    }
+    r.review_plan = Some(p);
 }
 
 /// A duration as its largest unit: `<1m`, `5m`, `2h`, `9d`.
