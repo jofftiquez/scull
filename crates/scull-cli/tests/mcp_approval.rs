@@ -908,15 +908,17 @@ fn under_script(program: &std::path::Path, cmd: &str) -> Option<Command> {
         return None;
     }
     let mut c = Command::new(program);
+    // `; exit $?` keeps the shell alive as `script`'s parent: a shell running a single
+    // command may exec it instead, which would take `program` out of the process chain.
     if cfg!(target_os = "macos") {
         c.args([
             "-c",
-            &format!("script -q /dev/null sh -c {}", shell_quote(cmd)),
+            &format!("script -q /dev/null sh -c {}; exit $?", shell_quote(cmd)),
         ]);
     } else {
         c.args([
             "-c",
-            &format!("script -q -e -c {} /dev/null", shell_quote(cmd)),
+            &format!("script -q -e -c {} /dev/null; exit $?", shell_quote(cmd)),
         ]);
     }
     Some(c)
@@ -1058,7 +1060,14 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
     let fake = env.fx.base().join("bin");
     std::fs::create_dir_all(&fake).unwrap();
     let claude = fake.join("claude");
-    std::fs::copy("/bin/sh", &claude).unwrap();
+    // A real shell binary under the agent's name. Not macOS's `/bin/sh`: that is a launcher
+    // which execs the configured shell, so the copy would not stay in the chain as `claude`.
+    let shell = if cfg!(target_os = "macos") {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    std::fs::copy(shell, &claude).unwrap();
     let Some(c) = under_script(&claude, &cmd) else {
         eprintln!("skipped: no script(1)");
         env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
