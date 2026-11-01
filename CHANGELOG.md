@@ -33,8 +33,9 @@ The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
   that never runs by itself. One disk-full forecast is shared by every surface
   ([FORECAST.md](docs/FORECAST.md)).
 - MCP destructive mode (opt-in twice): an agent can prepare a plan, and only you approve it
-  in your own terminal with `scull approve`, or withdraw an approval with `--revoke`. Denials
-  are final, pending plans and the preparation rate are capped, and everything is audited.
+  in your own terminal with `scull approve`, or in the desktop app's approval dialog, and can
+  withdraw an approval (`--revoke`, or **Revoke approval** in the app). Denials are final,
+  pending plans and the preparation rate are capped, and everything is audited.
 - `scull ask`: an optional assistant with your own model (or a local one) over scull's
   read-only tools, with a consent notice before the first request.
 - `scull agent install|uninstall`, `scull insights`, `scull worktrees register --ttl`,
@@ -44,8 +45,8 @@ The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
 
 ### Not in this release yet
 
-- Opt-in auto-policies (#20), the desktop approval dialog (#77), approve-and-run in one
-  terminal step (`scull approve --run`, #97), and plan preparation from `scull ask` (#22).
+- Opt-in auto-policies (#20), approve-and-run in one terminal step (`scull approve --run`,
+  #97), and plan preparation from `scull ask` (#22).
 
 ## 0.1.0-alpha.1
 

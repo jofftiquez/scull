@@ -17,7 +17,7 @@ will and won't do. The architecture is described in [ARCHITECTURE.md](../ARCHITE
   item, it tries the Trash, and failing that it leaves the item alone.
 * **An AI agent can't approve a cleanup.** The MCP server is read-only unless you turn on
   destructive mode. Even then an agent can only prepare a plan; it runs after you approve it
-  yourself, in your own terminal. An AI tool call is not your consent.
+  yourself, in your own terminal or in the desktop app. An AI tool call is not your consent.
 * **Nothing runs unattended.** Scheduled checks, the desktop's monitor and `scull ask` only
   read and notify. There is no automatic cleanup in this build.
 * **No telemetry.** Everything stays on your machine.
@@ -254,15 +254,20 @@ scull can serve AI coding agents over the Model Context Protocol (`scull mcp ser
 * **Destructive mode is opt-in, twice.** Only with `[mcp] destructive = true` in scull's config
   file *and* `scull mcp serve --allow-destructive` can an agent prepare a cleanup plan. It is
   never offered when scull runs elevated.
-* **Only you approve, in your own terminal.** `scull approve <plan-id>` shows the whole plan
+* **Only you approve, outside the chat.** In the desktop app's main window, Cleanup Review
+  shows the plan: you tick each item, type the short code shown next to it, and press
+  **Approve** or **Deny**. The code exists only in the app, and scull's core checks it; the
+  menu bar widget can't approve. In a terminal, `scull approve <plan-id>` shows the whole plan
   and a short code that you type. It never runs as root, and it refuses a pipe, a script or
   an agent's shell tool. It also refuses a terminal that looks driven by an agent (agent
   environment variables, an agent or terminal-automation tool among its parent processes, or
   parents it can't read). That check is a heuristic, not a proof that a human is typing; see
   [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md) for what it does and doesn't stop.
-* **A denial is final.** `deny`, or three wrong codes, means that plan can never be approved.
-  You can also withdraw an approval with `scull approve --revoke <plan-id>` until the agent
-  starts the cleanup; exactly one of the two wins.
+* **A denial is final,** in the app or the terminal: **Deny**, `deny`, or three wrong codes
+  means that plan can never be approved. You can withdraw an approval (**Revoke approval** in
+  the app, `scull approve --revoke <plan-id>` in a terminal) until the agent starts the
+  cleanup; exactly one of the two wins. Both show the agent client's name as it gave it,
+  not verified.
 * **An approval runs the exact plan once.** It is bound to the plan's content and lapses with
   it (15 minutes at most). If anything in the plan changed on disk, the whole plan is void.
   The cleanup goes through the same Executor, checks and quarantine as `scull clean`.
@@ -275,8 +280,9 @@ scull can serve AI coding agents over the Model Context Protocol (`scull mcp ser
 * **Out of scope:** an agent that can already run shell commands can delete files without
   scull. scull only guarantees that *its own* tools can't delete without you.
 
-The desktop app's approval dialog is coming (#77). Until then, approvals happen in
-`scull approve`.
+The desktop dialog works only in the app's main window, and a page from any other origin is
+refused. What remains (another program running as you that drives the screen, or injects
+code into the app) is described in [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
 
 ### `scull ask`
 

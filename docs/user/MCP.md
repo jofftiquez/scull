@@ -173,8 +173,10 @@ same atomic step that execution uses to claim it, so exactly one of the two happ
 revocation is refused because the cleanup already started, or `execute_cleanup` is refused with
 `approval_revoked` and nothing runs. The plan then reports `revoked`.
 
-Approving from the desktop app's dialog is coming (#77). In this build, `scull approve` in
-your terminal is the only way to approve.
+The desktop dialog works only in the app's main window. The menu bar widget and any other page
+can't open, approve or deny a plan. Like the terminal, the dialog shows the client's name as
+the client gave it, not verified. Approving or running in one terminal step
+(`scull approve <plan-id> --run`) is coming (#97).
 
 ### Limits on what the agent can ask for
 
