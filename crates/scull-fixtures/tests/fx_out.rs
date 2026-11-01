@@ -836,7 +836,7 @@ fn fx_out_02_binary_returns_the_documented_exit_codes() {
         &mut seen,
         &schemas,
         &cli,
-        &["approve", "p", "--json"],
+        &["insights", "purge", "--json"],
         ExitCode::General,
         Some("unsupported_platform"),
     );
