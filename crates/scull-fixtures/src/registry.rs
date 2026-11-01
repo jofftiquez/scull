@@ -401,23 +401,20 @@ pub const REGISTRY: &[RegisteredFixture] = &[
         Gate::Mvp,
         "MLW",
         Mode::Ci,
-        Status::Tracked {
-            issue: 83,
-            reason: "classification and link recording are end-to-end; the removal half \
-                     (\"deleting node_modules removes the links only\") runs against a \
-                     std::fs stand-in until the Executor exists (#67 Unix, #68 Windows); \
-                     the FX-EXEC fixtures (#83) re-run it through the real executor",
-            partial: &[
-                t(
-                    E2E_CLS,
-                    "fx_cls_06_linked_workspace_sources_survive_node_modules_removal",
-                ),
-                t(
-                    NODE_DET,
-                    "fx_cls_06_workspace_and_link_symlinks_are_recorded_never_followed",
-                ),
-            ],
-        },
+        Status::Implemented(&[
+            t(
+                E2E_CLS,
+                "fx_cls_06_linked_workspace_sources_survive_node_modules_removal",
+            ),
+            t(
+                E2E_EXEC,
+                "fx_cls_06_executor_deletes_node_modules_links_only_sources_intact",
+            ),
+            t(
+                NODE_DET,
+                "fx_cls_06_workspace_and_link_symlinks_are_recorded_never_followed",
+            ),
+        ]),
     ),
     fx(
         "FX-CLS-07",

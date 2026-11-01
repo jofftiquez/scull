@@ -350,3 +350,92 @@ fn fx_exec_14_one_of_five_fails_exit_3_others_complete() {
     // Let the temp dir be removed.
     std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+/// FX-CLS-06 (deletion half, through the real Executor): `node_modules` holding a workspace
+/// symlink to a sibling package, an `npm link` symlink to a folder outside the project and a
+/// link into the canary's directory is planned S0 and deleted under the execution lock in an
+/// audited operation: the links go, every linked folder and the canary stay intact (I-2),
+/// nothing else changed (I-3), the audit matches the disk (I-4). The classification half is
+/// `fx_cls.rs::fx_cls_06_linked_workspace_sources_survive_node_modules_removal`.
+#[test]
+fn fx_cls_06_executor_deletes_node_modules_links_only_sources_intact() {
+    let mut fx = Fixture::new().unwrap();
+    fx.file(
+        "web/package.json",
+        "{\"name\":\"web\",\"private\":true,\"workspaces\":[\"packages/*\"]}\n",
+    )
+    .unwrap()
+    .file("web/package-lock.json", "{}")
+    .unwrap()
+    .npm_project(
+        "web/packages/ui",
+        "@acme/ui",
+        scull_fixtures::NodeLock::None,
+    )
+    .unwrap()
+    .file("web/packages/ui/src/index.js", "export const ui = 1;\n")
+    .unwrap()
+    .npm_project("linked-lib", "linked-lib", scull_fixtures::NodeLock::None)
+    .unwrap()
+    .file("linked-lib/src/index.js", "module.exports = 1;\n")
+    .unwrap()
+    .node_modules("web", &["left-pad"])
+    .unwrap();
+    let ws = fx
+        .symlink("web/node_modules/@acme/ui", "../../packages/ui")
+        .unwrap();
+    let linked = fx
+        .symlink("web/node_modules/linked-lib", "../../linked-lib")
+        .unwrap();
+    let canary = fx.canary().symlink_target_dir.clone();
+    let escape = fx.symlink("web/node_modules/escape", &canary).unwrap();
+    let links = [&ws, &linked, &escape]
+        .iter()
+        .filter(|l| l.is_created())
+        .count();
+    println!("links created: {links} of 3 (Windows without symlink rights creates none)");
+    fx.checkpoint().unwrap();
+
+    let h = harness();
+    let scan = h.scan(&fx);
+    let c = exec::engine::at(&fx, &scan, "web/node_modules");
+    assert_eq!(c.tier, scull_core::Tier::S0, "{:?}", c.reasons);
+    assert_eq!(c.action, scull_core::Action::Delete);
+    let p = plan(&fx, &scan, &["web/node_modules"], "PXCLS06");
+    let mut s = store(&fx);
+    let op = OperationId::from_suffix("OXCLS06").unwrap();
+    let r = run(&fx, &h, &mut s, &p, &op);
+
+    let ItemOutcome::Deleted(d) = &r.items[0].outcome else {
+        panic!("not deleted: {:?}", r.items[0].outcome)
+    };
+    assert_eq!(d.outcome, RemoveOutcome::Complete);
+    assert!(!fx.root().join("web/node_modules").exists());
+    // The links went; what they pointed to did not.
+    for kept in [
+        "web/packages/ui/src/index.js",
+        "web/packages/ui/package.json",
+        "linked-lib/src/index.js",
+        "linked-lib/package.json",
+        "web/package.json",
+        "web/package-lock.json",
+    ] {
+        assert!(fx.root().join(kept).is_file(), "{kept} must survive");
+    }
+    assert!(
+        canary.join("keep.txt").is_file(),
+        "the canary's folder survives"
+    );
+    assert_eq!(r.error_kind(), None);
+    let inv = check(&fx, &inputs(&p, &r, &s, &op, &["web/node_modules"]));
+    assert_eq!(inv.outcome(InvariantId::I4), &Outcome::Passed, "{inv}");
+    assert_ran(
+        &inv,
+        &[
+            InvariantId::I1,
+            InvariantId::I2,
+            InvariantId::I3,
+            InvariantId::I8,
+        ],
+    );
+}
