@@ -1,0 +1,62 @@
+name: Desktop app crate
+
+# The Tauri app crate (apps/desktop/src-tauri, its own Cargo workspace) on Linux: clippy and its
+# tests. The tests include the Tauri ACL checks on the real capability files
+# (tests/approval_commands.rs: the approval and cleanup commands are the main window's only,
+# through a mock runtime, no window or display) and SAFE-10 on the app's resolved graph
+# (tests/safe10.rs). Compiling the crate needs WebKitGTK, and `generate_context!` embeds the
+# frontend bundle, so both are set up first; nothing is bundled or signed.
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - ".github/workflows/desktop-app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  app-crate:
+    name: desktop app crate (linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Linux build dependencies (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - name: Frontend bundle (embedded by generate_context!)
+        run: pnpm --filter @scull/desktop build
+      - name: clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: test (ACL on the real capabilities, SAFE-10 graph, tray)
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
