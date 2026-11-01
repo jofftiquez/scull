@@ -8,6 +8,8 @@
 //!   Maven, NuGet) located per OS, without running any tool (Quick Clean, QC-01…05).
 //! * [`go`]: the Go build and module caches (locations, layouts).
 //! * [`jvm`]: Gradle and Maven caches (inspect-only); the build folders are plain rules.
+//! * [`docker`]: build cache, dangling images, stopped containers and (protected) volumes via
+//!   the Docker Engine API (read-only), plus Docker Desktop VM disk caveats.
 //! * [`dotnet`]: `bin/` (configuration folders only) and the NuGet global packages folder.
 //! * [`xcode`]: DerivedData, device support files, archives and unavailable simulators (macOS).
 //! * [`android`]: Android Gradle Plugin build output (release-aware) and emulator images.
@@ -24,6 +26,7 @@ pub mod android;
 pub mod caches;
 pub mod cargo;
 pub mod detector;
+pub mod docker;
 pub mod dotnet;
 pub mod game_engines;
 pub mod go;
@@ -44,6 +47,11 @@ pub use cargo::{SharedTargetDirs, TargetDirSource};
 pub use detector::{
     CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detector, DetectorSignals,
     Detectors, MAX_CONFIG_BYTES, RuleDetector,
+};
+pub use docker::{
+    DaemonInfo, DockerGroup, DockerKind, DockerOptions, DockerReport, DockerStatus, DockerTarget,
+    DockerTransport, EndpointSource, ImageTotals, NativeTransport, RefusedEndpoint, VmDisk,
+    VmDiskKind, docker_targets, inspect_docker, inspect_docker_with, locate_vm_disks,
 };
 pub use dotnet::DotnetBinDetector;
 pub use game_engines::GameEngineDetector;
