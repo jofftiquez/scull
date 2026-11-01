@@ -7,6 +7,7 @@
 
 use crate::history::HistoryView;
 use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
+use crate::monitor::{DigestView, MonitorConfig, MonitorSnapshot, MonitorStatus};
 use crate::settings::SettingsView;
 use crate::views::{
     CapabilitiesReport, DesktopStatus, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
@@ -71,6 +72,22 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
         (
             "footprint-history",
             schema::<FootprintHistory>("footprint-history", "FootprintHistory"),
+        ),
+        (
+            "weekly-digest",
+            schema::<DigestView>("weekly-digest", "DigestView"),
+        ),
+        (
+            "monitor-status",
+            schema::<MonitorStatus>("monitor-status", "MonitorStatus"),
+        ),
+        (
+            "monitor-config",
+            schema::<MonitorConfig>("monitor-config", "MonitorConfig"),
+        ),
+        (
+            "monitor-snapshot",
+            schema::<MonitorSnapshot>("monitor-snapshot", "MonitorSnapshot"),
         ),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]

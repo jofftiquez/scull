@@ -7,6 +7,8 @@ import { designSettings } from '../../bridge/settingsMock';
 import { createMockSettingsWriter, createPendingSettingsWriter, type SettingsWriter } from '../../components/settings/bridge';
 import { routes } from '../../navigation';
 import SettingsScreen from './SettingsScreen.vue';
+import { mockMonitor } from '../../monitor/mock';
+import { STORAGE_KEYS } from '../../monitor/prefs';
 
 async function mountScreen(opts: { writer?: SettingsWriter; bridge?: ScullBridge; tab?: string } = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes });
@@ -121,6 +123,50 @@ describe('Settings screen', () => {
     expect(w.get('[data-testid="save-error"]').text()).toMatch(/nothing was changed/);
     expect(sw(w, 'Hash project names').attributes('aria-checked')).toBe('false');
     expect(w.get('[data-testid="saved"]').text()).toBe('');
+  });
+
+  it('Alerts: monitor settings save even with the refusing writer, and pause/send now work', async () => {
+    localStorage.clear();
+    mockMonitor.reset();
+    // The writer the app uses inside Tauri refuses config changes; monitor keys still save.
+    const w = await mountScreen({ writer: createPendingSettingsWriter(), tab: 'alerts' });
+    expect(sw(w, 'Weekly digest').attributes('aria-checked')).toBe('false');
+    expect(w.get('[data-testid="next-digest"]').text()).toContain('Turn on Weekly digest');
+    await sw(w, 'Weekly digest').trigger('click');
+    await vi.waitFor(() => expect(w.get('[data-testid="saved"]').text()).toBe('Saved ✓'));
+    expect(w.find('[data-testid="save-error"]').exists()).toBe(false);
+    expect(sw(w, 'Weekly digest').attributes('aria-checked')).toBe('true');
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.prefs)!)).toEqual({ 'app.weekly_digest': true });
+    expect(mockMonitor.status().settings.digest?.enabled).toBe(true);
+    await vi.waitFor(() => expect(w.get('[data-testid="next-digest"]').text()).toMatch(/^Next digest (today|tomorrow|\w{3}) \d\d:\d\d\.$/));
+
+    // Sudden growth off mutes growth alerts; the look-every choice sets the interval.
+    await sw(w, 'Sudden growth').trigger('click');
+    await vi.waitFor(() => expect(mockMonitor.status().settings.muted_kinds).toEqual(['growth_spike', 'free_space_drop']));
+    await flushPromises();
+    await w.get('[aria-label="Look every"] button:first-child').trigger('click');
+    await vi.waitFor(() => expect(mockMonitor.status().settings.interval_secs).toBe(900));
+
+    // Pause for an hour, then resume.
+    const pause = w.findAll('[data-testid="monitoring"] button').find((b) => b.text() === '1 hour')!;
+    await pause.trigger('click');
+    await vi.waitFor(() => expect(w.get('[data-testid="pause-state"]').text()).toMatch(/^Paused until /));
+    expect(mockMonitor.status().paused).toBe(true);
+    const resume = w.findAll('[data-testid="monitoring"] button').find((b) => b.text() === 'Resume')!;
+    await resume.trigger('click');
+    await vi.waitFor(() => expect(w.get('[data-testid="pause-state"]').text()).toBe('Alerts are on.'));
+
+    // Send now: the digest is prepared (the mock shows no notification).
+    const send = w.findAll('[data-testid="monitoring"] button').find((b) => b.text() === 'Send now')!;
+    await send.trigger('click');
+    await vi.waitFor(() => expect(mockMonitor.sent).toHaveLength(1));
+    expect(mockMonitor.sent[0]!.digest?.title).toBe('Your week in scull');
+
+    // A remount reads the stored choices back.
+    const again = await mountScreen({ tab: 'alerts' });
+    expect(sw(again, 'Weekly digest').attributes('aria-checked')).toBe('true');
+    expect(sw(again, 'Sudden growth').attributes('aria-checked')).toBe('false');
+    localStorage.clear();
   });
 
   it('Data & privacy shows scull data show info read-only', async () => {

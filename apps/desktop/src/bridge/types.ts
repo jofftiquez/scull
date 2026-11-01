@@ -13,10 +13,12 @@ import type {
   CachesReport,
   CapabilitiesReport,
   DesktopStatus,
+  DigestView,
   Drive,
   FootprintHistory,
   FreeSpaceHistory,
   HistoryView,
+  MonitorStatus,
   ProgressEvent,
   ProjectsView,
   RegrowthHistory,
@@ -102,6 +104,12 @@ export interface ScullBridge {
   regrowth(since: number): Promise<RegrowthHistory>;
   /** scull's own footprint samples since `since`. Read-only. */
   footprintHistory(since: number): Promise<FootprintHistory>;
+  /** The last 7 days in a few lines (INS-04): Insights "This week" and the digest
+   * notification's text. Read-only. */
+  weeklyDigest(): Promise<DigestView>;
+  /** What tray monitoring is doing: settings, pause, last/next check and digest. Read-only
+   * (changing it is src/monitor/control.ts, app state only). */
+  monitorStatus(): Promise<MonitorStatus>;
 }
 
 /** Bridge methods and the Tauri command each calls (also used by the parity test). */
@@ -120,6 +128,8 @@ export const COMMANDS = {
   rollupHistory: 'rollup_history',
   regrowth: 'regrowth',
   footprintHistory: 'footprint_history',
+  weeklyDigest: 'weekly_digest',
+  monitorStatus: 'monitor_status',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 
 /** The Tauri command that cancels an operation. */

@@ -12,6 +12,8 @@ import { needsOnboarding } from './components/onboarding/model';
 import type { NavItem } from './navigation';
 import { createTauriWindowCommands } from './bridge/tauri';
 import { isMainRoute } from './components/menubar/window';
+import { monitorControlFor } from './monitor/control';
+import { startMonitorSync } from './monitor/prefs';
 
 const bridge = useBridge();
 const route = useRoute();
@@ -38,8 +40,16 @@ function skipToContent() {
 }
 // The menu bar widget (P4-UI-01) asks the tray to show this window on a screen; follow it.
 let stopNavigate: (() => void) | null = null;
-onBeforeUnmount(() => stopNavigate?.());
+// Tray monitoring (P5-PRO-01): send the stored settings and memory, keep its snapshots.
+let stopMonitor: (() => void) | null = null;
+onBeforeUnmount(() => {
+  stopNavigate?.();
+  stopMonitor?.();
+});
 onMounted(async () => {
+  void startMonitorSync(monitorControlFor(bridge))
+    .then((stop) => (stopMonitor = stop))
+    .catch(() => undefined);
   if (bridge.kind === 'tauri') {
     void createTauriWindowCommands()
       .onNavigate((to) => {

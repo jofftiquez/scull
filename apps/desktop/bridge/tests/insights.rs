@@ -311,11 +311,32 @@ fn history_commands_read_the_recorded_series() {
     assert!(fp.samples.iter().all(|x| x.total_bytes > 0
         && x.total_bytes == x.database_bytes + x.wal_bytes + x.backup_bytes + x.damaged_bytes));
 
+    // The weekly digest (INS-04) of the same history: 41.2 GiB free on /, shrinking.
+    let digest = s.weekly_digest(NOW);
+    assert_eq!(digest.state, HistoryRead::Ok);
+    let d = digest.digest.as_ref().unwrap();
+    assert!(d.has_history);
+    assert_eq!(d.since, NOW - 7 * DAY);
+    assert_eq!(d.volumes[0].volume_id, VOLUME);
+    assert!(d.volumes[0].change_bytes < 0);
+    assert!(
+        d.lines[0].starts_with("41.2 GiB free on / (−24.5 GiB this week)"),
+        "{:?}",
+        d.lines
+    );
+    assert!(
+        d.lines
+            .contains(&"Grew most: ML model caches (+1.8 GiB)".to_owned()),
+        "{:?}",
+        d.lines
+    );
+
     let docs = [
         ("free-space-history", json(&free)),
         ("rollup-history", json(&roll)),
         ("regrowth", json(&regrowth)),
         ("footprint-history", json(&fp)),
+        ("weekly-digest", json(&digest)),
     ];
     for (stem, v) in &docs {
         validate(stem, v);

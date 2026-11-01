@@ -8,10 +8,15 @@ import {
   COMMANDS,
   PROGRESS_EVENT,
   toBridgeError,
+  type DigestView,
+  type MonitorConfig,
+  type MonitorSnapshot,
+  type MonitorStatus,
   type OperationOptions,
   type ProgressEvent,
   type ScullBridge,
 } from './types';
+import type { MonitorControl } from '../monitor/control';
 
 /** The transport, injectable for tests. */
 export interface TauriTransport {
@@ -79,6 +84,8 @@ export function createTauriBridge(t: TauriTransport = realTransport): ScullBridg
     rollupHistory: (since) => call(COMMANDS.rollupHistory, { since }),
     regrowth: (since) => call(COMMANDS.regrowth, { since }),
     footprintHistory: (since) => call(COMMANDS.footprintHistory, { since }),
+    weeklyDigest: () => call(COMMANDS.weeklyDigest),
+    monitorStatus: () => call(COMMANDS.monitorStatus),
   };
 }
 
@@ -115,5 +122,36 @@ export function createTauriWindowCommands(t: TauriTransport = realTransport): Ta
     openMain: (route) => call(WINDOW_COMMANDS.openMain, { route }),
     hideWidget: () => call(WINDOW_COMMANDS.hideWidget),
     onNavigate: (handler) => t.listen<string>(NAVIGATE_EVENT, handler),
+  };
+}
+
+/**
+ * Tray monitoring's commands (apps/desktop/src-tauri/src/monitor.rs). They change the
+ * monitor's in-memory settings or show a notification, never a file, so they are not on
+ * ScullBridge.
+ */
+export const MONITOR_COMMANDS = {
+  configure: 'configure_monitor',
+  pause: 'pause_monitor',
+  sendDigestNow: 'send_digest_now',
+} as const;
+
+/** The event carrying MonitorSnapshot payloads for the main window to keep. */
+export const MONITOR_EVENT = 'scull://monitor';
+
+export function createTauriMonitorControl(t: TauriTransport = realTransport): MonitorControl {
+  const call = async <T>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+    try {
+      return await t.invoke<T>(cmd, args);
+    } catch (e) {
+      throw toBridgeError(e);
+    }
+  };
+  return {
+    kind: 'tauri',
+    configure: (config: MonitorConfig) => call<MonitorStatus>(MONITOR_COMMANDS.configure, { config }),
+    pause: (secs: number | null) => call<MonitorStatus>(MONITOR_COMMANDS.pause, { secs }),
+    sendDigestNow: () => call<DigestView>(MONITOR_COMMANDS.sendDigestNow),
+    onSnapshot: (handler: (s: MonitorSnapshot) => void) => t.listen<MonitorSnapshot>(MONITOR_EVENT, handler),
   };
 }
