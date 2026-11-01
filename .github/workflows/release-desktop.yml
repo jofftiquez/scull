@@ -80,7 +80,7 @@ jobs:
             python3 scripts/release/bump_version.py --check
             echo "tag=" >> "$GITHUB_OUTPUT"
           fi
-          if false && [ "$EVENT" != "push" ] && [ "$TARGETS" != "all" ]; then
+          if [ "$EVENT" != "push" ] && [ "$TARGETS" != "all" ]; then
             matrix=$(jq -c '[.[] | select(.name == "linux-x86_64")]' <<< "$all")
           else
             matrix=$(jq -c '.' <<< "$all")
