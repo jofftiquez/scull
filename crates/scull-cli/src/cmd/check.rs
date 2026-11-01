@@ -19,14 +19,22 @@
 //!    and free-space drops (PRO-04). Thresholds come from `[proactive]` in the user config.
 //!    Every alert raised is recorded in the history database's alert stream (INS-06).
 //!
-//! Writes nothing but history rows and never deletes anything: an alert points to a reviewed
-//! cleanup, it never performs one. Exit code 0 whether or not alerts fired (alerts are data).
+//! 5. **Prepare** the ready-to-review reclaim plan from the scan (PRO-05, D-28: S0 items, S1
+//!    too with `--include-s1`): a CLI plan recorded in the database and written to scull's
+//!    data directory, announced as "A 12 GB cleanup plan is ready to review: scull clean
+//!    --plan …" (see [`super::review_plan`]). Without a scan, the current plan is shown.
 //!
-//! Not in this command yet: the ready-to-review reclaim plan (PRO-05, #115); registering it
-//! with the OS scheduler and running at low priority (`scull schedule enable|disable`, #114).
+//! Writes nothing but history rows, the plan record and the plan file, and never deletes
+//! anything: an alert points to a reviewed cleanup, it never performs one, and the plan is a
+//! proposal that only `scull clean --plan` (with revalidation and confirmation) could run.
+//! Exit code 0 whether or not alerts fired (alerts are data).
+//!
+//! Not in this command yet: registering it with the OS scheduler and running at low priority
+//! (`scull schedule enable|disable`, #114).
 
 use super::forecast::ForecastReport;
 use super::pipeline::{self, CancelBridge};
+use super::review_plan::{self, ReviewPlanReport};
 use super::status::VolumeReport;
 use super::{emit_machine, emit_text};
 use crate::cancel;
@@ -63,6 +71,8 @@ pub struct CheckReport {
     pub forecasts: Vec<ForecastReport>,
     /// Alerts raised, most severe first.
     pub alerts: Vec<Alert>,
+    /// The ready-to-review reclaim plan (PRO-05), when one is current. Never executed.
+    pub review_plan: Option<ReviewPlanReport>,
 }
 
 /// The scan a check ran (or why it did not).
@@ -149,11 +159,44 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
         roots: &r.roots,
         candidates: &r.candidates,
     });
-    let alerts =
-        scull_proactive::check_alerts(&store, cfg, &forecasts, input, now).map_err(store_error)?;
+    // Worktree TTLs registered by agents and scripts (PRO-08), for worktrees that still exist.
+    let ttls: Vec<(String, i64)> =
+        match scull_mcp::registry::Registry::in_data_dir(&dirs.data).load() {
+            Ok(regs) => regs
+                .into_iter()
+                .filter(|r| Path::new(&r.path).is_dir())
+                .map(|r| (r.path, r.expires_at))
+                .collect(),
+            Err(e) => {
+                pipeline::warn(ui, &format!("worktree TTLs could not be read: {e}"));
+                Vec::new()
+            }
+        };
+    let alerts = scull_proactive::check_alerts(&store, cfg, &forecasts, input, &ttls, now)
+        .map_err(store_error)?;
     if let Err(e) = store.record_alerts(&alert_events(&alerts)) {
         pipeline::warn(ui, &format!("alerts were not recorded in history: {e}"));
     }
+    let review_plan = match &scanned {
+        Some(r) => match review_plan::Binding::current(&dirs.data).and_then(|binding| {
+            review_plan::refresh(
+                &mut store,
+                &dirs.data,
+                &r.scan_id,
+                &r.candidates,
+                args.include_s1,
+                &binding,
+                now,
+            )
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                pipeline::warn(ui, &format!("no cleanup plan was prepared: {}", e.message));
+                None
+            }
+        },
+        None => review_plan::current(&store, now),
+    };
     let report = CheckReport {
         now,
         scan: scan_state,
@@ -169,6 +212,7 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
         not_sampled,
         forecasts: forecasts.iter().map(ForecastReport::from).collect(),
         alerts,
+        review_plan,
     };
     if ui.format.is_machine() {
         return emit_machine(ui.format, CHECK_SCHEMA, "check", &report);
@@ -402,7 +446,24 @@ pub fn render(r: &CheckReport) -> String {
     if r.alerts.is_empty() {
         out.push_str("no alerts\n");
     }
+    if let Some(p) = &r.review_plan {
+        out.push_str(&review_plan_line(p));
+        out.push('\n');
+    }
     out
+}
+
+/// `A 12.0 GiB cleanup plan is ready to review: scull clean --plan … (3 items, nothing was
+/// removed)`.
+pub fn review_plan_line(p: &ReviewPlanReport) -> String {
+    format!(
+        "A {} cleanup plan is ready to review: {} ({} item{}{}, nothing was removed)",
+        format_bytes(p.reclaimable_bytes),
+        p.review_command,
+        p.items,
+        if p.items == 1 { "" } else { "s" },
+        if p.includes_s1 { ", S0 and S1" } else { ", S0" }
+    )
 }
 
 /// `3 days`, `5 hours`, `<1 hour`.
@@ -478,8 +539,29 @@ mod tests {
                 "/ will drop below 10.0 GiB free in about 9 days (high confidence)",
                 0,
             )],
+            review_plan: None,
         };
         let text = render(&r);
+        let mut with_plan = r.clone();
+        with_plan.review_plan = Some(ReviewPlanReport {
+            plan_id: "plan_x".into(),
+            file: "/d/review-plan.json".into(),
+            items: 3,
+            reclaimable_bytes: 12 * GIB,
+            created_at: 0,
+            expires_at: 86_400,
+            includes_s1: false,
+            review_command: "scull clean --plan /d/review-plan.json".into(),
+            reused: false,
+        });
+        assert!(
+            render(&with_plan).ends_with(
+                "A 12.0 GiB cleanup plan is ready to review: scull clean --plan \
+                 /d/review-plan.json (3 items, S0, nothing was removed)\n"
+            ),
+            "{}",
+            render(&with_plan)
+        );
         assert_eq!(
             text,
             "scull check: sampled 1 volume\n\
@@ -496,6 +578,7 @@ mod tests {
             not_sampled: vec![],
             forecasts: vec![],
             alerts: vec![],
+            review_plan: None,
         };
         assert!(render(&empty).contains("no volumes to check yet"));
         empty.scan = CheckScan::Skipped {

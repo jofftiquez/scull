@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod pipeline;
 pub mod projects;
 pub mod render;
+pub mod review_plan;
 pub mod rules;
 pub mod scan;
 pub mod schemas;

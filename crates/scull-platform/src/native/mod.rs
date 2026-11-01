@@ -62,6 +62,11 @@ pub fn native_path_bytes(path: &Path) -> Cow<'_, [u8]> {
 
 // Crate-internal entry points for the OS-independent modules (`app_dirs`, `owner_only`).
 
+/// The account this process acts as: `uid:<n>` on Unix, the user SID on Windows.
+pub(crate) fn current_user_id() -> io::Result<String> {
+    os::current_user_id()
+}
+
 /// No-follow metadata (see [`Platform::metadata`]), as a raw I/O result.
 pub(crate) fn os_metadata(path: &Path) -> io::Result<Metadata> {
     os::metadata(path)

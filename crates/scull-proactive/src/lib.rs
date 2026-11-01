@@ -13,11 +13,15 @@
 //! * [`policy`]: staleness policies, budgets and spike alerts (PRO-02/03/04/08), configured by
 //!   `[proactive]` in the user config.
 //! * [`history`]: thin read helpers that load the inputs from a [`scull_storage::Store`].
+//! * [`review`]: the ready-to-review reclaim plan (PRO-05): which items a proposal holds, and
+//!   the announcement `scull status` / `scull check` read back. A proposal only: reviewing and
+//!   running it is `scull clean --plan`.
 
 pub mod alert;
 pub mod forecast;
 pub mod history;
 pub mod policy;
+pub mod review;
 pub mod stats;
 
 pub use alert::{Alert, AlertKind, Severity, forecast_alerts};

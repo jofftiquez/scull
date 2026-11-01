@@ -26,6 +26,9 @@
 //!   administrator, and the invoking user under `sudo`, for the executor's refusal and
 //!   `scull doctor` (SAFE-14). [`Elevation::Unknown`] blocks destructive operations like
 //!   [`Elevation::Elevated`].
+//! * [`current_user`] / [`machine_id`]: the account scull runs as (`uid:<n>` / the user SID)
+//!   and a random per-installation machine ID kept in the data directory, which plans are
+//!   bound to (SAFE-11, PRD §10.4).
 //!
 //! Use [`Native`] for the real OS. Other crates can implement [`Platform`] with an in-memory
 //! fake in their tests.
@@ -49,6 +52,7 @@ pub mod app_dirs;
 pub mod cloud;
 pub mod elevation;
 mod error;
+pub mod identity;
 mod native;
 pub mod owner_only;
 mod types;
@@ -62,6 +66,7 @@ pub use app_dirs::{
 pub use cloud::{CloudProvider, CloudState, SyncMechanism, SyncedRoot, SyncedRoots};
 pub use elevation::{Elevation, Privileges, is_elevated};
 pub use error::{ErrorKind, Operation, PlatformError};
+pub use identity::{MACHINE_ID_FILE, current_user, machine_id};
 pub use native::{Native, native_path_bytes};
 pub use owner_only::{Exposure, create_dir_owner_only, create_file_owner_only, ensure_owner_only};
 pub use types::{Capabilities, DirEntry, EntryKind, Metadata};

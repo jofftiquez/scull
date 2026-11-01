@@ -190,8 +190,11 @@ pub struct ScanInput<'a> {
 /// * budgets (PRO-03): over `scan`'s candidates when there is one (category, ecosystem and
 ///   path budgets), otherwise over the latest recorded scan's category totals (category
 ///   budgets only);
-/// * staleness (PRO-02, PRO-08) of `scan`'s worktrees, build outputs and caches (needs a scan:
-///   history keeps no modification times);
+/// * staleness (PRO-02) of `scan`'s worktrees, build outputs and caches (needs a scan:
+///   history keeps no modification times), and expired worktree TTLs (PRO-08): `ttls` are
+///   registered `(worktree path, expires_at)` pairs; a scanned worktree gets its TTL, and a
+///   registered worktree the scan did not see (outside the roots, or no scan) is still
+///   reported when its TTL has run out (the caller passes only paths that still exist);
 /// * category growth spikes over scans of the same roots as `scan` (or as the latest recorded
 ///   scan), naming the largest items of the category when `scan` is given, and free-space
 ///   drops of every volume (PRO-04).
@@ -202,6 +205,7 @@ pub fn check_alerts(
     cfg: &ProactiveConfig,
     forecasts: &[Forecast],
     scan: Option<ScanInput<'_>>,
+    ttls: &[(String, i64)],
     now: i64,
 ) -> Result<Vec<Alert>, StoreError> {
     let policy = crate::policy::forecast_policy(cfg);
@@ -213,14 +217,31 @@ pub fn check_alerts(
         };
         alerts.extend(budget_alerts(&cfg.budgets, &usage, now));
     }
-    if let Some(s) = scan {
-        let items: Vec<_> = s
-            .candidates
-            .iter()
-            .filter_map(activity_from_candidate)
-            .collect();
-        alerts.extend(stale_alerts(&items, cfg, now));
+    let mut items: Vec<crate::policy::Activity> = scan
+        .map(|s| {
+            s.candidates
+                .iter()
+                .filter_map(activity_from_candidate)
+                .collect()
+        })
+        .unwrap_or_default();
+    for (path, expires_at) in ttls {
+        match items
+            .iter_mut()
+            .find(|a| a.kind == crate::policy::StaleKind::Worktree && &a.path == path)
+        {
+            Some(a) => a.ttl_expires_at = Some(*expires_at),
+            None => items.push(crate::policy::Activity {
+                path: path.clone(),
+                kind: crate::policy::StaleKind::Worktree,
+                last_activity_at: None,
+                ttl_expires_at: Some(*expires_at),
+                bytes: 0,
+                in_use: false,
+            }),
+        }
     }
+    alerts.extend(stale_alerts(&items, cfg, now));
     let roots = match scan {
         Some(s) => Some(s.roots.to_vec()),
         None => latest_scan_roots(store)?,

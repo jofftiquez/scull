@@ -131,6 +131,12 @@ pub(super) fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// The account this process acts as, for binding plans (`crate::identity`): the effective
+/// user ID as `uid:<n>`. Numeric, so renaming the account doesn't change it.
+pub(super) fn current_user_id() -> io::Result<String> {
+    Ok(format!("uid:{}", effective_uid()))
+}
+
 /// `mkdir(path, 0700)`: the mode is applied by the creating call; the umask can only narrow
 /// it. Not recursive.
 pub(super) fn create_dir_owner_only(path: &Path) -> io::Result<()> {

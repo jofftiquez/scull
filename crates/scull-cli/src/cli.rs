@@ -286,6 +286,11 @@ pub struct CheckArgs {
     /// (staleness and ecosystem/path budgets need it and are not evaluated).
     #[arg(long)]
     pub no_scan: bool,
+
+    /// Also put S1 (costly to recreate) items in the ready-to-review cleanup plan; by default
+    /// it holds S0 items only (D-28). The plan is never executed by `check`.
+    #[arg(long)]
+    pub include_s1: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.

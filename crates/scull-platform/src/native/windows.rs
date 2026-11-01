@@ -55,6 +55,12 @@ mod volumes;
 
 pub(super) use volumes::{free_space, volume_of, volumes};
 
+/// The account this process acts as, for binding plans (`crate::identity`): the token user's
+/// SID string (`S-1-5-21-...`), which survives renaming the account.
+pub(super) fn current_user_id() -> io::Result<String> {
+    security::current_user_sid()
+}
+
 use crate::{
     Capabilities, DirEntry, DirIter, EntryKind, Metadata, Operation, PlatformError, Result,
 };
