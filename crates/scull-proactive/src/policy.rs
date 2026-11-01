@@ -144,13 +144,15 @@ fn window_secs(cfg: &ProactiveConfig, kind: StaleKind) -> i64 {
     i64::try_from(d.as_secs()).unwrap_or(i64::MAX)
 }
 
-/// `3 days`, `12 hours`.
+/// `3 days`, `12 hours`, `less than an hour`.
 fn duration_text(secs: i64) -> String {
     let secs = u32::try_from(secs.max(0)).unwrap_or(u32::MAX);
     if secs >= 86_400 {
         plural(secs / 86_400, "day")
-    } else {
+    } else if secs >= 3_600 {
         plural(secs / 3_600, "hour")
+    } else {
+        "less than an hour".to_owned()
     }
 }
 
@@ -472,6 +474,13 @@ mod tests {
     fn candidate() -> Candidate {
         serde_json::from_str(include_str!("../../../schemas/v1/examples/candidate.json"))
             .expect("example candidate")
+    }
+
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(duration_text(90), "less than an hour");
+        assert_eq!(duration_text(3 * 3_600), "3 hours");
+        assert_eq!(duration_text(DAY), "1 day");
     }
 
     #[test]

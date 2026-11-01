@@ -202,7 +202,7 @@ pub enum Command {
     },
 
     /// Light scan plus forecast and alerts (run by the OS scheduler).
-    Check,
+    Check(CheckArgs),
 
     /// Local trends and insights from scull's own history (read-only).
     Insights {
@@ -274,6 +274,15 @@ pub struct ScanArgs {
     /// overlay (skipped by default, D-22; backup volumes are never scanned).
     #[arg(long)]
     pub allow_network_roots: bool,
+}
+
+/// Arguments for `scull check`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct CheckArgs {
+    /// Only sample free space and use recorded history: skip the scan of `scan.roots`
+    /// (staleness and ecosystem/path budgets need it and are not evaluated).
+    #[arg(long)]
+    pub no_scan: bool,
 }
 
 /// Scan roots for `scull projects` and `scull worktrees`.
@@ -556,11 +565,84 @@ pub enum ExportFormat {
 /// `scull agent` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Write MCP config and guidance for an AI client.
-    Install {
-        /// Client name (e.g. claude-code, codex, cursor, vscode, gemini-cli).
-        client: String,
-    },
+    /// Register scull's read-only MCP server and short guidance with an AI client. Shows each
+    /// file's path and diff first and asks before writing (or `--yes`).
+    Install(AgentInstallArgs),
+    /// Remove scull's MCP entry and guidance from an AI client (nothing else is touched).
+    Uninstall(AgentUninstallArgs),
+}
+
+/// AI clients `scull agent` can configure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AgentClient {
+    /// Claude Code (`~/.claude.json`, guidance in `~/.claude/CLAUDE.md`).
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    /// OpenAI Codex CLI (`~/.codex/config.toml`, guidance in `~/.codex/AGENTS.md`).
+    Codex,
+    /// Cursor (`~/.cursor/mcp.json`).
+    Cursor,
+    /// Visual Studio Code (user `mcp.json`).
+    #[value(name = "vscode", alias = "code", alias = "vs-code")]
+    Vscode,
+    /// Gemini CLI (`~/.gemini/settings.json`, guidance in `~/.gemini/GEMINI.md`).
+    #[value(name = "gemini-cli", alias = "gemini")]
+    GeminiCli,
+}
+
+impl AgentClient {
+    /// The command-line id, e.g. `claude-code`.
+    pub fn id(self) -> &'static str {
+        match self {
+            AgentClient::ClaudeCode => "claude-code",
+            AgentClient::Codex => "codex",
+            AgentClient::Cursor => "cursor",
+            AgentClient::Vscode => "vscode",
+            AgentClient::GeminiCli => "gemini-cli",
+        }
+    }
+
+    /// The product name, e.g. `Claude Code`.
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentClient::ClaudeCode => "Claude Code",
+            AgentClient::Codex => "Codex",
+            AgentClient::Cursor => "Cursor",
+            AgentClient::Vscode => "VS Code",
+            AgentClient::GeminiCli => "Gemini CLI",
+        }
+    }
+}
+
+/// Arguments for `scull agent install`.
+#[derive(Debug, Args)]
+pub struct AgentInstallArgs {
+    /// The AI client.
+    #[arg(value_enum)]
+    pub client: AgentClient,
+    /// Apply without asking (after reviewing `--dry-run`).
+    #[arg(short, long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and diffs; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// The command the client runs (use a full path if the client does not inherit PATH).
+    #[arg(long, value_name = "PATH", default_value = "scull")]
+    pub command: String,
+}
+
+/// Arguments for `scull agent uninstall`.
+#[derive(Debug, Args)]
+pub struct AgentUninstallArgs {
+    /// The AI client.
+    #[arg(value_enum)]
+    pub client: AgentClient,
+    /// Apply without asking (after reviewing `--dry-run`).
+    #[arg(short, long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Only show the files and diffs; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `scull schedule` subcommands.

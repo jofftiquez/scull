@@ -52,6 +52,23 @@ describe('tauri bridge', () => {
     ]);
   });
 
+  it('history commands send the window start (and the volume) as Tauri arguments', async () => {
+    const { t, calls } = fake();
+    const b = createTauriBridge(t);
+    await b.freeSpaceHistory(100);
+    await b.freeSpaceHistory(100, '/Volumes/Dev SSD');
+    await b.rollupHistory(200);
+    await b.regrowth(300);
+    await b.footprintHistory(400);
+    expect(calls).toEqual([
+      { cmd: COMMANDS.freeSpaceHistory, args: { since: 100, volumeId: null } },
+      { cmd: COMMANDS.freeSpaceHistory, args: { since: 100, volumeId: '/Volumes/Dev SSD' } },
+      { cmd: COMMANDS.rollupHistory, args: { since: 200 } },
+      { cmd: COMMANDS.regrowth, args: { since: 300 } },
+      { cmd: COMMANDS.footprintHistory, args: { since: 400 } },
+    ]);
+  });
+
   it('scan sends params and an operation ID, and only forwards its own progress', async () => {
     const { t, calls, handlers } = fake((c, emit) => {
       if (c.cmd === 'scan') {

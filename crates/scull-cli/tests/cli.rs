@@ -142,13 +142,8 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
 #[test]
 fn stub_commands_exit_1_with_tracking_issue() {
     let cases: &[(&[&str], &str)] = &[
-        (
-            &["worktrees", "register", ".", "--ttl", "7d"],
-            "(tracked in #111)",
-        ),
         (&["approve", "p"], "(tracked in #108)"),
         (&["insights", "purge"], "(tracked in #266)"),
-        (&["agent", "install", "codex"], "(tracked in #110)"),
         (&["schedule", "enable"], "(tracked in #114)"),
     ];
     for (args, want) in cases {

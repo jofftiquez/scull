@@ -14,10 +14,10 @@ function figure(o: DriveOption): string {
   return o.used === null ? '—' : `${o.used}%`;
 }
 
-function aria(o: DriveOption): string {
-  const what = o.drive === null ? 'All drives' : `${o.label}${o.kind ? `, ${o.kind}` : ''}`;
-  const used = o.drive && o.used !== null ? `, ${o.used}% used` : '';
-  return `${what}: ${o.count} item${o.count === 1 ? '' : 's'}, ${formatBytes(o.bytes)}${used}`;
+/** Read after the visible text (WCAG 2.5.3: the accessible name starts with what is shown). */
+function details(o: DriveOption): string {
+  const items = `, ${o.count} item${o.count === 1 ? '' : 's'}`;
+  return o.drive === null ? items : `${items}, ${formatBytes(o.bytes)}`;
 }
 </script>
 
@@ -29,7 +29,6 @@ function aria(o: DriveOption): string {
         :key="o.id"
         type="button"
         :aria-pressed="model === o.id"
-        :aria-label="aria(o)"
         class="inline-flex min-h-touch cursor-pointer items-center gap-2 rounded-chip border-0 px-3.5 font-[inherit] text-label transition-colors duration-200"
         :class="model === o.id ? 'bg-ink text-on-ink' : 'bg-transparent text-text-strong-muted hover:text-ink'"
         data-testid="drive-option"
@@ -39,8 +38,9 @@ function aria(o: DriveOption): string {
           <rect x="3" y="6" width="18" height="12" rx="3" />
           <path d="M7 14h.01M11 14h6" />
         </svg>
-        <span class="font-medium">{{ o.label }}<span v-if="o.kind" class="font-normal opacity-75"> · {{ o.kind }}</span></span>
-        <span class="font-mono text-caption tabular-nums" :class="model === o.id ? 'text-on-ink opacity-80' : 'text-text-tertiary'">{{ figure(o) }}</span>
+        <span class="font-medium">{{ o.label }}<span v-if="o.kind" class="font-normal"> · {{ o.kind }}</span></span>
+        <span class="font-mono text-caption tabular-nums" :class="model === o.id ? 'text-on-ink' : 'text-text-tertiary'">{{ figure(o) }}<span v-if="o.drive && o.used !== null" class="sr-only"> used</span></span>
+        <span class="sr-only">{{ details(o) }}</span>
       </button>
     </div>
     <span class="text-center text-caption text-text-secondary" data-testid="drive-context">{{ context }}</span>

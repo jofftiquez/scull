@@ -12,9 +12,13 @@ import type {
   CapabilitiesReport,
   DesktopStatus,
   Drive,
+  FootprintHistory,
+  FreeSpaceHistory,
   OperationOptions,
   ProgressEvent,
   ProjectsView,
+  RegrowthHistory,
+  RollupHistory,
   ScanParams,
   ScanReport,
   ScullBridge,
@@ -28,6 +32,10 @@ import cachesReport from './fixtures/caches-report.json';
 import status from './fixtures/status.json';
 import capabilities from './fixtures/capabilities.json';
 import progressEvents from './fixtures/progress-events.json';
+import freeSpaceHistory from './fixtures/free-space-history.json';
+import rollupHistory from './fixtures/rollup-history.json';
+import regrowth from './fixtures/regrowth.json';
+import footprintHistory from './fixtures/footprint-history.json';
 import { withDesignWorktrees } from './worktreesMock';
 import { designHistory } from './historyMock';
 import { designSettings } from './settingsMock';
@@ -81,6 +89,62 @@ export const MOCK_DATA = {
   settings: designSettings(),
 };
 
+/**
+ * The recorded history (apps/desktop/bridge/tests/insights.rs) moved in time so its latest
+ * timestamp is `now`: every `at`, `since` and `*_at` field shifts by the same amount.
+ */
+export function shiftHistory<T>(doc: T, now: number): T {
+  const isTime = (k: string) => k === 'at' || k === 'since' || k.endsWith('_at');
+  let latest = -Infinity;
+  const scan = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(scan);
+    else if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (isTime(k) && k !== 'since' && typeof x === 'number') latest = Math.max(latest, x);
+        else scan(x);
+      }
+    }
+  };
+  scan(doc);
+  if (!Number.isFinite(latest)) return structuredClone(doc);
+  const delta = Math.floor(now) - latest;
+  const shift = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(shift);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.entries(v).map(([k, x]) => [k, isTime(k) && typeof x === 'number' ? x + delta : shift(x)]),
+      );
+    }
+    return v;
+  };
+  return shift(doc) as T;
+}
+
+/** Recorded history payloads (validated against their schemas in parity.test.ts). */
+export const MOCK_HISTORY = {
+  freeSpace: freeSpaceHistory as unknown as FreeSpaceHistory,
+  rollups: rollupHistory as unknown as RollupHistory,
+  regrowth: regrowth as unknown as RegrowthHistory,
+  footprint: footprintHistory as unknown as FootprintHistory,
+};
+
+/** The latest timestamp of the recorded history, shared so all four series stay aligned. */
+function historyLatest(): number {
+  const ats = [
+    ...MOCK_HISTORY.freeSpace.samples.map((s) => s.sampled_at),
+    ...MOCK_HISTORY.footprint.samples.map((s) => s.at),
+  ];
+  return ats.length ? Math.max(...ats) : 0;
+}
+
+/** Shift a history payload to `now` and keep only entries at or after `since`. */
+function historyAt<T extends { since: number }>(doc: T, now: number, sinceArg: number, keep: (d: T, since: number) => T): T {
+  const since = Math.floor(sinceArg);
+  const shifted = shiftHistory({ ...doc, anchor_at: historyLatest() }, now) as T & { anchor_at?: number };
+  delete shifted.anchor_at;
+  return keep({ ...shifted, since }, since);
+}
+
 export interface MockOptions {
   /** Simulated latency per call, in milliseconds (0 in tests). */
   latencyMs?: number;
@@ -132,5 +196,37 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
     capabilities: () => later(MOCK_DATA.capabilities),
     history: () => later(MOCK_DATA.history),
     settings: () => later(MOCK_DATA.settings),
+    freeSpaceHistory: (since: number, volumeId?: string) => {
+      const now = Date.now() / 1000;
+      const doc = historyAt(MOCK_HISTORY.freeSpace, now, since, (d, t) => ({
+        ...d,
+        samples: d.samples.filter((x) => x.sampled_at >= t),
+      }));
+      if (volumeId && volumeId !== doc.volume_id) return later({ ...doc, volume_id: volumeId, samples: [] });
+      return later(doc);
+    },
+    rollupHistory: (since: number) =>
+      later(
+        historyAt(MOCK_HISTORY.rollups, Date.now() / 1000, since, (d, t) => ({
+          ...d,
+          series: d.series
+            .map((c) => ({ ...c, points: c.points.filter((p) => p.at >= t) }))
+            .filter((c) => c.points.some((p) => p.allocated_bytes > 0 || p.items > 0)),
+        })),
+      ),
+    regrowth: (since: number) =>
+      later(
+        historyAt(MOCK_HISTORY.regrowth, Date.now() / 1000, since, (d, t) => ({
+          ...d,
+          events: d.events.filter((e) => e.reappeared_at >= t),
+        })),
+      ),
+    footprintHistory: (since: number) =>
+      later(
+        historyAt(MOCK_HISTORY.footprint, Date.now() / 1000, since, (d, t) => ({
+          ...d,
+          samples: d.samples.filter((x) => x.at >= t),
+        })),
+      ),
   };
 }

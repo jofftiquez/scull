@@ -2,8 +2,14 @@
 //! scan roots with its state and removal tier, or one worktree in detail. Read-only: Git is
 //! run hardened (no hooks, fsmonitor or fetch; SAFE-15) and history is not recorded.
 //!
-//! Machine output: `scull/worktrees@1` (`worktree` lines then a `summary` with `--ndjson`)
-//! and `scull/worktree@1` for `inspect` (one `worktree` line with `--ndjson`).
+//! `scull worktrees register <path> --ttl 7d` (P4-AI-02, PRO-08) records a time-to-live for an
+//! agent or script worktree in scull's registry file ([`scull_mcp::registry`]). The listing
+//! shows each registration under the scan roots with its expiry; an expired one is a review
+//! suggestion. Nothing is ever removed because a TTL ran out.
+//!
+//! Machine output: `scull/worktrees@1` (`worktree` lines then a `summary` with `--ndjson`),
+//! `scull/worktree@1` for `inspect` (one `worktree` line with `--ndjson`) and
+//! `scull/worktree-registration@1` for `register` (one `registration` line).
 
 use super::pipeline::{self, CancelBridge};
 use super::render;
@@ -17,9 +23,12 @@ use crate::output::style::{Style, tier_style, tier_text};
 use crate::output::table::{Align, Cell, Table};
 use crate::output::{Format, Ui};
 use schemars::JsonSchema;
-use scull_core::{FsPath, ScullError};
+use scull_core::{ErrorKind, FsPath, ScullError};
+use scull_engine::now_unix;
+use scull_engine::paths::{canon, is_within};
 use scull_engine::{ScanRequest, SignalUnavailable, WorktreeProblemReport, WorktreeReport};
 use scull_git::{HeadState, LockState, MergeStatus, Observed, WorktreeKind};
+use scull_mcp::registry::{Registry, Source, human_duration, parse_ttl};
 use serde::Serialize;
 use std::io::{self, Write};
 use std::path::Path;
@@ -28,6 +37,48 @@ use std::path::Path;
 pub const WORKTREES_SCHEMA: SchemaId = SchemaId::new("worktrees", 1);
 /// Schema of `scull worktrees inspect --json` / `--ndjson`.
 pub const WORKTREE_SCHEMA: SchemaId = SchemaId::new("worktree", 1);
+/// Schema of `scull worktrees register --json` / `--ndjson`.
+pub const REGISTRATION_SCHEMA: SchemaId = SchemaId::new("worktree-registration", 1);
+
+/// A worktree TTL registration under the scan roots (shown by the human `scull worktrees`
+/// listing; `scull/worktrees@1` is unchanged so the desktop bridge keeps the same shape).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TtlRegistration {
+    /// The worktree folder.
+    pub path: FsPath,
+    /// Time to live, seconds.
+    pub ttl_secs: u64,
+    /// When it was registered (Unix seconds).
+    pub registered_at: i64,
+    /// When the TTL runs out (Unix seconds).
+    pub expires_at: i64,
+    /// Whether the TTL has run out: the worktree is a review suggestion (never removed
+    /// automatically).
+    pub expired: bool,
+    /// Who registered it.
+    pub source: Source,
+    /// Whether the worktree was found by this scan.
+    pub found: bool,
+}
+
+/// `scull worktrees register` data.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegistrationReport {
+    /// The registered worktree folder (canonical).
+    pub path: FsPath,
+    /// Time to live, seconds.
+    pub ttl_secs: u64,
+    /// The TTL, human (`7d`).
+    pub ttl: String,
+    /// When it was registered (Unix seconds).
+    pub registered_at: i64,
+    /// When the TTL runs out (Unix seconds).
+    pub expires_at: i64,
+    /// The registry file it was recorded in.
+    pub registry: FsPath,
+}
 
 /// `scull worktrees` data.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -69,6 +120,14 @@ pub struct WorktreesSummary {
     pub problems: Vec<WorktreeProblemReport>,
     /// Signals that could not be observed.
     pub signals_unavailable: Vec<SignalUnavailable>,
+}
+
+/// The one `scull worktrees register --ndjson` record.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum RegistrationRecord {
+    /// The registration.
+    Registration(RegistrationReport),
 }
 
 /// The one `scull worktrees inspect --ndjson` record.
@@ -113,6 +172,7 @@ pub fn run(args: &RootArgs, ui: &Ui) -> Result<(), ScullError> {
             }
         }
     }
+    let registrations = registrations_under(&r.roots, &r.worktrees, now_unix(), ui);
     let report = WorktreesReport {
         roots: r.roots,
         cancelled: r.cancelled,
@@ -142,7 +202,7 @@ pub fn run(args: &RootArgs, ui: &Ui) -> Result<(), ScullError> {
                     )
                 })
         }
-        Format::Human => write_text(out, &render_list(&report, ui.color_out)),
+        Format::Human => write_text(out, &render_list(&report, &registrations, ui.color_out)),
     };
     res.or_else(ignore_broken_pipe)
         .map_err(|e| ScullError::from_io(&e))?;
@@ -150,6 +210,91 @@ pub fn run(args: &RootArgs, ui: &Ui) -> Result<(), ScullError> {
         return Err(cancel::cancelled_error());
     }
     Ok(())
+}
+
+/// The registrations whose worktree lies under one of `roots` (read-only; a missing registry
+/// is empty, an unreadable one is a warning).
+fn registrations_under(
+    roots: &[FsPath],
+    worktrees: &[WorktreeReport],
+    now: i64,
+    ui: &Ui,
+) -> Vec<TtlRegistration> {
+    let Ok(dirs) = scull_platform::app_dirs() else {
+        return Vec::new();
+    };
+    let regs = match Registry::in_data_dir(&dirs.data).load() {
+        Ok(r) => r,
+        Err(e) => {
+            pipeline::warn(ui, &format!("cannot read worktree registrations: {e}"));
+            return Vec::new();
+        }
+    };
+    regs.into_iter()
+        .filter(|g| {
+            roots
+                .iter()
+                .any(|r| is_within(Path::new(&g.path), &r.to_path_buf()))
+        })
+        .map(|g| TtlRegistration {
+            found: worktrees
+                .iter()
+                .any(|w| w.path.to_path_buf() == Path::new(&g.path)),
+            expired: g.is_expired(now),
+            path: FsPath::from_path(Path::new(&g.path)),
+            ttl_secs: g.ttl_secs,
+            registered_at: g.registered_at,
+            expires_at: g.expires_at,
+            source: g.source,
+        })
+        .collect()
+}
+
+/// Run `scull worktrees register <path> --ttl <duration>`: check that `path` is a linked Git
+/// worktree and record its TTL. Never touches the worktree.
+pub fn register(path: &Path, ttl: &str, ui: &Ui) -> Result<(), ScullError> {
+    let ttl_secs =
+        parse_ttl(ttl).map_err(|e| ScullError::new(ErrorKind::Usage, format!("--ttl {e}")))?;
+    let loaded = pipeline::load_config(&[])?;
+    let engine = pipeline::engine(&loaded, &[], false, ui)?;
+    let w = engine.inspect_worktree(&canon(path))?;
+    if w.kind != WorktreeKind::Linked || w.state.missing {
+        return Err(ScullError::new(
+            ErrorKind::Usage,
+            format!(
+                "{} is not an existing linked Git worktree (main and bare checkouts can't be \
+                 registered)",
+                path.display()
+            ),
+        )
+        .with_path(FsPath::from_path(path)));
+    }
+    let dirs = scull_platform::app_dirs()
+        .map_err(|e| ScullError::new(ErrorKind::Config, e.to_string()))?;
+    let registry = Registry::in_data_dir(&dirs.data);
+    let reg = registry
+        .record(&w.path.to_path_buf(), ttl_secs, now_unix(), Source::Cli)
+        .map_err(|e| ScullError::new(ErrorKind::Io, e.to_string()))?;
+    let report = RegistrationReport {
+        path: FsPath::from_path(Path::new(&reg.path)),
+        ttl_secs,
+        ttl: human_duration(ttl_secs),
+        registered_at: reg.registered_at,
+        expires_at: reg.expires_at,
+        registry: FsPath::from_path(registry.file()),
+    };
+    match ui.format {
+        Format::Human => super::emit_text(&format!(
+            "Registered {}\n  TTL {}: expires in {} (Unix time {}).\n  When it expires, \
+             `scull worktrees` lists it as a review suggestion; it is never removed \
+             automatically.\n",
+            escape_for_terminal(report.path.as_str()),
+            report.ttl,
+            report.ttl,
+            report.expires_at
+        )),
+        f => super::emit_machine(f, REGISTRATION_SCHEMA, "registration", &report),
+    }
 }
 
 /// Run `scull worktrees inspect <path>`.
@@ -239,8 +384,8 @@ fn deciding_reason(w: &WorktreeReport) -> String {
         .unwrap_or_default()
 }
 
-/// The `scull worktrees` table.
-pub fn render_list(r: &WorktreesReport, color: bool) -> String {
+/// The `scull worktrees` table, plus the TTL registrations under the roots.
+pub fn render_list(r: &WorktreesReport, registrations: &[TtlRegistration], color: bool) -> String {
     let mut out = String::new();
     if r.cancelled {
         out.push_str("CANCELLED: the walk was stopped before worktrees were analysed\n\n");
@@ -297,6 +442,33 @@ pub fn render_list(r: &WorktreesReport, color: bool) -> String {
                 "  {}: {}\n",
                 escape_for_terminal(p.problem.admin_dir.as_str()),
                 escape_for_terminal(&p.problem.detail)
+            ));
+        }
+    }
+    if !registrations.is_empty() {
+        out.push_str("\nRegistered TTLs (never removed automatically):\n");
+        let now = now_unix();
+        for g in registrations {
+            let state = if g.expired {
+                Style::Warn.paint(
+                    &format!(
+                        "expired {} ago: review suggested",
+                        human_duration(u64::try_from(now - g.expires_at).unwrap_or(0))
+                    ),
+                    color,
+                )
+            } else {
+                format!(
+                    "expires in {}",
+                    human_duration(u64::try_from(g.expires_at - now).unwrap_or(0))
+                )
+            };
+            out.push_str(&format!(
+                "  {}  TTL {}, {}{}\n",
+                escape_for_terminal(g.path.as_str()),
+                human_duration(g.ttl_secs),
+                state,
+                if g.found { "" } else { " (folder not found)" }
             ));
         }
     }

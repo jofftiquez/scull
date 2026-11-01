@@ -24,8 +24,9 @@
   a:hover {
     color: var(--color-accent-text);
   }
+  /* text-tertiary, not text-hint: the hint gray is 4.1:1 on the raised field (AA needs 4.5:1). */
   input::placeholder {
-    color: var(--color-text-hint);
+    color: var(--color-text-tertiary);
   }
   :focus-visible {
     outline: 2px solid var(--color-accent);

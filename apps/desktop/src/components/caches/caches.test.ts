@@ -130,8 +130,14 @@ async function mountAt(path: string) {
   router.push(path);
   await router.isReady();
   const w = mount(App, { global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: createMockBridge() } } });
-  await new Promise((r) => setTimeout(r, 300));
-  await flushPromises();
+  // Wait for the caches report (rows or the skipped row), not a fixed time.
+  await vi.waitUntil(
+    async () => {
+      await flushPromises();
+      return w.find('[data-testid="cache-row"]').exists() || w.find('[data-testid="skipped-row"]').exists();
+    },
+    { timeout: 5000 },
+  );
   return w;
 }
 

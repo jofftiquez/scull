@@ -14,9 +14,13 @@ import type {
   CapabilitiesReport,
   DesktopStatus,
   Drive,
+  FootprintHistory,
+  FreeSpaceHistory,
   HistoryView,
   ProgressEvent,
   ProjectsView,
+  RegrowthHistory,
+  RollupHistory,
   ScanParams,
   ScanReport,
   ScullError,
@@ -89,6 +93,15 @@ export interface ScullBridge {
    * own data (read-only: changing a setting is not a bridge call, see
    * components/settings/bridge.ts). */
   settings(): Promise<SettingsView>;
+  /** Free-space samples of one volume since `since` (Unix seconds). The volume defaults to
+   * the home folder's, then `/`, then the most recently sampled one. Read-only. */
+  freeSpaceHistory(since: number, volumeId?: string): Promise<FreeSpaceHistory>;
+  /** Bytes per category per usable scan since `since`. Read-only. */
+  rollupHistory(since: number): Promise<RollupHistory>;
+  /** Artifacts that came back since `since`. Read-only. */
+  regrowth(since: number): Promise<RegrowthHistory>;
+  /** scull's own footprint samples since `since`. Read-only. */
+  footprintHistory(since: number): Promise<FootprintHistory>;
 }
 
 /** Bridge methods and the Tauri command each calls (also used by the parity test). */
@@ -103,6 +116,10 @@ export const COMMANDS = {
   capabilities: 'capabilities',
   history: 'history',
   settings: 'settings',
+  freeSpaceHistory: 'free_space_history',
+  rollupHistory: 'rollup_history',
+  regrowth: 'regrowth',
+  footprintHistory: 'footprint_history',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 
 /** The Tauri command that cancels an operation. */

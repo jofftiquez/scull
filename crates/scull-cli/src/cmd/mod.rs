@@ -1,6 +1,7 @@
 //! Implemented commands. Each module builds a serializable report, renders it for people,
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
+pub mod agent;
 pub mod caches;
 pub mod check;
 pub mod clean;

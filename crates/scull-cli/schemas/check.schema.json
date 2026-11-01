@@ -133,16 +133,117 @@
             "$ref": "#/$defs/VolumeReport"
           },
           "type": "array"
+        },
+        "scan": {
+          "$ref": "#/$defs/CheckScan",
+          "description": "What was scanned."
         }
       },
       "required": [
         "now",
+        "scan",
         "sampled",
         "not_sampled",
         "forecasts",
         "alerts"
       ],
       "type": "object"
+    },
+    "CheckScan": {
+      "description": "The scan a check ran (or why it did not).",
+      "oneOf": [
+        {
+          "description": "No `scan.roots` configured: only history is used.",
+          "properties": {
+            "state": {
+              "const": "not_configured",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`--no-scan`: only history is used.",
+          "properties": {
+            "state": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The roots were not scanned; recorded history is used instead.",
+          "properties": {
+            "reason": {
+              "description": "Why (e.g. a broad root that needs `scull scan --allow-broad-roots`).",
+              "type": "string"
+            },
+            "state": {
+              "const": "skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The roots were scanned (and the scan recorded in history).",
+          "properties": {
+            "allocated_bytes": {
+              "description": "Allocated bytes of everything found.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "candidates": {
+              "description": "Candidates found.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "entries_scanned": {
+              "description": "Entries counted.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "roots": {
+              "description": "The roots scanned.",
+              "items": {
+                "$ref": "#/$defs/FsPath"
+              },
+              "type": "array"
+            },
+            "scan_id": {
+              "$ref": "#/$defs/ScanId",
+              "description": "The scan's ID."
+            },
+            "state": {
+              "const": "scanned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "scan_id",
+            "roots",
+            "candidates",
+            "entries_scanned",
+            "allocated_bytes"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Confidence": {
       "description": "How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.",
@@ -280,6 +381,10 @@
         }
       ]
     },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
     "NotSampled": {
       "additionalProperties": false,
       "description": "A volume known from history that was not sampled.",
@@ -298,6 +403,10 @@
         "reason"
       ],
       "type": "object"
+    },
+    "ScanId": {
+      "pattern": "^scan_[0-9A-Za-z]{1,64}$",
+      "type": "string"
     },
     "Severity": {
       "description": "How urgent an alert is. Ordered: `Info < Warning < Critical`.",

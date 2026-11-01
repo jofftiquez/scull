@@ -335,6 +335,13 @@ export type ErrorKind =
   | "unsupported_platform"
   | "internal";
 /**
+ * Whether the history database answered.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HistoryRead".
+ */
+export type HistoryRead = "ok" | "no_database" | "unavailable";
+/**
  * The outcome of one plan item.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -814,9 +821,13 @@ export interface BridgePayloads {
   CapabilitiesReport: CapabilitiesReport;
   Drives: Drives;
   ScullError: ScullError;
+  FootprintHistory: FootprintHistory;
+  FreeSpaceHistory: FreeSpaceHistory;
   HistoryView: HistoryView;
   ProgressEvent: ProgressEvent;
   ProjectsView: ProjectsView;
+  RegrowthHistory: RegrowthHistory;
+  RollupHistory: RollupHistory;
   ScanParams: ScanParams;
   ScanReport: ScanReport;
   SettingsView: SettingsView;
@@ -1290,6 +1301,112 @@ export interface ScullError {
   path?: FsPath | null;
 }
 /**
+ * `footprint_history`: scull's own footprint over time ("What scull knows").
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "FootprintHistory".
+ */
+export interface FootprintHistory {
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * Raw free-space samples are kept this many days, then downsampled (INS-02).
+   */
+  raw_retention_days: number;
+  /**
+   * Samples at or after `since`, oldest first.
+   */
+  samples: FootprintSampleView[];
+  /**
+   * Start of the window (Unix seconds).
+   */
+  since: number;
+  state: HistoryRead;
+}
+/**
+ * scull's own disk use at one moment (DATA-05).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "FootprintSampleView".
+ */
+export interface FootprintSampleView {
+  /**
+   * When it was measured (Unix seconds).
+   */
+  at: number;
+  /**
+   * Migration backups.
+   */
+  backup_bytes: number;
+  /**
+   * Damaged databases set aside.
+   */
+  damaged_bytes: number;
+  /**
+   * The database file.
+   */
+  database_bytes: number;
+  /**
+   * Sum of the parts.
+   */
+  total_bytes: number;
+  /**
+   * The `-wal` and `-shm` files.
+   */
+  wal_bytes: number;
+}
+/**
+ * `free_space_history`: one volume's free-space samples (INS-01), oldest first.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "FreeSpaceHistory".
+ */
+export interface FreeSpaceHistory {
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * Samples at or after `since`, oldest first.
+   */
+  samples: VolumeSampleView[];
+  /**
+   * Start of the window (Unix seconds).
+   */
+  since: number;
+  state: HistoryRead;
+  /**
+   * The volume the samples belong to (`None` when nothing was ever sampled).
+   */
+  volume_id?: string | null;
+}
+/**
+ * One volume's latest free-space sample from history.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "VolumeSampleView".
+ */
+export interface VolumeSampleView {
+  /**
+   * Bytes available to the user.
+   */
+  free_bytes: number;
+  /**
+   * When it was sampled (Unix seconds).
+   */
+  sampled_at: number;
+  /**
+   * Volume size in bytes.
+   */
+  total_bytes: number;
+  /**
+   * Volume identifier (mount point or volume GUID path).
+   */
+  volume_id: string;
+}
+/**
  * `history`: every recorded operation, newest first.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -1576,6 +1693,123 @@ export interface ProjectSummary {
    * Allocated size of the whole project directory, when measured.
    */
   total_allocated?: number | null;
+}
+/**
+ * `regrowth`: every regrowth event in the window, oldest first.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RegrowthHistory".
+ */
+export interface RegrowthHistory {
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * Events, oldest first.
+   */
+  events: RegrowthEventView[];
+  /**
+   * Start of the window (Unix seconds).
+   */
+  since: number;
+  state: HistoryRead;
+}
+/**
+ * An artifact that came back after it had gone (INS-03).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RegrowthEventView".
+ */
+export interface RegrowthEventView {
+  /**
+   * Artifact type, e.g. "npm dependencies".
+   */
+  artifact: string;
+  category: Category;
+  /**
+   * When it was marked gone.
+   */
+  disappeared_at: number;
+  path: FsPath;
+  /**
+   * Last sighting of the item that went (Unix seconds).
+   */
+  previous_last_seen_at: number;
+  /**
+   * When it was seen again.
+   */
+  reappeared_at: number;
+  /**
+   * The same object came back (e.g. restored), not a rebuild.
+   */
+  same_item: boolean;
+}
+/**
+ * `rollup_history`: bytes per category per usable scan (INS-02 growth, the mix chart).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RollupHistory".
+ */
+export interface RollupHistory {
+  /**
+   * Why it didn't, when it didn't.
+   */
+  detail?: string | null;
+  /**
+   * Categories with at least one non-zero point, in [`CATEGORIES`] order.
+   */
+  series: CategorySeries[];
+  /**
+   * Start of the window (Unix seconds).
+   */
+  since: number;
+  state: HistoryRead;
+}
+/**
+ * One category's bytes per usable scan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CategorySeries".
+ */
+export interface CategorySeries {
+  category: Category;
+  /**
+   * One point per usable scan in the window (zero when the scan found none), oldest first.
+   */
+  points: RollupPointView[];
+}
+/**
+ * One point of a category series: the category's bytes in one scan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RollupPointView".
+ */
+export interface RollupPointView {
+  /**
+   * Allocated (on-disk) bytes.
+   */
+  allocated_bytes: number;
+  /**
+   * Scan finish time (Unix seconds).
+   */
+  at: number;
+  /**
+   * Candidates.
+   */
+  items: number;
+  /**
+   * Logical bytes.
+   */
+  logical_bytes: number;
+  /**
+   * Reclaimable bytes.
+   */
+  reclaimable_bytes: number;
+  /**
+   * The scan.
+   */
+  scan_id: string;
 }
 /**
  * `scan` parameters.
@@ -2353,30 +2587,6 @@ export interface LastScan {
    * `completed`, `partial` or `cancelled`.
    */
   status: string;
-}
-/**
- * One volume's latest free-space sample from history.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "VolumeSampleView".
- */
-export interface VolumeSampleView {
-  /**
-   * Bytes available to the user.
-   */
-  free_bytes: number;
-  /**
-   * When it was sampled (Unix seconds).
-   */
-  sampled_at: number;
-  /**
-   * Volume size in bytes.
-   */
-  total_bytes: number;
-  /**
-   * Volume identifier (mount point or volume GUID path).
-   */
-  volume_id: string;
 }
 /**
  * `worktrees`: the Git worktrees of the last scan. Same shape as `scull worktrees --json`.

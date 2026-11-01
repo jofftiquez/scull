@@ -1,42 +1,46 @@
-//! `scull check` (PRD §12, PRO-01, PRO-07): sample free space, forecast every drive, raise
-//! alerts. Meant to be run periodically by the OS scheduler.
+//! `scull check` (PRD §12, PRO-01..04, PRO-07): scan the configured roots, sample free space,
+//! forecast every drive, raise alerts. Meant to be run periodically by the OS scheduler.
 //!
-//! 1. **Sample.** Free space of every volume scull has sampled before (D-22: each drive its
+//! 1. **Scan** the configured `scan.roots` (the same read-only scan as `scull scan`, recorded
+//!    in history), unless `--no-scan` is given or no roots are configured. Roots that
+//!    `scull scan` would refuse without a flag (a filesystem root, the home folder, a network
+//!    volume; CFG-04, D-22) are not scanned unattended: the check notes why and uses recorded
+//!    history instead.
+//! 2. **Sample.** Free space of every volume scull has sampled before (D-22: each drive its
 //!    own forecast; a drive that is not connected right now is listed as not sampled) and of
 //!    the volumes holding the configured scan roots. The samples are recorded in the history
-//!    database like a scan's (INS-06: "every scan and every scheduled check").
-//! 2. **Forecast** each volume from its last 30 days of samples ([`scull_proactive::forecast()`]).
-//! 3. **Alert** on volumes below their reserve, or forecast to drop below it within
-//!    `proactive.alert_days` (default 14) with at least medium confidence
-//!    ([`scull_proactive::forecast_alerts`]); on category budgets exceeded at the latest scan
-//!    ([`scull_proactive::budget_alerts`], PRO-03); and on volumes that lost more than the
-//!    spike threshold of free space within the spike window
-//!    ([`scull_proactive::free_space_drop_alerts`], PRO-04). Thresholds come from
-//!    `[proactive]` in the user config.
-//!
-//! Staleness alerts, ecosystem and path budgets need a scan's candidates, and category growth
-//! spikes need scans of the same roots; they come with the light scan (PRO-07). The policy
-//! functions are in `scull-proactive`.
+//!    database like a scan's (INS-06: "every scan and every scheduled check"); a volume the
+//!    scan just sampled is not recorded twice.
+//! 3. **Forecast** each volume from its last 30 days of samples ([`scull_proactive::forecast()`]).
+//! 4. **Alert** ([`scull_proactive::check_alerts`]): volumes below their reserve or forecast to
+//!    drop below it within `proactive.alert_days` (PRO-01); budgets (PRO-03; ecosystem and
+//!    path budgets need the scan); stale worktrees, build outputs and caches (PRO-02; need the
+//!    scan); category growth spikes over scans of the same roots, naming the largest items,
+//!    and free-space drops (PRO-04). Thresholds come from `[proactive]` in the user config.
+//!    Every alert raised is recorded in the history database's alert stream (INS-06).
 //!
 //! Writes nothing but history rows and never deletes anything: an alert points to a reviewed
 //! cleanup, it never performs one. Exit code 0 whether or not alerts fired (alerts are data).
 //!
-//! Not in this command yet: the light scan of known locations (PRO-07) and the ready-to-review
-//! reclaim plan it keeps (PRO-05, #115); registering it with the OS scheduler and running at
-//! low priority (`scull schedule enable|disable`, #114).
+//! Not in this command yet: the ready-to-review reclaim plan (PRO-05, #115); registering it
+//! with the OS scheduler and running at low priority (`scull schedule enable|disable`, #114).
 
 use super::forecast::ForecastReport;
+use super::pipeline::{self, CancelBridge};
 use super::status::VolumeReport;
 use super::{emit_machine, emit_text};
+use crate::cancel;
+use crate::cli::CheckArgs;
 use crate::cmd::pipeline::load_config;
 use crate::output::Ui;
 use crate::output::bytes::format_bytes;
 use crate::output::escape::escape_for_terminal;
 use crate::output::json::SchemaId;
 use schemars::JsonSchema;
-use scull_core::{ErrorKind, ScullError};
-use scull_proactive::{Alert, Confidence, ForecastState, Severity};
-use scull_storage::VolumeSample;
+use scull_core::{ErrorKind, FsPath, ScanId, ScullError};
+use scull_engine::{ScanReport, ScanRequest};
+use scull_proactive::{Alert, Confidence, ForecastState, ScanInput, Severity};
+use scull_storage::{AlertEvent, VolumeSample};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -49,6 +53,8 @@ pub const CHECK_SCHEMA: SchemaId = SchemaId::new("check", 1);
 pub struct CheckReport {
     /// When the check ran (Unix seconds).
     pub now: i64,
+    /// What was scanned.
+    pub scan: CheckScan,
     /// Free space sampled now (and recorded in history).
     pub sampled: Vec<VolumeReport>,
     /// Volumes known from history that could not be sampled now.
@@ -57,6 +63,34 @@ pub struct CheckReport {
     pub forecasts: Vec<ForecastReport>,
     /// Alerts raised, most severe first.
     pub alerts: Vec<Alert>,
+}
+
+/// The scan a check ran (or why it did not).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CheckScan {
+    /// No `scan.roots` configured: only history is used.
+    NotConfigured,
+    /// `--no-scan`: only history is used.
+    Disabled,
+    /// The roots were not scanned; recorded history is used instead.
+    Skipped {
+        /// Why (e.g. a broad root that needs `scull scan --allow-broad-roots`).
+        reason: String,
+    },
+    /// The roots were scanned (and the scan recorded in history).
+    Scanned {
+        /// The scan's ID.
+        scan_id: ScanId,
+        /// The roots scanned.
+        roots: Vec<FsPath>,
+        /// Candidates found.
+        candidates: u64,
+        /// Entries counted.
+        entries_scanned: u64,
+        /// Allocated bytes of everything found.
+        allocated_bytes: u64,
+    },
 }
 
 /// A volume known from history that was not sampled.
@@ -70,9 +104,10 @@ pub struct NotSampled {
 }
 
 /// `scull check`.
-pub fn run(ui: &Ui) -> Result<(), ScullError> {
-    let now = scull_engine::now_unix();
+pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     let loaded = load_config(&[])?;
+    let (scan_state, scanned) = light_scan(&loaded, args, ui)?;
+    let now = scull_engine::now_unix();
     let dirs = scull_platform::app_dirs().map_err(|e| {
         ScullError::new(
             ErrorKind::Io,
@@ -88,23 +123,40 @@ pub fn run(ui: &Ui) -> Result<(), ScullError> {
         .map(|v| v.volume_id)
         .collect();
     let (samples, not_sampled) = sample_volumes(&known, &loaded.config.scan.roots, now);
-    if !samples.is_empty() {
+    // The scan recorded the free space of the volumes it covered: don't sample them twice.
+    let mut to_record = Vec::new();
+    for s in &samples {
+        let by_scan = match &scanned {
+            Some(r) => !store
+                .free_space_history(&s.volume_id, r.started_at)
+                .map_err(store_error)?
+                .is_empty(),
+            None => false,
+        };
+        if !by_scan {
+            to_record.push(s.clone());
+        }
+    }
+    if !to_record.is_empty() {
         store
-            .record_free_space(&samples, None)
+            .record_free_space(&to_record, None)
             .map_err(store_error)?;
     }
     let cfg = &loaded.config.proactive;
     let policy = scull_proactive::forecast_policy(cfg);
     let forecasts = scull_proactive::forecast_all(&store, now, &policy).map_err(store_error)?;
-    let mut alerts = scull_proactive::forecast_alerts(&forecasts, &policy, now);
-    if !cfg.budgets.is_empty() {
-        let usage = scull_proactive::category_usage(&store, now).map_err(store_error)?;
-        alerts.extend(scull_proactive::budget_alerts(&cfg.budgets, &usage, now));
+    let input = scanned.as_ref().map(|r| ScanInput {
+        roots: &r.roots,
+        candidates: &r.candidates,
+    });
+    let alerts =
+        scull_proactive::check_alerts(&store, cfg, &forecasts, input, now).map_err(store_error)?;
+    if let Err(e) = store.record_alerts(&alert_events(&alerts)) {
+        pipeline::warn(ui, &format!("alerts were not recorded in history: {e}"));
     }
-    alerts.extend(scull_proactive::free_space_drop_alerts(&store, cfg, now).map_err(store_error)?);
-    scull_proactive::alert::sort_alerts(&mut alerts);
     let report = CheckReport {
         now,
+        scan: scan_state,
         sampled: samples
             .iter()
             .map(|v| VolumeReport {
@@ -121,12 +173,75 @@ pub fn run(ui: &Ui) -> Result<(), ScullError> {
     if ui.format.is_machine() {
         return emit_machine(ui.format, CHECK_SCHEMA, "check", &report);
     }
-    // Volume IDs come from the database and the OS: escape them, line by line (SAFE-17).
+    // Volume IDs and paths come from the database and the OS: escape them, line by line
+    // (SAFE-17).
     let text: String = render(&report)
         .lines()
         .map(|l| escape_for_terminal(l) + "\n")
         .collect();
     emit_text(&text)
+}
+
+/// The alerts as rows of the history database's alert stream.
+pub fn alert_events(alerts: &[Alert]) -> Vec<AlertEvent> {
+    alerts
+        .iter()
+        .filter_map(|a| {
+            Some(AlertEvent {
+                event_id: 0,
+                at: a.raised_at,
+                source: "check".to_owned(),
+                key: a.key.clone(),
+                alert: serde_json::to_value(a).ok()?,
+            })
+        })
+        .collect()
+}
+
+/// Scan the configured roots for the check (step 1 in the module docs). A root `scull scan`
+/// would refuse without a flag, or a scan that fails, is reported as skipped; Ctrl-C stops the
+/// check.
+fn light_scan(
+    loaded: &pipeline::Loaded,
+    args: &CheckArgs,
+    ui: &Ui,
+) -> Result<(CheckScan, Option<ScanReport>), ScullError> {
+    if loaded.config.scan.roots.is_empty() {
+        return Ok((CheckScan::NotConfigured, None));
+    }
+    if args.no_scan {
+        return Ok((CheckScan::Disabled, None));
+    }
+    let skipped = |e: ScullError| CheckScan::Skipped { reason: e.message };
+    let roots = match pipeline::roots(loaded, false) {
+        Ok(r) => r,
+        Err(e) => return Ok((skipped(e), None)),
+    };
+    let engine = match pipeline::engine(loaded, &roots, true, ui) {
+        Ok(e) => e,
+        Err(e) => return Ok((skipped(e), None)),
+    };
+    let bridge = CancelBridge::start();
+    let mut req = ScanRequest::full().history(true);
+    req.threads = loaded.config.scan.threads as usize;
+    let result = engine.scan(&roots, &req, bridge.token(), pipeline::progress(ui));
+    drop(bridge);
+    drop(engine);
+    let report = match result {
+        Ok(r) => r,
+        Err(e) => return Ok((skipped(e), None)),
+    };
+    if report.cancelled || cancel::is_cancelled() {
+        return Err(cancel::cancelled_error());
+    }
+    let state = CheckScan::Scanned {
+        scan_id: report.scan_id.clone(),
+        roots: report.roots.clone(),
+        candidates: report.candidates.len() as u64,
+        entries_scanned: report.entries_scanned,
+        allocated_bytes: report.totals.allocated.total(),
+    };
+    Ok((state, Some(report)))
 }
 
 fn store_error(e: scull_storage::StoreError) -> ScullError {
@@ -195,6 +310,26 @@ pub fn sample_volumes(
 /// The human output: one line per volume, then the alerts.
 pub fn render(r: &CheckReport) -> String {
     let mut out = String::new();
+    match &r.scan {
+        CheckScan::NotConfigured | CheckScan::Disabled => {}
+        CheckScan::Skipped { reason } => {
+            out.push_str(&format!("scan skipped: {reason}\n"));
+        }
+        CheckScan::Scanned {
+            roots,
+            candidates,
+            allocated_bytes,
+            ..
+        } => {
+            let roots: Vec<&str> = roots.iter().map(FsPath::as_str).collect();
+            out.push_str(&format!(
+                "scanned {}: {candidates} item{} ({})\n",
+                roots.join(", "),
+                if *candidates == 1 { "" } else { "s" },
+                format_bytes(*allocated_bytes)
+            ));
+        }
+    }
     if r.forecasts.is_empty() && r.sampled.is_empty() {
         out.push_str(
             "scull check: no volumes to check yet; run `scull scan <path>` or set `scan.roots`\n",
@@ -315,6 +450,7 @@ mod tests {
     fn render_lines() {
         let r = CheckReport {
             now: 0,
+            scan: CheckScan::NotConfigured,
             sampled: vec![VolumeReport {
                 volume_id: "/".into(),
                 total_bytes: 500 * GIB,
@@ -353,14 +489,27 @@ mod tests {
              \x20 /media/usb: not sampled (not connected)\n\
              warning: / will drop below 10.0 GiB free in about 9 days (high confidence)\n"
         );
-        let empty = CheckReport {
+        let mut empty = CheckReport {
             now: 0,
+            scan: CheckScan::Disabled,
             sampled: vec![],
             not_sampled: vec![],
             forecasts: vec![],
             alerts: vec![],
         };
         assert!(render(&empty).contains("no volumes to check yet"));
+        empty.scan = CheckScan::Skipped {
+            reason: "/ is a filesystem root".into(),
+        };
+        assert!(render(&empty).starts_with("scan skipped: / is a filesystem root\n"));
+        empty.scan = CheckScan::Scanned {
+            scan_id: ScanId::from_suffix("x1").expect("id"),
+            roots: vec![FsPath::from("/p")],
+            candidates: 1,
+            entries_scanned: 9,
+            allocated_bytes: 2 * GIB,
+        };
+        assert!(render(&empty).starts_with("scanned /p: 1 item (2.0 GiB)\n"));
         assert_eq!(span(30), "<1 hour");
         assert_eq!(span(7_200), "2 hours");
     }

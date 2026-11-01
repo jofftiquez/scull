@@ -75,5 +75,9 @@ export function createTauriBridge(t: TauriTransport = realTransport): ScullBridg
     capabilities: () => call(COMMANDS.capabilities),
     history: () => call(COMMANDS.history),
     settings: () => call(COMMANDS.settings),
+    freeSpaceHistory: (since, volumeId) => call(COMMANDS.freeSpaceHistory, { since, volumeId: volumeId ?? null }),
+    rollupHistory: (since) => call(COMMANDS.rollupHistory, { since }),
+    regrowth: (since) => call(COMMANDS.regrowth, { since }),
+    footprintHistory: (since) => call(COMMANDS.footprintHistory, { since }),
   };
 }

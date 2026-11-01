@@ -1291,6 +1291,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "toml_edit",
  "unicode-width",
 ]
 
@@ -1421,6 +1422,7 @@ dependencies = [
  "scull-fixtures",
  "scull-git",
  "scull-platform",
+ "scull-proactive",
  "scull-safety",
  "scull-scanner",
  "scull-storage",
@@ -1782,6 +1784,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

@@ -17,5 +17,5 @@
     "jsx": "preserve",
     "types": ["vite/client", "node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "scripts/**/*.ts", "scripts/**/*.d.mts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "scripts/**/*.ts", "scripts/**/*.d.mts", "vite.config.ts", "bench/**/*.ts"]
 }

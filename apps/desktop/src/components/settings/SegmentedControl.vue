@@ -12,7 +12,7 @@ defineEmits<{ pick: [value: string] }>();
       :key="v"
       type="button"
       :aria-pressed="value === v ? 'true' : 'false'"
-      class="relative min-h-[32px] cursor-pointer rounded-chip border-0 px-3 text-label font-medium transition-[background] duration-200 after:absolute after:inset-x-0 after:-inset-y-[6px] after:content-['']"
+      class="relative min-h-[32px] min-w-touch cursor-pointer rounded-chip border-0 px-3 text-label font-medium transition-[background] duration-200 after:absolute after:inset-x-0 after:-inset-y-[6px] after:content-['']"
       :class="value === v ? 'bg-ink text-on-ink' : 'bg-transparent text-text-strong-muted hover:text-ink'"
       @click="$emit('pick', v)"
     >

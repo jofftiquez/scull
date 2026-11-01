@@ -206,6 +206,10 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
         let wt = s(&fx.root().join("repo-wt"));
         schemas.json(&cli, &["worktrees", "inspect", &wt], "worktree");
         schemas.ndjson(&cli, &["worktrees", "inspect", &wt], "worktree");
+        // `worktrees register` (main, #271): recorded in scull's own data folder only.
+        let reg = ["worktrees", "register", wt.as_str(), "--ttl", "7d"];
+        schemas.json(&cli, &reg, "worktree-registration");
+        schemas.ndjson(&cli, &reg, "worktree-registration");
     }
     schemas.json(&cli, &["caches"], "caches");
     schemas.ndjson(&cli, &["caches"], "caches");
@@ -277,6 +281,9 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     // an alert fired; both only read history and the volumes' free space).
     schemas.json(&cli, &["check"], "check");
     schemas.json(&cli, &["insights"], "insights");
+    // `agent install` (main, #267) as a dry run: shows the diff for the fixture home's Cursor
+    // config and writes nothing.
+    schemas.json(&cli, &["agent", "install", "cursor", "--dry-run"], "agent");
 
     // Phase 2 commands: clean, history, restore, quarantine purge, Quick Clean preview.
     clean_history_restore_outputs(&schemas, &cli);
@@ -298,7 +305,7 @@ fn fx_out_01_every_json_and_ndjson_output_validates_against_published_schemas() 
     let mut unused = Vec::new();
     for e in std::fs::read_dir(workspace().join("crates/scull-cli/schemas")).unwrap() {
         let name = e.unwrap().file_name().to_string_lossy().into_owned();
-        let needs_git = name.starts_with("worktree.");
+        let needs_git = name.starts_with("worktree.") || name.starts_with("worktree-registration.");
         if !used.contains(&name) && !(needs_git && !with_git) {
             unused.push(name);
         }

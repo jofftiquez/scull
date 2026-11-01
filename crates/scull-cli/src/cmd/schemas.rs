@@ -79,6 +79,11 @@ pub fn all() -> Vec<(String, serde_json::Value)> {
         ndjson_schema::<worktrees::WorktreeRecord>(worktrees::WORKTREE_SCHEMA),
     );
     add(
+        worktrees::REGISTRATION_SCHEMA,
+        document_schema::<worktrees::RegistrationReport>(worktrees::REGISTRATION_SCHEMA),
+        ndjson_schema::<worktrees::RegistrationRecord>(worktrees::REGISTRATION_SCHEMA),
+    );
+    add(
         caches::CACHES_SCHEMA,
         document_schema::<scull_engine::CachesReport>(caches::CACHES_SCHEMA),
         ndjson_schema::<caches::CachesRecord>(caches::CACHES_SCHEMA),

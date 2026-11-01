@@ -282,7 +282,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             </PlanRow>
 
             <template v-if="plan.left_out.length">
-              <h3 class="m-0 border-t border-line px-4 pt-4 pb-2 text-label font-medium text-text-secondary">Protected · never offered</h3>
+              <div role="listitem"><h2 class="m-0 border-t border-line px-4 pt-4 pb-2 text-label font-medium text-text-secondary">Protected · never offered</h2></div>
               <div
                 v-for="l in plan.left_out"
                 :key="l.label"
@@ -297,7 +297,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             </template>
 
             <template v-if="plan.skipped.length">
-              <h3 class="m-0 border-t border-line px-4 pt-4 pb-2 text-label font-medium text-text-secondary">Skipped at re-check · not in this plan</h3>
+              <div role="listitem"><h2 class="m-0 border-t border-line px-4 pt-4 pb-2 text-label font-medium text-text-secondary">Skipped at re-check · not in this plan</h2></div>
               <div
                 v-for="s in plan.skipped"
                 :key="s.label"

@@ -22,8 +22,10 @@
 //! * **Privacy** (MCP-05, T-44): the home folder prefix is shown as `~` by default
 //!   (`mcp.redact_home`); `mcp.hash_names` hashes project and folder names with a per-machine
 //!   salt that is never returned. The CLI prints [`DISCLOSURE`] when MCP is first enabled.
-//! * **Nothing is written**: scans run without a history store and the history database is
-//!   opened read-only. This crate never depends on `scull-cleaner` (SAFE-10).
+//! * **Nothing of yours is written**: scans run without a history store and the history
+//!   database is opened read-only. The one metadata-only tool, `register_worktree`, appends a
+//!   TTL reminder to scull's own [`registry`] file; expiry raises a review suggestion and never
+//!   deletes anything. This crate never depends on `scull-cleaner` (SAFE-10).
 //!
 //! # Connecting a client
 //!
@@ -39,6 +41,7 @@ mod allowlist;
 mod escape;
 mod history;
 mod redact;
+pub mod registry;
 mod server;
 mod tools;
 mod views;
@@ -52,7 +55,7 @@ pub use redact::{
 pub use server::{
     INSTRUCTIONS, ROOTS_TIMEOUT, ScullMcp, ServerOptions, serve, serve_stdio, serve_until,
 };
-pub use tools::{TOOL_NAMES, ToolError, definitions};
+pub use tools::{METADATA_TOOLS, TOOL_NAMES, ToolError, definitions};
 
 /// Crate name, used in diagnostics and `scull doctor` output.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
@@ -63,7 +66,8 @@ scull MCP server: privacy notice
   Results of scull's MCP tools (paths, project names, Git branch names, sizes) are sent to the
   AI client that started the server, and possibly to that client's cloud model provider. This
   is the one exception to scull keeping everything on your machine.
-  * Tools are read-only: they cannot delete, move or change anything, or approve a cleanup.
+  * Tools are read-only: they cannot delete, move or change your files, or approve a cleanup.
+    (register_worktree only records a reminder in scull's own data folder.)
   * Only folders under your configured scan roots (scan.roots) can be inspected.
   * Your home folder is shown as `~` (mcp.redact_home = true). Set mcp.hash_names = true to
     hide project and folder names, and mcp.max_results to limit result sizes.

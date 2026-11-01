@@ -20,7 +20,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 
 <template>
   <label
-    class="flex min-h-touch cursor-text items-center gap-2.5 rounded-button-lg border border-line bg-surface-raised px-3 text-text-tertiary"
+    class="flex min-h-touch cursor-text items-center gap-2.5 rounded-button-lg border border-line bg-surface-raised px-3 text-text-tertiary focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ink"
   >
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <circle cx="11" cy="11" r="6" />

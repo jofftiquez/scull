@@ -13,8 +13,13 @@ Two checks, both stdlib-only so they run unchanged on Linux, macOS and Windows:
     * every command that would delete, move, restore or purge (``clean`` in all its forms,
       ``clean caches --confirm --wipe``, ``restore``, ``approve``, ``data purge``,
       ``insights purge``, ...) exits 1 with "is not implemented yet";
+    * ``scull agent install <client>`` without ``--yes`` (and without a terminal to confirm
+      on) refuses and leaves the home folder unchanged; ``--dry-run`` only shows the diff;
+    * ``scull worktrees register`` writes nothing outside ``SCULL_HOME``;
     * ``scull mcp serve --allow-destructive`` lists only tools annotated
-      ``readOnlyHint: true`` and ``destructiveHint: false``;
+      ``destructiveHint: false``, all ``readOnlyHint: true`` except the metadata-only
+      ``register_worktree``, which, called on a real linked worktree, writes only under
+      ``SCULL_HOME`` and leaves the worktree unchanged;
     * a canary tree that every command is pointed at is byte-for-byte unchanged afterwards.
 
     Everything runs inside a fresh temp directory with ``SCULL_HOME``/``HOME`` redirected
@@ -62,11 +67,35 @@ DESTRUCTIVE = [
     ["approve", "plan-0000"],
     ["data", "purge"],
     ["insights", "purge"],
-    ["worktrees", "register", "tree", "--ttl", "1d"],
     ["schedule", "enable"],
     ["schedule", "disable"],
-    ["agent", "install", "claude-code"],
 ]
+
+# Commands that edit an AI client's config only with explicit consent (P4-AI-01): `--yes`, or a
+# "y" typed at an interactive prompt. Run as the gate runs them (stdin is not a terminal, no
+# `--yes`), each must exit with the code given and leave the home folder byte-for-byte
+# unchanged. `--dry-run` only shows the diff. With no scull entry, uninstall has nothing to do.
+CONSENT_GATED = [
+    (["agent", "install", "claude-code"], 2),
+    (["agent", "install", "codex"], 2),
+    (["agent", "install", "claude-code", "--dry-run"], 0),
+    (["agent", "uninstall", "claude-code"], 0),
+]
+
+
+# Commands that may record metadata in scull's own data folder (P4-AI-02) and nowhere else: the
+# home folder outside ``SCULL_HOME`` and the canary tree must stay byte-for-byte unchanged
+# (``tree`` is not a Git worktree, so this one is refused, but it still must not write).
+SCULL_HOME_ONLY = [
+    ["worktrees", "register", "tree", "--ttl", "1d"],
+]
+
+# MCP tools that record metadata in scull's data folder (PRD §13.2: ``register_worktree``
+# records a TTL, never deletes). They may be annotated ``readOnlyHint: false`` but must be
+# ``destructiveHint: false``; every other tool must be read-only and non-destructive.
+METADATA_ONLY = {"register_worktree"}
+
+SCULL_HOME_DIR = "scull-home"
 
 
 def fail(msg: str) -> None:
@@ -152,13 +181,92 @@ def check_destructive(scull: str, canary: Path, env: dict[str, str]) -> None:
         print(f"ok: `{shown}` -> exit 1, {p.stderr.strip().splitlines()[-1]}")
 
 
+def check_consent_gated(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None:
+    before = snapshot(home)
+    for args, code in CONSENT_GATED:
+        p = subprocess.run(
+            [scull, *args], cwd=canary, env=env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=60,
+        )
+        shown = "scull " + " ".join(args)
+        if p.returncode != code:
+            fail(
+                f"`{shown}` without consent must exit {code} "
+                f"(got exit {p.returncode}; stderr: {p.stderr.strip()!r})"
+            )
+        after = snapshot(home)
+        if after != before:
+            changed = sorted(set(before.items()) ^ set(after.items()))
+            fail(f"`{shown}` without consent changed the home folder: {changed}")
+        print(f"ok: `{shown}` -> exit {code}, home folder unchanged")
+
+
+def outside_scull_home(snap: dict[str, str]) -> dict[str, str]:
+    """``snap`` (of the gate's home folder) without anything under ``SCULL_HOME``."""
+    return {k: v for k, v in snap.items() if not k.startswith(SCULL_HOME_DIR + "/")}
+
+
+def check_scull_home_only(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None:
+    for args in SCULL_HOME_ONLY:
+        before_home = outside_scull_home(snapshot(home))
+        before_canary = snapshot(canary)
+        p = subprocess.run(
+            [scull, *args], cwd=canary, env=env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=60,
+        )
+        shown = "scull " + " ".join(args)
+        if outside_scull_home(snapshot(home)) != before_home:
+            fail(f"`{shown}` wrote to the home folder outside SCULL_HOME")
+        if snapshot(canary) != before_canary:
+            fail(f"`{shown}` changed the canary tree")
+        print(f"ok: `{shown}` -> exit {p.returncode}, nothing written outside SCULL_HOME")
+
+
+def check_tool_annotations(tools: list[dict]) -> None:
+    """Every tool read-only and non-destructive, except METADATA_ONLY tools, which may write
+    metadata (readOnlyHint false) but are never destructive."""
+    for t in tools:
+        ann = t.get("annotations") or {}
+        if ann.get("destructiveHint") is not False:
+            fail(f"MCP tool {t['name']!r} is not annotated non-destructive: {ann}")
+        if t["name"] in METADATA_ONLY:
+            continue
+        if ann.get("readOnlyHint") is not True:
+            fail(f"MCP tool {t['name']!r} is not annotated read-only: {ann}")
+
+
+def make_worktree(base: Path, env: dict[str, str]) -> Path | None:
+    """A Git repository with a linked worktree under ``base`` (None without git)."""
+    repo = base / "repo"
+    try:
+        def git(*args: str, cwd: Path = repo) -> None:
+            subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True,
+                           timeout=60)
+        repo.mkdir(parents=True)
+        git("init", "-q", "-b", "main")
+        (repo / "README.md").write_text("gate\n")
+        git("add", "README.md")
+        git("-c", "user.name=gate", "-c", "user.email=gate@example.invalid",
+            "commit", "-q", "-m", "init")
+        git("worktree", "add", "-q", "-b", "agent", str(base / "repo-wt"))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return base / "repo-wt"
+
+
 def check_mcp(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None:
     config_dir = home / "scull-home" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     root = str(canary / "tree").replace("\\", "\\\\")
+    # A linked worktree for register_worktree, outside the canary and the home folder.
+    wt_base = home.parent / "wt"
+    worktree = make_worktree(wt_base, env)
+    wt_root = str(wt_base).replace("\\", "\\\\")
     (config_dir / "config.toml").write_text(
-        f'[scan]\nroots = ["{root}"]\n\n[mcp]\nenabled = true\n'
+        f'[scan]\nroots = ["{root}", "{wt_root}"]\n\n[mcp]\nenabled = true\n'
     )
+    before_home = outside_scull_home(snapshot(home))
+    before_wt = snapshot(wt_base) if worktree else {}
     msgs = [
         {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -170,6 +278,13 @@ def check_mcp(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
+    if worktree:
+        msgs.append({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "register_worktree",
+                       "arguments": {"path": str(worktree), "ttl": "1d"}},
+        })
+    registered = None
     proc = subprocess.Popen(
         [scull, "mcp", "serve", "--allow-destructive"], cwd=canary, env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -191,6 +306,8 @@ def check_mcp(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None
                     break
             if m["id"] == 2:
                 tools = v["result"]["tools"]
+            if m["id"] == 3:
+                registered = v.get("result") or {}
     finally:
         proc.stdin.close()
         try:
@@ -200,12 +317,22 @@ def check_mcp(scull: str, canary: Path, home: Path, env: dict[str, str]) -> None
             fail("mcp server did not exit after stdin closed")
     if not tools:
         fail("mcp server listed no tools")
-    for t in tools:
-        ann = t.get("annotations") or {}
-        if ann.get("readOnlyHint") is not True or ann.get("destructiveHint") is not False:
-            fail(f"MCP tool {t['name']!r} is not annotated read-only/non-destructive: {ann}")
+    check_tool_annotations(tools)
     names = ", ".join(t["name"] for t in tools)
-    print(f"ok: `scull mcp serve --allow-destructive` lists {len(tools)} read-only tools: {names}")
+    print(f"ok: `scull mcp serve --allow-destructive` lists {len(tools)} non-destructive tools "
+          f"(metadata-only: {', '.join(sorted(METADATA_ONLY))}): {names}")
+    if worktree:
+        if registered is None or registered.get("isError"):
+            fail(f"register_worktree failed on a linked worktree: {registered}")
+        if outside_scull_home(snapshot(home)) != before_home:
+            fail("register_worktree wrote to the home folder outside SCULL_HOME")
+        if snapshot(wt_base) != before_wt:
+            fail("register_worktree changed the worktree or its repository")
+        if not (home / SCULL_HOME_DIR / "data" / "worktree-ttl.jsonl").is_file():
+            fail("register_worktree recorded nothing in SCULL_HOME")
+        print("ok: register_worktree recorded a TTL in SCULL_HOME only; worktree unchanged")
+    else:
+        print("note: git unavailable; register_worktree's write check skipped")
 
 
 def check_binary(scull: str) -> None:
@@ -224,6 +351,8 @@ def check_binary(scull: str) -> None:
         ).stdout.strip()
         print(f"checking {version} ({scull})")
         check_destructive(scull, canary, env)
+        check_scull_home_only(scull, canary, home, env)
+        check_consent_gated(scull, canary, home, env)
         check_mcp(scull, canary, home, env)
         after = snapshot(canary)
         if after != before:

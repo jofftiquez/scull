@@ -6,7 +6,10 @@ use scull_core::{Category, FsPath, ScanId, Tier};
 use scull_proactive::alert::AlertKind;
 use scull_proactive::forecast::GIB;
 use scull_proactive::policy::category_spike_alert;
-use scull_proactive::{budget_alerts, category_series, category_usage, free_space_drop_alerts};
+use scull_proactive::{
+    budget_alerts, category_series, category_spike_alerts, category_usage, free_space_drop_alerts,
+    latest_scan_roots,
+};
 use scull_storage::{
     DefaultPermissions, Rollup, ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store,
     VolumeSample,
@@ -18,13 +21,26 @@ const HOUR: i64 = 3_600;
 /// Record a completed scan of the same root finishing `hours_ago`, with `container` and
 /// `artifacts` GiB, and a free-space sample of `/`.
 fn scan(store: &mut Store, n: u32, hours_ago: i64, container: u64, artifacts: u64, free: u64) {
+    scan_of(store, "/home/u", n, hours_ago, container, artifacts, free);
+}
+
+/// Like [`scan`], of `root`.
+fn scan_of(
+    store: &mut Store,
+    root: &str,
+    n: u32,
+    hours_ago: i64,
+    container: u64,
+    artifacts: u64,
+    free: u64,
+) {
     let at = NOW - hours_ago * HOUR;
     let scan_id = ScanId::from_suffix(&format!("p{n}")).expect("id");
     store
         .record_scan_start(&ScanStart {
             scan_id: scan_id.clone(),
             started_at: at - 60,
-            roots: vec![FsPath::from("/home/u")],
+            roots: vec![FsPath::from(root)],
         })
         .expect("start");
     let rollup = |category, gib: u64| Rollup {
@@ -136,4 +152,45 @@ fn alerts_fire_over_recorded_history() {
             .is_empty()
     );
     assert!(category_spike_alert(Category::Container, &docker, Vec::new(), &quiet, NOW).is_none());
+}
+
+/// Category spikes compare only scans of the same roots (P4-PRO-02 follow-up): a broader scan
+/// finding more is not growth.
+#[test]
+fn category_spikes_compare_scans_of_the_same_roots() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut s = store(dir.path());
+    let cfg = ProactiveConfig::default();
+    let home = vec![FsPath::from("/home/u")];
+    assert_eq!(latest_scan_roots(&s).expect("roots"), Some(home.clone()));
+
+    let a = category_spike_alerts(&s, &home, &cfg, NOW, |c| match c {
+        Category::Container => vec!["/home/u/.docker".to_owned()],
+        _ => Vec::new(),
+    })
+    .expect("spikes");
+    assert_eq!(a.len(), 1, "{a:#?}");
+    assert_eq!(a[0].key, "growth_spike:container");
+    assert_eq!(a[0].bytes, Some(28 * GIB));
+    assert_eq!(a[0].paths, vec!["/home/u/.docker".to_owned()]);
+
+    // A broader scan (`/`) an hour later with far more of everything: not compared with the
+    // `/home/u` scans, and alone it has no baseline.
+    scan_of(&mut s, "/", 9, 0, 400, 300, 266);
+    let root = vec![FsPath::from("/")];
+    assert_eq!(latest_scan_roots(&s).expect("roots"), Some(root.clone()));
+    assert!(
+        category_spike_alerts(&s, &root, &cfg, NOW, |_| Vec::new())
+            .expect("spikes")
+            .is_empty()
+    );
+    // The `/home/u` series still shows only its own growth.
+    let a = category_spike_alerts(&s, &home, &cfg, NOW, |_| Vec::new()).expect("spikes");
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].bytes, Some(28 * GIB));
+    assert!(
+        category_spike_alerts(&s, &[], &cfg, NOW, |_| Vec::new())
+            .expect("spikes")
+            .is_empty()
+    );
 }

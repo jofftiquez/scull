@@ -3,10 +3,14 @@
 
 use crate::alert::Alert;
 use crate::forecast::{DAY_SECS, Forecast, ForecastPolicy, Release, forecast};
-use crate::policy::{SeriesPoint, Usage, free_space_drop_alert};
-use scull_core::Category;
+use crate::policy::{
+    SeriesPoint, Usage, activity_from_candidate, budget_alerts, category_spike_alert,
+    free_space_drop_alert, stale_alerts, usage_from_candidates,
+};
 use scull_core::config::ProactiveConfig;
+use scull_core::{Candidate, Category, FsPath, ScanId};
 use scull_storage::{Store, StoreError};
+use std::collections::{BTreeSet, HashMap};
 
 /// Forecast one volume from its recorded free-space samples in the policy window.
 /// `releases` are bytes known to have been freed on that volume (may be empty).
@@ -58,9 +62,8 @@ pub const CATEGORIES: [Category; 8] = [
 
 /// `category`'s allocated bytes per usable scan finished at or after `since`, oldest first
 /// (input for [`crate::policy::spike`]). Points of scans with different roots are not
-/// comparable (a broader scan is not growth), and the store does not yet expose each scan's
-/// roots, so only feed this to spike detection when the caller knows the scans cover the same
-/// roots.
+/// comparable (a broader scan is not growth): use [`category_spike_alerts`], which keeps only
+/// scans of the same roots, for spike detection.
 pub fn category_series(
     store: &Store,
     category: Category,
@@ -111,4 +114,133 @@ pub fn free_space_drop_alerts(
     }
     crate::alert::sort_alerts(&mut out);
     Ok(out)
+}
+
+/// The roots of the latest usable (`completed`/`partial`) scan, if any: the series that
+/// category spikes compare when the caller did not just scan.
+pub fn latest_scan_roots(store: &Store) -> Result<Option<Vec<FsPath>>, StoreError> {
+    let Some(last) = store.status_summary()?.last_scan else {
+        return Ok(None);
+    };
+    store.scan_roots(&last.scan_id)
+}
+
+/// Category growth spikes (PRO-04) over the scans of exactly `roots` (as a set) in the last
+/// two spike windows: one [`crate::AlertKind::GrowthSpike`] warning per category whose
+/// allocated bytes grew past the spike threshold. Scans of other roots are ignored (a broader
+/// scan is not growth). `paths` names the folders responsible for a category (largest first),
+/// when the caller knows them.
+pub fn category_spike_alerts(
+    store: &Store,
+    roots: &[FsPath],
+    cfg: &ProactiveConfig,
+    now: i64,
+    paths: impl Fn(Category) -> Vec<String>,
+) -> Result<Vec<Alert>, StoreError> {
+    if roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let want: BTreeSet<&str> = roots.iter().map(FsPath::as_str).collect();
+    let window = i64::try_from(cfg.spike_window.as_secs()).unwrap_or(i64::MAX);
+    let since = now.saturating_sub(window.saturating_mul(2));
+    let mut same: HashMap<ScanId, bool> = HashMap::new();
+    let mut out = Vec::new();
+    for c in CATEGORIES {
+        let mut points = Vec::new();
+        for p in store.rollup_history(c, since)? {
+            let matches = match same.get(&p.scan_id) {
+                Some(m) => *m,
+                None => {
+                    let m = store.scan_roots(&p.scan_id)?.is_some_and(|r| {
+                        r.iter().map(FsPath::as_str).collect::<BTreeSet<_>>() == want
+                    });
+                    same.insert(p.scan_id.clone(), m);
+                    m
+                }
+            };
+            if matches {
+                points.push(SeriesPoint {
+                    at: p.at,
+                    bytes: p.allocated_bytes,
+                });
+            }
+        }
+        if points.len() >= 2
+            && let Some(a) = category_spike_alert(c, &points, paths(c), cfg, now)
+        {
+            out.push(a);
+        }
+    }
+    crate::alert::sort_alerts(&mut out);
+    Ok(out)
+}
+
+/// The scan a check just ran: its roots and candidates.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanInput<'a> {
+    /// The roots scanned (as recorded).
+    pub roots: &'a [FsPath],
+    /// Everything it found.
+    pub candidates: &'a [Candidate],
+}
+
+/// Every alert a check raises (PRD §16), most severe first:
+///
+/// * disk-full forecasts and low space ([`crate::forecast_alerts`], PRO-01);
+/// * budgets (PRO-03): over `scan`'s candidates when there is one (category, ecosystem and
+///   path budgets), otherwise over the latest recorded scan's category totals (category
+///   budgets only);
+/// * staleness (PRO-02, PRO-08) of `scan`'s worktrees, build outputs and caches (needs a scan:
+///   history keeps no modification times);
+/// * category growth spikes over scans of the same roots as `scan` (or as the latest recorded
+///   scan), naming the largest items of the category when `scan` is given, and free-space
+///   drops of every volume (PRO-04).
+///
+/// Read-only: nothing is recorded or removed.
+pub fn check_alerts(
+    store: &Store,
+    cfg: &ProactiveConfig,
+    forecasts: &[Forecast],
+    scan: Option<ScanInput<'_>>,
+    now: i64,
+) -> Result<Vec<Alert>, StoreError> {
+    let policy = crate::policy::forecast_policy(cfg);
+    let mut alerts = crate::alert::forecast_alerts(forecasts, &policy, now);
+    if !cfg.budgets.is_empty() {
+        let usage = match scan {
+            Some(s) => usage_from_candidates(s.candidates),
+            None => category_usage(store, now)?,
+        };
+        alerts.extend(budget_alerts(&cfg.budgets, &usage, now));
+    }
+    if let Some(s) = scan {
+        let items: Vec<_> = s
+            .candidates
+            .iter()
+            .filter_map(activity_from_candidate)
+            .collect();
+        alerts.extend(stale_alerts(&items, cfg, now));
+    }
+    let roots = match scan {
+        Some(s) => Some(s.roots.to_vec()),
+        None => latest_scan_roots(store)?,
+    };
+    if let Some(roots) = roots {
+        let largest = |c: Category| -> Vec<String> {
+            let mut of: Vec<&Candidate> = scan
+                .map(|s| s.candidates.iter().filter(|x| x.category == c).collect())
+                .unwrap_or_default();
+            of.sort_by(|a, b| {
+                b.sizes
+                    .allocated
+                    .cmp(&a.sizes.allocated)
+                    .then_with(|| a.path.as_str().cmp(b.path.as_str()))
+            });
+            of.iter().map(|x| x.path.as_str().to_owned()).collect()
+        };
+        alerts.extend(category_spike_alerts(store, &roots, cfg, now, largest)?);
+    }
+    alerts.extend(free_space_drop_alerts(store, cfg, now)?);
+    crate::alert::sort_alerts(&mut alerts);
+    Ok(alerts)
 }

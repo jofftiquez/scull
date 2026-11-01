@@ -13,14 +13,14 @@ const note = ref('');
     <div class="flex gap-2">
       <button
         type="button"
-        class="min-h-9 cursor-pointer rounded-small border-0 bg-ink px-3.5 text-label font-semibold text-on-ink"
+        class="min-h-11 cursor-pointer rounded-small border-0 bg-ink px-3.5 text-label font-semibold text-on-ink"
         @click="note = 'Supporter checkout is not available yet.'"
       >
         Support
       </button>
       <button
         type="button"
-        class="min-h-9 cursor-pointer rounded-small border-0 bg-transparent px-3 text-label text-text-strong-muted hover:text-ink"
+        class="min-h-11 cursor-pointer rounded-small border-0 bg-transparent px-3 text-label text-text-strong-muted hover:text-ink"
         @click="note = 'Supporter keys are not available yet.'"
       >
         I have a key

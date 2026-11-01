@@ -197,7 +197,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
     <template #actions>
       <button
         type="button"
-        class="inline-flex min-h-10 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
+        class="inline-flex min-h-11 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
         data-testid="show-regenerable"
         @click="showRegenerable"
       >
@@ -206,7 +206,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       <button
         v-if="core.scanning"
         type="button"
-        class="inline-flex min-h-10 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
+        class="inline-flex min-h-11 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
         @click="cancelScan"
       >
         Cancel
@@ -214,7 +214,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       <button
         type="button"
         :disabled="scanningView"
-        class="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink disabled:cursor-progress"
+        class="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink disabled:cursor-progress"
         data-testid="rescan"
         @click="startScan"
       >
@@ -235,6 +235,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         <span class="tabular-nums">{{ rescanLabel }}</span>
       </button>
     </template>
+    <h1 class="sr-only">Overview</h1>
 
     <section
       aria-label="Storage wheel"
