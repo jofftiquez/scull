@@ -1167,15 +1167,12 @@ fn fx_mcp_13_approve_started_by_an_agent_process_is_refused() {
 /// refusal still runs); skipped locally without tmux too.
 #[cfg(unix)]
 fn have_tmux(test: &str) -> bool {
-    if Command::new("tmux").arg("-V").output().is_ok() {
-        return true;
-    }
-    assert!(
-        !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
-        "{test}: tmux is required on Linux CI"
-    );
-    eprintln!("SKIP {test}: tmux is not installed");
-    false
+    // CI installs tmux on Linux and macOS: there a missing tmux is a failure, not a skip.
+    scull_fixtures::skip::require(
+        Command::new("tmux").arg("-V").output().is_ok(),
+        test,
+        "tmux is not installed",
+    )
 }
 
 /// An agent plan over `app/target` only, prepared through the MCP server; the session stays
@@ -1523,6 +1520,8 @@ fn approve_run_is_refused_before_anything_is_shown() {
     }
 
     if !have_tmux("approve_run_is_refused_before_anything_is_shown") {
+        // The fixture was used above: its invariants are checked before skipping the rest.
+        env.fx.check_invariants(&InvariantInputs::new()).assert_ok();
         return;
     }
     // Elevated, and an agent's environment marker, in a clean terminal.
