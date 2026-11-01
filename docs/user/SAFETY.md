@@ -337,8 +337,10 @@ code into the app) is described in [APPROVAL_HARDENING.md](../APPROVAL_HARDENING
 
 `scull ask` is an optional assistant that answers questions with a model you choose. It is
 off until you configure it. Before the first question to a provider, scull shows what will be
-sent and asks for your consent. The model can call only scull's read-only tools, so it can't
-change files or prepare a cleanup. See [the CLI reference](CLI.md#scull-ask).
+sent and asks for your consent. The model calls scull's read-only tools, so it can't change
+files or approve or run a cleanup. Only if you set `[mcp] destructive = true` (and scull isn't
+elevated) may it prepare a plan, which changes nothing and runs only after you approve it
+yourself with `scull approve <plan-id>`. See [the CLI reference](CLI.md#scull-ask).
 
 ## Unattended cleanup
 

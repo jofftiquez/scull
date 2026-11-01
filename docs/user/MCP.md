@@ -166,6 +166,12 @@ How a cleanup goes:
    right before it is touched; S0 items are deleted, S1/S2 items quarantined (`scull restore`
    puts them back).
 
+Rather run it yourself? `scull approve <plan-id> --run` approves and runs the plan in one
+step, in your terminal: the same checks and code, then the same rescan (any change voids the
+plan) and the same Executor run as `execute_cleanup`. The approval is spent by that run, so
+if the agent calls `execute_cleanup` at the same moment, exactly one of the two runs it. No
+agent can ask for this: it has no MCP tool, setting or environment variable.
+
 Changed your mind after approving? Press **Revoke approval** in the desktop app, or run
 `scull approve --revoke <plan-id>` in your terminal, before the agent executes it (`scull
 approve` with no plan ID lists approved plans not yet run). The approval is withdrawn in the
@@ -175,8 +181,7 @@ revocation is refused because the cleanup already started, or `execute_cleanup` 
 
 The desktop dialog works only in the app's main window. The menu bar widget and any other page
 can't open, approve or deny a plan. Like the terminal, the dialog shows the client's name as
-the client gave it, not verified. Approving or running in one terminal step
-(`scull approve <plan-id> --run`) is coming (#97).
+the client gave it, not verified.
 
 ### Limits on what the agent can ask for
 
@@ -222,6 +227,7 @@ Everything that was **refused** is recorded too, and `scull history` lists it un
 | `prepare_refused` | A `prepare_cleanup` hit a limit (above) | `rate_limited`, `too_many_pending_plans` (no plan ID) |
 | `approval_revoked` | You revoked an approval before it was used (recorded in the same transaction; nothing else can write this entry) | `revoked` |
 | `revoke_refused` | A revocation was refused | `not_approved`, `approval_used` (the cleanup already started), `approval_revoked`, `approval_expired`, `plan_foreign`, `unknown_plan` |
+| `approve_run` by `cli` | You approved a plan with `scull approve <plan-id> --run`; how that run ended | `executed`, `plan_changed` (void), `approval_used` (the agent ran it first), `lock_held` (the approval was then revoked), `outside_allowlist`, `cancelled`, ... |
 | `execute_refused` by `executor` | The Executor's own check refused to start the plan | `not_approved`, `not_human`, `approval_mismatch`, `approval_expired`, `approval_used`, `approval_revoked`, `other_account`, `targets_touched`, `unfinished_operation`, ... |
 
 Each entry holds the reason code, the plan ID and its content hash, the channel

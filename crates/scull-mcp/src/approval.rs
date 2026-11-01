@@ -1337,6 +1337,34 @@ pub fn record_execute_refusal(
         .map_err(store_err)
 }
 
+/// Record how a `scull approve <plan-id> --run` ended after the human approved plan `plan`
+/// in that terminal ([`EventKind::ApproveRun`], source `cli`, channel `terminal`): `outcome`
+/// is a stable code (`executed`, `plan_changed`, `approval_used`, `lock_held`, ...). The
+/// approval itself was recorded by [`approve`]; the operation, if one ran, has its own audit.
+pub fn record_approve_run(
+    store: &mut Store,
+    plan: &Plan,
+    outcome: &str,
+    who: &Principal,
+    now: i64,
+) -> Result<(), Refused> {
+    store
+        .record_agent_event(&AgentAuditEvent {
+            event_id: 0,
+            at: now,
+            kind: EventKind::ApproveRun,
+            source: "cli".into(),
+            plan_id: Some(plan.id().clone()),
+            content_hash: Some(plan.content_hash().clone()),
+            reason: outcome.into(),
+            channel: channel_name(HumanChannel::Terminal.method()).into(),
+            machine_id: who.machine_id.clone(),
+            user: who.user.clone(),
+            count: 1,
+        })
+        .map_err(store_err)
+}
+
 /// Record that the MCP server refused a `prepare_cleanup` with the stable code `reason`
 /// (`rate_limited`, `too_many_pending_plans`; [`EventKind::PrepareRefused`], no plan).
 pub fn record_prepare_refusal(

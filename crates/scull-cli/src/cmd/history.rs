@@ -12,7 +12,8 @@
 //! * Below the operations (without an ID): what was refused to AI agents (PRD §13.3 step 5),
 //!   newest first: denied approvals (`deny`, too many wrong codes, no terminal, a refused
 //!   attempt), refused `execute_cleanup` and `prepare_cleanup` calls (#299: rate limit,
-//!   pending cap), approvals the human revoked and refused revocations (#298), each with its
+//!   pending cap), approvals the human revoked and refused revocations (#298), and agent
+//!   plans the human approved and ran with `scull approve --run` (with how that ended), each with its
 //!   reason code, plan, channel, who recorded it and how many times it repeated
 //!   (`agent_events` in JSON). Bounded: at most `--limit` entries (default
 //!   [`AGENT_EVENTS_LIMIT`]) from `--since` or, by default, the last [`AGENT_EVENTS_DAYS`]
@@ -473,6 +474,7 @@ fn render_agent_events(events: &[AgentEventLine], color: bool) -> String {
             "approval_revoked" => "approval revoked",
             "revoke_refused" => "revoke refused",
             "prepare_refused" => "plan refused",
+            "approve_run" => "approved, run here",
             other => other,
         };
         t.push(vec![
