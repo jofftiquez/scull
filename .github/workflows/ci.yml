@@ -58,6 +58,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/phase2' || github.event_name == 'pull_request' }}
+      - name: Test prerequisites (macOS)
+        # tmux drives a real terminal for the `scull approve --run` tests; a fixture's missing
+        # prerequisite fails in CI (scull_fixtures::skip, #113), so install it.
+        if: runner.os == 'macOS'
+        run: command -v tmux >/dev/null || brew install tmux
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
