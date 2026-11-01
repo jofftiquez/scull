@@ -1197,34 +1197,56 @@ fn windows_ctrl_c_exits_130(fx: &Fixture) {
     command.creation_flags(scull_platform::console::TARGET_CREATION_FLAGS);
     let mut m = Mcp::start_command(command);
     let pid = m.child.id();
-    let sender = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "fx_out_02_ctrl_c_sender",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CTRL_C_PID_ENV, pid.to_string())
-        .output()
-        .unwrap();
-    assert!(
-        sender.status.success(),
-        "Ctrl-C sender failed: {}\n{}",
-        String::from_utf8_lossy(&sender.stdout),
-        String::from_utf8_lossy(&sender.stderr)
-    );
+    let send = || {
+        let sender = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fx_out_02_ctrl_c_sender",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CTRL_C_PID_ENV, pid.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            sender.status.success(),
+            "interrupt sender failed: {}\n{}",
+            String::from_utf8_lossy(&sender.stdout),
+            String::from_utf8_lossy(&sender.stderr)
+        );
+    };
+    let exited_within = |m: &mut Mcp, secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            if let Some(status) = m.child.try_wait().unwrap() {
+                return Some(status);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    send();
     // Prompt: well within a few seconds, while stdin is still open.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let status = loop {
-        if let Some(status) = m.child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() > deadline {
+    let Some(status) = exited_within(&mut m, 15) else {
+        // Tell "never received" from "received but stuck": a second interrupt makes scull exit
+        // at once (cancel.rs) if the first one arrived.
+        send();
+        let second = exited_within(&mut m, 10);
+        if second.is_none() {
             let _ = m.child.kill();
-            panic!("scull mcp serve did not exit within 20 s of a console interrupt");
         }
-        std::thread::sleep(Duration::from_millis(100));
+        let mut err = String::new();
+        if let Some(mut e) = m.child.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+        }
+        panic!(
+            "scull mcp serve did not exit within 15 s of a console interrupt; after a second \
+             one: {second:?}\nstderr:\n{err}"
+        );
     };
     drop(m.child.stdin.take());
     assert_eq!(
