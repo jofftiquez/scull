@@ -75,6 +75,7 @@ pub mod quarantine;
 #[cfg(feature = "delete")]
 pub mod remove;
 pub mod scheduler;
+pub mod startup_env;
 #[cfg(feature = "delete")]
 pub mod trash;
 mod types;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-footprint-history"
+description = "Enables the footprint_history command without any pre-configured scope."
+commands.allow = ["footprint_history"]
+
+[[permission]]
+identifier = "deny-footprint-history"
+description = "Denies the footprint_history command without any pre-configured scope."
+commands.deny = ["footprint_history"]

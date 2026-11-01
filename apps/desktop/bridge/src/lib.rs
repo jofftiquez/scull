@@ -47,6 +47,7 @@
 //! `tests/safe10.rs` fails the build if either changes. Cleanups reach the Executor through a
 //! plan and a human approval, never through the desktop bridge.
 
+pub mod approvals;
 pub mod db;
 pub mod drives;
 pub mod forecasts;
@@ -59,6 +60,10 @@ pub mod session;
 pub mod settings;
 pub mod views;
 
+pub use approvals::{
+    AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
+    ApprovalDesk,
+};
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
 pub use forecasts::ForecastsView;
 pub use history::HistoryView;

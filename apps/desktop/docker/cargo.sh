@@ -17,11 +17,12 @@ image=scull-desktop-build:1
 }
 docker image inspect "$image" >/dev/null 2>&1 || docker build -t "$image" "$root/apps/desktop/docker"
 # Runs as root (the image's toolchain and the cache volumes are root's), then hands the files
-# tauri-build generates in the mounted tree (src-tauri/gen, gitignored) back to you.
+# tauri-build generates in the mounted tree (src-tauri/gen and src-tauri/permissions, gitignored)
+# back to you.
 # RUSTUP_TOOLCHAIN pins the image's 1.97.x toolchain (rust-toolchain.toml says "1.97").
 exec docker run --rm \
   -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_TARGET_DIR=/target \
   -v scull-desktop-target:/target -v scull-desktop-registry:/usr/local/cargo/registry \
   -v "$root:/work" -w /work/apps/desktop/src-tauri \
   -e HOST_IDS="$(id -u):$(id -g)" \
-  "$image" sh -c 'cargo "$@"; s=$?; chown -R "$HOST_IDS" gen 2>/dev/null; exit $s' cargo "$@"
+  "$image" sh -c 'cargo "$@"; s=$?; chown -R "$HOST_IDS" gen permissions 2>/dev/null; exit $s' cargo "$@"

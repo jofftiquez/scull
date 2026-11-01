@@ -24,7 +24,8 @@ export interface TauriTransport {
   listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn>;
 }
 
-const realTransport: TauriTransport = {
+/** The real Tauri IPC (also used by ./tauriPlans.ts, which must not import @tauri-apps/api). */
+export const realTransport: TauriTransport = {
   invoke: (cmd, args) => invoke(cmd, args),
   listen: (event, handler) => listen(event, (e) => handler(e.payload as never)),
 };
