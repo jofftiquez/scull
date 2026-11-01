@@ -435,10 +435,18 @@ fn fx_lnx_03_network_mount_inside_scan_root_is_skipped_and_never_hangs() {
                 !rel.starts_with("hang"),
                 "classified behind a frozen mount: {rel}"
             );
-            if rel == "proj/target" {
-                assert_eq!(c.tier, Tier::S3);
-            }
         }
+        // A frozen mount costs only itself (#301): its sibling `proj/` is still scanned, and
+        // `proj/target` (with its own network mount) is still S3 because it crosses a mount.
+        let proj = cand(&frozen_report, root, "proj/target");
+        assert_eq!(proj.tier, Tier::S3, "{:?}", proj.reasons);
+        assert!(
+            proj.reasons
+                .iter()
+                .any(|x| x.code == ReasonCode::CrossesMount),
+            "{:?}",
+            proj.reasons
+        );
         children.push(frozen);
     } else {
         println!("FX-LNX-03: frozen-mount sub-case skipped (needs bindfs)");
