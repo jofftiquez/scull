@@ -49,7 +49,11 @@ const drive = computed(() => chosenDrive(driveChoice.value, driveOpts.value));
 const candidates = computed(() => candidatesOn(allCandidates.value, drive.value, drives.value));
 const model = computed(() => (core.report || caches.value ? buildWheelModel(candidates.value) : null));
 const arcs = computed(() => (model.value ? layoutWheel(model.value) : []));
-const scanningView = computed(() => core.scanning || sweep.sweeping.value);
+// Before the first scan of the session starts, mount waits for `status` to decide whether it may
+// scan (onboarding owns the first one). Count that wait as scanning so the header never offers an
+// idle "Rescan" over a wheel that is about to be replaced.
+const preparing = ref(!core.report && !core.scanning);
+const scanningView = computed(() => preparing.value || core.scanning || sweep.sweeping.value);
 
 // Live scan progress, kept between events (the analysing phase reports no entry count).
 const seenEntries = ref(0);
@@ -175,8 +179,12 @@ onMounted(async () => {
     // First run: scan roots must be chosen explicitly (CFG-04), so onboarding owns the first
     // scan. Never auto-scan default roots before that.
     const status = core.status ?? (await bridge.status().catch(() => null));
-    if (!needsOnboarding(status)) void startScan();
+    // Hand over to the sweep in the same tick: startScan sets it before its first await.
+    preparing.value = false;
+    if (!needsOnboarding(status) && !core.report && !core.scanning) void startScan();
+    else if (core.scanning) followRunningScan();
   }
+  preparing.value = false;
   bridge
     .drives()
     .then((d) => (drives.value = d))
