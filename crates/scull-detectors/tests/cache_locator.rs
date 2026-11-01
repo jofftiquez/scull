@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{StdReader, check, identity_available, plan_inputs, rel};
+use common::{StdReader, check, identity_available, jvm_caches, plan_inputs, rel};
 use scull_core::{
     Action, Candidate, Category, Evidence, PlanId, PlanItem, PlanOrigin, PlanParams, ReasonCode,
     ScanId, Tier,
@@ -244,6 +244,11 @@ fn build(fx: &mut Fixture, tool: CacheTool, dir: &str) {
         CacheTool::Pip => pip_cache(fx, dir),
         CacheTool::Uv => uv_cache(fx, dir),
         CacheTool::Conda => conda_pkgs(fx, dir),
+        CacheTool::GoBuild => jvm_caches::go_build_cache(fx, dir),
+        CacheTool::GoMod => jvm_caches::go_modcache(fx, dir),
+        CacheTool::Gradle => jvm_caches::gradle_caches(fx, dir),
+        CacheTool::Maven => jvm_caches::maven_repository(fx, dir),
+        CacheTool::NuGet => jvm_caches::nuget_packages(fx, dir),
     }
 }
 
@@ -259,6 +264,11 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Pip, "home/.cache/pip"),
             (CacheTool::Uv, "home/.cache/uv"),
             (CacheTool::Conda, "home/miniconda3/pkgs"),
+            (CacheTool::GoBuild, "home/.cache/go-build"),
+            (CacheTool::GoMod, "home/go/pkg/mod"),
+            (CacheTool::Gradle, "home/.gradle/caches"),
+            (CacheTool::Maven, "home/.m2/repository"),
+            (CacheTool::NuGet, "home/.nuget/packages"),
         ],
         Os::Macos => vec![
             (CacheTool::Npm, "home/.npm/_cacache"),
@@ -269,6 +279,11 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Pip, "home/Library/Caches/pip"),
             (CacheTool::Uv, "home/.cache/uv"),
             (CacheTool::Conda, "home/miniconda3/pkgs"),
+            (CacheTool::GoBuild, "home/Library/Caches/go-build"),
+            (CacheTool::GoMod, "home/go/pkg/mod"),
+            (CacheTool::Gradle, "home/.gradle/caches"),
+            (CacheTool::Maven, "home/.m2/repository"),
+            (CacheTool::NuGet, "home/.nuget/packages"),
         ],
         Os::Windows => vec![
             (CacheTool::Npm, "home/AppData/Local/npm-cache/_cacache"),
@@ -279,6 +294,11 @@ fn default_layout(os: Os) -> Vec<(CacheTool, &'static str)> {
             (CacheTool::Pip, "home/AppData/Local/pip/Cache"),
             (CacheTool::Uv, "home/AppData/Local/uv/cache"),
             (CacheTool::Conda, "home/miniconda3/pkgs"),
+            (CacheTool::GoBuild, "home/AppData/Local/go-build"),
+            (CacheTool::GoMod, "home/go/pkg/mod"),
+            (CacheTool::Gradle, "home/.gradle/caches"),
+            (CacheTool::Maven, "home/.m2/repository"),
+            (CacheTool::NuGet, "home/.nuget/packages"),
         ],
     }
 }
@@ -306,8 +326,9 @@ fn default_layout_for(os: Os) {
     let want: Vec<(CacheTool, String)> = mine.iter().map(|(t, d)| (*t, (*d).to_owned())).collect();
     assert_eq!(found_rel(&fx, &scan), want, "{os:?} layout");
 
-    let want_len = scan.found.len();
-    assert_eq!(want_len, CacheTool::ALL.len(), "every tool found");
+    assert_eq!(scan.found.len(), CacheTool::ALL.len(), "every tool found");
+    // Gradle and Maven have no cleanup command: shown, inspect-only, never planned.
+    let want_len = scan.found.iter().filter(|c| c.commands().is_some()).count();
     let mut candidates = Vec::new();
     for c in scan.found {
         assert!(c.recognized, "{} layout recognized", c.tool);
@@ -318,6 +339,13 @@ fn default_layout_for(os: Os) {
         assert!(cand.is_consistent());
         assert_eq!(cand.category, Category::PackageCache);
         assert_eq!(cand.rule.id, tool.rule_id());
+        if scull_detectors::commands_for_rule(tool.rule_id()).is_none() {
+            assert_eq!(cand.tier, Tier::S3, "{tool} is inspect-only");
+            assert_eq!(cand.action, Action::None);
+            assert!(codes(&cand).contains(&ReasonCode::InspectOnly));
+            candidates.push(cand);
+            continue;
+        }
         assert_eq!(cand.tier, expected(Tier::S1), "{tool} is S1 (QC-02)");
         assert!(codes(&cand).contains(&ReasonCode::PackageCache));
         assert_eq!(
@@ -337,6 +365,7 @@ fn default_layout_for(os: Os) {
     if identity_available() {
         let items: Vec<PlanItem> = candidates
             .iter()
+            .filter(|c| c.action != Action::None)
             .map(|c| PlanItem::from_candidate(c).unwrap())
             .collect();
         assert_eq!(

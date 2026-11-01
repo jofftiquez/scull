@@ -23,11 +23,19 @@ in `crates/scull-detectors/`, not rules (CLS-02).
   variables (`HF_HOME`, `HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `OLLAMA_MODELS`, `TORCH_HOME`,
   `XDG_CACHE_HOME`) are found per OS from an injected `CacheEnv` by
   `scull_detectors::ml::locate_ml_caches`.
+- Java/Kotlin (`ecosystems/jvm.toml`: Gradle `build/` and `.gradle/`, Maven `target/`) and .NET
+  (`ecosystems/dotnet.toml`: `bin/`, `obj/`) build folders need the build or project file beside
+  them **and** entries only the tool writes inside them; `build/` next to another build system's
+  file is left alone (FX-CLS-10), and so are `bin/`/`obj/` in Unity and Unreal projects
+  (FX-CLS-14). `scull_detectors::dotnet::DotnetBinDetector` raises a `bin/` holding anything but
+  configuration folders to S2. Go has no project build folder (its outputs go to the build cache).
 - Package caches (Quick Clean): `scull_detectors::caches::locate_caches` finds the npm, pnpm,
-  Bun, Yarn (classic and Berry), pip, uv and conda caches per OS from an injected `CacheEnv` (home,
-  environment, OS layout), validates their locations (QC-05, T-23) and picks each tool's native
-  command by rule ID (`npm.cache`, `pnpm.store`, `bun.cache`, `yarn.classic-cache`,
-  `yarn.berry-cache`, `pip.cache`, `uv.cache`, `conda.pkgs`).
+  Bun, Yarn (classic and Berry), pip, uv, conda, Go (build and module), Gradle, Maven and NuGet
+  caches per OS from an injected `CacheEnv` (home, environment, OS layout), validates their
+  locations (QC-05, T-23) and picks each tool's native command by rule ID (`npm.cache`,
+  `pnpm.store`, `bun.cache`, `yarn.classic-cache`, `yarn.berry-cache`, `pip.cache`, `uv.cache`,
+  `conda.pkgs`, `go.build-cache`, `go.modcache`, `nuget.packages`). Gradle (`gradle.caches`) and
+  Maven (`maven.repository`) have no cleanup command: located and measured, inspect-only.
 - Bundled rules live in `rules/ecosystems/*.toml` and are **compiled into the binary**
   (`BUNDLED_RULE_FILES`, `include_str!`). scull never downloads rules (CLS-05). A test fails if a
   `.toml` file under `rules/` is not listed in `BUNDLED_RULE_FILES`.

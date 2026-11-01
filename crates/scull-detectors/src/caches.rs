@@ -1,5 +1,5 @@
-//! Package-manager caches: npm, pnpm, Bun, Yarn, pip, uv and conda (P1-DET-04, P4-DET-02,
-//! P4-DET-01, PRD §10.8 QC-01…05, T-23).
+//! Package-manager caches: npm, pnpm, Bun, Yarn, pip, uv, conda, Go, Gradle, Maven and NuGet
+//! (P1-DET-04, P4-DET-02, P4-DET-01, P5-DET-01, PRD §10.8 QC-01…05, T-23).
 //!
 //! Global package caches hold no unique data, so they form the Quick Clean category
 //! ([`Category::PackageCache`]): **S1**, cleaned with the tool's **own** command (QC-02, QC-03),
@@ -22,6 +22,11 @@
 //! | pip | `PIP_CACHE_DIR`; `cache-dir` in `[global]` of the user pip config (`PIP_CONFIG_FILE` alone when it names an existing file; otherwise `$XDG_CONFIG_HOME/pip/pip.conf` or `~/.config/pip/pip.conf`, macOS first `~/Library/Application Support/pip/pip.conf`, Windows `%AppData%\pip\pip.ini`, then the legacy `~/.pip/pip.conf` / `~\pip\pip.ini`) | `$XDG_CACHE_HOME/pip` or `~/.cache/pip` / `~/Library/Caches/pip` / `%LocalAppData%\pip\Cache` |
 //! | conda | `CONDA_PKGS_DIRS` (comma-separated, every entry); `pkgs_dirs` in the user condarc (`$CONDARC`, `~/.condarc`, `~/.conda/condarc`, `$XDG_CONFIG_HOME/conda/condarc` or `~/.config/conda/condarc`; every listed folder) | `pkgs/` of `~/miniconda3`, `~/anaconda3`, `~/miniforge3`, `~/mambaforge`, and `~/.conda/pkgs` (all OSs), plus `%LocalAppData%\conda\conda\pkgs` on Windows |
 //! | uv | `UV_CACHE_DIR`; top-level `cache-dir` in the user `uv.toml` (`UV_CONFIG_FILE`, else `$XDG_CONFIG_HOME/uv/uv.toml` or `~/.config/uv/uv.toml`, Windows `%AppData%\uv\uv.toml`) | `$XDG_CACHE_HOME/uv` or `~/.cache/uv` (Linux and macOS) / `%LocalAppData%\uv\cache` |
+//! | Go build cache | `GOCACHE`; `GOCACHE=` in the Go env file (`GOENV`, else `$XDG_CONFIG_HOME/go/env` or `~/.config/go/env` / `~/Library/Application Support/go/env` / `%AppData%\go\env`; `GOENV=off` disables it) | `$XDG_CACHE_HOME/go-build` or `~/.cache/go-build` / `~/Library/Caches/go-build` / `%LocalAppData%\go-build` |
+//! | Go module cache | `GOMODCACHE`, then `$GOPATH/pkg/mod` (first `GOPATH` entry), each from the environment, then the Go env file | `~/go/pkg/mod` |
+//! | Gradle | `GRADLE_USER_HOME` (the caches are its `caches/`) | `~/.gradle/caches` |
+//! | Maven | `-Dmaven.repo.local=` in `MAVEN_OPTS` / `MAVEN_ARGS`; `<localRepository>` in `~/.m2/settings.xml` | `~/.m2/repository` |
+//! | NuGet | `NUGET_PACKAGES`; `globalPackagesFolder` in the user `NuGet.Config` (`~/.nuget/NuGet/NuGet.Config` / same / `%AppData%\NuGet\NuGet.Config`) | `~/.nuget/packages` |
 //!
 //! Configuration files are read through the [`DetectContext::config_reader`] as data only.
 //! **Project** configuration (a project's `.npmrc`, `.yarnrc.yml`, `[tool.uv]` in
@@ -51,6 +56,10 @@
 //! file. The preferred command (a prune where the tool has one) becomes the candidate's
 //! [`Action::ToolCommand`]; the full-wipe alternative is recorded in the evidence. pnpm has no
 //! wipe: projects hard-link into the store, so removing it frees little and confuses pnpm.
+//!
+//! Gradle and Maven have **no** command that cleans their caches ([`commands_for_rule`] is
+//! `None`): their caches are located and measured but inspect-only (S3, no action). See
+//! [`crate::jvm`] for why.
 //!
 //! The executor must re-resolve the location before running anything and make the tool act on
 //! the same path (e.g. through the tool's own cache-location option), since it runs tools with a
@@ -96,11 +105,21 @@ pub enum CacheTool {
     Uv,
     /// conda's package cache (`pkgs/`).
     Conda,
+    /// Go's build cache (`GOCACHE`).
+    GoBuild,
+    /// Go's module cache (`GOMODCACHE`, read-only files).
+    GoMod,
+    /// Gradle's dependency and build caches (`$GRADLE_USER_HOME/caches`); inspect-only.
+    Gradle,
+    /// Maven's local repository (`~/.m2/repository`); inspect-only.
+    Maven,
+    /// NuGet's global packages folder (`NUGET_PACKAGES`).
+    NuGet,
 }
 
 impl CacheTool {
     /// Every tool, in reporting order.
-    pub const ALL: [CacheTool; 8] = [
+    pub const ALL: [CacheTool; 13] = [
         CacheTool::Npm,
         CacheTool::Pnpm,
         CacheTool::Bun,
@@ -109,6 +128,11 @@ impl CacheTool {
         CacheTool::Pip,
         CacheTool::Uv,
         CacheTool::Conda,
+        CacheTool::GoBuild,
+        CacheTool::GoMod,
+        CacheTool::Gradle,
+        CacheTool::Maven,
+        CacheTool::NuGet,
     ];
 
     /// Rule ID recorded on its candidates.
@@ -122,6 +146,11 @@ impl CacheTool {
             CacheTool::Pip => "pip.cache",
             CacheTool::Uv => "uv.cache",
             CacheTool::Conda => "conda.pkgs",
+            CacheTool::GoBuild => "go.build-cache",
+            CacheTool::GoMod => "go.modcache",
+            CacheTool::Gradle => "gradle.caches",
+            CacheTool::Maven => "maven.repository",
+            CacheTool::NuGet => "nuget.packages",
         }
     }
 
@@ -140,6 +169,10 @@ impl CacheTool {
             CacheTool::Pip => "pip",
             CacheTool::Uv => "uv",
             CacheTool::Conda => "conda",
+            CacheTool::GoBuild | CacheTool::GoMod => "go",
+            CacheTool::Gradle => "gradle",
+            CacheTool::Maven => "mvn",
+            CacheTool::NuGet => "dotnet",
         }
     }
 
@@ -154,6 +187,11 @@ impl CacheTool {
             CacheTool::Pip => "pip cache",
             CacheTool::Uv => "uv cache",
             CacheTool::Conda => "conda package cache",
+            CacheTool::GoBuild => "Go build cache",
+            CacheTool::GoMod => "Go module cache",
+            CacheTool::Gradle => "Gradle caches",
+            CacheTool::Maven => "Maven local repository",
+            CacheTool::NuGet => "NuGet global packages folder",
         }
     }
 
@@ -167,6 +205,11 @@ impl CacheTool {
             CacheTool::Pip => &["pip", "pip3"],
             CacheTool::Uv => &["uv", "uvx"],
             CacheTool::Conda => &["conda", "mamba", "micromamba"],
+            CacheTool::GoBuild | CacheTool::GoMod => &["go", "gopls"],
+            // The Gradle daemon and the Kotlin compile daemon run as `java`.
+            CacheTool::Gradle => &["gradle", "gradlew", "java"],
+            CacheTool::Maven => &["mvn", "mvnd", "java"],
+            CacheTool::NuGet => &["dotnet", "nuget", "MSBuild", "msbuild", "VBCSCompiler"],
         }
     }
 }
@@ -219,14 +262,15 @@ pub struct CacheCommands {
     pub wipe: Option<NativeCommand>,
 }
 
-/// The native commands for a cache rule ID (CLS-04: chosen in Rust, by rule ID).
+/// The native commands for a cache rule ID (CLS-04: chosen in Rust, by rule ID). `None` for
+/// an unknown rule and for a tool with no cleanup command (Gradle, Maven: inspect-only).
 pub fn commands_for_rule(rule_id: &str) -> Option<CacheCommands> {
-    CacheTool::from_rule_id(rule_id).map(commands_for_tool)
+    CacheTool::from_rule_id(rule_id).and_then(commands_for_tool)
 }
 
-fn commands_for_tool(tool: CacheTool) -> CacheCommands {
+fn commands_for_tool(tool: CacheTool) -> Option<CacheCommands> {
     let c = |tool, args| NativeCommand { tool, args };
-    match tool {
+    Some(match tool {
         CacheTool::Npm => CacheCommands {
             preferred: c("npm", &["cache", "verify"]),
             preferred_prunes: true,
@@ -271,7 +315,28 @@ fn commands_for_tool(tool: CacheTool) -> CacheCommands {
             preferred_prunes: true,
             wipe: None,
         },
-    }
+        // Go has no prune command (it trims entries unused for five days by itself): each
+        // command empties its cache. Never removed directly: module files are read-only.
+        CacheTool::GoBuild => CacheCommands {
+            preferred: c("go", &["clean", "-cache"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        CacheTool::GoMod => CacheCommands {
+            preferred: c("go", &["clean", "-modcache"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        // Only the folder scull located and measured: `locals all` would also clear the HTTP
+        // cache, temp and plugin caches at locations scull hasn't validated (T-23).
+        CacheTool::NuGet => CacheCommands {
+            preferred: c("dotnet", &["nuget", "locals", "global-packages", "--clear"]),
+            preferred_prunes: false,
+            wipe: None,
+        },
+        // No native cleanup command at all (see `crate::jvm`).
+        CacheTool::Gradle | CacheTool::Maven => return None,
+    })
 }
 
 type EnvLookup = dyn Fn(&str) -> Option<String> + Send + Sync;
@@ -332,7 +397,7 @@ impl CacheEnv {
     }
 
     /// The first of `names` that is set, with its name.
-    fn first_var(&self, names: &[&str]) -> Option<(String, String)> {
+    pub(crate) fn first_var(&self, names: &[&str]) -> Option<(String, String)> {
         names
             .iter()
             .find_map(|n| self.var(n).map(|v| ((*n).to_owned(), v)))
@@ -347,13 +412,13 @@ impl CacheEnv {
     }
 
     /// `%AppData%`, or `~\AppData\Roaming` when unset.
-    fn roaming_app_data(&self) -> PathBuf {
+    pub(crate) fn roaming_app_data(&self) -> PathBuf {
         self.abs_var("APPDATA")
             .unwrap_or_else(|| self.home.join("AppData").join("Roaming"))
     }
 
     /// `$XDG_CONFIG_HOME`, or `~/.config` when unset.
-    fn xdg_config(&self) -> PathBuf {
+    pub(crate) fn xdg_config(&self) -> PathBuf {
         self.abs_var("XDG_CONFIG_HOME")
             .unwrap_or_else(|| self.home.join(".config"))
     }
@@ -365,7 +430,7 @@ impl CacheEnv {
     }
 
     /// `%LocalAppData%`, or `~\AppData\Local` when unset.
-    fn local_app_data(&self) -> PathBuf {
+    pub(crate) fn local_app_data(&self) -> PathBuf {
         self.abs_var("LOCALAPPDATA")
             .unwrap_or_else(|| self.home.join("AppData").join("Local"))
     }
@@ -518,6 +583,11 @@ pub fn locate_caches(
             CacheTool::Pip => pip_spots(env, platform, ctx),
             CacheTool::Uv => uv_spots(env, platform, ctx),
             CacheTool::Conda => conda_spots(env, platform, ctx),
+            CacheTool::GoBuild => crate::go::build_cache_spots(env, platform, ctx),
+            CacheTool::GoMod => crate::go::modcache_spots(env, platform, ctx),
+            CacheTool::Gradle => Ok(crate::jvm::gradle_spots(env)),
+            CacheTool::Maven => crate::jvm::maven_spots(env, platform, ctx),
+            CacheTool::NuGet => crate::dotnet::nuget_spots(env, platform, ctx),
         };
         let spots = match spots {
             Ok(s) => s,
@@ -550,18 +620,18 @@ pub fn locate_caches(
 
 /// One place a tool's cache may be.
 #[derive(Debug, Clone)]
-struct Spot {
-    tool: CacheTool,
+pub(crate) struct Spot {
+    pub(crate) tool: CacheTool,
     /// The configured location (validated).
-    root: PathBuf,
+    pub(crate) root: PathBuf,
     /// The cache folder inside it (often `root` itself).
-    path: PathBuf,
-    source: CacheSource,
-    notes: Vec<String>,
+    pub(crate) path: PathBuf,
+    pub(crate) source: CacheSource,
+    pub(crate) notes: Vec<String>,
 }
 
 impl Spot {
-    fn new(tool: CacheTool, root: PathBuf, source: CacheSource) -> Self {
+    pub(crate) fn new(tool: CacheTool, root: PathBuf, source: CacheSource) -> Self {
         Self {
             tool,
             path: root.clone(),
@@ -571,15 +641,15 @@ impl Spot {
         }
     }
 
-    fn sub(mut self, rel: &str) -> Self {
+    pub(crate) fn sub(mut self, rel: &str) -> Self {
         self.path = self.root.join(rel);
         self
     }
 }
 
-type Spots = Result<Vec<Spot>, Box<RefusedCache>>;
+pub(crate) type Spots = Result<Vec<Spot>, Box<RefusedCache>>;
 
-fn refused(
+pub(crate) fn refused(
     tool: CacheTool,
     path: Option<PathBuf>,
     source: CacheSource,
@@ -594,7 +664,7 @@ fn refused(
 }
 
 /// A user-level configuration file.
-enum UserRc {
+pub(crate) enum UserRc {
     /// No such file: nothing configured there.
     Absent,
     /// Its parsed text.
@@ -604,7 +674,7 @@ enum UserRc {
 }
 
 impl UserRc {
-    fn read(file: PathBuf, platform: &dyn Platform, ctx: &DetectContext<'_>) -> Self {
+    pub(crate) fn read(file: PathBuf, platform: &dyn Platform, ctx: &DetectContext<'_>) -> Self {
         let md = match platform.metadata(&file) {
             Ok(md) => md,
             Err(e) if e.is_not_found() => return UserRc::Absent,
@@ -639,7 +709,7 @@ impl UserRc {
     }
 
     /// The value of `key` (parsed with `parse`), or why the tool must be refused.
-    fn lookup(
+    pub(crate) fn lookup(
         &self,
         tool: CacheTool,
         key: &str,
@@ -666,7 +736,7 @@ impl UserRc {
 }
 
 /// A configured path from `source`: `~` and `${VAR}` expanded, must be absolute.
-fn configured(
+pub(crate) fn configured(
     env: &CacheEnv,
     tool: CacheTool,
     raw: &str,
@@ -1162,7 +1232,7 @@ fn inspect(env: &CacheEnv, platform: &dyn Platform, s: Spot) -> Option<LocatedCa
         return Some(c); // never listed through
     }
     if let Some(inside) = list(platform, &path) {
-        recognize(&mut c, &inside);
+        recognize(&mut c, &inside, platform);
     }
     if c.problems.is_empty()
         && let (Some(id), Ok(Some(aid))) =
@@ -1192,8 +1262,9 @@ fn is_uv_bucket(name: &str) -> bool {
     })
 }
 
-/// Check the folder's entries against the tool's layout.
-fn recognize(c: &mut LocatedCache, inside: &Listing) {
+/// Check the folder's entries against the tool's layout. Go's module cache and NuGet's global
+/// packages folder are recognized one or two levels down (no-follow listings).
+fn recognize(c: &mut LocatedCache, inside: &Listing, platform: &dyn Platform) {
     let dirs = || {
         inside
             .iter()
@@ -1237,6 +1308,19 @@ fn recognize(c: &mut LocatedCache, inside: &Listing) {
                 )
                 .collect()
         }
+        CacheTool::GoBuild => crate::go::build_cache_markers(inside),
+        CacheTool::GoMod => {
+            c.markers = crate::go::modcache_markers(&c.path, inside, platform);
+            c.recognized = !c.markers.is_empty();
+            return;
+        }
+        CacheTool::Gradle => crate::jvm::gradle_markers(inside),
+        CacheTool::Maven => crate::jvm::maven_markers(inside),
+        CacheTool::NuGet => {
+            c.markers = crate::dotnet::nuget_markers(&c.path, inside, platform);
+            c.recognized = !c.markers.is_empty();
+            return;
+        }
     };
     c.recognized = !markers.is_empty();
     if c.tool == CacheTool::Pnpm && c.recognized {
@@ -1257,8 +1341,9 @@ impl LocatedCache {
         }
     }
 
-    /// The native commands for this cache.
-    pub fn commands(&self) -> CacheCommands {
+    /// The native commands for this cache; `None` for a tool without one (Gradle, Maven), whose
+    /// cache is inspect-only.
+    pub fn commands(&self) -> Option<CacheCommands> {
         commands_for_tool(self.tool)
     }
 
@@ -1284,7 +1369,9 @@ impl LocatedCache {
     ///   tool is skipped and reported (QC-05). Any [`CacheProblem`] or a missing file
     ///   identity raises it to S3 (no action).
     /// * The action is the preferred native command ([`Action::ToolCommand`]); the wipe
-    ///   alternative and the not-undoable note go into evidence and regeneration.
+    ///   alternative and the not-undoable note go into evidence and regeneration. A tool with
+    ///   no cleanup command (Gradle, Maven) gets no action and is raised to S3
+    ///   ([`ReasonCode::InspectOnly`]): its cache is shown and measured, never cleaned.
     /// * `summary` is the scanner's result for [`LocatedCache::path`] (ignored if it is for
     ///   another path): sizes, shared (hard-linked) bytes and the newest mtime (last use).
     pub fn into_candidate(self, caller: &CallerSignals, summary: Option<&DirSummary>) -> Candidate {
@@ -1312,20 +1399,32 @@ impl LocatedCache {
                 .map(|t| Evidence::Note { text: t.clone() }),
         );
         evidence.push(Evidence::Note {
-            text: match (commands.wipe, commands.preferred_prunes) {
-                (Some(w), _) => format!(
-                    "cleaned with `{}` (removes unused entries); full wipe alternative: `{w}`",
-                    commands.preferred
+            text: match commands {
+                Some(CacheCommands {
+                    preferred,
+                    wipe: Some(w),
+                    ..
+                }) => format!(
+                    "cleaned with `{preferred}` (removes unused entries); full wipe alternative: \
+                     `{w}`"
                 ),
-                (None, true) => format!(
-                    "cleaned with `{}` (removes unused entries); no full wipe is offered",
-                    commands.preferred
+                Some(CacheCommands {
+                    preferred,
+                    preferred_prunes: true,
+                    wipe: None,
+                }) => format!(
+                    "cleaned with `{preferred}` (removes unused entries); no full wipe is offered"
                 ),
-                (None, false) => {
-                    format!("cleaned with `{}` (removes everything)", commands.preferred)
+                Some(CacheCommands { preferred, .. }) => {
+                    format!("cleaned with `{preferred}` (removes everything)")
                 }
+                None => format!(
+                    "{} has no command that cleans this cache, so scull only shows it",
+                    self.tool.binary()
+                ),
             },
         });
+        evidence.extend(tool_note(self.tool).map(|t| Evidence::Note { text: t.into() }));
         if self.tool == CacheTool::Conda {
             evidence.push(Evidence::Note {
                 text: "conda environments hard-link into this package cache: it is never \
@@ -1382,7 +1481,7 @@ impl LocatedCache {
                 instructions: Some(NOT_UNDOABLE_NOTE.into()),
                 cost: RegenerationCost::Unknown,
             },
-            action: commands.preferred.to_action(),
+            action: commands.map_or(Action::None, |k| k.preferred.to_action()),
         };
         let signals = Signals {
             git: caller.git,
@@ -1408,11 +1507,26 @@ impl LocatedCache {
         candidate.raise(TierReason::new(
             Tier::S1,
             ReasonCode::PackageCache,
-            format!(
-                "package-manager cache: re-downloadable, cleaned with `{}`. {NOT_UNDOABLE_NOTE}",
-                commands.preferred
-            ),
+            match commands {
+                Some(k) => format!(
+                    "package-manager cache: re-downloadable, cleaned with `{}`. \
+                     {NOT_UNDOABLE_NOTE}",
+                    k.preferred
+                ),
+                None => "package-manager cache: its contents can be downloaded again".into(),
+            },
         ));
+        if commands.is_none() {
+            candidate.raise(TierReason::new(
+                Tier::S3,
+                ReasonCode::InspectOnly,
+                format!(
+                    "inspect-only: {} has no command to clean its cache, and scull never \
+                     removes a cache whose tool is installed by itself",
+                    self.tool.binary()
+                ),
+            ));
+        }
         if !self.recognized && self.problems.is_empty() {
             candidate.raise(TierReason::new(
                 Tier::S2,
@@ -1478,6 +1592,24 @@ impl LocatedCache {
         }
         candidate
     }
+}
+
+/// A tool-specific fact for the evidence, beyond the commands.
+fn tool_note(tool: CacheTool) -> Option<&'static str> {
+    Some(match tool {
+        CacheTool::GoBuild => {
+            "Go trims build cache entries unused for five days by itself; `go clean -cache` \
+             empties it (the next builds are slower until it refills)"
+        }
+        CacheTool::GoMod => crate::go::MODCACHE_READ_ONLY_NOTE,
+        CacheTool::Gradle => crate::jvm::GRADLE_NOTE,
+        CacheTool::Maven => crate::jvm::MAVEN_NOTE,
+        CacheTool::NuGet => {
+            "`dotnet nuget locals global-packages --clear` empties this folder only; projects \
+             restore their packages again on the next `dotnet restore` or build"
+        }
+        _ => return None,
+    })
 }
 
 /// Expand a configured path: `${VAR}` from the environment (an unset variable is an error, as
@@ -1765,6 +1897,18 @@ mod tests {
             "conda clean --packages --tarballs --yes"
         );
         assert!(s("conda.pkgs").preferred_prunes && s("conda.pkgs").wipe.is_none());
+        assert_eq!(s("go.build-cache").preferred.to_string(), "go clean -cache");
+        assert_eq!(s("go.modcache").preferred.to_string(), "go clean -modcache");
+        assert_eq!(
+            s("nuget.packages").preferred.to_string(),
+            "dotnet nuget locals global-packages --clear"
+        );
+        for id in ["go.build-cache", "go.modcache", "nuget.packages"] {
+            assert!(!s(id).preferred_prunes && s(id).wipe.is_none(), "{id}");
+        }
+        // No cleanup command exists: inspect-only.
+        assert!(commands_for_rule("gradle.caches").is_none());
+        assert!(commands_for_rule("maven.repository").is_none());
         assert!(
             commands_for_rule("ollama.models").is_none(),
             "not a package cache"
@@ -1773,10 +1917,9 @@ mod tests {
         assert!(commands_for_rule("python.venv").is_none());
         for t in CacheTool::ALL {
             assert_eq!(CacheTool::from_rule_id(t.rule_id()), Some(t));
-            assert_eq!(
-                commands_for_rule(t.rule_id()).unwrap().preferred.tool,
-                t.binary()
-            );
+            if let Some(k) = commands_for_rule(t.rule_id()) {
+                assert_eq!(k.preferred.tool, t.binary());
+            }
         }
     }
 

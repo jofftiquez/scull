@@ -34,6 +34,14 @@ pub const BUNDLED_RULE_FILES: &[(&str, &str)] = &[
         "rules/ecosystems/ml.toml",
         include_str!("../../../../rules/ecosystems/ml.toml"),
     ),
+    (
+        "rules/ecosystems/jvm.toml",
+        include_str!("../../../../rules/ecosystems/jvm.toml"),
+    ),
+    (
+        "rules/ecosystems/dotnet.toml",
+        include_str!("../../../../rules/ecosystems/dotnet.toml"),
+    ),
 ];
 
 /// Key fragments and whole key tokens that suggest a command, script or hook. Any of these

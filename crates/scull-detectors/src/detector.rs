@@ -548,6 +548,7 @@ impl Detectors {
                 crate::node::detector_for(r)
                     .or_else(|| crate::python::detector_for(r))
                     .or_else(|| crate::ml::detector_for(r))
+                    .or_else(|| crate::dotnet::detector_for(r))
                     .unwrap_or_else(|| Box::new(RuleDetector::new(r.clone())) as Box<dyn Detector>)
             })
             .collect();

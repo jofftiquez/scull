@@ -4,8 +4,11 @@
 //! * [`Detector`], [`Detectors`], [`DetectedArtifact`]: deciding whether a directory the
 //!   scanner visited is an artifact, with evidence ([`detector`] module docs).
 //! * [`cargo`]: shared Cargo target directories (`CARGO_TARGET_DIR`, `[build] target-dir`).
-//! * [`caches`]: package-manager caches (npm, pnpm, Bun, Yarn, pip, uv, conda) located per OS,
-//!   without running any tool (Quick Clean, QC-01…05).
+//! * [`caches`]: package-manager caches (npm, pnpm, Bun, Yarn, pip, uv, conda, Go, Gradle,
+//!   Maven, NuGet) located per OS, without running any tool (Quick Clean, QC-01…05).
+//! * [`go`]: the Go build and module caches (locations, layouts).
+//! * [`jvm`]: Gradle and Maven caches (inspect-only); the build folders are plain rules.
+//! * [`dotnet`]: `bin/` (configuration folders only) and the NuGet global packages folder.
 //! * [`large_files`]: the inspect-only large-files listing (never a cleanup candidate).
 //! * [`ml`]: Hugging Face, Ollama and PyTorch Hub caches (scan rules plus a per-OS locator).
 //! * [`node`]: `node_modules` (link awareness, workspace lockfiles) and framework outputs.
@@ -17,6 +20,9 @@
 pub mod caches;
 pub mod cargo;
 pub mod detector;
+pub mod dotnet;
+pub mod go;
+pub mod jvm;
 pub mod large_files;
 pub mod ml;
 pub mod node;
@@ -32,6 +38,7 @@ pub use detector::{
     CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detector, DetectorSignals,
     Detectors, MAX_CONFIG_BYTES, RuleDetector,
 };
+pub use dotnet::DotnetBinDetector;
 pub use large_files::{
     FileKind, LargeFile, LargeFileOptions, LargeFileReport, LargeFiles, inspect_large_files,
 };
