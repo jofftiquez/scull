@@ -294,12 +294,27 @@ fn elevated_here() -> bool {
     scull_platform::is_elevated().blocks_destructive()
 }
 
+/// Set by CI's standard-user run of this test binary on Windows (`scripts/ci/run-as-standard-user.ps1`,
+/// #65): there an elevated process is a broken setup, not a reason to skip.
+const REQUIRE_NOT_ELEVATED_ENV: &str = "SCULL_TEST_REQUIRE_NOT_ELEVATED";
+
 /// The approval-flow tests need the plan tools; elevated, the server stays read-only (checked
-/// in `fx_mcp_07_binary_needs_both_flag_and_config`), so they only say so and stop.
+/// in `fx_mcp_07_binary_needs_both_flag_and_config`), so they only say so and stop. GitHub's
+/// Windows runners are elevated, so CI also runs this binary as a standard user, with
+/// [`REQUIRE_NOT_ELEVATED_ENV`] set: then a skip is a failure, never silent (#65).
 fn skip_if_elevated(test: &str) -> bool {
+    let required = std::env::var_os(REQUIRE_NOT_ELEVATED_ENV).is_some_and(|v| !v.is_empty());
     if elevated_here() {
+        assert!(
+            !required,
+            "{test}: {REQUIRE_NOT_ELEVATED_ENV} is set but this process runs elevated, so the \
+             approval flow would be skipped"
+        );
         eprintln!("SKIP {test}: running elevated, so scull mcp serves read-only tools (SAFE-14)");
         return true;
+    }
+    if required {
+        eprintln!("RUN {test}: not elevated (standard user)");
     }
     false
 }
