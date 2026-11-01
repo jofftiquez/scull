@@ -38,10 +38,12 @@ The MVP: safe cleanup. The [CLI reference](docs/user/CLI.md) and the
   pending plans and the preparation rate are capped, and everything is audited.
 - `scull approve <plan-id> --run`: approve an agent's plan and run it yourself, in one
   terminal step (#102; review fixes follow).
-- Opt-in auto-policies (`[auto]` in the config file only): the scheduled `scull check` moves
-  idle S0 build outputs into quarantine. It never deletes them and never uses the Trash. It
-  runs a dry run first, within per-run and per-day caps, under the cleanup lock, and stops
-  with any kill switch (#74).
+- Opt-in auto-policies (`[auto]` in your user config file only, writable only by you): the
+  scheduled `scull check` moves idle S0 build outputs into quarantine. It never deletes them
+  and never uses the Trash. It runs a dry run first, stays within per-run and per-day caps,
+  and works under the cleanup lock. Any kill switch stops it (`--no-auto-policies`,
+  `SCULL_NO_AUTO_POLICIES`, an `auto-policies.off` file or `paused = true`), and it never runs
+  as root (#74).
 - `scull ask`: an optional assistant with your own model (or a local one) over scull's
   read-only tools, with a consent notice before the first request. With `[mcp] destructive =
   true` it may also prepare a plan, which runs only after you approve it (#105).
