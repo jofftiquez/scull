@@ -37,6 +37,8 @@ ctrlc = "3.5"
 unicode-width = "0.2"
 
 toml = "1"
+# Validates a remote `scull scan --json` report against the published schema (`scan --ssh`).
+jsonschema = { version = "0.60", default-features = false }
 # Format-preserving edits of client TOML configs (`scull agent install codex`).
 toml_edit = "0.25"
 
@@ -46,7 +48,6 @@ scull-fixtures.workspace = true
 scull-insights = { workspace = true, features = ["fixtures"] }
 # The desktop bridge, for the cross-surface forecast test (tests/forecast_surfaces.rs) only.
 scull-desktop-bridge = { path = "../../apps/desktop/bridge" }
-jsonschema = { version = "0.60", default-features = false }
 tempfile = "3"
 
 [[bin]]
