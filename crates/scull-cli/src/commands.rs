@@ -56,6 +56,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         Command::Schedule { .. } => None,
         Command::Data { .. } => None,
         Command::Doctor(_) => None,
+        Command::Ask(_) => None,
         Command::Mcp {
             action: McpAction::Serve { .. },
         } => None,
@@ -168,6 +169,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             crate::cmd::data::run_purge(ui, &opts, *confirm)?;
         }
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        Command::Ask(args) => crate::cmd::ask::run(args, ui)?,
         Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;

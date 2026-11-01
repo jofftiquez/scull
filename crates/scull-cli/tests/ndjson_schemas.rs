@@ -129,6 +129,10 @@ const NO_NDJSON: &[(&str, &str)] = &[
         "approve",
         "interactive only: refuses --json/--ndjson (FX-MCP-08)",
     ),
+    (
+        "ask",
+        "prints a prose answer from the user's own model; --json/--ndjson are refused",
+    ),
 ];
 
 /// Commands whose `--ndjson` output needs an executed cleanup operation: their line schema must

@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://github.com/jofftiquez/scull"
 authors.workspace = true
 publish.workspace = true
 
@@ -26,6 +27,8 @@ scull-storage.workspace = true
 # packaging/check_inspect_only.py).
 scull-cleaner.workspace = true
 scull-mcp.workspace = true
+# `scull ask` (optional, off by default): the only crate here that talks to a network endpoint.
+scull-ask = { path = "../scull-ask" }
 scull-engine.workspace = true
 scull-proactive.workspace = true
 scull-insights.workspace = true

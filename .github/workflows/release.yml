@@ -116,6 +116,17 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+      SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+      SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+      SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+      SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+      CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+      CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+      CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+    permissions:
+      "attestations": "write"
+      "contents": "read"
+      "id-token": "write"
     steps:
       - name: enable windows longpaths
         run: |
@@ -131,6 +142,29 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Code signing status"
+        run: |
+          case "$RUNNER_OS" in
+            macOS)
+              if [ -n "${CODESIGN_IDENTITY:-}" ] && [ -n "${CODESIGN_CERTIFICATE:-}" ] && [ -n "${CODESIGN_CERTIFICATE_PASSWORD:-}" ]; then
+                echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"
+                echo "::notice title=macOS signing::Developer ID signing is on (hardened runtime)."
+              else
+                echo "::notice title=macOS signing skipped::CODESIGN_IDENTITY, CODESIGN_CERTIFICATE and CODESIGN_CERTIFICATE_PASSWORD are not all set; the macOS binaries in this run are NOT signed."
+              fi
+              ;;
+            Windows)
+              if [ -n "${SSLDOTCOM_USERNAME:-}" ] && [ -n "${SSLDOTCOM_PASSWORD:-}" ] && [ -n "${SSLDOTCOM_CREDENTIAL_ID:-}" ] && [ -n "${SSLDOTCOM_TOTP_SECRET:-}" ]; then
+                echo "::notice title=Windows signing::Authenticode signing (SSL.com eSigner) is on."
+              else
+                echo "::notice title=Windows signing skipped::SSLDOTCOM_USERNAME, SSLDOTCOM_PASSWORD, SSLDOTCOM_CREDENTIAL_ID and SSLDOTCOM_TOTP_SECRET are not all set; the Windows binary in this run is NOT signed."
+              fi
+              ;;
+            *)
+              echo "No code signing for $RUNNER_OS builds (Linux archives are covered by checksums and build-provenance attestations)."
+              ;;
+          esac
+        shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -148,6 +182,10 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      - name: Attest
+        uses: actions/attest@v4
+        with:
+          subject-path: "target/distrib/*${{ join(matrix.targets, ', ') }}*"
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
@@ -215,14 +253,78 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+
+  custom-release-extras:
+    needs:
+      - plan
+      - build-local-artifacts
+    uses: ./.github/workflows/release-extras.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "contents": "read"
+
+  # Sign globally-built Windows artifacts after all artifact builds complete
+  sign-artifacts:
+    needs:
+      - plan
+      - build-global-artifacts
+      - custom-release-extras
+    if: ${{ always() && needs.build-global-artifacts.result == 'success' && (needs.custom-release-extras.result == 'skipped' || needs.custom-release-extras.result == 'success') }}
+    runs-on: windows-2022
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
+      SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+      SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+      SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+      SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Install dist
+        run: "irm https://github.com/axodotdev/cargo-dist/releases/download/v0.33.1/cargo-dist-installer.ps1 | iex"
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-build-global
+          path: target/distrib/
+          merge-multiple: true
+      - name: Sign artifacts
+        shell: pwsh
+        run: |
+          dist sign ${{ needs.plan.outputs.tag-flag }} --output-format=json | Out-File -FilePath dist-manifest.json -Encoding utf8
+          Write-Host "artifacts signed successfully"
+      - id: cargo-dist
+        name: Post-signing
+        shell: bash
+        run: |
+          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
+          dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+      - name: "Replace global artifacts"
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-build-global
+          overwrite: true
+          path: |
+            ${{ steps.cargo-dist.outputs.paths }}
+            ${{ env.BUILD_MANIFEST_NAME }}
   # Determines if we should publish/announce
   host:
     needs:
       - plan
       - build-local-artifacts
       - build-global-artifacts
+      - custom-release-extras
+      - sign-artifacts
     # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.custom-release-extras.result == 'skipped' || needs.custom-release-extras.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') && needs.sign-artifacts.result == 'success' }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
@@ -282,14 +384,28 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
+  custom-release-packages:
+    needs:
+      - plan
+      - host
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    uses: ./.github/workflows/release-packages.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    # publish jobs get escalated permissions
+    permissions:
+      "contents": "read"
+
   announce:
     needs:
       - plan
       - host
+      - custom-release-packages
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.custom-release-packages.result == 'skipped' || needs.custom-release-packages.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

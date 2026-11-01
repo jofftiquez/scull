@@ -31,6 +31,9 @@
 //! * **Privacy** (MCP-05, T-44): the home folder prefix is shown as `~` by default
 //!   (`mcp.redact_home`); `mcp.hash_names` hashes project and folder names with a per-machine
 //!   salt that is never returned. The CLI prints [`DISCLOSURE`] when MCP is first enabled.
+//! * **In-process use** ([`ScullMcp::read_only_tools`], [`ScullMcp::call_read_only`]): the
+//!   same read-only tools, allowlist and redaction for callers inside scull (`scull ask`),
+//!   without the metadata-only tools or the plan tools.
 //! * **Nothing of yours is written** by the read-only tools: scans run without a history
 //!   store and the history database is opened read-only. The one metadata-only tool,
 //!   `register_worktree`, appends a TTL reminder to scull's own [`registry`] file; expiry raises
@@ -52,6 +55,7 @@ mod allowlist;
 pub mod approval;
 mod escape;
 mod history;
+mod local;
 mod plan_tools;
 mod redact;
 pub mod registry;
@@ -61,6 +65,7 @@ mod views;
 
 pub use allowlist::{Allowlist, MAX_PATH_ARG_BYTES, Refusal, Root, path_from_file_uri};
 pub use escape::{Suspicion, TRUNCATION_MARKER, escape, needs_escape, suspicion};
+pub use local::{LocalResult, ToolSpec, read_only_tool_names};
 pub use plan_tools::{
     CleanupRunner, CleanupStatusOutput, ExecuteOutput, ItemOutcomeView, MAX_PLAN_ITEMS,
     OperationView, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanIdArgs, PlanItemView, PlanOutput,

@@ -1,8 +1,10 @@
 //! `scull init` (P1-CLI-03; ONB-01…04, ONB-07, CFG-01, CFG-04): first-run onboarding.
 //!
 //! 1. **Detect first** (ONB-01), metadata only: toolchain binaries on `PATH` (absolute entries
-//!    only), well-known cache folders and likely project folders under the home directory, and
-//!    AI-client config folders. Nothing is listed recursively, sized or scanned.
+//!    only), cache folders (every tool of the cache locator, [`CacheTool::ALL`], at its
+//!    environment-aware location, plus a few well-known folders it doesn't cover), likely
+//!    project folders under the home directory, and AI-client config folders. Nothing is listed
+//!    recursively, sized or scanned, and no configuration file is read.
 //! 2. **Ask at most five questions** (ONB-02), pre-filled from what was found: what you build,
 //!    scan roots, AI-agent use, what matters most, caution. On a terminal they are prompts on
 //!    stderr (Enter accepts the default); with `--yes` (or `--json`) the flags and detected
@@ -27,6 +29,9 @@ use crate::output::table::Cell;
 use schemars::JsonSchema;
 use scull_core::config::{ConfigLayer, expand_home, validate_roots};
 use scull_core::{ErrorKind, FsPath, ScullError};
+use scull_detectors::caches::CacheTool;
+use scull_detectors::rules::Platform as RulesOs;
+use scull_detectors::{CacheEnv, DetectContext, locate_caches};
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -71,7 +76,8 @@ const AI_CLIENTS: &[(&str, &str)] = &[
     ("cursor", ".cursor"),
 ];
 
-/// A toolchain: id, label, build kind it suggests, binaries, cache folders under home.
+/// A toolchain: id, label, build kind it suggests, binaries, and well-known folders under home
+/// that the cache locator doesn't cover (its caches are added by [`toolchain_for`]).
 struct ToolchainSpec {
     id: &'static str,
     label: &'static str,
@@ -156,7 +162,7 @@ const TOOLCHAINS: &[ToolchainSpec] = &[
         id: "mobile",
         label: "Mobile (Xcode, Android, Flutter)",
         build: "mobile",
-        binaries: &["xcodebuild", "adb", "sdkmanager", "flutter"],
+        binaries: &["xcodebuild", "adb", "sdkmanager", "flutter", "pod", "swift"],
         caches: &[
             "Library/Developer/Xcode/DerivedData",
             "Library/Android/sdk",
@@ -169,10 +175,49 @@ const TOOLCHAINS: &[ToolchainSpec] = &[
         id: "native",
         label: "C/C++",
         build: "native",
-        binaries: &["cmake", "clang", "gcc", "cl"],
+        binaries: &["cmake", "clang", "gcc", "cl", "zig", "conan", "vcpkg"],
         caches: &[".ccache", ".cache/ccache"],
     },
+    ToolchainSpec {
+        id: "embedded",
+        label: "Embedded (PlatformIO, Arduino, ESP-IDF)",
+        build: "native",
+        binaries: &["pio", "platformio", "arduino-cli", "idf.py"],
+        caches: &[],
+    },
+    ToolchainSpec {
+        id: "system",
+        label: "System package managers (Homebrew, Nix)",
+        build: "other",
+        binaries: &["brew", "nix"],
+        caches: &[],
+    },
 ];
+
+/// The onboarding toolchain a located cache belongs to. Exhaustive on purpose: a new
+/// [`CacheTool`] doesn't compile until it is given one.
+pub fn toolchain_for(tool: CacheTool) -> &'static str {
+    match tool {
+        CacheTool::Npm
+        | CacheTool::Pnpm
+        | CacheTool::Bun
+        | CacheTool::YarnClassic
+        | CacheTool::YarnBerry
+        | CacheTool::Deno
+        | CacheTool::Playwright
+        | CacheTool::Cypress
+        | CacheTool::Puppeteer
+        | CacheTool::Electron => "node",
+        CacheTool::Pip | CacheTool::Uv | CacheTool::Conda => "python",
+        CacheTool::GoBuild | CacheTool::GoMod => "go",
+        CacheTool::Gradle | CacheTool::Maven | CacheTool::Coursier => "jvm",
+        CacheTool::NuGet => "dotnet",
+        CacheTool::SwiftPm | CacheTool::CocoaPods => "mobile",
+        CacheTool::Ccache | CacheTool::Conan | CacheTool::Vcpkg | CacheTool::Zig => "native",
+        CacheTool::PlatformIo | CacheTool::Arduino | CacheTool::EspIdf => "embedded",
+        CacheTool::Homebrew | CacheTool::Nix => "system",
+    }
+}
 
 /// One detected toolchain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -293,7 +338,9 @@ pub fn run(ui: &Ui, args: &InitArgs) -> Result<(), ScullError> {
     let dirs = scull_platform::app_dirs()
         .map_err(|e| ScullError::new(ErrorKind::Config, e.to_string()))?;
     let path_env = std::env::var_os("PATH").unwrap_or_default();
-    let detected = detect(&home, &path_env);
+    let cache_env =
+        RulesOs::current().map(|os| CacheEnv::new(home.clone(), os, |k| std::env::var(k).ok()));
+    let detected = detect(&home, &path_env, cache_env.as_ref());
     let mut terminal = Terminal;
     let prompter: Option<&mut dyn Prompter> = if interactive {
         Some(&mut terminal)
@@ -322,8 +369,10 @@ fn usage(msg: &str) -> ScullError {
 }
 
 /// The metadata-only probe (ONB-01). `path_env` is a `PATH` value; relative entries are
-/// ignored so the current directory never counts.
-pub fn detect(home: &Path, path_env: &OsStr) -> Detection {
+/// ignored so the current directory never counts. `cache_env` (home, environment, OS layout)
+/// locates every [`CacheTool`] the way `scull caches` does, but without reading any
+/// configuration file: a tool whose user config would decide the location is left out here.
+pub fn detect(home: &Path, path_env: &OsStr, cache_env: Option<&CacheEnv>) -> Detection {
     let path_dirs: Vec<PathBuf> = std::env::split_paths(path_env)
         .filter(|d| d.is_absolute())
         .collect();
@@ -331,6 +380,15 @@ pub fn detect(home: &Path, path_env: &OsStr) -> Detection {
         let p = rel.split('/').fold(home.to_path_buf(), |p, c| p.join(c));
         std::fs::symlink_metadata(&p).is_ok().then_some(p)
     };
+    let located: Vec<(CacheTool, PathBuf)> = cache_env
+        .map(|env| {
+            locate_caches(env, &scull_platform::Native::new(), &DetectContext::new())
+                .found
+                .into_iter()
+                .map(|c| (c.tool, c.path))
+                .collect()
+        })
+        .unwrap_or_default();
     let toolchains = TOOLCHAINS
         .iter()
         .filter_map(|t| {
@@ -340,12 +398,15 @@ pub fn detect(home: &Path, path_env: &OsStr) -> Detection {
                 .filter_map(|b| find_binary(&path_dirs, b))
                 .map(|p| FsPath::from_path(&p))
                 .collect();
-            let caches: Vec<FsPath> = t
-                .caches
-                .iter()
-                .filter_map(|c| exists(c))
-                .map(|p| FsPath::from_path(&p))
-                .collect();
+            let mut found: Vec<PathBuf> = t.caches.iter().filter_map(|c| exists(c)).collect();
+            for (tool, path) in &located {
+                // A located cache inside a folder already listed (`~/.npm/_cacache` under
+                // `~/.npm`) adds nothing.
+                if toolchain_for(*tool) == t.id && !found.iter().any(|f| path.starts_with(f)) {
+                    found.push(path.clone());
+                }
+            }
+            let caches: Vec<FsPath> = found.iter().map(|p| FsPath::from_path(p)).collect();
             (!binaries.is_empty() || !caches.is_empty()).then(|| Toolchain {
                 id: t.id.to_owned(),
                 label: t.label.to_owned(),
@@ -923,8 +984,82 @@ mod tests {
             std::fs::create_dir_all(home.join(d)).expect("dir");
         }
         let path = std::env::join_paths([bin, PathBuf::from("relative/bin")]).expect("path");
-        let det = detect(home, &path);
+        let det = detect(home, &path, None);
         (dir, det)
+    }
+
+    /// #38: every tool of the cache locator belongs to an onboarding toolchain, and every
+    /// toolchain suggests a valid "What do you build?" answer.
+    #[test]
+    fn every_cache_tool_maps_to_a_toolchain() {
+        for t in CacheTool::ALL {
+            let id = toolchain_for(t);
+            assert!(
+                TOOLCHAINS.iter().any(|spec| spec.id == id),
+                "{t:?} maps to unknown toolchain {id}"
+            );
+        }
+        for spec in TOOLCHAINS {
+            assert!(BUILDS.contains(&spec.build), "{}: {}", spec.id, spec.build);
+        }
+    }
+
+    /// #38: caches the locator finds (defaults and environment overrides, long-tail tools
+    /// included) show up under their toolchain; a located cache inside a folder already listed
+    /// is not repeated; nothing outside the temp home is consulted.
+    #[test]
+    fn located_caches_join_their_toolchain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        for d in [
+            ".npm/_cacache/index-v5",
+            "custom-deno/deps",
+            ".cache/deno/deps",
+            ".conan2/p",
+            ".platformio/.cache/downloads",
+            ".cache/ms-playwright/chromium-1140",
+            ".cache/Homebrew/downloads",
+            ".cache/org.swift.swiftpm/repositories",
+        ] {
+            std::fs::create_dir_all(home.join(d)).expect("dir");
+        }
+        let custom_deno = home.join("custom-deno");
+        let env = CacheEnv::with_vars(
+            home,
+            RulesOs::Linux,
+            [("DENO_DIR", custom_deno.to_string_lossy().into_owned())],
+        );
+        let det = detect(home, OsStr::new(""), Some(&env));
+        let caches = |id: &str| -> Vec<String> {
+            det.toolchains
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("{id} detected: {:?}", det.toolchains))
+                .caches
+                .iter()
+                .map(|p| {
+                    p.to_path_buf()
+                        .strip_prefix(home)
+                        .expect("under home")
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                })
+                .collect()
+        };
+        // `~/.npm` (hint) already covers `~/.npm/_cacache` (located); DENO_DIR wins over the
+        // default `~/.cache/deno`.
+        assert_eq!(
+            caches("node"),
+            [".npm", "custom-deno", ".cache/ms-playwright"]
+        );
+        assert_eq!(caches("native"), [".conan2/p"]);
+        assert_eq!(caches("embedded"), [".platformio/.cache"]);
+        assert_eq!(caches("system"), [".cache/Homebrew"]);
+        assert_eq!(caches("mobile"), [".cache/org.swift.swiftpm"]);
+        let ids: Vec<&str> = det.toolchains.iter().map(|t| t.id.as_str()).collect();
+        assert!(!ids.contains(&"python"), "{ids:?}");
     }
 
     #[test]
