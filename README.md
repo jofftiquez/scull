@@ -6,17 +6,18 @@ macOS, Linux and Windows. It finds what development tools leave behind (`node_mo
 explains each item, classifies it by risk, and reclaims space **without ever risking source code,
 Git history or unique files**.
 
-> Status: alpha. The first alpha is inspect-only; cleanup arrives with the MVP. Progress lives
-> in the pinned **Roadmap tracker** issue.
+> Status: alpha. The first alpha is inspect-only. Safe cleanup (plans, quarantine, restore,
+> audit) is built for the MVP release, and the guides below describe it. Progress lives in the
+> pinned **Roadmap tracker** issue.
 
 ## Documentation
 
 | Guide | What it covers |
 |---|---|
-| [Install](docs/user/INSTALL.md) | Downloads per OS, checksums, private-repo downloads, first run |
-| [Safety model](docs/user/SAFETY.md) | Tiers, what scull never touches, plans, quarantine and restore, privacy |
+| [Install](docs/user/INSTALL.md) | Downloads per OS, checksums, building from source, first run |
+| [Safety model](docs/user/SAFETY.md) | Tiers, what scull never touches, plans, quarantine and restore, agent approvals, privacy |
 | [CLI reference](docs/user/CLI.md) | Every command and flag, exit codes, JSON and NDJSON output |
-| [AI agents (MCP)](docs/user/MCP.md) | The read-only MCP server and how to connect a client |
+| [AI agents (MCP)](docs/user/MCP.md) | The MCP server, connecting a client, and agent cleanups you approve |
 
 ```sh
 scull init                         # choose the folders to scan
@@ -43,8 +44,8 @@ S0 items are deleted after you confirm (rebuilding is the undo). S1 and S2 items
 One Rust engine shared by a CLI (`scull`), a Tauri 2 + Vue 3 desktop app, and an MCP server.
 
 ```text
-crates/   scull-core, -platform, -scanner, -detectors, -git, -safety,
-          -cleaner, -storage, -cli, -mcp, -fixtures
+crates/   scull-core, -platform, -scanner, -detectors, -git, -safety, -engine,
+          -cleaner, -storage, -proactive, -insights, -ask, -cli, -mcp, -fixtures
 apps/     desktop (Tauri 2 + Vue 3, Phase 3)
 rules/    declarative detector rules (data only)
 schemas/  JSON Schemas for CLI/MCP output and plan files
@@ -63,8 +64,10 @@ The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Privacy
 
-No telemetry. Everything stays on your machine. The opt-in MCP server is the one exception:
-its results go to your AI client ([details](docs/user/MCP.md)).
+No telemetry. Everything stays on your machine. Two opt-in features are the exceptions: the MCP
+server's results go to your AI client ([details](docs/user/MCP.md)), and `scull ask` sends your
+question and read-only tool results to the model provider you configure, after you agree to a
+notice ([details](docs/user/CLI.md#scull-ask)).
 
 ## License
 
