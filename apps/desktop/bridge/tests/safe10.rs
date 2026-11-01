@@ -616,8 +616,16 @@ fn desktop_sources_have_no_filesystem_mutation() {
     let cleanup = desktop().join(CLEANUP_MODULE);
     for f in files.iter().filter(|f| **f != cleanup) {
         let code = code_of(f);
+        let whole = std::fs::read_to_string(f).unwrap();
         for api in MUTATION_APIS {
-            assert!(!code.contains(api), "{} uses {api}", f.display());
+            // The cleaner and the Trash: never, not even in test items (cfg(test) could be set
+            // for one crate by a rustc wrapper). Plain std::fs: production code only.
+            let text = if matches!(*api, "scull_cleaner" | "trash::") {
+                &whole
+            } else {
+                &code
+            };
+            assert!(!text.contains(api), "{} uses {api}", f.display());
         }
     }
 }
@@ -797,7 +805,8 @@ fn no_desktop_source_reaches_platform_deletion() {
 }
 
 /// `cfg(test)` can't be switched on in a production build of the desktop: no bridge build
-/// script, no `rustc-cfg` in the app crate's, and no `--cfg` in any Cargo config or workflow.
+/// script, no `rustc-cfg` in the app crate's, no `--cfg` or rustc wrapper in any Cargo config
+/// or workflow, and Cargo configs define profiles only.
 #[test]
 fn cfg_test_cannot_be_set_in_production() {
     assert!(
@@ -841,6 +850,50 @@ fn cfg_test_cannot_be_set_in_production() {
     for f in files {
         let text = std::fs::read_to_string(&f).unwrap_or_default();
         assert!(!text.contains("--cfg"), "{} passes --cfg", f.display());
+        for wrapper in [
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "rustc-wrapper",
+            "rustc_wrapper",
+        ] {
+            assert!(!text.contains(wrapper), "{} sets {wrapper}", f.display());
+        }
+        // A Cargo config may only define profiles (no build/target/env settings, no rustc,
+        // rustflags or wrapper, however the keys are spelled).
+        if f.parent()
+            .and_then(|d| d.file_name())
+            .is_some_and(|d| d == ".cargo")
+        {
+            let mut section = String::new();
+            for line in text.lines().map(str::trim) {
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if line.starts_with('[') {
+                    section = line.to_owned();
+                    assert!(
+                        line.starts_with("[profile."),
+                        "{}: only [profile.*] sections are allowed, found {line}",
+                        f.display()
+                    );
+                    continue;
+                }
+                assert!(
+                    !section.is_empty(),
+                    "{}: a top-level key: {line}",
+                    f.display()
+                );
+                let key = line.split('=').next().unwrap_or("").trim();
+                assert!(
+                    key.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        && !key.contains("rustflags")
+                        && !key.contains("rustc"),
+                    "{}: key {key:?} is not allowed in a Cargo config",
+                    f.display()
+                );
+            }
+        }
     }
 }
 
