@@ -184,6 +184,15 @@ pub fn create_file_owner_only(path: &Path) -> Result<File> {
         .map_err(|e| PlatformError::from_io(Operation::CreateFile, path, e))
 }
 
+/// Opens the existing regular file at `path` for reading **without following a link** at its
+/// last component (Unix `O_NOFOLLOW`; Windows `FILE_FLAG_OPEN_REPARSE_POINT`, a reparse point is
+/// refused), and returns it with the identity read from the opened handle. Used to read a file
+/// scull wrote itself (the headroom reserve's marker) knowing it is that object.
+pub fn open_file_no_follow(path: &Path) -> Result<(File, Option<scull_core::FileIdentity>)> {
+    native::open_file_no_follow(path)
+        .map_err(|e| PlatformError::from_io(Operation::OpenFile, path, e))
+}
+
 /// Creates one directory at `path` (the parent must exist) with owner-only permissions at
 /// creation. Fails with [`io::ErrorKind::AlreadyExists`] if anything exists at `path`,
 /// including a symlink, which is never followed.

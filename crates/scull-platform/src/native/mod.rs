@@ -4,6 +4,7 @@ use crate::{
     Capabilities, DirIter, DirSource, Exposure, Metadata, Operation, Platform, PlatformError,
     Result,
 };
+use scull_core::FileIdentity;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io;
@@ -86,6 +87,12 @@ pub(crate) fn create_dir_owner_only(path: &Path) -> io::Result<()> {
 /// Creates a new file (`create_new`) with owner-only permissions, opened read-write.
 pub(crate) fn create_file_owner_only(path: &Path) -> io::Result<File> {
     os::create_file_owner_only(path)
+}
+
+/// Opens an existing regular file read-only without following a link at its last component,
+/// with the identity read from the opened handle.
+pub(crate) fn open_file_no_follow(path: &Path) -> io::Result<(File, Option<FileIdentity>)> {
+    os::open_file_no_follow(path)
 }
 
 /// Narrows an existing file or directory to owner-only, without following a link.
