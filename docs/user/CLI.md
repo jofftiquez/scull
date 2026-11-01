@@ -587,9 +587,9 @@ Quick Clean also runs five newer tool caches, each pointed at exactly the folder
 |---|---|---|
 | ccache | `ccache --clear` | Keeps `ccache.conf`. No config file is read during the run, so remote storage is never touched. |
 | Conan 2 | `conan cache clean --source --build --temp` | Temporary folders only: packages and the download cache stay. Skipped (`not_scoped`) if a `.conanrc` above scull's working folder would redirect Conan. |
-| Arduino CLI | `arduino-cli cache clean` | The download cache (`staging/`). |
-| Deno | `deno clean` | Removes the whole Deno cache folder. Skipped (`not_scoped`) if it holds `location_data/` (web storage of Deno programs). |
-| Cypress | `cypress cache prune` | Keeps the binary of the Cypress version that runs it and the session records; `--wipe` still prunes. |
+| Arduino CLI | `arduino-cli cache clean` | The download cache (`staging/`). Skipped (`not_scoped`) unless it holds only downloaded archives in `packages/` and `libraries/` (never a sketchbook). |
+| Deno | `deno clean` | Removes the whole Deno cache folder. Skipped (`not_scoped`) if it holds anything that isn't Deno's own cache: `location_data/` (web storage of Deno programs), REPL history, an installed `bin/`, other files. |
+| Cypress | `cypress cache prune` | Keeps the binary of the Cypress version that runs it. Skipped (`not_scoped`) if the folder holds anything but Cypress version folders (such as session records or `bundles/`, which older Cypress versions also delete); `--wipe` still prunes. |
 
 The other newer tool caches `scull caches` lists (CocoaPods, Playwright, Puppeteer, and
 inspect-only ones such as vcpkg, SwiftPM, Coursier, Zig, Electron, Homebrew and the Nix store)

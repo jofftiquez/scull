@@ -356,7 +356,7 @@ fn fake_main(dir: &Path, tool: &str, args: Vec<String>, script: Option<&str>) ->
         eprintln!("fake {tool}: unsupported invocation {args:?}");
         return 64;
     };
-    if !target.join(GUARD).is_file() {
+    if !has_guard(&target) {
         eprintln!("fake {tool}: {} is not a fake cache", target.display());
         return 65;
     }
@@ -373,22 +373,43 @@ fn fake_main(dir: &Path, tool: &str, args: Vec<String>, script: Option<&str>) ->
     get("exit").and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
-/// Prune: remove files named `unused*`; wipe: remove every entry but the guard (and `keep`, for
-/// ccache's configuration). Never follows links (they are removed as entries).
+/// Whether `dir` holds a guard file (a name starting with [`GUARD`]) directly or one folder
+/// down: caches whose layout scull checks entry by entry (Deno, Cypress, Arduino) keep it
+/// inside an allowed folder, e.g. `gen/FAKE_CACHE` or `packages/FAKE_CACHE.zip`.
+fn has_guard(dir: &Path) -> bool {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        let is_guard = |n: &std::ffi::OsStr| n.to_string_lossy().starts_with(GUARD);
+        match e.file_type() {
+            Ok(ft) if ft.is_file() => is_guard(&e.file_name()),
+            Ok(ft) if ft.is_dir() => fs::read_dir(e.path()).is_ok_and(|inner| {
+                inner
+                    .flatten()
+                    .any(|i| i.file_type().is_ok_and(|t| t.is_file()) && is_guard(&i.file_name()))
+            }),
+            _ => false,
+        }
+    })
+}
+
+/// Prune: remove files named `unused*`; wipe: remove every file but guards (names starting with
+/// [`GUARD`]) and `keep` (ccache's configuration), then the folders left empty. Never follows
+/// links (they are removed as entries).
 fn clean(dir: &Path, wipe: bool, keep: &[&str]) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
         let Ok(ft) = e.file_type() else { continue };
-        if name == GUARD || keep.contains(&name.as_str()) {
+        if name.starts_with(GUARD) || keep.contains(&name.as_str()) {
             continue;
         }
         if ft.is_dir() {
+            clean(&p, wipe, &[]);
             if wipe {
-                let _ = fs::remove_dir_all(&p);
-            } else {
-                clean(&p, false, &[]);
+                let _ = fs::remove_dir(&p); // only if left empty
             }
         } else if wipe || name.starts_with("unused") {
             let _ = fs::remove_file(&p);

@@ -233,6 +233,22 @@ const TESTS: &[Test] = &[
         "d36_long_tail_only_arduino_is_orphan_removable",
         d36_long_tail_only_arduino_is_orphan_removable,
     ),
+    (
+        "forged_location_and_env_together_never_run",
+        forged_location_and_env_together_never_run,
+    ),
+    (
+        "deno_dir_with_foreign_entries_is_refused",
+        deno_dir_with_foreign_entries_is_refused,
+    ),
+    (
+        "cypress_with_anything_but_version_folders_is_refused",
+        cypress_with_anything_but_version_folders_is_refused,
+    ),
+    (
+        "arduino_sketchbook_is_never_cleaned_or_removed",
+        arduino_sketchbook_is_never_cleaned_or_removed,
+    ),
 ];
 
 fn main() {
@@ -3413,8 +3429,25 @@ fn long_tail_cache(fx: &mut Fixture, tool: CacheTool, dir: &str) -> PathBuf {
     for (rel, size) in files {
         fx.file_of_size(format!("{dir}/{rel}"), *size).unwrap();
     }
-    fx.file(format!("{dir}/{}", fake::GUARD), "").unwrap();
+    fx.file(format!("{dir}/{}", guard_rel(tool)), "").unwrap();
     fx.root().join(dir)
+}
+
+/// Where the fake's guard file lives in `tool`'s cache: inside a folder its layout allows for
+/// the caches scull checks entry by entry before running the tool (#44).
+fn guard_rel(tool: CacheTool) -> String {
+    match tool {
+        CacheTool::Deno => format!("gen/{}", fake::GUARD),
+        CacheTool::Cypress => format!("13.6.0/{}", fake::GUARD),
+        CacheTool::Arduino => format!("packages/{}.zip", fake::GUARD),
+        _ => fake::GUARD.to_owned(),
+    }
+}
+
+fn guard_of(tool: CacheTool, dir: &Path) -> PathBuf {
+    guard_rel(tool)
+        .split('/')
+        .fold(dir.to_path_buf(), |p, c| p.join(c))
 }
 
 fn locate_macos(fx: &Fixture) -> CacheScan {
@@ -3474,7 +3507,7 @@ fn long_tail_tools_are_not_supported_and_never_run() {
     }
     assert!(!fake::ran_in(&tools(&fx)), "nothing started");
     for (tool, _, dir) in &dirs {
-        assert!(dir.join(fake::GUARD).is_file(), "{tool:?} untouched");
+        assert!(guard_of(*tool, dir).is_file(), "{tool:?} untouched");
     }
 }
 
@@ -3549,7 +3582,7 @@ fn forged_long_tail_plan_entries_never_run() {
             "{rows:#?}"
         );
         for (tool, dir) in &forged {
-            assert!(dir.join(fake::GUARD).is_file(), "{tool:?} untouched");
+            assert!(guard_of(*tool, dir).is_file(), "{tool:?} untouched");
         }
         assert!(pip.join("wheels").is_dir());
         assert!(uv.join("wheels-v5/pypi/keep01").is_file());
@@ -3717,8 +3750,14 @@ fn long_tail_enabled_tools_exact_argv_env_and_location() {
         files_below(&dir(CacheTool::Ccache)),
         [fake::GUARD, "ccache.conf"]
     );
-    assert_eq!(files_below(&dir(CacheTool::Arduino)), [fake::GUARD]);
-    assert_eq!(files_below(&dir(CacheTool::Deno)), [fake::GUARD]);
+    assert_eq!(
+        files_below(&dir(CacheTool::Arduino)),
+        [guard_rel(CacheTool::Arduino)]
+    );
+    assert_eq!(
+        files_below(&dir(CacheTool::Deno)),
+        [guard_rel(CacheTool::Deno)]
+    );
     let conan = files_below(&dir(CacheTool::Conan));
     assert!(conan.iter().any(|f| f.ends_with("libz.a")), "{conan:?}");
     assert!(!conan.iter().any(|f| f.contains("unused")), "{conan:?}");
@@ -3787,7 +3826,7 @@ fn long_tail_forged_invocations_never_run() {
     assert!(!fake::ran_in(&tools(&fx)), "nothing started");
     assert!(elsewhere.join("keep.bin").is_file());
     for (tool, _, dir) in &setup {
-        assert!(dir.join(fake::GUARD).is_file(), "{tool:?}");
+        assert!(guard_of(*tool, dir).is_file(), "{tool:?}");
     }
     let rows = rows(&fx, &report.rec);
     assert_eq!(rows.len(), 3, "{rows:#?}");
@@ -3954,8 +3993,260 @@ fn d36_long_tail_only_arduino_is_orphan_removable() {
             "{report:#?}"
         );
         only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("d36_excluded"));
-        assert!(dir.join(fake::GUARD).is_file(), "{forged_tool:?} untouched");
+        assert!(
+            guard_of(forged_tool, dir).is_file(),
+            "{forged_tool:?} untouched"
+        );
         drop(exec);
         check(&fx, &p, &cands, &[], &[&report.rec]);
+    }
+}
+
+/// `v` with every occurrence of `from` (a path, as text) replaced by `to`.
+fn retarget(v: &OsString, from: &Path, to: &Path) -> OsString {
+    OsString::from(
+        v.to_string_lossy()
+            .replace(&*from.to_string_lossy(), &to.to_string_lossy()),
+    )
+}
+
+/// Point a planned tool at `to`: its location and every argument and variable naming the
+/// location changed together (the consistent forgery the #44 review reproduced), or with
+/// `cache_too` also its cache folder.
+fn forge_target(t: &mut scull_cleaner::quickclean::PlannedTool, to: &Path, cache_too: bool) {
+    let from = t.location.clone();
+    t.location = to.to_path_buf();
+    t.args = t.args.iter().map(|a| retarget(a, &from, to)).collect();
+    t.env = t
+        .env
+        .iter()
+        .map(|(k, v)| (k.clone(), retarget(v, &from, to)))
+        .collect();
+    if cache_too {
+        t.cache = to.to_path_buf();
+    }
+}
+
+/// #44 review (M1): a plan entry whose location, arguments and variables were all changed to
+/// another folder, consistently (or with its cache folder changed too), never starts, for
+/// every enabled long-tail tool and every package-manager tool: the location is derived from
+/// the approved item's folder, never taken from the plan. The other folder stays intact.
+fn forged_location_and_env_together_never_run() {
+    if !identity_available() {
+        return;
+    }
+    for cache_too in [false, true] {
+        // The long-tail tools (macOS layout).
+        let mut fx = Fixture::new().unwrap();
+        let setup = long_tail_enabled_setup(&mut fx);
+        let scan = locate_macos(&fx);
+        let cands = candidates(&scan);
+        let q = quick(options(&fx, &[tools(&fx)]));
+        let mut plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        assert_eq!(plan.tools.len(), 5, "{plan:#?}");
+        let elsewhere = fx.base().join("elsewhere");
+        for t in &mut plan.tools {
+            let to = elsewhere.join(t.tool.rule_id());
+            fs::create_dir_all(&to).unwrap();
+            fs::write(to.join(fake::GUARD), "").unwrap();
+            fs::write(to.join("keep.bin"), "keep").unwrap();
+            forge_target(t, &to, cache_too);
+        }
+        let report = run_ok(&fx, &q, &plan);
+        assert!(report.results.is_empty(), "{report:#?}");
+        assert!(report.spawned.is_empty(), "{report:#?}");
+        for (tool, _, dir) in &setup {
+            assert!(
+                matches!(skip_reason(&report.skipped, *tool), SkipReason::Changed(_)),
+                "{tool:?}: {report:#?}"
+            );
+            assert!(guard_of(*tool, dir).is_file());
+            assert!(elsewhere.join(tool.rule_id()).join("keep.bin").is_file());
+        }
+        assert!(!fake::ran_in(&tools(&fx)), "nothing started");
+        check(&fx, &plan, &cands, &[], &[&report.rec]);
+
+        // The package managers (Linux layout).
+        let mut fx = Fixture::new().unwrap();
+        npm_cache(&mut fx);
+        pnpm_store(&mut fx);
+        bun_cache(&mut fx);
+        yarn_classic(&mut fx);
+        pip_cache(&mut fx);
+        uv_cache(&mut fx);
+        conda_pkgs(&mut fx);
+        go_build_cache(&mut fx);
+        nuget_packages(&mut fx);
+        fx.checkpoint().unwrap();
+        for bin in [
+            "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda", "go", "dotnet",
+        ] {
+            fake::install(&tools(&fx), bin);
+        }
+        let scan = locate(&fx);
+        let cands = candidates(&scan);
+        let q = quick(options(&fx, &[tools(&fx)]));
+        let mut plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        assert_eq!(plan.tools.len(), 9, "{:?}", plan.skipped);
+        let elsewhere = fx.base().join("elsewhere");
+        for t in &mut plan.tools {
+            let to = elsewhere.join(t.tool.rule_id());
+            fs::create_dir_all(to.join("_cacache")).unwrap();
+            fs::write(to.join(fake::GUARD), "").unwrap();
+            fs::write(to.join("_cacache").join(fake::GUARD), "").unwrap();
+            fs::write(to.join("keep.bin"), "keep").unwrap();
+            forge_target(t, &to, cache_too);
+        }
+        let report = run_ok(&fx, &q, &plan);
+        assert!(report.results.is_empty(), "{report:#?}");
+        assert!(report.spawned.is_empty(), "{report:#?}");
+        for t in &plan.tools {
+            assert!(
+                matches!(skip_reason(&report.skipped, t.tool), SkipReason::Changed(_)),
+                "{:?}: {report:#?}",
+                t.tool
+            );
+            assert!(elsewhere.join(t.tool.rule_id()).join("keep.bin").is_file());
+        }
+        // Planning probes `yarn --version`; nothing else ever started.
+        for bin in [
+            "npm", "pnpm", "bun", "yarn", "pip", "uv", "conda", "go", "dotnet",
+        ] {
+            assert!(
+                fake::calls(&tools(&fx), bin)
+                    .iter()
+                    .all(|c| c.argv == ["--version"]),
+                "{bin} started"
+            );
+        }
+        check(&fx, &plan, &cands, &[], &[&report.rec]);
+    }
+}
+
+/// #44 review (M2): `deno clean` removes the whole DENO_DIR, so a folder holding anything but
+/// Deno's own entries (an installed `bin/deno` as in `~/.deno`, REPL history, a stray file) is
+/// refused (`not_scoped`) and nothing runs; one holding only Deno's entries (folders, SQLite
+/// caches with their journals, `latest.txt`) is planned.
+fn deno_dir_with_foreign_entries_is_refused() {
+    if !identity_available() {
+        return;
+    }
+    let base = "home/Library/Caches/deno";
+    for (extra, refused) in [
+        ("bin/deno", true),
+        ("deno_history.txt", true),
+        ("notes.txt", true),
+        ("remote/https/x", false),
+        ("registries/jsr.io/meta", false),
+        ("dl/deno-x86_64.zip", false),
+        ("check_cache_v2", false),
+        ("v8_code_cache_v2-journal", false),
+        ("latest.txt", false),
+    ] {
+        let mut fx = Fixture::new().unwrap();
+        let dir = long_tail_cache(&mut fx, CacheTool::Deno, base);
+        fx.file(format!("{base}/{extra}"), "x").unwrap();
+        fx.checkpoint().unwrap();
+        fake::install(&tools(&fx), "deno");
+        let scan = locate_macos(&fx);
+        let cands = candidates(&scan);
+        let q = quick(options(&fx, &[tools(&fx)]));
+        let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        if refused {
+            assert!(plan.tools.is_empty(), "{extra}: {plan:#?}");
+            let name = extra.split('/').next().unwrap();
+            assert!(
+                matches!(skip_reason(&plan.skipped, CacheTool::Deno), SkipReason::NotScoped(ref w) if w.contains(name)),
+                "{extra}: {plan:#?}"
+            );
+        } else {
+            assert_eq!(
+                planned_tools(&plan),
+                [CacheTool::Deno],
+                "{extra}: {plan:#?}"
+            );
+        }
+        assert!(!fake::ran_in(&tools(&fx)));
+        assert!(dir.join(extra).is_file());
+        check(&fx, &plan, &cands, &[], &[]);
+    }
+}
+
+/// #44 review (L1): `cypress cache prune` deletes every entry but the running version's (older
+/// CLIs also `bundles/` and session records), so a folder holding anything but Cypress version
+/// folders is refused (`not_scoped`) and nothing runs.
+fn cypress_with_anything_but_version_folders_is_refused() {
+    if !identity_available() {
+        return;
+    }
+    let base = "home/Library/Caches/Cypress";
+    for extra in ["sessions/s.json", "bundles/b.zip", "notes.txt", "beta/x"] {
+        let mut fx = Fixture::new().unwrap();
+        let dir = long_tail_cache(&mut fx, CacheTool::Cypress, base);
+        fx.file(format!("{base}/{extra}"), "x").unwrap();
+        fx.checkpoint().unwrap();
+        fake::install(&tools(&fx), "cypress");
+        let scan = locate_macos(&fx);
+        let cands = candidates(&scan);
+        let q = quick(options(&fx, &[tools(&fx)]));
+        let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+        assert!(plan.tools.is_empty(), "{extra}: {plan:#?}");
+        let name = extra.split('/').next().unwrap();
+        assert!(
+            matches!(skip_reason(&plan.skipped, CacheTool::Cypress), SkipReason::NotScoped(ref w) if w.contains(name)),
+            "{extra}: {plan:#?}"
+        );
+        assert!(!fake::ran_in(&tools(&fx)));
+        assert!(dir.join(extra).is_file());
+        check(&fx, &plan, &cands, &[], &[]);
+    }
+}
+
+/// #44 review (L2): a folder at Arduino's download-cache location that looks like a sketchbook
+/// (installed library folders, `.ino` sketches, other entries) is never cleaned with
+/// `arduino-cli cache clean` (`not_scoped`) and never offered or removed as an orphaned cache.
+fn arduino_sketchbook_is_never_cleaned_or_removed() {
+    if !identity_available() {
+        return;
+    }
+    let base = "home/Library/Arduino15/staging";
+    for extra in [
+        "libraries/Servo/src/Servo.h",
+        "libraries/blink.ino",
+        "Blink/Blink.ino",
+        "readme.txt",
+    ] {
+        for installed in [true, false] {
+            let mut fx = Fixture::new().unwrap();
+            let dir = long_tail_cache(&mut fx, CacheTool::Arduino, base);
+            fx.file(format!("{base}/{extra}"), "x").unwrap();
+            fx.checkpoint().unwrap();
+            if installed {
+                fake::install(&tools(&fx), "arduino-cli");
+            } else {
+                fs::create_dir_all(tools(&fx)).unwrap();
+            }
+            let scan = locate_macos(&fx);
+            let cands = candidates(&scan);
+            let q = quick(options(&fx, &[tools(&fx)]));
+            let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+            assert!(plan.tools.is_empty(), "{extra}: {plan:#?}");
+            assert!(plan.orphaned.is_empty(), "{extra}: {plan:#?}");
+            let reason = skip_reason(&plan.skipped, CacheTool::Arduino);
+            if installed {
+                assert!(
+                    matches!(reason, SkipReason::NotScoped(_)),
+                    "{extra}: {reason:?}"
+                );
+            } else {
+                assert!(
+                    matches!(reason, SkipReason::NotInstalled { .. }),
+                    "{extra}: {reason:?}"
+                );
+            }
+            assert!(!fake::ran_in(&tools(&fx)));
+            assert!(dir.join(extra).is_file());
+            check(&fx, &plan, &cands, &[], &[]);
+        }
     }
 }
