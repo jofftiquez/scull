@@ -318,14 +318,16 @@ A `get_status` call, from a real session:
 | Names look like hashes | `mcp.hash_names` is on. |
 | Garbage in the client log | scull writes only JSON-RPC on stdout; messages go to stderr. Make sure nothing wraps the command in a shell that prints to stdout. |
 
-## `scull ask`: a read-only assistant in your terminal
+## `scull ask`: an assistant in your terminal
 
 `scull ask` is the other way to put a model to work: you ask a question in your terminal, and
 a model you configure answers it by calling scull's read-only tools. These are the tools
-listed above, minus `register_worktree`, with the same allowlist and redaction. The model gets
-none of the destructive-mode tools, so it can't prepare or approve a cleanup. It is off by
-default, uses your own API key or a local server, and asks for your consent before the first
-request to each provider. See [the CLI reference](CLI.md#scull-ask).
+listed above, minus `register_worktree`, with the same allowlist and redaction. It can't
+approve or run a cleanup. Only with `[mcp] destructive = true` (and never when scull runs
+elevated) may it also prepare a plan. Preparing changes nothing, and the plan runs only after
+you approve it yourself, with `scull approve` or in the desktop app. It is off by default,
+uses your own API key or a local server, and asks for your consent before the first request
+to each provider. See [the CLI reference](CLI.md#scull-ask).
 
 ## What is out of scope
 
