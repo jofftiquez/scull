@@ -4,6 +4,8 @@
 
 #![allow(dead_code, clippy::unwrap_used)]
 
+pub mod jvm_caches;
+
 use scull_core::{Candidate, Tier};
 use scull_detectors::{
     CallerSignals, ConfigReader, DetectContext, DetectedArtifact, Detectors, SharedTargetDirs,

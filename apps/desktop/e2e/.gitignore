@@ -1,0 +1,5 @@
+# Written by run.sh and Playwright; never committed (screenshots are attached to issues instead).
+.dist/
+results/
+report/
+shots/

@@ -13,7 +13,8 @@
     "test": "vitest run",
     "tokens": "node scripts/gen-theme.mjs",
     "types": "node scripts/gen-types.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "e2e": "e2e/run.sh"
   },
   "dependencies": {
     "@fontsource/dm-mono": "5.3.0",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
     "@tauri-apps/cli": "2.12.4",
     "@types/d3-hierarchy": "3.1.7",

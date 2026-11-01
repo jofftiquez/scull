@@ -813,15 +813,26 @@ mod tests {
 
         /// Linear fill with bounded noise and random cleanups: the rate is recovered within
         /// 10%, and the days follow from it.
+        ///
+        /// Cleanups are generated in the regime the method promises to handle (step 5): each
+        /// one is an *upward* step in free space of at least `jump_min_bytes` even after the
+        /// day's consumption and the worst-case noise of both samples. A cleanup smaller than
+        /// a day's consumption leaves free space still falling over that interval; with daily
+        /// samples it is indistinguishable from a quiet day and biases any trend (two such
+        /// cleanups of 5 and 6.3 GiB at 8.6 GiB/day once read as 7.6 GiB/day).
         #[test]
         fn recovers_the_rate(
             rate in 1.0f64..12.0,
             days in 14i64..30,
             noise_frac in 0.0f64..0.15,
             seed in any::<u64>(),
-            cleanups in proptest::collection::vec((2i64..28, 5.0f64..60.0), 0..3),
+            cleanups in proptest::collection::vec((2i64..28, 1.0f64..60.0), 0..3),
         ) {
             let start = g(rate * days as f64 + 40.0);
+            // Day's consumption + noise swing of two samples + jump_min (1 GiB) + margin.
+            let visible = rate * (1.0 + 2.0 * noise_frac) + 1.0;
+            let cleanups: Vec<(i64, f64)> =
+                cleanups.iter().map(|&(d, extra)| (d, visible + extra)).collect();
             let s = daily(days, |i| {
                 let mut free = start - g(rate) * i as f64 + g(rate) * noise_frac * jitter(seed, i);
                 for &(d, freed) in &cleanups {

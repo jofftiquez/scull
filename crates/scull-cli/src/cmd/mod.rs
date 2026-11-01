@@ -21,6 +21,7 @@ pub mod restore;
 pub mod review_plan;
 pub mod rules;
 pub mod scan;
+pub mod schedule;
 pub mod schemas;
 pub mod status;
 pub mod worktrees;

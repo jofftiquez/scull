@@ -72,6 +72,7 @@ pub mod quarantine;
 pub mod remove;
 #[cfg(feature = "delete")]
 pub mod trash;
+pub mod scheduler;
 mod types;
 pub mod volumes;
 

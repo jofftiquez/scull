@@ -15,6 +15,9 @@ Two checks, both stdlib-only so they run unchanged on Linux, macOS and Windows:
       ``insights purge``, ...) exits 1 with "is not implemented yet";
     * ``scull agent install <client>`` without ``--yes`` (and without a terminal to confirm
       on) refuses and leaves the home folder unchanged; ``--dry-run`` only shows the diff;
+    * ``scull schedule enable`` likewise refuses without ``--yes`` and ``--dry-run`` only shows
+      the unit files and scheduler commands; ``disable``/``status`` with nothing registered
+      change nothing (no real schedule is ever registered by the gate);
     * ``scull worktrees register`` writes nothing outside ``SCULL_HOME``;
     * ``scull mcp serve --allow-destructive`` lists only tools annotated
       ``destructiveHint: false``, all ``readOnlyHint: true`` except the metadata-only
@@ -67,8 +70,6 @@ DESTRUCTIVE = [
     ["approve", "plan-0000"],
     ["data", "purge"],
     ["insights", "purge"],
-    ["schedule", "enable"],
-    ["schedule", "disable"],
 ]
 
 # Commands that edit an AI client's config only with explicit consent (P4-AI-01): `--yes`, or a
@@ -80,6 +81,13 @@ CONSENT_GATED = [
     (["agent", "install", "codex"], 2),
     (["agent", "install", "claude-code", "--dry-run"], 0),
     (["agent", "uninstall", "claude-code"], 0),
+    # P4-PRO-03: registering the periodic `scull check` needs `--yes` or a typed "y"; the gate
+    # never passes `--yes`, so no real launchd/systemd/Task Scheduler job is ever created.
+    # With nothing registered, disable has nothing to do and status runs no scheduler tool.
+    (["schedule", "enable"], 2),
+    (["schedule", "enable", "--dry-run"], 0),
+    (["schedule", "disable"], 0),
+    (["schedule", "status"], 0),
 ]
 
 

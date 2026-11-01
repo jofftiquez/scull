@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 scull-storage.workspace = true
+scull-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 scull-core.workspace = true

@@ -172,8 +172,10 @@ export function planBridgeFor(bridge: ScullBridge): PlanBridge {
   if (!p) {
     p = bridge.kind === 'mock' ? createMockPlanBridge({ latencyMs: 120 }) : createUnavailablePlanBridge();
     forBridge.set(bridge, p);
-    // Development only: lets screenshot scripts drive the mock (e.g. a target changing).
-    if (p.kind === 'mock' && import.meta.env.DEV) {
+    // Development and E2E builds only (`VITE_SCULL_E2E=1`, apps/desktop/e2e/run.sh): lets
+    // screenshot scripts and E2E tests drive the mock (e.g. a target changing). A normal
+    // `vite build` drops this branch.
+    if (p.kind === 'mock' && (import.meta.env.DEV || import.meta.env.VITE_SCULL_E2E === '1')) {
       (globalThis as { __scullMockPlans?: PlanBridge }).__scullMockPlans = p;
     }
   }

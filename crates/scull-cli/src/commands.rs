@@ -7,7 +7,7 @@
 use crate::cancel;
 use crate::cli::{
     CleanAction, Cli, Command, DataAction, InsightsAction, McpAction, ProjectsAction, RulesAction,
-    ScheduleAction, WorktreesAction,
+    WorktreesAction,
 };
 use crate::output::Ui;
 use clap::CommandFactory;
@@ -60,10 +60,7 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         } => Some(crate::cmd::insights::PURGE),
         Command::Insights { .. } => None,
         Command::Agent { .. } => None,
-        Command::Schedule { action } => match action {
-            ScheduleAction::Enable => planned("schedule enable", 114),
-            ScheduleAction::Disable => planned("schedule disable", 114),
-        },
+        Command::Schedule { .. } => None,
         Command::Data { .. } => None,
         Command::Doctor => None,
         Command::Mcp {
@@ -174,6 +171,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             crate::cmd::data::run_purge(ui, &opts, *confirm)?;
         }
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
@@ -224,8 +222,6 @@ mod tests {
                 "insights purge",
                 Some(266),
             ),
-            (&["schedule", "enable"], "schedule enable", Some(114)),
-            (&["schedule", "disable"], "schedule disable", Some(114)),
         ];
         for (args, name, issue) in table {
             assert_eq!(
@@ -259,6 +255,9 @@ mod tests {
             &["restore", "op_1"],
             &["clean", "--purge-quarantine"],
             &["clean", "caches", "--confirm", "--wipe"],
+            &["schedule", "enable"],
+            &["schedule", "disable"],
+            &["schedule", "status"],
         ] {
             assert_eq!(planned_of(implemented), None, "{implemented:?}");
         }

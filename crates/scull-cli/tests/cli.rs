@@ -144,7 +144,6 @@ fn stub_commands_exit_1_with_tracking_issue() {
     let cases: &[(&[&str], &str)] = &[
         (&["approve", "p"], "(tracked in #108)"),
         (&["insights", "purge"], "(tracked in #266)"),
-        (&["schedule", "enable"], "(tracked in #114)"),
     ];
     for (args, want) in cases {
         let o = scull(args);

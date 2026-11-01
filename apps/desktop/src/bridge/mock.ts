@@ -150,12 +150,16 @@ export interface MockOptions {
   latencyMs?: number;
   /** Delay between simulated progress events, in milliseconds. */
   progressMs?: number;
+  /** Start as a machine that was never scanned (`state: "no_scan"`, no last scan) until the
+   *  first complete scan, so the app opens on onboarding (`?scenario=first-run`, E2E). */
+  firstRun?: boolean;
 }
 
 export function createMockBridge(opts: MockOptions = {}): ScullBridge {
   const latency = opts.latencyMs ?? 0;
   const step = opts.progressMs ?? 0;
   let ops = 0;
+  let scanned = !opts.firstRun;
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const later = async <T>(value: T): Promise<T> => {
     await wait(latency);
@@ -187,12 +191,15 @@ export function createMockBridge(opts: MockOptions = {}): ScullBridge {
       if (params.roots?.some((r) => !r.startsWith('/'))) {
         throw new BridgeError({ kind: 'usage', message: 'scan roots must be absolute paths' });
       }
-      return operation(MOCK_DATA.scanReport, o);
+      const report = await operation(MOCK_DATA.scanReport, o);
+      if (!report.cancelled) scanned = true;
+      return report;
     },
     projects: () => later(MOCK_DATA.projects),
     worktrees: () => later(MOCK_DATA.worktrees),
     caches: (o?: OperationOptions) => operation(MOCK_DATA.cachesReport, o),
-    status: () => later(MOCK_DATA.status),
+    status: () =>
+      later<DesktopStatus>(scanned ? MOCK_DATA.status : { ...MOCK_DATA.status, state: 'no_scan', last_scan: null }),
     capabilities: () => later(MOCK_DATA.capabilities),
     history: () => later(MOCK_DATA.history),
     settings: () => later(MOCK_DATA.settings),

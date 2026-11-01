@@ -1,0 +1,82 @@
+# .NET rules. Format: rules/README.md.
+# The NuGet global packages folder is a package cache located by Rust code in
+# `scull_detectors::caches` (rule ID `nuget.packages`), not a rule (CLS-02).
+#
+# `bin/` and `obj/` are only candidates beside an MSBuild project file (`*.csproj`, `*.fsproj`,
+# `*.vbproj`), never by name alone and never beside a `.sln` alone (CLS-03).
+#
+# Rust detectors in `scull_detectors::dotnet` add to these rules, never loosen them:
+# * `dotnet.bin`: MSBuild only writes configuration folders (`Debug/`, `Release/`) into `bin/`;
+#   anything else at its top level (a loose file, a link) raises it to S2, since `bin/` is also a
+#   common name for a folder of scripts.
+#
+# Unity and Unreal projects carry generated project files too; their folders belong to the game
+# engine rules, so `bin/` and `obj/` there are left alone (FX-CLS-14).
+
+schema_version = 1
+
+[[rule]]
+id = "dotnet.obj"
+version = 1
+artifact = ".NET intermediate build output"
+ecosystem = "dotnet"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["obj"]
+
+[rule.markers]
+# The project file beside it, and NuGet restore or MSBuild output inside.
+all = ["../*.{csproj,fsproj,vbproj}"]
+any = [
+  "project.assets.json",
+  "*.nuget.dgspec.json",
+  "*.nuget.g.props",
+  "{Debug,Release}",
+]
+
+[rule.exclude]
+markers = ["../ProjectSettings", "../*.uproject"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["dotnet", "MSBuild", "msbuild", "VBCSCompiler", "devenv"]
+
+[rule.regeneration]
+instructions = "Run `dotnet build` (or build in the IDE): restore and the build recreate it."
+network = false
+long_build = false
+
+[[rule]]
+id = "dotnet.bin"
+version = 1
+artifact = ".NET build output"
+ecosystem = "dotnet"
+category = "project_artifact"
+platforms = ["macos", "linux", "windows"]
+base_tier = "S0"
+strategy = "filesystem"
+evidence = ["marker", "known_artifact"]
+
+[rule.match]
+names = ["bin"]
+
+[rule.markers]
+# The project file beside it, and a configuration folder inside.
+all = ["../*.{csproj,fsproj,vbproj}", "{Debug,Release}"]
+
+[rule.exclude]
+markers = ["../ProjectSettings", "../*.uproject"]
+within = ["node_modules"]
+
+[rule.activity]
+processes = ["dotnet", "MSBuild", "msbuild", "VBCSCompiler", "devenv"]
+
+[rule.regeneration]
+instructions = "Run `dotnet build` (or `dotnet publish` for published output) to rebuild."
+network = false
+long_build = false
