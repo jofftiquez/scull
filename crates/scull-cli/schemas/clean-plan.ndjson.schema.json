@@ -1068,7 +1068,7 @@
     },
     "Plan": {
       "additionalProperties": false,
-      "description": "An immutable cleanup plan (PRD §10.4, SAFE-11).\n\nConstruct with [`Plan::new`] (which computes the hash) or by deserializing a plan file\n(which rejects unknown fields). Either way, call [`Plan::verify`] before trusting it, and\n[`narrow`] it against freshly derived candidates before executing anything.\n\n```\nuse scull_core::*;\n\nlet identity = FileIdentity::new(1, 42);\nlet path = \"/home/me/proj/target\";\nlet reasons = vec![TierReason::new(Tier::S0, ReasonCode::Regenerable, \"Cargo.lock present\")];\nlet candidate = Candidate {\n    id: ItemId::derive(identity, path.as_bytes()),\n    path: FsPath::from(path),\n    identity,\n    category: Category::ProjectArtifact,\n    artifact: \"Cargo build output\".into(),\n    rule: RuleRef { id: \"rust.target\".into(), version: 1 },\n    project: None,\n    tier: Tier::S0,\n    reasons,\n    evidence: vec![],\n    sizes: Sizes::default(),\n    flags: Flags::default(),\n    regeneration: Regeneration::default(),\n    action: Action::Delete,\n};\nlet params = PlanParams {\n    id: PlanId::from_suffix(\"01J\").unwrap(),\n    scan_id: ScanId::from_suffix(\"01J\").unwrap(),\n    created_unix: 1_800_000_000,\n    ttl_secs: None,\n    machine_id: \"machine-a\".into(),\n    user: \"me\".into(),\n    origin: PlanOrigin::Cli,\n};\nlet plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();\nassert!(plan.verify(1_800_000_060, \"machine-a\", \"me\").is_ok());\nassert_eq!(\n    plan.verify(1_800_000_060, \"machine-b\", \"me\").unwrap_err().kind,\n    ErrorKind::PlanForeign\n);\n\nlet narrowed = narrow(&plan, &[candidate]);\nassert_eq!(narrowed.executable.len(), 1);\nassert!(narrow(&plan, &[]).executable.is_empty());\n```",
+      "description": "An immutable cleanup plan (PRD §10.4, SAFE-11).\n\nConstruct with [`Plan::new`] (which computes the hash) or by deserializing a plan file\n(which rejects unknown fields). Either way, call [`Plan::verify`] before trusting it, and\n[`narrow`] it against freshly derived candidates before executing anything.\n\n```\nuse scull_core::*;\n\nlet identity = FileIdentity::new(1, 42);\nlet path = \"/home/me/proj/target\";\nlet reasons = vec![TierReason::new(Tier::S0, ReasonCode::Regenerable, \"Cargo.lock present\")];\nlet candidate = Candidate {\n    id: ItemId::derive(identity, path.as_bytes()),\n    path: FsPath::from(path),\n    identity,\n    category: Category::ProjectArtifact,\n    artifact: \"Cargo build output\".into(),\n    rule: RuleRef { id: \"rust.target\".into(), version: 1 },\n    project: None,\n    tier: Tier::S0,\n    reasons,\n    evidence: vec![],\n    sizes: Sizes::default(),\n    flags: Flags::default(),\n    regeneration: Regeneration::default(),\n    action: Action::Delete,\n};\nlet params = PlanParams {\n    id: PlanId::from_suffix(\"01J\").unwrap(),\n    scan_id: ScanId::from_suffix(\"01J\").unwrap(),\n    created_unix: 1_800_000_000,\n    ttl_secs: None,\n    machine_id: \"machine-a\".into(),\n    user: \"me\".into(),\n    origin: PlanOrigin::Cli,\n    operations_watermark: Some(0),\n};\nlet plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();\nassert!(plan.verify(1_800_000_060, \"machine-a\", \"me\").is_ok());\nassert_eq!(\n    plan.verify(1_800_000_060, \"machine-b\", \"me\").unwrap_err().kind,\n    ErrorKind::PlanForeign\n);\n\nlet narrowed = narrow(&plan, &[candidate]);\nassert_eq!(narrowed.executable.len(), 1);\nassert!(narrow(&plan, &[]).executable.is_empty());\n```",
       "properties": {
         "content_hash": {
           "$ref": "#/$defs/ContentHash"
@@ -1092,6 +1092,15 @@
         },
         "machine_id": {
           "type": "string"
+        },
+        "operations_watermark": {
+          "description": "SAFE-09: the position of the last recorded operation in scull's database when the scan\nthe items came from started (operations are append-only, so positions only grow). An\noperation recorded after this position touched the targets after the scan saw them and\ninvalidates the plan. Absent in plans that predate it; those use the creation time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "origin": {
           "$ref": "#/$defs/PlanOrigin"

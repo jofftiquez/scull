@@ -424,6 +424,10 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
     let roots = pipeline::roots(&loaded, args.allow_broad_roots)?;
     let who = exec::who()?;
     let engine = pipeline::engine(&loaded, &roots, true, ui)?;
+    // SAFE-09: the last recorded operation before the scan starts. Any operation recorded
+    // after it may have touched what the scan observes, and invalidates the plan.
+    let mut store = exec::open_store()?;
+    let watermark = store.operations_watermark()?;
     let scan = scan(&engine, &roots, &loaded, true, ui)?;
     if scan.cancelled || cancel::is_cancelled() {
         return Err(cancel::cancelled_error());
@@ -448,16 +452,14 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
                 machine_id: who.machine_id.clone(),
                 user: who.user.clone(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: Some(watermark),
             },
             items,
         )?)
     };
-    let mut store = None;
     let mut plan_file = None;
     if let Some(p) = &plan {
-        let mut s = exec::open_store()?;
-        s.insert_plan(p)?;
-        store = Some(s);
+        store.insert_plan(p)?;
         if let Some(out) = &args.output {
             write_plan_file(out, p)?;
             plan_file = Some(FsPath::from_path(&absolute(&cwd, out)));
@@ -499,10 +501,6 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
         return Ok(());
     }
     let elevated = elevated_gate(&report, args.allow_permanent, true)?;
-    let mut store = match store {
-        Some(s) => s,
-        None => exec::open_store()?,
-    };
     let sizes = sizes_by_id(&scan.candidates);
     let run = execute(
         &plan,

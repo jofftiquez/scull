@@ -160,8 +160,29 @@ pub fn plan(fx: &Fixture, r: &ScanReport, rels: &[&str]) -> Plan {
     plan_named(fx, r, rels, "01JREVALIDATION")
 }
 
+/// [`plan_named`] bound to the SAFE-09 watermark read before the scan `r` started.
+pub fn plan_watermarked(
+    fx: &Fixture,
+    r: &ScanReport,
+    rels: &[&str],
+    id: &str,
+    watermark: u64,
+) -> Plan {
+    plan_with(fx, r, rels, id, Some(watermark))
+}
+
 /// [`plan`] with its own plan ID suffix.
 pub fn plan_named(fx: &Fixture, r: &ScanReport, rels: &[&str], id: &str) -> Plan {
+    plan_with(fx, r, rels, id, None)
+}
+
+fn plan_with(
+    fx: &Fixture,
+    r: &ScanReport,
+    rels: &[&str],
+    id: &str,
+    operations_watermark: Option<u64>,
+) -> Plan {
     let items = rels
         .iter()
         .map(|p| PlanItem::from_candidate(at(fx, r, p)).unwrap())
@@ -175,6 +196,7 @@ pub fn plan_named(fx: &Fixture, r: &ScanReport, rels: &[&str], id: &str) -> Plan
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin: PlanOrigin::Cli,
+            operations_watermark,
         },
         items,
     )

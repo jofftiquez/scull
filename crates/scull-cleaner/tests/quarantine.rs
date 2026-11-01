@@ -347,6 +347,83 @@ fn fx_race_05_plan_invalidated_when_another_operation_touched_its_targets() {
     check(&fx, &stale, &r, &["web/node_modules"]);
 }
 
+/// SAFE-09 with the watermark taken when the plan's scan started: an operation recorded after
+/// it invalidates the plan even though it started *before* the plan was created (between the
+/// scan and the plan, where the creation-time rule only caught it within the same second). A
+/// watermark taken after that operation (a rescan) is not invalidated by it.
+#[test]
+fn fx_race_05_operation_recorded_after_the_scan_started_invalidates_the_plan() {
+    let fx = fixture();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let watermark = s.operations_watermark().unwrap();
+    let scan = h.scan(&fx);
+    // After the scan, before the plan is created, another operation runs on the same item.
+    let (_, r) = run(&fx, &h, &mut s, &["web/node_modules"], "FIRST");
+    quarantined(&fx, &r, "web/node_modules");
+    let stale = plan_watermarked(
+        &fx,
+        &scan,
+        &["web/node_modules", "app/target"],
+        "STALE",
+        watermark,
+    );
+    s.insert_plan(&stale).unwrap();
+
+    let exec = locked(&fx);
+    let e = exec
+        .begin_operation(&mut s, &stale, &start(&stale, "SECOND"))
+        .unwrap_err();
+    println!("stale plan: [{}] {}", e.kind, e.message);
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated);
+    assert!(e.message.contains("FIRST"), "{}", e.message);
+    drop(exec);
+
+    // A rescan takes a new watermark: FIRST is before it and no longer counts.
+    let rescan_watermark = s.operations_watermark().unwrap();
+    assert!(rescan_watermark > watermark);
+    let rescan = h.scan(&fx);
+    let fresh = plan_watermarked(&fx, &rescan, &["app/target"], "FRESH", rescan_watermark);
+    s.insert_plan(&fresh).unwrap();
+    let exec = locked(&fx);
+    exec.begin_operation(&mut s, &fresh, &start(&fresh, "THIRD"))
+        .expect("an operation before the rescan does not invalidate the new plan");
+    check(&fx, &stale, &r, &["web/node_modules"]);
+}
+
+/// SAFE-09: an operation that began before the scan and is still running when the watermark
+/// is read may change the items after the scan observed them, so it invalidates the plan once
+/// it is over (begin_operation refuses while it runs: SAFE-19).
+#[test]
+fn fx_race_05_operation_running_when_the_scan_started_invalidates_the_plan() {
+    let fx = fixture();
+    let h = harness(false);
+    let mut s = store(&fx);
+    let before = h.scan(&fx);
+    let other = plan_named(&fx, &before, &["app/target"], "OTHER");
+    s.insert_plan(&other).unwrap();
+    let exec = locked(&fx);
+    let running = exec
+        .begin_operation(&mut s, &other, &start(&other, "RUNNING"))
+        .unwrap();
+    // The scan starts while RUNNING is still running (read through a second connection).
+    let watermark = store(&fx).operations_watermark().unwrap();
+    let scan = h.scan(&fx);
+    running.finish(OperationEnd::Cancelled, now_unix()).unwrap();
+    drop(exec);
+
+    let plan = plan_watermarked(&fx, &scan, &["app/target"], "LATER", watermark);
+    s.insert_plan(&plan).unwrap();
+    let exec = locked(&fx);
+    let e = exec
+        .begin_operation(&mut s, &plan, &start(&plan, "LATEROP"))
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::PlanInvalidated, "{}", e.message);
+    assert!(e.message.contains("RUNNING"), "{}", e.message);
+    fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+        .assert_ok();
+}
+
 /// Operations need the execution lock.
 #[test]
 fn operations_and_purge_need_the_lock() {

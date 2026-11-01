@@ -575,6 +575,14 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
         ));
     };
     let env = CacheEnv::new(home, os, |k| std::env::var(k).ok());
+    // SAFE-09: before the caches are measured and located, the last recorded operation; any
+    // later one invalidates the plan of record. Read only when something may run (a preview
+    // never creates the database).
+    let watermark = if wants_run {
+        Some(exec::open_store()?.operations_watermark()?)
+    } else {
+        None
+    };
     let engine = pipeline::engine(&loaded, &[], false, ui)?;
     let bridge = CancelBridge::start();
     let caches = engine.caches(
@@ -690,6 +698,7 @@ pub fn run(args: &CleanCachesArgs, ui: &Ui) -> Result<(), ScullError> {
             machine_id: who.machine_id.clone(),
             user: who.user.clone(),
             origin: PlanOrigin::Cli,
+            operations_watermark: watermark,
         },
     )?;
     store.insert_plan(&audit_plan)?;

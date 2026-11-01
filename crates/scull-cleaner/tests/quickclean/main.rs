@@ -828,8 +828,10 @@ fn os(v: &[&str]) -> Vec<OsString> {
     v.iter().map(OsString::from).collect()
 }
 
+/// A path as the tools receive it: native separators (`home/.cache/pip` joined onto a Windows
+/// root is passed as `home\.cache\pip`).
 fn path_arg(p: &Path) -> OsString {
-    p.as_os_str().to_owned()
+    p.components().collect::<PathBuf>().into_os_string()
 }
 
 /// One audited operation, for the invariants and the audit assertions.
@@ -899,6 +901,7 @@ fn in_operation<R>(
                 machine_id: "qc-machine".into(),
                 user: "tester".into(),
                 origin: PlanOrigin::Cli,
+                operations_watermark: None,
             },
         )
         .unwrap();
@@ -1086,7 +1089,12 @@ fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
     let call = only_call(&fx, "npm");
     assert_eq!(
         call.argv,
-        ["cache", "verify", "--cache", &location.to_string_lossy()]
+        [
+            "cache",
+            "verify",
+            "--cache",
+            &path_arg(&location).to_string_lossy()
+        ]
     );
     let sandbox = canonical(&sandbox_base(&fx));
     assert!(call.cwd.starts_with(&sandbox), "cwd {:?}", call.cwd);
@@ -1154,7 +1162,7 @@ fn fx_qc_01_npm_prune_exact_argv_env_cwd_and_measured() {
                 "cache".into(),
                 "verify".into(),
                 "--cache".into(),
-                location.to_string_lossy().into_owned(),
+                path_arg(&location).to_string_lossy().into_owned(),
             ],
         }
     );
@@ -1198,7 +1206,7 @@ fn fx_qc_01_npm_wipe_only_when_requested() {
             "clean",
             "--force",
             "--cache",
-            &location.to_string_lossy()
+            &path_arg(&location).to_string_lossy()
         ]
     );
     assert_eq!(files_below(&cache), [fake::GUARD]);
@@ -1259,7 +1267,12 @@ fn fx_qc_02_pnpm_store_prune_only_with_partial_reclaim_explanation() {
     assert!(r.succeeded(), "{r:?}");
     assert_eq!(
         only_call(&fx, "pnpm").argv,
-        ["store", "prune", "--store-dir", &store.to_string_lossy()]
+        [
+            "store",
+            "prune",
+            "--store-dir",
+            &path_arg(&store).to_string_lossy()
+        ]
     );
     // The store folder and every referenced package are still there; only the unused went.
     let left = files_below(&store);
@@ -1981,7 +1994,7 @@ fn fx_qc_07_project_npmrc_never_applies() {
     assert_ne!(call.cwd, fx.root().join("proj"));
     assert!(call.cwd.starts_with(canonical(&sandbox_base(&fx))));
     let location = home(&fx).join(".npm");
-    assert_eq!(call.argv[3], location.to_string_lossy());
+    assert_eq!(call.argv[3], path_arg(&location).to_string_lossy());
     assert_ne!(call.argv[3], home_s);
     assert!(
         !call
@@ -2113,7 +2126,10 @@ fn bun_and_yarn_location_variables_target_the_located_cache() {
     assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
     let bun_call = only_call(&fx, "bun");
     assert_eq!(bun_call.argv, ["pm", "cache", "rm"]);
-    assert_eq!(bun_call.env["BUN_INSTALL_CACHE_DIR"], bun.to_string_lossy());
+    assert_eq!(
+        bun_call.env["BUN_INSTALL_CACHE_DIR"],
+        path_arg(&bun).to_string_lossy()
+    );
     assert_eq!(
         env_names(&bun_call.env),
         expected_env_names(&["BUN_INSTALL_CACHE_DIR"])
@@ -2478,7 +2494,7 @@ fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
         let location = home(&fx).join(".npm");
         assert_eq!(t.binary, canonical(&node), "{style:?}");
         assert_eq!(t.script.as_deref(), Some(script.as_path()));
-        assert_eq!(t.shim.as_deref(), Some(shim.as_path()));
+        assert_eq!(t.shim.as_deref(), Some(canonical(&shim).as_path()));
         assert_eq!(
             t.args,
             [
@@ -2500,7 +2516,12 @@ fn p2_qc_02_npm_cmd_shim_runs_node_on_its_script_without_a_shell() {
         let call = only_call(&fx, "npm");
         assert_eq!(
             call.argv,
-            ["cache", "verify", "--cache", &location.to_string_lossy()]
+            [
+                "cache",
+                "verify",
+                "--cache",
+                &path_arg(&location).to_string_lossy()
+            ]
         );
         assert_eq!(call.script.as_deref(), Some(&*script.to_string_lossy()));
         assert_eq!(env_names(&call.env), expected_env_names(&[]));
@@ -2567,7 +2588,12 @@ fn p2_qc_02_yarn_and_pnpm_shims_use_a_trusted_node_from_the_search_path() {
     );
     assert_eq!(
         pnpm_calls[0].argv,
-        ["store", "prune", "--store-dir", &pnpm.to_string_lossy()]
+        [
+            "store",
+            "prune",
+            "--store-dir",
+            &path_arg(&pnpm).to_string_lossy()
+        ]
     );
     let yarn_calls = fake::calls(&node_dir(&fx), "yarn");
     assert_eq!(yarn_calls.len(), 2, "version probe + clean: {yarn_calls:?}");
@@ -2802,7 +2828,12 @@ fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
     let call = only_call(&fx, "pip");
     assert_eq!(
         call.argv,
-        ["cache", "purge", "--cache-dir", &pip.to_string_lossy()]
+        [
+            "cache",
+            "purge",
+            "--cache-dir",
+            &path_arg(&pip).to_string_lossy()
+        ]
     );
     assert_eq!(
         env_names(&call.env),
@@ -2814,7 +2845,12 @@ fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
     let call = only_call(&fx, "uv");
     assert_eq!(
         call.argv,
-        ["cache", "prune", "--cache-dir", &uv.to_string_lossy()]
+        [
+            "cache",
+            "prune",
+            "--cache-dir",
+            &path_arg(&uv).to_string_lossy()
+        ]
     );
     assert_eq!(
         env_names(&call.env),
@@ -2824,7 +2860,10 @@ fn python_caches_pip_uv_conda_exact_argv_env_and_location() {
 
     let call = only_call(&fx, "conda");
     assert_eq!(call.argv, ["clean", "--packages", "--tarballs", "--yes"]);
-    assert_eq!(call.env["CONDA_PKGS_DIRS"], conda.to_string_lossy());
+    assert_eq!(
+        call.env["CONDA_PKGS_DIRS"],
+        path_arg(&conda).to_string_lossy()
+    );
     assert_eq!(
         env_names(&call.env),
         expected_env_names(&["CONDA_PKGS_DIRS", "CONDA_OFFLINE"])
@@ -2909,7 +2948,12 @@ fn uv_wipe_only_when_requested_and_conda_never_wiped() {
     assert!(report.results.iter().all(|r| r.succeeded()), "{report:?}");
     assert_eq!(
         only_call(&fx, "uv").argv,
-        ["cache", "clean", "--cache-dir", &uv.to_string_lossy()]
+        [
+            "cache",
+            "clean",
+            "--cache-dir",
+            &path_arg(&uv).to_string_lossy()
+        ]
     );
     assert_eq!(files_below(&uv), [fake::GUARD]);
     assert!(conda.join("numpy-1.26.4-py312.conda").is_file());
@@ -3096,7 +3140,7 @@ fn go_and_nuget_exact_argv_env_and_location() {
             .iter()
             .find(|c| c.argv == ["clean", flag])
             .unwrap_or_else(|| panic!("go clean {flag}: {calls:?}"));
-        assert_eq!(call.env[var], dir.to_string_lossy());
+        assert_eq!(call.env[var], path_arg(dir).to_string_lossy());
         assert_eq!(call.env["GOENV"], "off");
         assert_eq!(call.env["GOFLAGS"], "");
         assert_eq!(call.env["GOTOOLCHAIN"], "local");
@@ -3109,7 +3153,10 @@ fn go_and_nuget_exact_argv_env_and_location() {
     }
     let call = only_call(&fx, "dotnet");
     assert_eq!(call.argv, ["nuget", "locals", "global-packages", "--clear"]);
-    assert_eq!(call.env["NUGET_PACKAGES"], nuget.to_string_lossy());
+    assert_eq!(
+        call.env["NUGET_PACKAGES"],
+        path_arg(&nuget).to_string_lossy()
+    );
     assert_eq!(
         env_names(&call.env),
         expected_env_names(&[

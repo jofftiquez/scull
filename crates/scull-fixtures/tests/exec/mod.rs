@@ -139,6 +139,7 @@ pub fn delete_measured(fx: &Fixture, rel: &str) -> Measured {
             machine_id: "machine-test".into(),
             user: "tester".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         vec![item.clone()],
     )

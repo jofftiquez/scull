@@ -137,6 +137,20 @@ impl Cli {
         if roots {
             c.arg("--allow-network-roots");
         }
+        // GitHub's Windows runners run tests as an elevated administrator, where `clean` and
+        // `restore` refuse to change anything without `--allow-root` (SAFE-14), as a user
+        // running elevated would have to pass. Tests of that refusal set
+        // `SCULL_TEST_ASSUME_ELEVATED` and never get the flag.
+        if matches!(args.first(), Some(&("clean" | "restore")))
+            && !args.contains(&"--allow-root")
+            && !self
+                .extra_env
+                .iter()
+                .any(|(k, _)| k == "SCULL_TEST_ASSUME_ELEVATED")
+            && scull_platform::is_elevated().blocks_destructive()
+        {
+            c.arg("--allow-root");
+        }
         for (k, _) in std::env::vars_os() {
             if k.to_str()
                 .is_some_and(|k| k.starts_with("SCULL_") || CACHE_VARS.contains(&k))

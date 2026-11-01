@@ -881,6 +881,20 @@ fn same_dir(a: &Path, b: &Path) -> bool {
         )
 }
 
+/// Whether `binary` is what the entry of the same name in the trusted directory `dir` resolves
+/// to: a link there (Homebrew's `/opt/homebrew/bin/git` → `/opt/homebrew/Cellar/git/<v>/bin/git`)
+/// that the hardened runners follow and then start by its real path, so a swap of the link
+/// can't change what runs. Only that exact entry counts, never anything else in its folder.
+fn reached_through(dir: &Path, binary: &Path) -> bool {
+    let Some(name) = binary.file_name() else {
+        return false;
+    };
+    matches!(
+        (std::fs::canonicalize(dir.join(name)), std::fs::canonicalize(binary)),
+        (Ok(a), Ok(b)) if a == b
+    )
+}
+
 /// The `node` rule of [`spawns_allowlisted`]: the script it runs.
 fn node_runs_allowlisted_script<P: AsRef<Path>>(
     r: &SpawnRecord,
@@ -934,7 +948,8 @@ fn node_runs_allowlisted_script<P: AsRef<Path>>(
 }
 
 /// I-7: every spawned process is an allowlisted tool ([`ALLOWED_TOOLS`]) started by absolute
-/// path from a trusted directory: the binary sits directly in one of `trusted`, no component of
+/// path from a trusted directory: the binary sits directly in one of `trusted` (or is the real
+/// file the same-named entry there links to, as Homebrew installs tools), no component of
 /// its path is `node_modules`, and it is not inside `root` (the scanned tree; project content is
 /// never trusted, SAFE-12). With spawn records but no trusted directory declared, nothing is
 /// trusted and every spawn fails.
@@ -975,7 +990,8 @@ pub fn spawns_allowlisted<P: AsRef<Path>>(
         }
         let in_trusted = b
             .parent()
-            .is_some_and(|dir| trusted.iter().any(|t| same_dir(dir, t.as_ref())));
+            .is_some_and(|dir| trusted.iter().any(|t| same_dir(dir, t.as_ref())))
+            || trusted.iter().any(|t| reached_through(t.as_ref(), b));
         if !in_trusted {
             why.push(if trusted.is_empty() {
                 "no trusted directory declared".to_owned()
