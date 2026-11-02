@@ -2,19 +2,17 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
-import { BRIDGE_KEY, type ScanParams, type ScullBridge } from '../../bridge';
+import { BRIDGE_KEY, type ScullBridge } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { createPendingOnboardingBridge, MOCK_DETECTION } from './bridge';
 import {
-  answeredCount,
   broadRootConcern,
   canMove,
   checkRoot,
   defaultAnswers,
   displayPath,
   needsOnboarding,
-  scanFill,
   scanRoots,
   summary,
   toProfile,
@@ -80,38 +78,27 @@ describe('answers and summary (ONB-01…03)', () => {
     expect(a.builds).toEqual(['web', 'rust', 'python', 'ml', 'game', 'infra']);
     expect(a.roots).toEqual(['/Users/ada/code', '/Users/ada/work']);
     expect(a.agents).toBe('daily');
-    expect(a.connectAgents).toBe(true);
-    expect(answeredCount(a, HOME)).toBe(5);
+    expect(a.connectAgents).toBe(false);
   });
 
   it('falls back to "other" and no agents when nothing was found', () => {
     const a = defaultAnswers({ home: HOME, toolchains: [], folders: [], ai_clients: [] });
     expect(a.builds).toEqual(['other']);
     expect(a.agents).toBe('none');
-    expect(answeredCount(a, HOME)).toBe(4);
   });
 
-  it('reads like the design', () => {
+  it('reviews answers without claiming unimplemented automation or connections', () => {
     const a = defaultAnswers(MOCK_DETECTION);
     a.builds = ['web', 'rust', 'ml'];
-    expect(summary(a, MOCK_DETECTION)).toEqual([
-      { k: 'Scan', v: '~/code, ~/work' },
-      { k: 'Show first', v: 'Web / JS · Rust · ML / AI' },
-      { k: 'Agents', v: 'Agent worktrees watched · Claude Code + Codex connected' },
-      { k: 'Open on', v: 'Quick Clean + safest wins' },
-      { k: 'Stale after', v: 'Idle 14 days' },
-      { k: 'Checks', v: 'Every 6 h · alert at ~14 days to full' },
+    expect(summary(a, MOCK_DETECTION).map(({ k, v }) => ({ k, v }))).toEqual([
+      { k: 'Your work', v: 'Web / JS · Rust · ML / AI' },
+      { k: 'Folders to scan', v: '~/code, ~/work' },
+      { k: 'Coding agents', v: 'Daily' },
+      { k: 'Your goal', v: 'Free space now' },
+      { k: 'Explanation preference', v: 'Balanced' },
     ]);
-    Object.assign(a, { roots: [], builds: [], agents: 'none', priority: 'understand', caution: 'cautious' });
-    const s = Object.fromEntries(summary(a, MOCK_DETECTION).map((r) => [r.k, r.v]));
-    expect(s).toMatchObject({
-      Scan: 'Choose at least one folder',
-      'Show first': 'Everything, by size',
-      Agents: 'Off',
-      'Open on': 'Storage map',
-      'Stale after': 'Idle 30 days',
-      Checks: 'Manual',
-    });
+    a.roots = [];
+    expect(summary(a, MOCK_DETECTION)[1]!.v).toBe('Choose at least one folder');
   });
 
   it('caution never reaches safety settings (ONB-07)', () => {
@@ -143,12 +130,7 @@ describe('first scan state machine', () => {
     expect(canMove('cancelled', 'running')).toBe(true);
   });
 
-  it('eases the bar to 90% while running and fills on completion', () => {
-    expect(scanFill('idle', 5000)).toBe(0);
-    expect(scanFill('running', 0)).toBe(0);
-    expect(scanFill('running', 1600)).toBeCloseTo(0.675);
-    expect(scanFill('running', 99999)).toBeCloseTo(0.9);
-    expect(scanFill('done', 0)).toBe(1);
+  it('sums real per-root entry counters', () => {
     expect(totalEntries({ '/a': 10, '/b': 5 })).toBe(15);
   });
 
@@ -162,13 +144,13 @@ describe('first scan state machine', () => {
 
 describe('pending onboarding bridge (inside Tauri)', () => {
   it('derives detection from read-only calls and never claims to save', async () => {
-    const b = createPendingOnboardingBridge(createMockBridge());
+    const b = createPendingOnboardingBridge(createMockBridge(), { context: async () => ({ home: HOME }), pickFolders: async () => null });
     const d = await b.detect();
-    expect(d.home).toBe(HOME);
+    expect((await b.context()).home).toBe(HOME);
+    expect(d.home).toBe('');
     expect(d.folders.map((f) => f.path)).toEqual(MOCK_DATA.projects.roots);
     expect(d.toolchains.map((t) => t.id)).toEqual(expect.arrayContaining(['node', 'rust']));
-    const r = await b.saveProfile(toProfile(defaultAnswers(d), d));
-    expect(r.saved).toBe(false);
+    expect(await b.pickFolders()).toBeNull();
   });
 });
 
@@ -181,70 +163,20 @@ async function mountApp(path: string, bridge: ScullBridge) {
   return { wrapper, router };
 }
 
-describe('onboarding screen', () => {
-  it('opens on first run, full window, and scans only the chosen roots', { timeout: 30000 }, async () => {
-    const calls: ScanParams[] = [];
+describe('first-run routing', () => {
+  it('opens the full-window survey before any first scan', async () => {
+    const scans: unknown[] = [];
     const base = createMockBridge();
     const bridge: ScullBridge = {
       ...base,
       status: async () => ({ ...MOCK_DATA.status, state: 'no_scan', last_scan: null }),
-      scan: async (p, o) => {
-        calls.push(p);
-        return base.scan(p, o);
-      },
+      scan: async (p) => { scans.push(p); return MOCK_DATA.scanReport; },
     };
     const { wrapper, router } = await mountApp('/', bridge);
-    // Wait for conditions, not fixed sleeps: the suite runs in parallel and timings vary.
-    await vi.waitFor(
-      async () => {
-        await flushPromises();
-        expect(router.currentRoute.value.path).toBe('/onboarding');
-      },
-      { timeout: 10000, interval: 25 },
-    );
-    await vi.waitFor(
-      async () => {
-        await flushPromises();
-        // Detection pre-fills the answers asynchronously.
-        expect(wrapper.find('[data-testid="answered"]').text()).toBe('5 of 5 answered');
-        expect(wrapper.find('[data-testid="found"]').text()).toContain('494.0 GiB');
-      },
-      { timeout: 10000, interval: 25 },
-    );
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/onboarding'));
     expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="found"]').text()).toContain('494.0 GiB · 41.2 GiB free');
-
-    // Ticking the home folder asks first (CFG-04); declining leaves it out.
-    await wrapper.get('button.btn-outline').trigger('click');
-    await wrapper.get('#add-folder').setValue('~');
-    await wrapper.get('form').trigger('submit');
-    expect(wrapper.get('[data-testid="broad-confirm"]').text()).toContain('is your home folder');
-    await wrapper.get('[data-testid="broad-confirm"] .btn-outline').trigger('click');
-    expect(wrapper.find('[data-testid="broad-confirm"]').exists()).toBe(false);
-
-    await wrapper.get('[data-testid="start-scan"]').trigger('click');
-    await vi.waitFor(
-      async () => {
-        await flushPromises();
-        expect(wrapper.get('[data-testid="scan"]').text()).toContain('Scan complete');
-      },
-      { timeout: 10000, interval: 50 },
-    );
-    expect(calls).toEqual([{ roots: ['/Users/ada/code', '/Users/ada/work'], allow_broad_roots: false }]);
-    expect(wrapper.get('[data-testid="scan"]').text()).toContain('Scan complete');
-    expect(wrapper.get('[data-testid="found-chips"]').text()).toContain(`${MOCK_DATA.scanReport.projects.length} projects`);
-    expect(wrapper.find('[data-testid="open-overview"]').exists()).toBe(true);
-    wrapper.unmount();
-  });
-
-  it('disables the scan until a folder is chosen', async () => {
-    const { wrapper } = await mountApp('/onboarding', createMockBridge());
-    await new Promise((r) => setTimeout(r, 200));
-    await flushPromises();
-    for (const box of wrapper.findAll('[data-testid="folder"] input')) await box.setValue(false);
-    expect(wrapper.get('[data-testid="start-scan"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-testid="summary"]').text()).toContain('Choose at least one folder');
-    expect(wrapper.get('[data-testid="answered"]').text()).toBe('4 of 5 answered');
+    expect(wrapper.get('h1').text()).toBe('What do you build?');
+    expect(scans).toEqual([]);
     wrapper.unmount();
   });
 });

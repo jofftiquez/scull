@@ -1,44 +1,101 @@
-// First run → onboarding → first scan → overview (PRD §14.7, design 02 / 02b).
-import { expect, open, test } from './fixtures';
+import { expect, open, tabTo, test } from './fixtures';
+import type { Page } from '@playwright/test';
 
-test('first run opens onboarding, scans the chosen folders, then lands on the overview', async ({ page, shot }) => {
-  // A never-scanned machine (mock `?scenario=first-run`): the app must not auto-scan default
-  // roots (CFG-04); it opens onboarding instead.
+async function continueToReview(page: Page) {
+  for (let step = 1; step < 6; step++) await page.getByTestId('survey-next').click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Ready for your first scan?');
+}
+
+test('six steps preserve choices, pick folders, review, scan, and open the overview', async ({ page, shot }) => {
   await open(page, '/?scenario=first-run');
   await expect(page).toHaveURL(/#\/onboarding$/);
-  await expect(page).toHaveTitle('Welcome · scull');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText("Let's set scull up for how you work.");
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('What do you build?');
   await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
-
-  // Detection pre-fills the answers; the suggested folders are chosen.
-  await expect(page.getByTestId('answered')).toHaveText(/[1-5] of 5 answered/);
-  const start = page.getByTestId('start-scan');
-  await expect(start).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Web / JS', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await shot('onboarding-1-detected');
-
-  // Change answers, then start the first scan.
-  await page.getByRole('button', { name: 'Mobile', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Mobile', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await start.click();
+  await expect(page.getByTestId('start-scan')).toHaveCount(0);
+  await page.getByRole('checkbox', { name: 'Mobile', exact: true }).check();
+  await shot('01-onboarding-work');
+  await page.getByTestId('survey-next').click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Where do your projects live?');
+  await page.getByTestId('choose-folders').click();
+  await expect(page.getByTestId('folder').filter({ hasText: '~/Projects' })).toBeVisible();
+  await expect(page.locator('input[type="text"]')).toHaveCount(0);
+  await shot('02-onboarding-folders');
+  await page.getByTestId('survey-back').click();
+  await expect(page.getByRole('checkbox', { name: 'Mobile', exact: true })).toBeChecked();
+  await page.getByTestId('survey-next').click();
+  await page.getByTestId('survey-next').click();
+  await page.getByRole('radio', { name: 'Sometimes', exact: true }).check();
+  await shot('03-onboarding-agents');
+  await page.getByTestId('survey-next').click();
+  await page.getByRole('radio', { name: /Just understand my disk/ }).check();
+  await shot('04-onboarding-goal');
+  await page.getByTestId('survey-next').click();
+  await page.getByRole('radio', { name: /Very cautious/ }).check();
+  await shot('05-onboarding-preference');
+  await page.getByTestId('survey-next').click();
+  await expect(page.getByTestId('review-row')).toHaveCount(5);
+  await expect(page.getByTestId('summary')).toContainText('Sometimes');
+  await page.getByTestId('edit-step-2').click();
+  await expect(page.getByTestId('folder').filter({ hasText: '~/Projects' }).getByRole('checkbox')).toBeChecked();
+  for (let step = 2; step < 6; step++) await page.getByTestId('survey-next').click();
+  await shot('06-onboarding-review');
+  await page.getByTestId('start-scan').click();
   await expect(page.getByTestId('cancel-scan')).toBeVisible();
-  await shot('onboarding-2-scanning', { settle: false, show: page.getByTestId('cancel-scan') });
-
-  const openOverview = page.getByTestId('open-overview');
-  await expect(openOverview).toBeVisible();
-  await expect(page.getByTestId('save-note')).toHaveCount(0);
-  await shot('onboarding-3-first-scan-done', { show: openOverview });
-
-  await openOverview.click();
+  await expect(page.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  await shot('07-onboarding-scanning', { settle: false });
+  await expect(page.getByTestId('open-overview')).toBeVisible();
+  await expect(page.getByTestId('scan')).toContainText('Scan complete');
+  await shot('08-onboarding-complete');
+  await page.getByTestId('open-overview').click();
   await expect(page).toHaveURL(/#\/$/);
-  await expect(page).toHaveTitle('Overview · scull');
-  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-  // The overview reads the scan: the wheel has segments and the rescan button is idle again.
-  await expect(page.getByTestId('rescan')).toHaveText(/Rescan/);
   await expect(page.getByTestId('rescan')).toBeEnabled();
-  await expect(page.locator('[data-kind="item"]').first()).toBeVisible();
-  await expect(page.getByTestId('header')).not.toContainText('not scanned');
-  await shot('onboarding-4-overview');
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  await shot('09-onboarding-overview');
+
+  // The browser mock has no persistent database, but app-local choices survive reload.
+  await open(page, '/onboarding');
+  await expect(page.getByRole('checkbox', { name: 'Mobile', exact: true })).toBeChecked();
+  await page.getByTestId('survey-next').click();
+  await expect(page.getByTestId('folder').filter({ hasText: '~/Projects' }).getByRole('checkbox')).toBeChecked();
+});
+
+test('empty answers block Continue and setup can be deferred without scanning', async ({ page }) => {
+  await open(page, '/?scenario=first-run');
+  await expect(page.getByRole('checkbox', { name: 'Web / JS', exact: true })).toBeChecked();
+  for (const box of await page.getByRole('checkbox').all()) await box.uncheck();
+  await expect(page.getByTestId('survey-next')).toBeDisabled();
+  await page.getByRole('checkbox', { name: 'Something else' }).check();
+  await page.getByTestId('survey-next').click();
+  for (const box of await page.getByRole('checkbox').all()) await box.uncheck();
+  await expect(page.getByTestId('survey-next')).toBeDisabled();
+  await page.getByTestId('skip').click();
+  await expect(page).toHaveURL(/#\/$/);
+  expect(await page.evaluate(() => localStorage.getItem('scull.onboarding.setup'))).toBeNull();
+  await expect(page.getByTestId('header')).toContainText('not scanned');
+});
+
+test('keyboard navigation moves focus to each question at the minimum window size', async ({ page, shot }) => {
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await open(page, '/?scenario=first-run');
+  for (let step = 1; step < 6; step++) {
+    await tabTo(page, page.getByTestId('survey-next'));
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { level: 1 })).toBeFocused();
+    await expect(page.getByTestId('survey-progress')).toContainText(`${step + 1} of 6`);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await shot('10-onboarding-keyboard-minimum');
+});
+
+test('stopping a scan offers partial results and retry', async ({ page }) => {
+  await open(page, '/?scenario=first-run');
+  await continueToReview(page);
+  await page.getByTestId('start-scan').click();
+  await page.getByTestId('cancel-scan').click();
+  await expect(page.getByTestId('scan')).toContainText('partial results');
+  await expect(page.getByTestId('retry-scan')).toBeVisible();
+  await expect(page.getByTestId('open-overview')).toContainText('View partial results');
 });
 
 test('a machine that was scanned before opens straight on the overview', async ({ page }) => {

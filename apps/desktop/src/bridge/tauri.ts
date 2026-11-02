@@ -30,6 +30,30 @@ export const realTransport: TauriTransport = {
   listen: (event, handler) => listen(event, (e) => handler(e.payload as never)),
 };
 
+export const ONBOARDING_COMMANDS = {
+  context: 'onboarding_context',
+  pickFolders: 'pick_project_folders',
+} as const;
+
+export interface OnboardingCommands {
+  context(): Promise<{ home: string | null }>;
+  pickFolders(): Promise<string[] | null>;
+}
+
+export function createTauriOnboardingCommands(t: TauriTransport = realTransport): OnboardingCommands {
+  const call = async <T>(command: string): Promise<T> => {
+    try {
+      return await t.invoke<T>(command);
+    } catch (e) {
+      throw toBridgeError(e);
+    }
+  };
+  return {
+    context: () => call(ONBOARDING_COMMANDS.context),
+    pickFolders: () => call(ONBOARDING_COMMANDS.pickFolders),
+  };
+}
+
 /** A fresh operation ID (matches the core's `[A-Za-z0-9_-]{1,64}`). */
 export function newOpId(): string {
   const c = globalThis.crypto;

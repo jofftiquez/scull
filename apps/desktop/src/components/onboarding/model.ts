@@ -27,17 +27,17 @@ export const AGENTS = [
 export type AgentUse = (typeof AGENTS)[number]['id'];
 
 export const PRIORITIES = [
-  { id: 'free-space', label: 'Free space now', hint: 'Opens on Quick Clean and the safest wins' },
-  { id: 'tidy', label: 'Keep it tidy automatically', hint: 'Sets up forecasts, staleness alerts and budgets' },
-  { id: 'understand', label: 'Just understand my disk', hint: 'Opens on the storage map; no suggestions pushed' },
+  { id: 'free-space', label: 'Free space now', hint: 'Find out what is taking up space' },
+  { id: 'tidy', label: 'Keep track of growth', hint: 'Understand how storage changes over time' },
+  { id: 'understand', label: 'Just understand my disk', hint: 'Get a clearer picture before deciding what to do' },
 ] as const;
 export type Priority = (typeof PRIORITIES)[number]['id'];
 
 /** Caution never changes tiers or safety checks (ONB-07); only suggestions and alerts. */
 export const CAUTION = [
-  { id: 'cautious', label: 'Very cautious', hint: 'Nothing preselected · longer idle windows' },
-  { id: 'balanced', label: 'Balanced', hint: 'Regenerable items preselected for review' },
-  { id: 'expert', label: 'I know what I’m doing', hint: 'Shorter idle windows · fewer reminders' },
+  { id: 'cautious', label: 'Very cautious', hint: 'I prefer more context before making a decision' },
+  { id: 'balanced', label: 'Balanced', hint: 'A balance of suggestions and explanations' },
+  { id: 'expert', label: 'I know what I’m doing', hint: 'I prefer brief explanations' },
 ] as const;
 export type Caution = (typeof CAUTION)[number]['id'];
 
@@ -84,6 +84,14 @@ export interface Answers {
   connectAgents: boolean;
   priority: Priority;
   caution: Caution;
+}
+
+export type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6;
+
+export function canContinue(step: OnboardingStep, answers: Answers, home: string): boolean {
+  if (step === 1) return answers.builds.length > 0;
+  if (step === 2 || step === 6) return home.length > 0 && scanRoots(answers, home).length > 0;
+  return true;
 }
 
 /** The local profile (ONB-03); same fields as `scull init`'s `profile.toml`. */
@@ -185,7 +193,7 @@ export function defaultAnswers(d: Detection): Answers {
     roots,
     confirmedBroad: [],
     agents,
-    connectAgents: d.ai_clients.length > 0,
+    connectAgents: false,
     priority: 'free-space',
     caution: 'balanced',
   };
@@ -196,36 +204,21 @@ export function scanRoots(a: Answers, home: string): string[] {
   return a.roots.filter((r) => broadRootConcern(r, home) === null || a.confirmedBroad.includes(r));
 }
 
-export function answeredCount(a: Answers, home: string): number {
-  return [a.builds.length > 0, scanRoots(a, home).length > 0, true, true, true].filter(Boolean).length;
-}
-
-export const IDLE_WINDOW: Record<Caution, string> = { cautious: '30 days', balanced: '14 days', expert: '7 days' };
-
 export interface SummaryRow {
+  step?: OnboardingStep;
   k: string;
   v: string;
 }
 
-/** "Here's what scull will focus on" (ONB-03), updated live as answers change. */
+/** Review records preferences without claiming that unimplemented settings were applied. */
 export function summary(a: Answers, d: Detection): SummaryRow[] {
   const roots = scanRoots(a, d.home).map((r) => displayPath(r, d.home));
-  const labels = BUILDS.filter((b) => a.builds.includes(b.id)).map((b) => b.label);
-  const clients = d.ai_clients.map(aiClientLabel);
-  const open = { 'free-space': 'Quick Clean + safest wins', tidy: 'Alerts, forecast and budgets', understand: 'Storage map' }[
-    a.priority
-  ];
-  const agents =
-    a.agents === 'none'
-      ? 'Off'
-      : 'Agent worktrees watched' + (a.connectAgents && clients.length > 0 ? ` · ${clients.join(' + ')} connected` : '');
   return [
-    { k: 'Scan', v: roots.length ? roots.join(', ') : 'Choose at least one folder' },
-    { k: 'Show first', v: labels.length ? labels.slice(0, 4).join(' · ') : 'Everything, by size' },
-    { k: 'Agents', v: agents },
-    { k: 'Open on', v: open },
-    { k: 'Stale after', v: `Idle ${IDLE_WINDOW[a.caution]}` },
-    { k: 'Checks', v: a.priority === 'understand' ? 'Manual' : 'Every 6 h · alert at ~14 days to full' },
+    { step: 1, k: 'Your work', v: BUILDS.filter((b) => a.builds.includes(b.id)).map((b) => b.label).join(' · ') || 'Choose what you build' },
+    { step: 2, k: 'Folders to scan', v: roots.join(', ') || 'Choose at least one folder' },
+    { step: 3, k: 'Coding agents', v: AGENTS.find((o) => o.id === a.agents)!.label },
+    { step: 4, k: 'Your goal', v: PRIORITIES.find((o) => o.id === a.priority)!.label },
+    { step: 5, k: 'Explanation preference', v: CAUTION.find((o) => o.id === a.caution)!.label },
   ];
 }
 
@@ -239,7 +232,7 @@ export function toProfile(a: Answers, d: Detection): Profile {
     caution: a.caution,
     detected_toolchains: d.toolchains.map((t) => t.id),
     detected_ai_clients: [...d.ai_clients],
-    connect_agents: a.agents !== 'none' && a.connectAgents && d.ai_clients.length > 0,
+    connect_agents: false,
   };
 }
 
@@ -298,17 +291,6 @@ const NEXT: Record<ScanPhase, readonly ScanPhase[]> = {
 
 export function canMove(from: ScanPhase, to: ScanPhase): boolean {
   return NEXT[from].includes(to);
-}
-
-/**
- * Progress bar fill, 0–1. The core reports entries but no total, so while running the bar
- * eases towards 90% over a few seconds (the design's 3.2 s ease-out) and fills on completion.
- */
-export function scanFill(phase: ScanPhase, elapsedMs: number): number {
-  if (phase === 'idle') return 0;
-  if (phase === 'done') return 1;
-  const t = Math.min(1, Math.max(0, elapsedMs) / 3200);
-  return 0.9 * (1 - (1 - t) ** 2);
 }
 
 /** Per-root entry counters → total (the core counts entries per root). */

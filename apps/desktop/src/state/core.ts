@@ -5,6 +5,7 @@ import type { DesktopStatus, Forecast, ProgressEvent, ScanReport, ScullBridge, T
 import { toBridgeError } from '../bridge';
 import { formatBytes } from '../lib/format';
 import { NOT_SCANNED, shell } from './shell';
+import { loadSetup, savedScanParams } from '../components/onboarding/prefs';
 
 export interface CoreState {
   status: DesktopStatus | null;
@@ -114,7 +115,7 @@ export async function rescan(bridge: ScullBridge): Promise<void> {
   publish();
   try {
     const report = await bridge.scan(
-      {},
+      savedScanParams(loadSetup()) ?? {},
       {
         signal: controller.signal,
         onProgress: (p) => {
