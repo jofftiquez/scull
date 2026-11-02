@@ -815,9 +815,11 @@ fn non_dev_dependencies(dir: &str) -> Vec<String> {
         .unwrap()
         .iter()
         .find(|p| {
-            p["manifest_path"]
-                .as_str()
-                .is_some_and(|m| Path::new(m) == manifest.canonicalize().unwrap())
+            // Both sides canonical: on Windows `canonicalize` gives a `\\?\` path and
+            // cargo metadata a plain one.
+            p["manifest_path"].as_str().is_some_and(|m| {
+                Path::new(m).canonicalize().ok() == Some(manifest.canonicalize().unwrap())
+            })
         })
         .unwrap_or_else(|| panic!("{dir}: package not in cargo metadata"));
     pkg["dependencies"]
