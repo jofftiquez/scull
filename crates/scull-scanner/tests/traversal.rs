@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::graph::{Graph, Node};
 use common::*;
 use scull_platform::{EntryKind, Native, Operation, Platform, PlatformError};
 use scull_scanner::{
@@ -475,11 +476,27 @@ fn stalling(stall: PathBuf, release: Arc<AtomicBool>) -> Tweaked {
 
 #[test]
 fn stalled_directory_times_out_and_scan_completes() -> TestResult {
-    let (_t, root) = temp_root();
-    mixed_tree(&root);
+    // Keep the watchdog's short deadline independent of native filesystem latency: on a busy
+    // Windows runner a healthy directory in mixed_tree can also exceed 200 ms (#131).
+    let mut graph = Graph::new();
+    let root = graph.root().to_path_buf();
+    graph.add(0, "top.txt", Node::File(10));
+    let a = graph.dir(0, "a");
+    let b = graph.dir(a, "b");
+    let c = graph.dir(b, "c");
+    graph.dir(0, "empty");
+    let d = graph.dir(0, "d");
+    graph.add(a, "one.bin", Node::File(5000));
+    graph.add(b, "two.bin", Node::File(70_000));
+    graph.add(c, "three.bin", Node::File(1));
+    graph.add(c, "zero.bin", Node::File(0));
+    for i in 0..30 {
+        graph.add(d, &format!("f{i}.dat"), Node::File(i * 100));
+    }
     let stall = root.join("a/b");
     let release = Arc::new(AtomicBool::new(false));
-    let p = stalling(stall.clone(), Arc::clone(&release));
+    let mut p = stalling(stall.clone(), Arc::clone(&release));
+    p.base = Arc::new(graph);
     let mut o = opts(2);
     o.dir_timeout = Some(Duration::from_millis(200));
     let t = Instant::now();
@@ -489,7 +506,7 @@ fn stalled_directory_times_out_and_scan_completes() -> TestResult {
     assert_eq!(out.status, ScanStatus::Completed);
     assert!(took < Duration::from_secs(5), "took {took:?}");
     let issues = ev.issues();
-    assert_eq!(issues.len(), 1);
+    assert_eq!(issues.len(), 1, "{issues:#?}");
     assert_eq!(
         (issues[0].path.as_path(), issues[0].kind),
         (stall.as_path(), IssueKind::TimedOut)
