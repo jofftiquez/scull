@@ -390,7 +390,7 @@ fn sample_files(dir: &Path, limits: &Limits, deadline: Instant) -> (Vec<PathBuf>
 }
 
 /// Ask Restart Manager which processes hold any of `files` open.
-fn restart_manager(files: &[PathBuf], hit_path: &Path) -> Result<Vec<Hit>, String> {
+pub(super) fn restart_manager(files: &[PathBuf], hit_path: &Path) -> Result<Vec<Hit>, String> {
     if files.is_empty() {
         return Ok(Vec::new());
     }

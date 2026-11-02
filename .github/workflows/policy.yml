@@ -59,6 +59,23 @@ jobs:
       - name: Check the workspace
         run: python3 scripts/ci/platform_boundary.py
 
+  desktop-safe10:
+    # P3-EXEC-01 / PRD SAFE-10: deletion only through the core Executor. On the resolved graphs
+    # (`cargo metadata`, no build, no WebKitGTK): in the desktop app's workspace only
+    # scull-desktop-bridge depends on scull-cleaner; scull-mcp reaches neither scull-cleaner nor
+    # the bridge. The bridge's own source checks run in CI's test job (bridge/tests/safe10.rs).
+    name: desktop-safe10
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Self-test the checker
+        run: python3 scripts/ci/test_desktop_safe10.py
+      - name: Only the bridge reaches the cleaner
+        run: python3 scripts/ci/desktop_safe10.py
+
   release-versions:
     # P4-REL-01: one tag releases the CLI, MCP and desktop, so every version string must agree
     # (scripts/release/bump_version.py); plus the release scripts' self-tests.

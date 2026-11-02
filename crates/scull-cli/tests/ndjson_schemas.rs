@@ -8,7 +8,8 @@
 //!
 //! Everything runs with `HOME`, `SCULL_HOME` and the app-data variables in temp dirs; the only
 //! things written are scull's own files there (config from `init`, the history database from
-//! `check`, a TTL registration). `schedule` and `agent` run with `--dry-run` only.
+//! `check` and `clean`'s plan, a TTL registration, a `data export`). `schedule`, `agent` and
+//! `clean caches` run with `--dry-run` only; `clean` only plans and nothing is executed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -92,6 +93,50 @@ const RUNS: &[(&str, &[&str], &str)] = &[
     ),
     ("schedule status", &["schedule", "status"], "schedule"),
     ("doctor", &["doctor"], "doctor"),
+    // `phase2` commands, without executing anything: `clean` only plans (the plan is recorded
+    // in scull's own database), `clean caches --dry-run` previews, `history` lists the (empty)
+    // audit log, `insights purge` forgets the temp history, `data` reads, exports to a temp
+    // folder and purges scull's own temp data.
+    (
+        "clean",
+        &["clean", "--root", "{root}", "--allow-network-roots"],
+        "clean-plan",
+    ),
+    (
+        "clean caches",
+        &["clean", "caches", "--dry-run"],
+        "clean-caches",
+    ),
+    ("history", &["history"], "history"),
+    ("data show", &["data", "show"], "data-show"),
+    (
+        "data export",
+        &["data", "export", "--out", "{export}"],
+        "data-export",
+    ),
+    // Emergency headroom (PRO-06) in the temp SCULL_HOME: a 256 MiB reserve, then released.
+    ("headroom status", &["headroom", "status"], "headroom"),
+    (
+        "headroom create",
+        &["headroom", "create", "--size", "256M", "--yes"],
+        "headroom",
+    ),
+    (
+        "headroom release",
+        &["headroom", "release", "--yes"],
+        "headroom",
+    ),
+    // Forgets the history `check` recorded above (scull's own temp database).
+    (
+        "insights purge",
+        &["insights", "purge", "--confirm"],
+        "insights-purge",
+    ),
+    (
+        "data purge",
+        &["data", "purge", "--all", "--confirm"],
+        "data-purge",
+    ),
     // Last: rewrites the config (kept as config.toml.bak).
     (
         "init",
@@ -105,14 +150,28 @@ const NO_NDJSON: &[(&str, &str)] = &[
     ("completions", "prints a shell script"),
     ("mcp serve", "stdout carries JSON-RPC only"),
     (
+        "approve",
+        "interactive only: refuses --json/--ndjson (FX-MCP-08)",
+    ),
+    (
         "ask",
         "prints a prose answer from the user's own model; --json/--ndjson are refused",
     ),
 ];
 
+/// Commands whose `--ndjson` output needs an executed cleanup operation: their line schema must
+/// be published here, and FX-OUT-01 (`crates/scull-fixtures/tests/fx_out.rs`) validates their
+/// real output against it inside a sandboxed fixture.
+const NEEDS_OPERATION: &[(&str, &str)] = &[("restore", "restore")];
+
 /// Flags that switch a command to another line schema, run like [`RUNS`].
 const VARIANTS: &[(&str, &[&str], &str)] = &[
     ("doctor --report", &["doctor", "--report"], "doctor-report"),
+    (
+        "clean --purge-quarantine",
+        &["clean", "--purge-quarantine"],
+        "quarantine-purge",
+    ),
     (
         "doctor --report --hash-names",
         &["doctor", "--report", "--hash-names"],
@@ -121,17 +180,7 @@ const VARIANTS: &[(&str, &[&str], &str)] = &[
 ];
 
 /// Commands this build refuses (not implemented / inspect-only gate): stdout stays empty.
-const REFUSED: &[(&str, &[&str])] = &[
-    ("clean", &["clean"]),
-    ("clean caches", &["clean", "caches"]),
-    ("history", &["history"]),
-    ("restore", &["restore", "op-1"]),
-    ("approve", &["approve", "plan-1"]),
-    ("data show", &["data", "show"]),
-    ("data export", &["data", "export"]),
-    ("data purge", &["data", "purge"]),
-    ("insights purge", &["insights", "purge"]),
-];
+const REFUSED: &[(&str, &[&str])] = &[];
 
 /// Every runnable command path in the clap tree (`rules list`, `scan`, ...): commands that
 /// require a subcommand and `help` are left out.
@@ -224,6 +273,7 @@ fn every_ndjson_command_has_a_line_schema_and_validates() {
     let mut listed: Vec<&str> = RUNS.iter().map(|r| r.0).collect();
     listed.extend(NO_NDJSON.iter().map(|r| r.0));
     listed.extend(REFUSED.iter().map(|r| r.0));
+    listed.extend(NEEDS_OPERATION.iter().map(|r| r.0));
     let unique: BTreeSet<String> = listed.iter().map(|s| (*s).to_owned()).collect();
     assert_eq!(unique.len(), listed.len(), "a command is listed twice");
     let paths = command_paths();
@@ -263,8 +313,10 @@ fn every_ndjson_command_has_a_line_schema_and_validates() {
         format!("[scan]\nroots = [\"{}\"]\n", toml_path(&root)),
     )
     .unwrap();
+    let export = env.home.path().join("export");
     let subst = |a: &str| {
         a.replace("{root}", &root.to_string_lossy())
+            .replace("{export}", &export.to_string_lossy())
             .replace("{app}", &app.to_string_lossy())
             .replace("{wt}", &wt.to_string_lossy())
             .replace(
@@ -301,6 +353,13 @@ fn every_ndjson_command_has_a_line_schema_and_validates() {
             let errors: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errors.is_empty(), "{path}: {errors:#?}\n{doc:#}");
         }
+    }
+
+    for (path, name) in NEEDS_OPERATION {
+        assert!(
+            schema_path(name).is_file(),
+            "`scull {path} --ndjson` prints lines but its line schema is not published"
+        );
     }
 
     for (path, args) in REFUSED {

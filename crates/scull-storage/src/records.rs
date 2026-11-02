@@ -1,7 +1,7 @@
 //! Typed records accepted and returned by [`crate::Store`]. All timestamps are Unix seconds
 //! supplied by the caller, so behavior is deterministic in tests.
 
-use scull_core::{Category, ContentHash, FsPath, ItemId, OperationId, PlanId, ScanId, Tier};
+use scull_core::{Category, ContentHash, FsPath, OperationId, PlanId, ScanId, Tier};
 
 /// Start of a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,35 +102,52 @@ pub struct ScanFinish {
 }
 
 /// How a human approved a plan (§13.3). Model-mediated channels are never an approval.
+///
+/// Append-only: variants and their stored strings are never renamed or removed, only added
+/// (rows written by older versions must keep parsing). The `method` columns carry no CHECK
+/// constraint listing the values, so a new variant needs no migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ApprovalMethod {
     /// `scull approve <plan-id>` in an interactive terminal with a typed confirmation code.
     CliTty,
-    /// Interactive confirmation of a CLI `clean` the user started themselves.
+    /// Interactive confirmation (answering the prompt on a terminal) of a CLI `clean` the
+    /// user started themselves.
     CliInteractive,
     /// The desktop Cleanup Review dialog.
     Desktop,
+    /// A CLI run the user started themselves and confirmed up front with `--confirm`, without
+    /// a prompt (non-interactive, CLI-03).
+    CliFlag,
+    /// No human click: an opt-in auto-policy the user enabled in their config file, run by the
+    /// scheduled `scull check` (PRO-10, D-11). Only for auto-policy plans
+    /// (`scull_core::PlanOrigin::Policy`); never a human approval of anything else.
+    AutoPolicy,
 }
 
 impl ApprovalMethod {
+    /// Every method, in declaration order.
+    pub const ALL: [ApprovalMethod; 5] = [
+        ApprovalMethod::CliTty,
+        ApprovalMethod::CliInteractive,
+        ApprovalMethod::Desktop,
+        ApprovalMethod::CliFlag,
+        ApprovalMethod::AutoPolicy,
+    ];
+
     /// Stable string stored in the database.
     pub fn as_str(self) -> &'static str {
         match self {
             ApprovalMethod::CliTty => "cli_tty",
             ApprovalMethod::CliInteractive => "cli_interactive",
             ApprovalMethod::Desktop => "desktop",
+            ApprovalMethod::CliFlag => "cli_flag",
+            ApprovalMethod::AutoPolicy => "auto_policy",
         }
     }
 
     pub(crate) fn parse(s: &str) -> Option<Self> {
-        [
-            ApprovalMethod::CliTty,
-            ApprovalMethod::CliInteractive,
-            ApprovalMethod::Desktop,
-        ]
-        .into_iter()
-        .find(|m| m.as_str() == s)
+        Self::ALL.into_iter().find(|m| m.as_str() == s)
     }
 }
 
@@ -172,7 +189,8 @@ pub struct Approval {
     pub used_at: Option<i64>,
 }
 
-/// Start of an executed operation (SAFE-08). Append-only.
+/// Start of an executed operation (SAFE-08), passed to [`crate::Store::begin_operation`].
+/// Append-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationStart {
     /// Operation identifier.
@@ -187,58 +205,4 @@ pub struct OperationStart {
     pub method: ApprovalMethod,
     /// When execution started.
     pub started_at: i64,
-}
-
-/// Outcome recorded in the audit log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AuditOutcome {
-    /// The item's action completed.
-    Succeeded,
-    /// The item's action failed.
-    Failed,
-    /// Part of the item was processed before an error.
-    Partial,
-    /// The item was dropped before acting (revalidation, SAFE-05); see `reason`.
-    Skipped,
-    /// Operation-level marker: execution finished (no item).
-    OperationFinished,
-}
-
-impl AuditOutcome {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            AuditOutcome::Succeeded => "succeeded",
-            AuditOutcome::Failed => "failed",
-            AuditOutcome::Partial => "partial",
-            AuditOutcome::Skipped => "skipped",
-            AuditOutcome::OperationFinished => "operation_finished",
-        }
-    }
-}
-
-/// One append-only audit row: a per-item outcome or an operation-level event.
-///
-/// Never put file contents or environment values here (INS-07, FX-DATA-07): `reason` is a
-/// stable code (e.g. a `DropReason::code()` or an `ErrorKind` string), not free text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditEntry {
-    /// Operation this row belongs to (must have been started).
-    pub operation_id: OperationId,
-    /// When the outcome was recorded.
-    pub recorded_at: i64,
-    /// Item, or `None` for operation-level rows.
-    pub item_id: Option<ItemId>,
-    /// Item path at execution time.
-    pub path: Option<FsPath>,
-    /// Action taken (`delete`, `trash`, `quarantine`, ...).
-    pub action: Option<String>,
-    /// Outcome.
-    pub outcome: AuditOutcome,
-    /// Stable reason code for skips and failures.
-    pub reason: Option<String>,
-    /// Bytes the plan predicted.
-    pub predicted_bytes: Option<u64>,
-    /// Bytes actually reclaimed (measured).
-    pub measured_bytes: Option<u64>,
 }

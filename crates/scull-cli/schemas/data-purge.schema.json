@@ -1,0 +1,271 @@
+{
+  "$defs": {
+    "DataPurgeReport": {
+      "additionalProperties": false,
+      "description": "`scull data purge` output.",
+      "properties": {
+        "dirs": {
+          "$ref": "#/$defs/DirsReport",
+          "description": "scull's directories."
+        },
+        "files": {
+          "description": "Every file considered, with its outcome.",
+          "items": {
+            "$ref": "#/$defs/PurgedFile"
+          },
+          "type": "array"
+        },
+        "kept": {
+          "description": "What was deliberately kept.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "older_than_secs": {
+          "description": "For `older_than`: the age in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "removed": {
+          "description": "Files removed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed_bytes": {
+          "description": "Bytes removed (logical sizes as listed).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "description": "`all` or `older_than`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dirs",
+        "scope",
+        "files",
+        "removed",
+        "removed_bytes",
+        "kept"
+      ],
+      "type": "object"
+    },
+    "DirsReport": {
+      "additionalProperties": false,
+      "description": "scull's per-user directories.",
+      "properties": {
+        "cache": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Disposable cache."
+        },
+        "config": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Configuration (`config.toml`, profile). Never purged."
+        },
+        "data": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Database, backups, audit mirrors, salt."
+        },
+        "state": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Logs and other state."
+        }
+      },
+      "required": [
+        "config",
+        "data",
+        "cache",
+        "state"
+      ],
+      "type": "object"
+    },
+    "FileKind": {
+      "description": "What a file of scull's own footprint is.",
+      "oneOf": [
+        {
+          "const": "database",
+          "description": "The database.",
+          "type": "string"
+        },
+        {
+          "const": "wal",
+          "description": "Its write-ahead log.",
+          "type": "string"
+        },
+        {
+          "const": "shm",
+          "description": "Its shared-memory index.",
+          "type": "string"
+        },
+        {
+          "const": "journal",
+          "description": "A rollback journal.",
+          "type": "string"
+        },
+        {
+          "const": "backup",
+          "description": "A backup taken before a migration.",
+          "type": "string"
+        },
+        {
+          "const": "damaged",
+          "description": "A damaged database set aside by a restore.",
+          "type": "string"
+        },
+        {
+          "const": "side_file",
+          "description": "A `-wal`, `-shm` or `-journal` file of a backup or damaged copy.",
+          "type": "string"
+        },
+        {
+          "const": "audit_mirror",
+          "description": "A file in the audit mirror folder (`<operation-id>.ndjson`).",
+          "type": "string"
+        },
+        {
+          "const": "salt",
+          "description": "The MCP name-hashing salt (never printed).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Another file the storage layer reports as part of the footprint.",
+          "type": "string"
+        }
+      ]
+    },
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "OwnFile": {
+      "additionalProperties": false,
+      "description": "One file of scull's own footprint.",
+      "properties": {
+        "bytes": {
+          "description": "Logical size in bytes (of the link itself for a symlink).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entry": {
+          "description": "Entry type, not following links (`file`, `symlink`, ...).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind",
+          "description": "What it is."
+        },
+        "modified_at": {
+          "description": "Last modification (Unix seconds), if known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it is."
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "entry",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "PurgeOutcome": {
+      "description": "What happened to one file.",
+      "oneOf": [
+        {
+          "const": "removed",
+          "description": "Removed (a symlink is removed as a link; its target is untouched).",
+          "type": "string"
+        },
+        {
+          "const": "already_gone",
+          "description": "Already gone when its turn came.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "Refused by the containment check and left in place.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Removal failed.",
+          "type": "string"
+        },
+        {
+          "const": "not_attempted",
+          "description": "Not attempted: an earlier file aborted the purge (data folder changed, walk anomaly).",
+          "type": "string"
+        }
+      ]
+    },
+    "PurgedFile": {
+      "additionalProperties": false,
+      "description": "One file considered by `scull data purge`.",
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/OwnFile",
+          "description": "The file."
+        },
+        "outcome": {
+          "$ref": "#/$defs/PurgeOutcome",
+          "description": "What happened."
+        },
+        "reason": {
+          "description": "Why, when it was refused or failed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "file",
+        "outcome"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/DataPurgeReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/data-purge@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/data-purge@1",
+  "type": "object"
+}

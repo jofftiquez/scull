@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "FsPath": {
+      "description": "A filesystem path as it appears in plans, JSON output and the database.\n\nSerialized as a string. Paths that aren't valid Unicode (possible on Unix and Windows) are\nconverted lossily with U+FFFD and flagged by [`FsPath::is_lossy`]; the engine never acts on\na path read back from JSON alone. Items are matched by [`crate::ItemId`] and file identity,\nand candidates are re-derived from the disk before execution (SAFE-05, SAFE-11).",
+      "type": "string"
+    },
+    "Mode": {
+      "description": "Preview or run.",
+      "oneOf": [
+        {
+          "const": "preview",
+          "description": "Nothing changed.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "Executed.",
+          "type": "string"
+        }
+      ]
+    },
+    "OperationId": {
+      "pattern": "^op_[0-9A-Za-z]{1,64}$",
+      "type": "string"
+    },
+    "PurgeLine": {
+      "additionalProperties": false,
+      "description": "One selected quarantine entry.",
+      "properties": {
+        "bytes": {
+          "description": "Allocated bytes held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entry_id": {
+          "description": "Manifest entry number.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "description": "When its retention ends.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "freed_bytes": {
+          "description": "Bytes freed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "description": "Its operation."
+        },
+        "original_path": {
+          "$ref": "#/$defs/FsPath",
+          "description": "Where it came from."
+        },
+        "outcome": {
+          "description": "`none` (preview), `purged`, `already_gone` or `kept`.",
+          "type": "string"
+        },
+        "quarantined_at": {
+          "description": "When it was quarantined.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why it was kept.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id",
+        "operation_id",
+        "original_path",
+        "bytes",
+        "quarantined_at",
+        "outcome",
+        "freed_bytes"
+      ],
+      "type": "object"
+    },
+    "PurgeReport": {
+      "additionalProperties": false,
+      "description": "`scull clean --purge-quarantine` (`scull/quarantine-purge@1`).",
+      "properties": {
+        "at": {
+          "description": "The instant the selection was made (Unix seconds).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "entries": {
+          "description": "The selected entries.",
+          "items": {
+            "$ref": "#/$defs/PurgeLine"
+          },
+          "type": "array"
+        },
+        "freed_bytes": {
+          "description": "Bytes freed by this run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kept": {
+          "description": "Entries kept by this run (changed or not removable).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode",
+          "description": "Preview or run."
+        },
+        "next_step": {
+          "description": "What to run next, if anything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "older_than_secs": {
+          "description": "`--older-than`, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "selected_bytes": {
+          "description": "Bytes held by the selection.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "at",
+        "entries",
+        "selected_bytes",
+        "freed_bytes",
+        "kept"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A JSON document: schema identifier, scull version and the payload.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/PurgeReport",
+      "description": "The payload."
+    },
+    "schema": {
+      "const": "scull/quarantine-purge@1",
+      "description": "Payload schema, `scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that produced this document.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "data"
+  ],
+  "title": "scull/quarantine-purge@1",
+  "type": "object"
+}

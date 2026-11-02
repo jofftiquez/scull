@@ -12,6 +12,23 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The handle-relative, no-follow removal walker (`scull_platform::remove`: P2-EXEC-01 Unix,
+# P2-EXEC-02 Windows). Off by default: only `scull-cleaner` (the Executor) may enable it, so no
+# other crate can even compile a call to it (SAFE-10). Checked by
+# `crates/scull-cleaner/tests/delete_feature.rs`. On Windows it adds the NT relative-open API
+# (`NtCreateFile` with a parent directory handle) and `DeviceIoControl` (reparse data).
+delete = [
+  "dep:rustix",
+  "windows-sys/Wdk_Foundation",
+  "windows-sys/Wdk_Storage_FileSystem",
+  "windows-sys/Win32_System_IO",
+]
+
+# Test support only, never enabled by a shipped crate: deliver a console interrupt to another
+# process on Windows (`scull_platform::console`), for the FX-OUT-02 exit-130 fixture.
+test-support = []
+
 [dependencies]
 scull-core.workspace = true
 serde.workspace = true
@@ -19,6 +36,8 @@ serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Safe wrappers for openat/fstatat/unlinkat/getdents used by the removal walker (no `unsafe`).
+rustix = { version = "1", features = ["fs", "std"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -29,6 +48,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_SystemServices",
   "Win32_System_Threading",
+  # Ctrl-C processing (`interrupt`), and the test-support console helpers
+  "Win32_System_Console",
   "Win32_UI_Shell",
   # activity (process cwd from the PEB, Restart Manager): P1-SAFE-02
   "Wdk_System_Threading",
@@ -43,3 +64,4 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = "3"
+scull-fixtures.workspace = true

@@ -96,6 +96,9 @@ pub struct DataInfo {
     pub files: Vec<OwnFile>,
     /// Their total size in bytes.
     pub footprint_bytes: u64,
+    /// The emergency headroom file (PRO-06, off by default; `None` without a data
+    /// directory). Read-only here: `scull headroom create|release` changes it.
+    pub headroom: Option<scull_proactive::headroom::HeadroomStatus>,
 }
 
 /// `settings`: the Settings screen's data.
@@ -170,6 +173,7 @@ pub fn data_info(config_dir: Option<&Path>, data_dir: Option<&Path>) -> DataInfo
         },
         footprint_bytes: files.iter().map(|f| f.bytes).sum(),
         files,
+        headroom: data_dir.map(scull_proactive::headroom::status),
     }
 }
 

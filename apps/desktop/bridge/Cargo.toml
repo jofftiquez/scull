@@ -28,6 +28,13 @@ scull-safety.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
 scull-insights.workspace = true
+# The approval broker (P4-MCP-02). Read-only by construction: never depends on scull-cleaner
+# (SAFE-10, checked by its own test and tests/safe10.rs here).
+scull-mcp.workspace = true
+# The core Executor (P3-EXEC-01): reached only from src/cleanup.rs, through its public API
+# (execute_plan, restore, QuickClean::run). PRD SAFE-10: deletion only through the Executor;
+# no desktop source deletes directly (tests/safe10.rs).
+scull-cleaner.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -36,3 +43,8 @@ schemars.workspace = true
 scull-fixtures.workspace = true
 tempfile = "3"
 jsonschema = { version = "0.60", default-features = false }
+# tests/safe10.rs parses desktop sources to cut exactly the `#[cfg(test)]` items (with their
+# source positions) before its checks.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "visit"] }

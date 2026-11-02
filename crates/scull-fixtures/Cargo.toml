@@ -14,13 +14,18 @@ workspace = true
 
 [dependencies]
 scull-core.workspace = true
+# I-4 reads an operation's audit (`Store::disk_expectations`), I-5 its recorded totals.
+# scull-storage depends only on scull-core, so no crate that dev-depends on scull-fixtures gets
+# a cycle.
+scull-storage.workspace = true
 sha2.workspace = true
 tempfile = "3"
 
 # End-to-end fixtures (tests/) drive the real pipeline pieces. Dev-dependencies only, so crates
 # that dev-depend on scull-fixtures get no cycle.
 [dev-dependencies]
-scull-platform.workspace = true
+# `test-support`: a real console interrupt to a child process on Windows (FX-OUT-02).
+scull-platform = { workspace = true, features = ["test-support"] }
 scull-scanner.workspace = true
 scull-detectors.workspace = true
 scull-git.workspace = true
@@ -28,7 +33,14 @@ scull-safety.workspace = true
 # Output escaping and argument parsing for FX-FS-09/10/13 (a dev-dependency: scull-cli itself
 # dev-depends on scull-fixtures).
 scull-cli = { path = "../scull-cli" }
+# FX-PHY/QC/RACE/EXEC: the real Executor, Quick Clean and measured delta (a dev-dependency:
+# scull-cleaner itself dev-depends on scull-fixtures; it does not enable `delete` here).
+scull-cleaner = { workspace = true, features = ["bare-api"] }
 # FX-FS-04 / FX-FS-15 (nightly): the shared read-only pipeline, which alone checks the mount
 # table for same-device bind mounts.
 scull-engine.workspace = true
 serde_json.workspace = true
+# FX-OUT / FX-DATA drive the real `scull` binary and validate its output against the published
+# JSON Schemas (both already in the lockfile through scull-cli).
+jsonschema = { version = "0.60", default-features = false }
+toml = "1"

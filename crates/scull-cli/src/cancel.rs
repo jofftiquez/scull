@@ -20,7 +20,14 @@ static INSTALL: Once = Once::new();
 pub fn install() -> Result<(), String> {
     let mut result = Ok(());
     INSTALL.call_once(|| {
-        result = ctrlc::set_handler(on_interrupt).map_err(|e| e.to_string());
+        // Windows: a launcher may have started us with Ctrl-C ignored (new process group);
+        // undo that so the user's Ctrl-C reaches the handler. Ctrl-Break always does.
+        if let Err(e) = scull_platform::interrupt::accept_ctrl_c() {
+            result = Err(format!("cannot enable Ctrl-C: {e}"));
+        }
+        if let Err(e) = ctrlc::set_handler(on_interrupt) {
+            result = Err(e.to_string());
+        }
     });
     result
 }

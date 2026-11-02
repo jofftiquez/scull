@@ -27,6 +27,10 @@ export interface MockPlanOptions {
   agentDelayMs?: number;
   /** Clock, injectable for tests. */
   now?: () => number;
+  /** List the pending agent request in `approvalRequests` (the notification). Off by default so
+   *  the notification doesn't cover other screens in development and E2E; the app turns it on
+   *  with `?agent=request` (src/bridge/plan.ts). Opening the request by its ID always works. */
+  announceAgentRequest?: boolean;
 }
 
 interface CandSpec {
@@ -223,6 +227,9 @@ function agentItems(now: number): PlanItem[] {
 /** The ID of the mock agent request (design 12). */
 export const MOCK_AGENT_PLAN_ID = '9c41e07b';
 
+/** Wrong codes the core accepts before it closes a request (scull_mcp::approval::MAX_CODE_ATTEMPTS). */
+export const MOCK_MAX_CODE_ATTEMPTS = 3;
+
 /** Extra candidates other screens can ask a plan for (e.g. a worktree removal). */
 const extraCandidates = new Map<ItemId, PlanItem>();
 
@@ -262,6 +269,8 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
     listeners: new Set<(e: ApprovalEvent) => void>(),
     timers: [] as ReturnType<typeof setTimeout>[],
     request: null as ApprovalRequest | null,
+    /** Wrong codes so far (like the core: MAX_CODE_ATTEMPTS closes the request). */
+    wrong: 0,
   };
   const emit = (e: ApprovalEvent) => agent.listeners.forEach((l) => l(structuredClone(e)));
 
@@ -438,6 +447,24 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       return resultOf(plan.plan_id, chosen, outcomes);
     },
 
+    async approvalRequests() {
+      await wait(latency);
+      if (!opts.announceAgentRequest) return [];
+      const r = agentRequest();
+      if (agent.status !== 'pending' || now() >= Date.parse(r.plan.expires_at)) return [];
+      return [
+        {
+          plan_id: r.plan.plan_id,
+          hash: r.plan.hash,
+          created_at: r.plan.created_at,
+          expires_at: r.plan.expires_at,
+          item_count: r.plan.items.length,
+          reclaimable_bytes: r.plan.items.reduce((a, i) => a + i.candidate.sizes.reclaimable.bytes, 0),
+          ...(r.plan.source.kind === 'mcp' && r.plan.source.client ? { client: r.plan.source.client } : {}),
+        },
+      ];
+    },
+
     async approvalRequest(planId) {
       await wait(latency);
       if (planId !== MOCK_AGENT_PLAN_ID) return null;
@@ -449,7 +476,22 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       const r = agentRequest();
       if (agent.status !== 'pending') throw new BridgeError({ kind: 'usage', message: `plan is ${agent.status}` });
       if (req.hash !== r.plan.hash) throw new BridgeError({ kind: 'plan_tampered', message: 'fingerprint mismatch' });
-      if (normalize(req.code) !== normalize(r.code)) throw new BridgeError({ kind: 'usage', message: 'wrong code' });
+      if (normalize(req.code) !== normalize(r.code)) {
+        agent.wrong += 1;
+        if (agent.wrong < MOCK_MAX_CODE_ATTEMPTS) {
+          const left = MOCK_MAX_CODE_ATTEMPTS - agent.wrong;
+          throw new BridgeError({
+            kind: 'safety_blocked',
+            message: `the confirmation code does not match; nothing was approved (${left} ${left === 1 ? 'try' : 'tries'} left)`,
+          });
+        }
+        agent.status = 'denied';
+        emit({ kind: 'denied', at: iso(now()) });
+        throw new BridgeError({
+          kind: 'safety_blocked',
+          message: `the confirmation code was wrong ${MOCK_MAX_CODE_ATTEMPTS} times; nothing was approved and this request is closed. The agent has to prepare a new plan.`,
+        });
+      }
       agent.status = 'approved';
       runAgent();
       return { approved_at: iso(now()) };
@@ -475,6 +517,9 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       agent.listeners.add(onEvent);
       return () => agent.listeners.delete(onEvent);
     },
+
+    // No links in a browser.
+    onOpenRequest: () => () => undefined,
 
     simulateTargetChanged(planId, itemId) {
       if (planId !== MOCK_AGENT_PLAN_ID) return;

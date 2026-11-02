@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "InsightsPurgeReport": {
+      "additionalProperties": false,
+      "description": "What `scull insights purge` deleted (`scull/insights-purge@1`).",
+      "properties": {
+        "database_found": {
+          "description": "Whether a database was found (nothing to purge otherwise).",
+          "type": "boolean"
+        },
+        "deleted": {
+          "$ref": "#/$defs/PurgedRows",
+          "description": "Rows deleted per stream."
+        },
+        "kept": {
+          "description": "What is always kept.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "older_than": {
+          "description": "Only history older than this was deleted (Unix seconds); `null` means all of it.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "database_found",
+        "deleted",
+        "kept"
+      ],
+      "type": "object"
+    },
+    "PurgedRows": {
+      "additionalProperties": false,
+      "description": "Rows deleted per history stream.",
+      "properties": {
+        "footprint_samples": {
+          "description": "scull's own footprint samples.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "free_space_samples": {
+          "description": "Free-space samples.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gone_items": {
+          "description": "Rows of items that are gone.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "item_events": {
+          "description": "Item lifecycle events.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regrowth_events": {
+          "description": "Regrowth events.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "description": "All of the above.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "free_space_samples",
+        "footprint_samples",
+        "item_events",
+        "regrowth_events",
+        "gone_items",
+        "total"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One line of `--ndjson` output with schema scull/insights-purge@1: `type` selects the shape of `data`.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/InsightsPurgeReport",
+      "description": "The payload, as in the command's `--json` document."
+    },
+    "schema": {
+      "const": "scull/insights-purge@1",
+      "description": "`scull/<name>@<major>`.",
+      "pattern": "^scull/[a-z][a-z0-9-]*@[1-9][0-9]*$",
+      "type": "string"
+    },
+    "type": {
+      "const": "insights_purge",
+      "description": "The record type (one value per command, e.g. `status`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "The scull version that wrote it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "type",
+    "data"
+  ],
+  "title": "scull/insights-purge@1 (NDJSON line)",
+  "type": "object"
+}

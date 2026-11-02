@@ -95,12 +95,26 @@ jobs:
         run: |
           cargo test -p scull-fixtures --release --locked --test fx_fs_nightly -- \
             --ignored --nocapture --test-threads=1 2>&1 | tee fx-fs-nightly.log
+      - name: FX-PHY-06 (G3 reference corpus, release build)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p scull-fixtures --release --locked --test fx_phy -- \
+            --ignored --nocapture fx_phy_06 2>&1 | tee -a fx-fs-nightly.log
+      - name: FX-EXEC-16 (nightly half, a second account can't read the quarantine)
+        if: ${{ !cancelled() }}
+        # macOS's per-user $TMPDIR (/var/folders/..., 0700) can't be traversed by `nobody`;
+        # /tmp can, so the fixture lives there and only scull's own folders are tested.
+        env:
+          TMPDIR: /tmp
+        run: |
+          cargo test -p scull-cleaner --locked --test quarantine -- \
+            --ignored --nocapture fx_exec_16_another_account 2>&1 | tee -a fx-fs-nightly.log
       - name: Summary
         if: always()
         run: |
           {
             echo "### Nightly FX-FS fixtures (${{ matrix.os }})"
             echo '```'
-            grep -E 'FX-FS-|SKIPPED|^test |test result' fx-fs-nightly.log || echo "no output"
+            grep -E 'FX-FS-|FX-EXEC-|FX-PHY-|nobody reads|SKIPPED|^test |test result' fx-fs-nightly.log || echo "no output"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

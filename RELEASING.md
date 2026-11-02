@@ -1,7 +1,7 @@
 # Releasing scull
 
-How the maintainer cuts a release. The first one is the **inspect-only alpha**
-(`v0.1.0-alpha.1`, P1-REL-01 / #66, PRD §22 Phase 1); the **MVP** (P2-REL-01 / #15) adds code
+How the maintainer cuts a release. The first one was the **inspect-only alpha**
+(`v0.1.0-alpha.1`, P1-REL-01 / #66, PRD §22 Phase 1; kept below as history); the **MVP** (P2-REL-01 / #15) adds code
 signing and notarization, Homebrew and Scoop, SBOMs and build-provenance attestations. Agents
 prepare the pipeline; only the maintainer creates accounts, sets secrets and pushes tags.
 
@@ -307,11 +307,11 @@ Goal (PRD §18): anyone can rebuild a release and get the same `scull` binary. W
 - Upgrading dist: change `cargo-dist-version`, run `dist generate`, and update `DIST_VERSION`
   and `DIST_SHA256` in `release-gates.yml` (from the new release's
   `cargo-dist-x86_64-unknown-linux-gnu.tar.xz.sha256`).
-- The inspect-only gate stays on for every release until the Executor ships with its own MVP
-  gates (PRD §21.3). Changing its list of refused commands needs a safety-lane review. The MVP
-  binary is built from `phase2`, where this gate is expected to fail once `scull clean` is
-  wired: the MVP release needs the safety lane's replacement gates in `release-gates.yml`
-  before it is tagged.
+- `release-gates.yml` picks the gate from the tag: `-alpha` tags run the inspect-only gate
+  (`packaging/check_inspect_only.py`, which fails on this code now that `scull clean` is
+  wired, so no alpha can be tagged from `main` any more); every other tag runs the MVP gates
+  (`packaging/check_mvp_gates.py`, PRD §21.3, #66). Changing either gate's checks needs a
+  safety-lane review. The inspect-only gate can be retired at the first MVP release.
 - `dist generate` warns "A Homebrew tap was specified but the Homebrew publish job is
   disabled". That is intended: `tap`/`formula` only name the formula; release-packages.yml
   pushes it (and skips cleanly without a token, which dist's own job does not).

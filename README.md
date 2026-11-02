@@ -6,8 +6,26 @@ macOS, Linux and Windows. It finds what development tools leave behind (`node_mo
 explains each item, classifies it by risk, and reclaims space **without ever risking source code,
 Git history or unique files**.
 
-> Status: pre-alpha. Planning and design are complete; the engine is being built issue by issue.
-> Progress lives in the pinned **Roadmap tracker** issue.
+> Status: pre-release. The first alpha (`0.1.0-alpha.1`) is inspect-only; `main` now carries
+> the cleanup Executor (plans, quarantine, restore, audit), which ships with the MVP release
+> once its release gates pass. Progress lives in the pinned **Roadmap tracker** issue.
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Install](docs/user/INSTALL.md) | Downloads per OS, checksums, building from source, first run |
+| [Safety model](docs/user/SAFETY.md) | Tiers, what scull never touches, plans, quarantine and restore, agent approvals, privacy |
+| [CLI reference](docs/user/CLI.md) | Every command and flag, exit codes, JSON and NDJSON output |
+| [AI agents (MCP)](docs/user/MCP.md) | The MCP server, connecting a client, and agent cleanups you approve |
+
+```sh
+scull init                         # choose the folders to scan
+scull scan                         # read-only: what is using space, and how risky it is
+scull clean --output plan.json     # dry run: write a plan you can review
+scull clean --plan plan.json       # review it against a fresh scan; confirm to run it
+scull restore <operation-id>       # undo: put quarantined items back
+```
 
 ## Risk tiers
 
@@ -18,17 +36,20 @@ Git history or unique files**.
 | S2 | Uncertain | Per-item opt-in, quarantined |
 | S3 | Protected | Never touched |
 
+S0 items are deleted after you confirm (rebuilding is the undo). S1 and S2 items go to a
+7-day quarantine that `scull restore` reverses. See the [safety model](docs/user/SAFETY.md).
+
 ## Layout
 
 One Rust engine shared by a CLI (`scull`), a Tauri 2 + Vue 3 desktop app, and an MCP server.
 
 ```text
-crates/   scull-core, -platform, -scanner, -detectors, -git, -safety,
-          -cleaner, -storage, -cli, -mcp, -fixtures
+crates/   scull-core, -platform, -scanner, -detectors, -git, -safety, -engine,
+          -cleaner, -storage, -proactive, -insights, -ask, -cli, -mcp, -fixtures
 apps/     desktop (Tauri 2 + Vue 3, Phase 3)
 rules/    declarative detector rules (data only)
 schemas/  JSON Schemas for CLI/MCP output and plan files
-docs/     PRD, decisions, threat model, fixture matrix
+docs/     PRD, decisions, threat model, fixture matrix; user guides in docs/user/
 design/   interactive design reference (open design/html/index.html)
 ```
 
@@ -43,7 +64,10 @@ The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Privacy
 
-No telemetry. Everything stays on your machine.
+No telemetry. Everything stays on your machine. Two opt-in features are the exceptions: the MCP
+server's results go to your AI client ([details](docs/user/MCP.md)), and `scull ask` sends your
+question and read-only tool results to the model provider you configure, after you agree to a
+notice ([details](docs/user/CLI.md#scull-ask)).
 
 ## License
 

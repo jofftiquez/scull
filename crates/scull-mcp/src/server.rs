@@ -1,7 +1,11 @@
 //! The MCP server: an `rmcp` [`ServerHandler`] over the read-only tools, served over stdio.
 
 use crate::allowlist::{Allowlist, path_from_file_uri};
+use crate::approval::Principal;
 use crate::local::LocalResult;
+use crate::plan_tools::{
+    self, CleanupRunner, PLAN_INSTRUCTIONS, PLAN_TOOL_NAMES, PlanLimits, PlanTools,
+};
 use crate::redact::{NameSalt, Redactor};
 use crate::tools::{self, Ctx, ToolError};
 use rmcp::model::{
@@ -63,6 +67,16 @@ pub struct ScullMcp {
     client_roots: Arc<Mutex<Option<Vec<PathBuf>>>>,
     /// One heavy call (scan) at a time.
     heavy: Arc<Semaphore>,
+    /// `mcp.destructive` from the user config file (one of the two switches, FX-MCP-07).
+    destructive_config: bool,
+    /// The plan and execute tools, when enabled ([`ScullMcp::with_plan_tools`]).
+    plans: Option<Arc<PlanTools>>,
+    /// Limits on `prepare_cleanup` (`mcp.max_pending_plans`, `mcp.prepare_per_minute`).
+    plan_limits: PlanLimits,
+    /// The plan tools for in-process callers (`scull ask`, AI-05), when enabled
+    /// ([`ScullMcp::with_in_process_plan_tools`]): prepare and read-only views, never
+    /// execution. Separate from [`ScullMcp::plans`]: the MCP surface is unchanged.
+    pub(crate) in_process_plans: Option<(Arc<PlanTools>, Option<scull_storage::AgentClient>)>,
 }
 
 impl ScullMcp {
@@ -76,6 +90,8 @@ impl ScullMcp {
             ));
         }
         let allowlist = Allowlist::new(&opts.roots, opts.home.as_deref());
+        let destructive_config = opts.mcp.destructive;
+        let plan_limits = PlanLimits::from_config(&opts.mcp);
         let salt = opts
             .mcp
             .hash_names
@@ -101,12 +117,94 @@ impl ScullMcp {
             tools: Arc::new(tools::definitions()),
             client_roots: Arc::new(Mutex::new(None)),
             heavy: Arc::new(Semaphore::new(1)),
+            destructive_config,
+            plans: None,
+            plan_limits,
+            in_process_plans: None,
         })
+    }
+
+    /// Offer the plan and execute tools (PRD §13.2–13.3) **only if** destructive mode is on
+    /// in both places: `mcp.destructive = true` in the user config file (the
+    /// [`ServerOptions::mcp`] this server was built with) and the `--allow-destructive` launch
+    /// flag (`launch_flag`), and a data directory is known. Otherwise the server stays
+    /// read-only and the tools are absent (FX-MCP-07). `runner` executes approved plans
+    /// through the Executor; `principal` is this machine and user.
+    #[must_use]
+    pub fn with_plan_tools(
+        mut self,
+        launch_flag: bool,
+        runner: Arc<dyn CleanupRunner>,
+        principal: Principal,
+    ) -> Self {
+        let Some(data_dir) = self.ctx.data_dir.clone() else {
+            return self;
+        };
+        if !(launch_flag && self.destructive_config) {
+            return self;
+        }
+        let mut tools = self.tools.as_ref().clone();
+        tools.extend(plan_tools::definitions());
+        self.tools = Arc::new(tools);
+        self.plans = Some(Arc::new(PlanTools::new(
+            runner,
+            principal,
+            data_dir,
+            self.plan_limits,
+        )));
+        self
+    }
+
+    /// Use these `prepare_cleanup` limits instead of the configured ones (#299; tests use a
+    /// short window). The rate budget of this session starts afresh.
+    #[must_use]
+    pub fn with_plan_limits(mut self, limits: PlanLimits) -> Self {
+        self.plan_limits = limits;
+        if let Some(p) = self.plans.take() {
+            self.plans = Some(Arc::new(PlanTools::new(
+                p.runner.clone(),
+                p.principal.clone(),
+                p.data_dir.clone(),
+                limits,
+            )));
+        }
+        if let Some((p, client)) = self.in_process_plans.take() {
+            self.in_process_plans = Some((
+                Arc::new(PlanTools::new(
+                    p.runner.clone(),
+                    p.principal.clone(),
+                    p.data_dir.clone(),
+                    limits,
+                )),
+                client,
+            ));
+        }
+        self
+    }
+
+    /// Whether the plan and execute tools are offered.
+    pub fn plan_tools_enabled(&self) -> bool {
+        self.plans.is_some()
+    }
+
+    /// The names of every tool offered, in listing order.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.iter().map(|t| t.name.to_string()).collect()
     }
 
     /// The handlers' shared state (for in-process calls, [`crate::local`]).
     pub(crate) fn ctx(&self) -> &Ctx {
         &self.ctx
+    }
+
+    /// `mcp.destructive` from the user config file this server was built with.
+    pub(crate) fn destructive_config(&self) -> bool {
+        self.destructive_config
+    }
+
+    /// The configured `prepare_cleanup` limits.
+    pub(crate) fn plan_limits(&self) -> PlanLimits {
+        self.plan_limits
     }
 
     /// The configured allowlist (before narrowing to client roots).
@@ -151,6 +249,25 @@ impl ScullMcp {
     }
 }
 
+/// `get_status` with the plan tools on: the server is no longer read-only, and lists them.
+fn with_plan_tools_listed(mut out: tools::Output) -> tools::Output {
+    if let Some(server) = out
+        .structured
+        .get_mut("server")
+        .and_then(|v| v.as_object_mut())
+    {
+        server.insert("read_only".into(), serde_json::Value::Bool(false));
+        if let Some(list) = server.get_mut("tools").and_then(|v| v.as_array_mut()) {
+            list.extend(PLAN_TOOL_NAMES.iter().map(|n| serde_json::json!(n)));
+        }
+    }
+    out.summary = out.summary.replace(
+        "read-only MCP server",
+        "MCP server (cleanups need the user's approval outside the chat)",
+    );
+    out
+}
+
 /// A tool failure as the client sees it: escaped, capped and redacted text plus
 /// `{"error": {...}}` (shared by MCP calls and in-process calls).
 pub(crate) fn error_result(e: &ToolError, r: &Redactor) -> LocalResult {
@@ -173,10 +290,18 @@ fn tool_error(e: &ToolError, r: &Redactor) -> CallToolResult {
 impl ServerHandler for ScullMcp {
     fn get_info(&self) -> ServerConfig {
         let mut implementation = Implementation::new("scull", env!("CARGO_PKG_VERSION"));
-        implementation.title = Some("scull (read-only)".into());
+        let (title, instructions) = if self.plans.is_some() {
+            (
+                "scull (cleanups need the user's approval)",
+                format!("{INSTRUCTIONS}{PLAN_INSTRUCTIONS}"),
+            )
+        } else {
+            ("scull (read-only)", INSTRUCTIONS.to_owned())
+        };
+        implementation.title = Some(title.into());
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(implementation)
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(instructions)
     }
 
     async fn list_tools(
@@ -193,13 +318,25 @@ impl ServerHandler for ScullMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.to_string();
-        if !tools::TOOL_NAMES.contains(&name.as_str()) {
+        // Plan tools are dispatched only when enabled; otherwise they are unknown, exactly
+        // like a tool that does not exist (FX-MCP-07).
+        let plans = self
+            .plans
+            .clone()
+            .filter(|_| PLAN_TOOL_NAMES.contains(&name.as_str()));
+        if !tools::TOOL_NAMES.contains(&name.as_str()) && plans.is_none() {
             return Err(ErrorData::invalid_params(
-                "unknown tool (this server is read-only; call tools/list)",
+                "unknown tool (call tools/list)",
                 None,
             ));
         }
+        let plans_enabled = self.plans.is_some();
         let allow = self.effective_allowlist(&context).await;
+        // The client's own `clientInfo` from `initialize` (#78): recorded with agent plans as
+        // a claim for the human to see, sanitized; never trusted for anything.
+        let client = context.peer.peer_info().and_then(|i| {
+            scull_storage::AgentClient::new(&i.client_info.name, Some(&i.client_info.version))
+        });
         let args = request.arguments.unwrap_or_default();
         let cancel = CancelToken::new();
         let watcher = {
@@ -218,7 +355,15 @@ impl ServerHandler for ScullMcp {
         let ctx = Arc::clone(&self.ctx);
         let joined = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            tools::call(&ctx, &allow, &name, args, &cancel)
+            let out = match &plans {
+                Some(p) => plan_tools::call(&ctx, p, &allow, &name, args, &cancel, client.as_ref()),
+                None => tools::call(&ctx, &allow, &name, args, &cancel),
+            };
+            if plans_enabled && name == "get_status" {
+                out.map(|r| r.map(with_plan_tools_listed))
+            } else {
+                out
+            }
         })
         .await;
         watcher.abort();

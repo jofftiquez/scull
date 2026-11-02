@@ -1,0 +1,23 @@
+{
+  "$id": "scull-desktop/agent-denied.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The human denied the plan.",
+  "properties": {
+    "denied_at": {
+      "description": "When (Unix seconds).",
+      "format": "int64",
+      "type": "integer"
+    },
+    "plan_id": {
+      "description": "Plan ID.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan_id",
+    "denied_at"
+  ],
+  "title": "AgentDenied",
+  "type": "object"
+}

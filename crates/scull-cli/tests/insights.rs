@@ -86,11 +86,15 @@ fn bless(name: &str, generated: Value) {
 /// Regenerate with `SCULL_BLESS=1 cargo test -p scull-cli --test insights`.
 #[test]
 fn committed_schema_matches_generated() {
-    use scull_cli::cmd::insights::INSIGHTS_SCHEMA;
+    use scull_cli::cmd::insights::{INSIGHTS_PURGE_SCHEMA, INSIGHTS_SCHEMA, InsightsPurgeReport};
     use scull_cli::output::json::document_schema;
     bless(
         "insights",
         document_schema::<scull_insights::InsightsReport>(INSIGHTS_SCHEMA),
+    );
+    bless(
+        "insights-purge",
+        document_schema::<InsightsPurgeReport>(INSIGHTS_PURGE_SCHEMA),
     );
 }
 
@@ -150,6 +154,17 @@ fn fx_ins_16_no_history_gives_an_empty_report_and_creates_nothing() {
     let o = scull_in(home.path(), &["insights"]);
     assert_eq!(o.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&o.stdout).contains("No history recorded yet"));
+    // Purging with no history creates nothing either, and says so.
+    let v = json_ok(
+        home.path(),
+        &["insights", "purge", "--confirm", "--json"],
+        "insights-purge",
+    );
+    assert_eq!(v["data"]["database_found"], false);
+    assert_eq!(v["data"]["deleted"]["total"], 0);
+    let o = scull_in(home.path(), &["insights", "purge"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Nothing to purge"));
     assert_eq!(
         std::fs::read_dir(home.path()).expect("dir").count(),
         0,
@@ -190,15 +205,75 @@ fn fx_ins_17_export_json_and_csv() {
     }
 }
 
-/// The inspect-only release gate requires `insights purge` to be refused on `main` during the
-/// alpha (packaging/check_inspect_only.py); the storage side is tested in scull-storage.
+fn count(home: &Path, what: &str) -> i64 {
+    // Counted through the report over ten years (the typed API has no row counts).
+    let v = json_ok(
+        home,
+        &["insights", "--json", "--since", "3650d"],
+        "insights",
+    );
+    match what {
+        "free_space" => v["data"]["free_space"].as_array().map_or(0, |a| {
+            a.iter()
+                .map(|x| x["points"].as_array().map_or(0, Vec::len))
+                .sum::<usize>()
+        }) as i64,
+        "regrowth" => v["data"]["regrowth"].as_array().map_or(0, Vec::len) as i64,
+        "operations" => v["data"]["accuracy"]["operations"]
+            .as_array()
+            .map_or(0, Vec::len) as i64,
+        "items" => v["data"]["coverage"]["items"].as_i64().unwrap_or(-1),
+        other => panic!("{other}"),
+    }
+}
+
+/// The `insights_purged` events recorded in the database: `(older_than, total)` each.
+fn purge_events(home: &Path) -> Vec<(Value, Value)> {
+    let store = Store::open(&db_path(home), &DefaultPermissions).expect("open");
+    store
+        .events(scull_storage::EventKind::InsightsPurged, 0)
+        .expect("events")
+        .into_iter()
+        .map(|e| {
+            assert_eq!(e.source, "cli");
+            (e.payload["older_than"].clone(), e.payload["total"].clone())
+        })
+        .collect()
+}
+
+/// INS-02: purging needs confirmation (`--confirm` without a terminal or in machine modes),
+/// forgets only history rows (all, or those older than `--older-than`), keeps live items,
+/// scans, the volumes cache and the append-only audit, and records each purge as an
+/// `insights_purged` event. Everything lives in a temp `SCULL_HOME`.
 #[test]
-fn fx_ins_18_purge_is_refused_in_the_inspect_only_alpha_and_deletes_nothing() {
+fn fx_ins_18_purge_requires_confirmation_forgets_only_history_and_is_recorded() {
     let home = seeded();
-    let before = json_ok(home.path(), &["insights", "--json"], "insights");
+    let h = home.path();
+    assert_eq!(count(h, "free_space"), 60);
+    assert_eq!(count(h, "regrowth"), 1);
+    let operations = count(h, "operations");
+    assert!(operations > 0);
+
+    // Without a terminal, --confirm is required (also in machine modes); nothing is deleted.
     for args in [
         &["insights", "purge"][..],
-        &["insights", "purge", "--confirm"],
+        &["insights", "purge", "--json"],
+        &["insights", "purge", "--older-than", "20d", "--ndjson"],
+    ] {
+        let o = scull_in(h, args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(o.stdout.is_empty(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("--confirm"),
+            "{args:?}"
+        );
+    }
+    assert_eq!(count(h, "free_space"), 60);
+    assert!(purge_events(h).is_empty());
+
+    // Older than 20 days: only old history goes.
+    let v = json_ok(
+        h,
         &[
             "insights",
             "purge",
@@ -207,21 +282,35 @@ fn fx_ins_18_purge_is_refused_in_the_inspect_only_alpha_and_deletes_nothing() {
             "--confirm",
             "--json",
         ],
-    ] {
-        let o = scull_in(home.path(), args);
-        assert_eq!(o.status.code(), Some(1), "{args:?}");
-        assert!(o.stdout.is_empty());
-        let err = String::from_utf8_lossy(&o.stderr);
-        assert!(
-            err.contains("not implemented yet (tracked in #266)"),
-            "{err}"
-        );
-    }
-    let after = json_ok(home.path(), &["insights", "--json"], "insights");
-    // Same history (the forecast moves with the clock, so compare the samples).
-    assert_eq!(
-        before["data"]["free_space"][0]["points"],
-        after["data"]["free_space"][0]["points"]
+        "insights-purge",
     );
-    assert_eq!(before["data"]["regrowth"], after["data"]["regrowth"]);
+    assert_eq!(v["schema"], "scull/insights-purge@1");
+    let d = &v["data"]["deleted"];
+    assert_eq!(d["free_space_samples"], 40);
+    assert!(d["gone_items"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(count(h, "free_space"), 20);
+    let cutoff = v["data"]["older_than"].clone();
+    assert!(cutoff.is_i64(), "{v:#}");
+
+    // Everything.
+    let o = scull_in(h, &["insights", "purge", "--confirm"]);
+    assert_eq!(o.status.code(), Some(0));
+    let text = String::from_utf8(o.stdout).expect("utf-8");
+    assert!(text.starts_with("Deleted "), "{text}");
+    assert!(text.contains("append-only"), "{text}");
+    assert_eq!(count(h, "free_space"), 0);
+    assert_eq!(count(h, "regrowth"), 0);
+    // Audit rows are append-only and kept: cleanup accuracy still reads them.
+    assert_eq!(count(h, "operations"), operations);
+    // Live items are kept.
+    assert!(count(h, "items") > 0);
+    // `scull status` still works (the volumes cache and scans are kept).
+    let o = scull_in(h, &["status"]);
+    assert_eq!(o.status.code(), Some(0));
+
+    // Both purges are recorded, with their cutoff and row count; neither deleted the other.
+    let events = purge_events(h);
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0], (cutoff, d["total"].clone()));
+    assert!(events[1].0.is_null());
 }

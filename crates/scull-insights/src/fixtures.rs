@@ -24,8 +24,9 @@ use scull_core::{
     Regeneration, RuleRef, ScanId, Sizes, Tier, TierReason,
 };
 use scull_storage::{
-    ApprovalMethod, AuditEntry, AuditOutcome, OperationStart, Result, ScanFinish, ScanRecord,
-    ScanStart, ScanStatus, ScanTotals, Store, VolumeSample, rollups_from_candidates,
+    ApprovalMethod, DefaultPermissions, ItemOutcome, ItemRecord, OperationEnd, OperationFinish,
+    OperationStart, Result, ScanFinish, ScanRecord, ScanStart, ScanStatus, ScanTotals, Store,
+    VolumeSample, rollups_from_candidates,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -161,44 +162,39 @@ pub fn record_cleanup(
             machine_id: "demo-machine".into(),
             user: "dev".into(),
             origin: PlanOrigin::Cli,
+            operations_watermark: None,
         },
         items,
     )
     .map_err(core)?;
     store.insert_plan(&plan)?;
     let op = OperationId::from_suffix(&format!("demo{n}")).map_err(bad_id)?;
-    store.record_operation_start(&OperationStart {
-        operation_id: op.clone(),
-        plan_id: plan.id().clone(),
-        content_hash: plan.content_hash().clone(),
-        approver: "dev".into(),
-        method: ApprovalMethod::CliTty,
-        started_at: at,
-    })?;
-    store.append_audit(&[
-        AuditEntry {
-            operation_id: op.clone(),
-            recorded_at: at + 30,
-            item_id: Some(item.id.clone()),
-            path: Some(item.path.clone()),
-            action: Some("delete".into()),
-            outcome: AuditOutcome::Succeeded,
-            reason: None,
-            predicted_bytes: Some(predicted),
-            measured_bytes: Some(measured),
-        },
-        AuditEntry {
+    let mut audit = store.begin_operation(
+        &OperationStart {
             operation_id: op,
-            recorded_at: at + 31,
-            item_id: None,
-            path: None,
-            action: None,
-            outcome: AuditOutcome::OperationFinished,
-            reason: None,
-            predicted_bytes: None,
-            measured_bytes: None,
+            plan_id: plan.id().clone(),
+            content_hash: plan.content_hash().clone(),
+            approver: "dev".into(),
+            method: ApprovalMethod::CliTty,
+            started_at: at,
         },
-    ])
+        &DefaultPermissions,
+    )?;
+    // The predicted bytes come from the plan item; the measured ones are what was freed.
+    let mut rec = ItemRecord::new(item.id.clone(), at + 30, ItemOutcome::Removed);
+    rec.freed_bytes = Some(measured);
+    rec.entries_removed = Some(1);
+    rec.entries_kept = Some(0);
+    store.record_item(&mut audit, &rec)?;
+    store.finish_operation(
+        &mut audit,
+        &OperationFinish {
+            finished_at: at + 31,
+            end: OperationEnd::Normal,
+            measured_delta_bytes: None,
+        },
+    )?;
+    Ok(())
 }
 
 fn bad_id(message: String) -> scull_storage::StoreError {

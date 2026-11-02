@@ -1,4 +1,4 @@
-//! End-to-end tests of the `scull` binary: help, version, usage errors, stub commands, JSON
+//! End-to-end tests of the `scull` binary: help, version, usage and runtime errors, JSON
 //! error envelopes and shell completions (P1-CLI-01). No command here touches the filesystem
 //! beyond reading the committed schema file.
 
@@ -138,49 +138,38 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
     }
 }
 
-/// Every not-yet-implemented command fails with exit 1 and names its tracking issue.
+/// A command's own (runtime) error, not a clap one: `--since` in the future is refused
+/// before anything is opened, so nothing on disk is touched (no command is a stub in this
+/// build).
+const RUNTIME_ERROR: [&str; 3] = ["insights", "--since", "2999-01-01"];
+
+/// A runtime error is one `scull: error: ...` line on stderr, with stdout empty.
 #[test]
-fn stub_commands_exit_1_with_tracking_issue() {
-    let cases: &[(&[&str], &str)] = &[
-        (
-            &["clean"],
-            "`scull clean` is not implemented yet (tracked in #79)",
-        ),
-        (&["clean", "caches"], "(tracked in #80)"),
-        (&["history"], "(tracked in #81)"),
-        (&["restore", "op"], "(tracked in #81)"),
-        (&["approve", "p"], "(tracked in #108)"),
-        (&["insights", "purge"], "(tracked in #266)"),
-        (&["data", "show"], "(tracked in #82)"),
-    ];
-    for (args, want) in cases {
-        let o = scull(args);
-        assert_eq!(o.status.code(), Some(1), "{args:?}");
-        assert!(o.stdout.is_empty(), "{args:?}: stdout must stay empty");
-        let err = stderr(&o);
-        assert!(err.starts_with("scull: error: "), "{args:?}: {err}");
-        assert!(err.contains(want), "{args:?}: {err}");
-        assert!(err.contains("not implemented yet"), "{args:?}: {err}");
-    }
+fn runtime_errors_are_one_prefixed_line_on_stderr() {
+    let o = scull(&RUNTIME_ERROR);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(o.stdout.is_empty(), "stdout must stay empty");
+    let err = stderr(&o);
+    assert!(err.starts_with("scull: error: "), "{err}");
+    assert!(err.contains("--since is in the future"), "{err}");
 }
 
 #[test]
-fn stub_errors_are_json_on_stderr_in_machine_modes() {
+fn runtime_errors_are_json_on_stderr_in_machine_modes() {
     let validator = error_schema_validator();
     for mode in ["--json", "--ndjson"] {
-        let o = scull(&["history", mode]);
-        assert_eq!(o.status.code(), Some(1), "{mode}");
+        let mut args = RUNTIME_ERROR.to_vec();
+        args.push(mode);
+        let o = scull(&args);
+        assert_eq!(o.status.code(), Some(2), "{mode}");
         assert!(o.stdout.is_empty(), "{mode}: no partial document on stdout");
         let err = stderr(&o);
         assert_eq!(err.lines().count(), 1, "{mode}: {err}");
         let v: Value = serde_json::from_str(&err).expect("JSON");
         assert_eq!(v["schema"], "scull/error@1");
         assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(v["error"]["kind"], "unsupported_platform");
-        assert_eq!(
-            v["error"]["message"],
-            "`scull history` is not implemented yet (tracked in #81)"
-        );
+        assert_eq!(v["error"]["kind"], "usage");
+        assert_eq!(v["error"]["message"], "--since is in the future");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{mode}: {errors:?}");
     }
@@ -188,29 +177,41 @@ fn stub_errors_are_json_on_stderr_in_machine_modes() {
 
 #[test]
 fn quiet_still_reports_errors() {
-    let o = scull(&["history", "-q"]);
-    assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("tracked in #81"));
+    let o = scull(&["insights", "--since", "2999-01-01", "-q"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(stderr(&o).contains("in the future"));
     // -q and -v are mutually exclusive.
-    assert_eq!(scull(&["history", "-q", "-v"]).status.code(), Some(2));
-    assert_eq!(scull(&["-q", "history", "-v"]).status.code(), Some(2));
+    assert_eq!(
+        scull(&["insights", "--since", "2999-01-01", "-q", "-v"])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(
+        scull(&["-q", "insights", "--since", "2999-01-01", "-v"])
+            .status
+            .code(),
+        Some(2)
+    );
 }
 
 #[test]
 fn color_never_and_no_color_produce_no_escapes() {
-    let o = scull(&["history", "--color", "never"]);
+    let o = scull(&["insights", "--since", "2999-01-01", "--color", "never"]);
     assert!(!stderr(&o).contains('\x1b'));
     let o = Command::new(env!("CARGO_BIN_EXE_scull"))
-        .args(["history"])
+        .args(RUNTIME_ERROR)
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
         .output()
         .expect("run");
     assert!(!String::from_utf8_lossy(&o.stderr).contains('\x1b'));
-    let o = scull(&["history", "--color", "always"]);
+    let o = scull(&["insights", "--since", "2999-01-01", "--color", "always"]);
     assert!(stderr(&o).contains("\x1b["), "--color always forces color");
     assert_eq!(
-        scull(&["history", "--color", "rainbow"]).status.code(),
+        scull(&["insights", "--since", "2999-01-01", "--color", "rainbow"])
+            .status
+            .code(),
         Some(2)
     );
 }
@@ -258,7 +259,10 @@ fn committed_error_schema_validates_real_output() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let validator = jsonschema::validator_for(&committed).expect("schema compiles");
-    for args in [&["history", "--json"][..], &["frob", "--ndjson"][..]] {
+    for args in [
+        &["insights", "--since", "2999-01-01", "--json"][..],
+        &["frob", "--ndjson"][..],
+    ] {
         let o = scull(args);
         let v: Value = serde_json::from_str(&stderr(&o)).expect("JSON error");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();

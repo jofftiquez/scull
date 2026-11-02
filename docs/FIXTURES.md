@@ -57,6 +57,51 @@ cargo test -p scull-fixtures --release --test fx_fs_nightly -- --ignored --nocap
 - **Mounts stay inside the fixture.** `scull_fixtures::Mounts` refuses mount points and sources outside the fixture's temporary directory. It unmounts everything (innermost first) before that directory is removed, and it falls back to a lazy unmount. If even that fails, it aborts the process, so the cleanup can never walk into a mounted filesystem.
 - **FX-FS-15 knobs.** `SCULL_FX_FS15_ENTRIES` (default 1,000,000), `SCULL_FX_FS15_MAX_SECS` (15) and `SCULL_FX_FS15_MAX_MB` (400) set the size and the PRD §21.2 budgets. The scan runs in a child process, once to warm the cache and once to be judged. Its peak memory comes from `VmHWM` on Linux, `/usr/bin/time -l` on macOS and `PeakWorkingSet64` on Windows. The time budget is enforced only in optimized builds (`--release`), or always when `SCULL_FX_FS15_ENFORCE_TIME=1`.
 
+### 2.2 Manual release checklist
+
+Manual fixtures can't be automated: they need a real desktop session, an account state, or OS permission prompts that hosted runners can't produce. Before each release, a maintainer runs this checklist on a real machine with the **release build**, ticks every box, and signs it (PRD §21.3). The signed copy is attached to the release's tracking issue. A box that can't be ticked blocks the release if the fixture's gate is that release or earlier. The fixture registry marks these fixtures `ManualChecklist`, and `tests/registry.rs` fails if a registered one has no entry here.
+
+Record once per run: scull version and commit, OS version and build, machine model, tester, date.
+
+**FX-MAC-01** (gate MVP). Protected folders without Full Disk Access are reported as inaccessible, with no crash and no repeated permission prompts.
+Setup: a macOS desktop session. In System Settings → Privacy & Security, scull, the scull desktop app and the terminal app you use must **not** have Full Disk Access. Reset earlier answers with `tccutil reset SystemPolicyAllFiles` and `tccutil reset All <bundle id>` for the desktop app.
+- [ ] From Terminal, run `scull scan ~ --json > scan.json` and confirm scanning the home folder. It exits normally, with no crash or hang.
+- [ ] Folders under macOS privacy protection (e.g. `~/Library/Mail`, `~/Library/Messages`, `~/Library/Safari`, `~/Library/Application Support/AddressBook`) are listed as inaccessible (permission-denied issues) in `scan.json`. None of them is a candidate.
+- [ ] Each privacy category prompted at most once during the scan. Deny every prompt.
+- [ ] Run the same scan again. No new prompts appear, and the same folders are reported as inaccessible.
+- [ ] `scull doctor` lists Full Disk Access as unavailable, with the explanation.
+- [ ] In the desktop app, scan the home folder. Inaccessible folders are shown as such, the app stays responsive and doesn't crash. Quit, reopen and scan again: no repeated prompts.
+
+**FX-WIN-07** (gate v1.0). A OneDrive Files On-Demand placeholder is not hydrated and is classified S2.
+Setup: Windows with OneDrive signed in. A folder inside OneDrive holds a `node_modules` (or `target`) whose files are "online-only" (cloud icon, "Free up space").
+- [ ] `scull scan <OneDrive folder> --json`: the artifact containing placeholders is at least S2, with a cloud or placeholder reason.
+- [ ] After the scan, every placeholder still shows the cloud icon (Explorer's "Status" column). Nothing was downloaded, and OneDrive's activity shows no downloads.
+- [ ] No placeholder appears in an executable plan for deletion.
+
+**FX-MAC-02** (gate v1.0). iCloud Drive files evicted by "Optimize Mac Storage" are not hydrated and are classified S2.
+Setup: macOS with iCloud Drive and "Optimize Mac Storage" on. A project in iCloud Drive with an artifact folder evicted to the cloud (`brctl evict <path>`).
+- [ ] `scull scan <iCloud project> --json`: the artifact is at least S2, with a cloud or placeholder reason.
+- [ ] After the scan the files are still evicted (cloud icon in Finder, `brctl status` shows no download). Nothing was downloaded.
+- [ ] No evicted file appears in an executable plan for deletion.
+
+**FX-MAC-06** (gate v1.0). A change in purgeable space during measurement is noted in the result.
+Setup: macOS with purgeable space present (e.g. local Time Machine snapshots or iCloud caches; `diskutil info /` shows "Purgeable").
+- [ ] Clean an S0 item while purgeable space changes, e.g. while `tmutil thinlocalsnapshots / 1000000000 1` runs.
+- [ ] The result's measured delta carries a note that purgeable space changed during measurement, and the confidence is lowered accordingly.
+- [ ] The note appears in `scull history` for that operation.
+
+Signed: ____________________ (name, date, release)
+
+### 2.3 Nightly OS fixtures
+
+FX-LNX-02, FX-LNX-03, FX-LNX-06 and FX-MAC-05 live in `crates/scull-fixtures/tests/fx_os_nightly.rs`. They are `#[ignore]`d and get their privileges from `scull_fixtures::require_privileges!`. Run them with:
+
+```sh
+cargo test -p scull-fixtures --test fx_os_nightly -- --ignored --nocapture --test-threads=1
+```
+
+On Linux, FX-LNX-03 and FX-LNX-06 need real root, either directly or through `SCULL_FIXTURES_ALLOW_SUDO=1`, which runs `sudo -n unshare --mount` so every mount stays in a private namespace. They also need `bindfs` and `btrfs-progs`. FX-LNX-03 additionally mounts an NFS export when `SCULL_FX_NFS_EXPORT` (e.g. `127.0.0.1:/srv/scull-nfs`) names one. FX-LNX-02 needs a user and mount namespace or root. FX-MAC-05 attaches a disk image with `hdiutil`, which needs no root. Without privileges the tests print `SKIPPED <test>: <reason>`. With `SCULL_FIXTURES_REQUIRE_PRIVILEGED=1` they fail instead. `.github/workflows/nightly-os-fixtures.yml` runs them every night.
+
 ---
 
 ## 3. Fixtures
@@ -205,6 +250,9 @@ cargo test -p scull-fixtures --release --test fx_fs_nightly -- --ignored --nocap
 | FX-MCP-08 | `scull approve` without an interactive terminal | Refused | MLW | v1.0 | CI |
 | FX-MCP-09 | Default redaction | Home prefix shown as `~` in all MCP results | MLW | MVP | CI |
 | FX-MCP-10 | `register_worktree` with an expired TTL | Staleness alert only; nothing deleted | MLW | v1.0 | CI |
+| FX-MCP-11 | `scull approve` run under a pseudo-terminal driver (`script`, `expect`) | Refused (`pty_driver`) before the plan or code is shown; audited; nothing approved | ML | v1.0 | CI |
+| FX-MCP-12 | `scull approve` in a terminal carrying an AI agent's environment (e.g. a `tmux` session the agent started) | Refused (`agent_environment`); audited; nothing approved | ML | v1.0 | CI |
+| FX-MCP-13 | `scull approve` with an AI agent client among its parent processes | Refused (`agent_process`); audited; nothing approved | MLW | v1.0 | CI |
 
 ### 3.10 Windows-specific (FX-WIN)
 
@@ -295,7 +343,7 @@ cargo test -p scull-fixtures --release --test fx_fs_nightly -- --ignored --nocap
 | T-34 Misleading permanence | FX-EXEC-11 |
 | T-35 Running as root | FX-EXEC-12 |
 | T-40 Prompt injection | FX-MCP-05 |
-| T-41 Self-approval | FX-MCP-08 |
+| T-41 Self-approval | FX-MCP-08, -11, -12, -13 |
 | T-42 Approval misuse | FX-MCP-01, -02, -03, -04 |
 | T-43 MCP scope escape | FX-MCP-06 |
 | T-44 Path leakage | FX-MCP-09 |

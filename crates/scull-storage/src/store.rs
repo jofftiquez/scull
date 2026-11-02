@@ -2,13 +2,11 @@
 
 use crate::backup::{list_backups, with_suffix};
 use crate::error::{Result, StoreError, is_corruption};
-use crate::migrate::{MIGRATIONS, check_compatible, migrate, user_version};
+use crate::migrate::{MIGRATIONS, Migration, check_compatible, migrate, user_version};
 use crate::perms::OwnerOnly;
-use crate::records::{
-    Approval, ApprovalMethod, AuditEntry, NewApproval, OperationStart, ScanFinish, ScanStart,
-};
+use crate::records::{Approval, ApprovalMethod, NewApproval, ScanFinish, ScanStart};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
-use scull_core::{Candidate, ContentHash, ErrorKind, Plan, PlanId};
+use scull_core::{Candidate, ContentHash, ErrorKind, Plan, PlanId, PlanOrigin};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -45,6 +43,21 @@ pub struct Store {
     pub(crate) conn: Connection,
     path: PathBuf,
     backups_taken: Vec<PathBuf>,
+    busy_timeout: Duration,
+    lock_wait: Option<LockWaitObserver>,
+    /// Registered while the connection lives (dropped after `conn`, declared first).
+    _live: crate::live::LiveConnection,
+}
+
+/// Called when a write finds another connection holding the write lock and is about to wait
+/// for it ([`Store::on_lock_wait`]).
+#[derive(Clone)]
+struct LockWaitObserver(std::sync::Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for LockWaitObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LockWaitObserver")
+    }
 }
 
 impl Store {
@@ -68,26 +81,103 @@ impl Store {
     ///    application's database → [`StoreError::NotScullDatabase`]. In all three cases the file
     ///    is left byte-identical.
     /// 3. Database, `-wal` and `-shm` files are restricted owner-only, connection settings are
-    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup.
+    ///    applied (see [`Store`]), and pending migrations run, each preceded by a backup. The
+    ///    `-wal` and `-shm` files SQLite creates while opening are restricted too.
     pub fn open_with(path: &Path, perms: &dyn OwnerOnly, options: &StoreOptions) -> Result<Store> {
         Self::open_inner(path, perms, options, MIGRATIONS)
+    }
+
+    /// Open an existing database **read-only**, for viewers that must never change it (the
+    /// desktop History screen, SAFE-10).
+    ///
+    /// The connection is opened with `SQLITE_OPEN_READ_ONLY` and `query_only` on: no file or
+    /// folder is created, no permission is changed, nothing is migrated or written (SQLite may
+    /// still create the WAL index sidecar a reader needs). The file must be a regular file
+    /// holding a scull database at exactly this build's schema version; otherwise it is
+    /// refused and left untouched: missing → [`ErrorKind::NotFound`]; a link or not a regular
+    /// file, or an older schema (pending migration) → [`ErrorKind::Config`]; newer →
+    /// [`StoreError::SchemaTooNew`]; another application's → [`StoreError::NotScullDatabase`];
+    /// damaged → [`StoreError::Corrupt`].
+    pub fn open_read_only(path: &Path, options: &StoreOptions) -> Result<Store> {
+        let known = u32::try_from(MIGRATIONS.len()).unwrap_or(u32::MAX);
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.is_file() => {}
+            Ok(_) => {
+                return Err(StoreError::rejected(
+                    ErrorKind::Config,
+                    format!(
+                        "{} is not a regular file; refusing to read it",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StoreError::rejected(
+                    ErrorKind::NotFound,
+                    format!("no database at {}", path.display()),
+                ));
+            }
+            Err(e) => return Err(StoreError::io(path, e)),
+        }
+        let cls = |e: StoreError| classify(path, e);
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(StoreError::from)
+        .map_err(cls)?;
+        check_compatible(&conn, path, known).map_err(cls)?;
+        let version = user_version(&conn).map_err(StoreError::from).map_err(cls)?;
+        if version != known {
+            return Err(StoreError::rejected(
+                ErrorKind::Config,
+                format!(
+                    "{} has schema version {version} (this build reads {known}); it is migrated \
+                     the next time scull opens it for writing",
+                    path.display()
+                ),
+            ));
+        }
+        (|| -> rusqlite::Result<()> {
+            conn.busy_timeout(options.busy_timeout)?;
+            conn.pragma_update(None, "query_only", true)?;
+            conn.pragma_update(None, "trusted_schema", false)?;
+            conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
+                r.get::<_, i64>(0)
+            })?;
+            Ok(())
+        })()
+        .map_err(StoreError::from)
+        .map_err(cls)?;
+        Ok(Store {
+            conn,
+            path: path.to_owned(),
+            backups_taken: Vec::new(),
+            busy_timeout: options.busy_timeout,
+            lock_wait: None,
+            _live: crate::live::LiveConnection::register(path),
+        })
     }
 
     pub(crate) fn open_inner(
         path: &Path,
         perms: &dyn OwnerOnly,
         options: &StoreOptions,
-        migrations: &[&str],
+        migrations: &[Migration],
     ) -> Result<Store> {
         let known = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
         prepare_location(path, perms)?;
         probe(path, known)?;
+        // Restricting may open and close each file, which on Unix drops this process's POSIX
+        // locks on it: never while another connection of this process is live on the database
+        // (its open restricted them; see `crate::live`).
+        let others_live = crate::live::is_live(path);
         for p in [
             path.to_owned(),
             with_suffix(path, "-wal"),
             with_suffix(path, "-shm"),
         ] {
-            if std::fs::symlink_metadata(&p).is_ok() {
+            if !others_live && std::fs::symlink_metadata(&p).is_ok() {
                 perms
                     .restrict(&p)
                     .map_err(|source| StoreError::Permissions { path: p, source })?;
@@ -109,6 +199,20 @@ impl Store {
         })
         .map_err(StoreError::from)
         .map_err(cls)?;
+        // The `-wal` and `-shm` files SQLite created just now, in WAL mode. On Unix they take
+        // the database file's mode; on Windows they inherit the data folder's owner-only DACL
+        // but are owned by the process's default owner, which for an elevated administrator is
+        // the Administrators group, not the user. Restricting them makes the user the owner.
+        // Windows only: closing another handle releases no lock there. On Unix this
+        // connection is live now, so the files are never opened and closed here; SQLite
+        // created them with the database file's (owner-only) mode.
+        for p in [with_suffix(path, "-wal"), with_suffix(path, "-shm")] {
+            if cfg!(windows) && std::fs::symlink_metadata(&p).is_ok() {
+                perms
+                    .restrict(&p)
+                    .map_err(|source| StoreError::Permissions { path: p, source })?;
+            }
+        }
         for b in &backups_taken {
             perms
                 .restrict(b)
@@ -121,6 +225,9 @@ impl Store {
             conn,
             path: path.to_owned(),
             backups_taken,
+            busy_timeout: options.busy_timeout,
+            lock_wait: None,
+            _live: crate::live::LiveConnection::register(path),
         })
     }
 
@@ -214,52 +321,48 @@ impl Store {
     /// covers. Re-inserting the identical plan is a no-op; a *different* plan under an existing
     /// ID is rejected as tampering (plan substitution, §13.4).
     pub fn insert_plan(&mut self, plan: &Plan) -> Result<()> {
-        let canonical = plan.canonical_json().map_err(core_err)?;
-        if plan.compute_hash().map_err(core_err)? != *plan.content_hash() {
+        let row = PlanRow::of(plan)?;
+        self.write(|tx| row.insert(tx, plan))
+    }
+
+    /// Agent (MCP) plans of `machine_id` and `user` still awaiting an approval at `now`:
+    /// unexpired, without any approval record, and not denied by the human (#299: an
+    /// `approval_denied` entry with reason `denied` or `wrong_code` from `scull approve` or
+    /// the desktop dialog; a refused attempt such as `no_terminal` does not count as one).
+    pub fn pending_agent_plans(&self, machine_id: &str, user: &str, now: i64) -> Result<u64> {
+        self.read(|conn| pending_agent_plans(conn, machine_id, user, now))
+    }
+
+    /// Record the agent plan `plan` (origin `mcp`) only if its machine and user have fewer
+    /// than `max_pending` plans awaiting approval at `now` ([`Store::pending_agent_plans`]):
+    /// the count and the insert are one transaction, so concurrent sessions can't exceed the
+    /// cap (#299). Returns `false`, recording nothing, when the cap is reached. Otherwise as
+    /// [`Store::insert_plan`], plus the MCP client the plan came through, when known
+    /// ([`crate::EventKind::AgentPlanClient`], #78), in the same transaction.
+    pub fn insert_agent_plan(
+        &mut self,
+        plan: &Plan,
+        now: i64,
+        max_pending: u32,
+        client: Option<&crate::AgentClient>,
+    ) -> Result<bool> {
+        if plan.origin() != PlanOrigin::Mcp {
             return Err(StoreError::rejected(
-                ErrorKind::PlanTampered,
-                "plan content does not match its hash",
+                ErrorKind::Usage,
+                "insert_agent_plan records agent (MCP) plans only",
             ));
         }
-        let reclaimable = plan
-            .items()
-            .iter()
-            .fold(0u64, |a, i| a.saturating_add(i.reclaimable_bytes));
+        let row = PlanRow::of(plan)?;
         self.write(|tx| {
-            let existing: Option<String> = tx
-                .query_row(
-                    "SELECT content_hash FROM plans WHERE plan_id = ?1",
-                    [plan.id().as_str()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match existing {
-                Some(h) if h == plan.content_hash().as_str() => return Ok(()),
-                Some(_) => {
-                    return Err(StoreError::rejected(
-                        ErrorKind::PlanTampered,
-                        format!("a different plan is already recorded as {}", plan.id()),
-                    ));
-                }
-                None => {}
+            let pending = pending_agent_plans(tx, plan.machine_id(), plan.user(), now)?;
+            if pending >= u64::from(max_pending) {
+                return Ok(false);
             }
-            tx.execute(
-                "INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, \
-                 expires_at, item_count, reclaimable_bytes, canonical_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    plan.id().as_str(),
-                    plan.content_hash().as_str(),
-                    serde_name(&plan.origin())?,
-                    plan.scan_id().as_str(),
-                    plan.created_unix(),
-                    plan.expires_unix(),
-                    int(plan.items().len() as u64)?,
-                    int(reclaimable)?,
-                    canonical,
-                ],
-            )?;
-            Ok(())
+            row.insert(tx, plan)?;
+            if let Some(c) = client {
+                crate::events::insert_plan_client(tx, plan.id(), c, now)?;
+            }
+            Ok(true)
         })
     }
 
@@ -302,7 +405,8 @@ impl Store {
     /// Record a human approval of a recorded plan (§13.3 step 3). Rejected if the plan is
     /// unknown, the hash differs from the recorded plan, the approval would outlive the plan,
     /// the plan already expired, or the plan already has an approval (single use: one approval
-    /// per plan). Returns the approval's row ID.
+    /// per plan), or a human denied the plan (#78, [`Store::deny_plan`]: final). Returns the
+    /// approval's row ID.
     pub fn insert_approval(&mut self, a: &NewApproval) -> Result<i64> {
         self.write(|tx| {
             let plan: Option<(String, i64)> = tx
@@ -345,6 +449,25 @@ impl Store {
                 return Err(StoreError::rejected(
                     ErrorKind::Usage,
                     format!("plan {} already has an approval (single use)", a.plan_id),
+                ));
+            }
+            // #78: a human's denial is final. Checked in this transaction; `deny_plan` checks
+            // for an approval in its own, so exactly one of a racing approve and deny wins.
+            let denied: bool = tx.query_row(
+                &format!(
+                    "SELECT EXISTS (SELECT 1 FROM events e WHERE {})",
+                    crate::events::final_denial_sql("?1")
+                ),
+                [a.plan_id.as_str()],
+                |r| r.get(0),
+            )?;
+            if denied {
+                return Err(StoreError::rejected(
+                    ErrorKind::SafetyBlocked,
+                    format!(
+                        "plan {} was denied by the user: it can never be approved",
+                        a.plan_id
+                    ),
                 ));
             }
             tx.execute(
@@ -431,48 +554,93 @@ impl Store {
         })
     }
 
-    /// Record the start of an operation (append-only; its hash must match the recorded plan).
-    pub fn record_operation_start(&mut self, op: &OperationStart) -> Result<()> {
-        self.write(|tx| {
-            tx.execute(
-                "INSERT INTO operations (operation_id, plan_id, content_hash, approver, method, \
-                 started_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    op.operation_id.as_str(),
-                    op.plan_id.as_str(),
-                    op.content_hash.as_str(),
-                    op.approver,
-                    op.method.as_str(),
-                    op.started_at,
-                ],
+    /// Plans made by `origin` that are still awaiting an approval at `now`: unexpired
+    /// (`now < expires_at`), without any approval record, and not denied by the human (as in
+    /// [`Store::pending_agent_plans`]). Newest first, at most `limit`.
+    /// Used to list what a human can approve (`scull approve`, the desktop dialog; §13.3).
+    pub fn plans_awaiting_approval(
+        &self,
+        origin: PlanOrigin,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<PlanId>> {
+        let origin = serde_name(&origin)?;
+        let ids: Vec<String> = self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT plan_id FROM plans p WHERE p.origin = ?1 AND ?2 < p.expires_at \
+                 AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.plan_id = p.plan_id) \
+                 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'approval_denied' \
+                     AND e.source IN ('cli', 'desktop') \
+                     AND json_extract(e.payload_json, '$.plan_id') = p.plan_id \
+                     AND json_extract(e.payload_json, '$.reason') IN ('denied', 'wrong_code')) \
+                 ORDER BY p.created_at DESC, p.plan_id DESC LIMIT ?3",
             )?;
-            Ok(())
-        })
+            let rows = stmt.query_map(params![origin, now, limit], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })?;
+        ids.into_iter()
+            .map(|id| {
+                PlanId::try_from(id).map_err(|e| StoreError::rejected(ErrorKind::Internal, e))
+            })
+            .collect()
     }
 
-    /// Append audit rows (SAFE-08) in one transaction. Rows can never be changed or removed.
-    pub fn append_audit(&mut self, entries: &[AuditEntry]) -> Result<()> {
-        self.write(|tx| {
-            let mut stmt = tx.prepare(
-                "INSERT INTO audit (operation_id, recorded_at, item_id, path, action, outcome, \
-                 reason, predicted_bytes, measured_bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    /// Plans made by `origin` with an approval that is unused and unexpired at `now`
+    /// (approved, not yet executed or revoked; #298). Newest first, at most `limit`.
+    pub fn plans_with_live_approval(
+        &self,
+        origin: PlanOrigin,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<PlanId>> {
+        let origin = serde_name(&origin)?;
+        let ids: Vec<String> = self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT p.plan_id FROM plans p JOIN approvals a ON a.plan_id = p.plan_id \
+                 WHERE p.origin = ?1 AND ?2 < p.expires_at AND a.used_at IS NULL \
+                 AND a.approved_at <= ?2 AND ?2 < a.expires_at \
+                 ORDER BY p.created_at DESC, p.plan_id DESC LIMIT ?3",
             )?;
-            for e in entries {
-                stmt.execute(params![
-                    e.operation_id.as_str(),
-                    e.recorded_at,
-                    e.item_id.as_ref().map(|i| i.as_str()),
-                    e.path.as_ref().map(|p| p.as_str()),
-                    e.action,
-                    e.outcome.as_str(),
-                    e.reason,
-                    e.predicted_bytes.map(int).transpose()?,
-                    e.measured_bytes.map(int).transpose()?,
-                ])?;
+            let rows = stmt.query_map(params![origin, now, limit], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })?;
+        ids.into_iter()
+            .map(|id| {
+                PlanId::try_from(id).map_err(|e| StoreError::rejected(ErrorKind::Internal, e))
+            })
+            .collect()
+    }
+
+    /// Call `observer` each time a write finds another connection (another scull) holding the
+    /// write lock, right before it waits for it (up to the busy timeout). A UI can say "waiting
+    /// for another scull to finish"; tests synchronise on it instead of on wall-clock time.
+    /// Without an observer, writes behave exactly as before.
+    pub fn on_lock_wait(&mut self, observer: impl Fn() + Send + Sync + 'static) {
+        self.lock_wait = Some(LockWaitObserver(std::sync::Arc::new(observer)));
+    }
+
+    /// With an observer: whether the write lock is held elsewhere right now (a non-waiting
+    /// `BEGIN IMMEDIATE` that is rolled back at once). Calls the observer when it is.
+    fn report_lock_wait(&mut self) -> Result<()> {
+        let Some(observer) = self.lock_wait.clone() else {
+            return Ok(());
+        };
+        self.conn.busy_timeout(Duration::ZERO)?;
+        let probe = self.conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;");
+        self.conn.busy_timeout(self.busy_timeout)?;
+        match probe {
+            Ok(()) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                (observer.0)();
+                Ok(())
             }
-            Ok(())
-        })
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Run `f` in a `BEGIN IMMEDIATE` transaction (waits up to the busy timeout for the write
@@ -481,6 +649,9 @@ impl Store {
         &mut self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
     ) -> Result<T> {
+        if let Err(e) = self.report_lock_wait() {
+            return Err(classify(&self.path, e));
+        }
         let path = &self.path;
         let result = (|| {
             let tx = self
@@ -497,6 +668,90 @@ impl Store {
     pub(crate) fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         f(&self.conn).map_err(|e| classify(&self.path, e))
     }
+}
+
+/// What [`Store::insert_plan`] writes, computed and checked before the transaction.
+struct PlanRow {
+    canonical: String,
+    reclaimable: u64,
+}
+
+impl PlanRow {
+    fn of(plan: &Plan) -> Result<Self> {
+        let canonical = plan.canonical_json().map_err(core_err)?;
+        if plan.compute_hash().map_err(core_err)? != *plan.content_hash() {
+            return Err(StoreError::rejected(
+                ErrorKind::PlanTampered,
+                "plan content does not match its hash",
+            ));
+        }
+        let reclaimable = plan
+            .items()
+            .iter()
+            .fold(0u64, |a, i| a.saturating_add(i.reclaimable_bytes));
+        Ok(Self {
+            canonical,
+            reclaimable,
+        })
+    }
+
+    /// Insert `plan` (idempotent for the same content; a different plan under its ID is
+    /// [`ErrorKind::PlanTampered`]).
+    fn insert(&self, tx: &rusqlite::Transaction<'_>, plan: &Plan) -> Result<()> {
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT content_hash FROM plans WHERE plan_id = ?1",
+                [plan.id().as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(h) if h == plan.content_hash().as_str() => return Ok(()),
+            Some(_) => {
+                return Err(StoreError::rejected(
+                    ErrorKind::PlanTampered,
+                    format!("a different plan is already recorded as {}", plan.id()),
+                ));
+            }
+            None => {}
+        }
+        tx.execute(
+            "INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, \
+             expires_at, item_count, reclaimable_bytes, canonical_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                plan.id().as_str(),
+                plan.content_hash().as_str(),
+                serde_name(&plan.origin())?,
+                plan.scan_id().as_str(),
+                plan.created_unix(),
+                plan.expires_unix(),
+                int(plan.items().len() as u64)?,
+                int(self.reclaimable)?,
+                self.canonical,
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+/// See [`Store::pending_agent_plans`]. Machine and user come from the plan's canonical JSON
+/// (the record verified against its hash on every read).
+fn pending_agent_plans(conn: &Connection, machine_id: &str, user: &str, now: i64) -> Result<u64> {
+    let origin = serde_name(&PlanOrigin::Mcp)?;
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM plans p WHERE p.origin = ?1 AND ?2 < p.expires_at \
+         AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.plan_id = p.plan_id) \
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'approval_denied' \
+             AND e.source IN ('cli', 'desktop') \
+             AND json_extract(e.payload_json, '$.plan_id') = p.plan_id \
+             AND json_extract(e.payload_json, '$.reason') IN ('denied', 'wrong_code')) \
+         AND json_extract(p.canonical_json, '$.machine_id') = ?3 \
+         AND json_extract(p.canonical_json, '$.user') = ?4",
+        params![origin, now, machine_id, user],
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
 }
 
 /// Mark a running scan finished and insert its rollups (inside the caller's transaction).

@@ -63,7 +63,11 @@ fn child(dir: &Path) {
     for n in 3..50 {
         a.record_events(&[event("cli", n)]).unwrap();
     }
-    let alerts = a.events(EventKind::Alert, 0).unwrap().len();
+    let counts = a.event_counts().unwrap();
+    let alerts = counts
+        .iter()
+        .find(|c| c.kind == "alert")
+        .map_or(0, |c| c.rows);
     assert_eq!(alerts, 49 + 20, "A's 49 writes and B's 20 are all there");
 }
 

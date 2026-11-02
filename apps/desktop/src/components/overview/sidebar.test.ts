@@ -11,7 +11,6 @@ import QuickCleanCard from './QuickCleanCard.vue';
 import { DESIGN_CANDIDATES, designScenarioBridge } from './designScenario';
 import { daysDash } from './forecast';
 import {
-  QUICK_CLEAN_UNAVAILABLE,
   quickCleanFrame,
   quickCleanPreview,
   quickCleanTools,
@@ -76,12 +75,32 @@ describe('quick clean model', () => {
     expect(quickCleanFrame(tools, new Set(tools.map((t) => t.id)), 'idle', 0).button).toBe('Pick caches to clean');
   });
 
-  it('the stub simulates with the mock bridge and refuses with the real one', async () => {
+  it('simulates with the mock bridge; inside Tauri the core runs the ticked tools', async () => {
     const mock = createMockBridge();
     const r = await quickCleanPreview(mock, tools);
     expect(r.simulated).toBe(true);
     expect(r.freed).toBe(tools.reduce((a, t) => a + t.bytes, 0));
-    await expect(quickCleanPreview({ ...mock, kind: 'tauri' }, tools)).rejects.toThrow(QUICK_CLEAN_UNAVAILABLE);
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    let answer: unknown = {
+      operation_id: 'op_1',
+      tools: [{ item_id: tools[0]!.id, tool: 'npm', succeeded: true, cache_bytes_freed: 1000 }],
+      skipped: [],
+      predicted_bytes: 2000,
+      measured_delta_bytes: 990,
+    };
+    const t = {
+      invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ cmd, args });
+        return answer as T;
+      },
+      listen: async () => () => undefined,
+    };
+    const real = await quickCleanPreview({ ...mock, kind: 'tauri' }, tools, t);
+    expect(calls).toEqual([{ cmd: 'quick_clean', args: { items: tools.map((x) => x.id) } }]);
+    expect(real).toEqual({ freed: 1000, measured: 990, simulated: false });
+    // Nothing ran (no trusted tool, in use, ...): never a success.
+    answer = { operation_id: null, tools: [], skipped: [{ tool: 'npm', reason: 'in use' }], predicted_bytes: 0, measured_delta_bytes: null };
+    await expect(quickCleanPreview({ ...mock, kind: 'tauri' }, tools, t)).rejects.toThrow('Nothing was run (npm: in use)');
   });
 });
 
@@ -146,13 +165,14 @@ describe('quick clean card', () => {
     }
   });
 
-  it('the real app shows "not available" and deletes nothing', async () => {
+  it('inside Tauri a failed Quick Clean shows why and never a success', async () => {
+    // No Tauri IPC in the test: the call fails, and the card says so instead of animating.
     const bridge: ScullBridge = { ...createMockBridge(), kind: 'tauri' };
     const w = mount(QuickCleanCard, { props: { tools, bridge, reduced: true } });
     await w.get('[data-testid="qc-button"]').trigger('click');
     await w.get('[data-testid="qc-button"]').trigger('click');
     await flushPromises();
-    expect(w.get('[data-testid="qc-unavailable"]').text()).toContain('Nothing was deleted');
+    expect(w.get('[data-testid="qc-unavailable"]').text()).not.toBe('');
     expect(w.find('[data-testid="qc-done"]').exists()).toBe(false);
   });
 });

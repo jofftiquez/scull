@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::backup::utc_stamp;
-use crate::migrate::MIGRATIONS;
+use crate::migrate::{MIGRATIONS, Migration};
 use crate::{DefaultPermissions, SCHEMA_VERSION, Store, StoreError, StoreOptions, list_backups};
 use rusqlite::Connection;
 use std::path::Path;
@@ -11,13 +11,13 @@ use std::path::Path;
 const V2_TEST: &str = "CREATE TABLE test_v2 (x INTEGER NOT NULL) STRICT; \
                        INSERT INTO meta (key, value) VALUES ('migrated', 'v2');";
 
-fn migrations_with_v2() -> Vec<&'static str> {
+fn migrations_with_v2() -> Vec<Migration> {
     let mut m = MIGRATIONS.to_vec();
-    m.push(V2_TEST);
+    m.push(Migration::sql(V2_TEST));
     m
 }
 
-fn open_with(path: &Path, migrations: &[&str]) -> crate::Result<Store> {
+fn open_with(path: &Path, migrations: &[Migration]) -> crate::Result<Store> {
     Store::open_inner(
         path,
         &DefaultPermissions,
@@ -98,7 +98,9 @@ fn failed_migration_rolls_back_and_keeps_backup() {
     let path = dir.path().join(crate::DB_FILE_NAME);
     drop(open_with(&path, MIGRATIONS).unwrap());
     let mut broken = MIGRATIONS.to_vec();
-    broken.push("CREATE TABLE half (x INTEGER); THIS IS NOT SQL;");
+    broken.push(Migration::sql(
+        "CREATE TABLE half (x INTEGER); THIS IS NOT SQL;",
+    ));
     assert!(open_with(&path, &broken).is_err());
     // Still at the old version with no partial changes, and the backup exists.
     let s = open_with(&path, MIGRATIONS).unwrap();
@@ -177,9 +179,8 @@ fn fx_data_01_v1_database_upgrades_to_v2_with_backup() {
     let path = dir.path().join(crate::DB_FILE_NAME);
     v1_database(&path);
 
-    let s = open_with(&path, MIGRATIONS).unwrap();
+    let s = open_with(&path, &MIGRATIONS[..2]).unwrap();
     assert_eq!(s.schema_version().unwrap(), 2);
-    assert_eq!(SCHEMA_VERSION, 2);
     assert_eq!(s.backups_taken().len(), 1);
     let backup = s.backups_taken()[0].clone();
     let name = backup.file_name().unwrap().to_string_lossy().into_owned();
@@ -241,7 +242,7 @@ fn fx_data_01_v1_database_upgrades_to_v2_with_backup() {
     drop(s);
 
     // Reopening takes no further backup.
-    let again = open_with(&path, MIGRATIONS).unwrap();
+    let again = open_with(&path, &MIGRATIONS[..2]).unwrap();
     assert!(again.backups_taken().is_empty());
     assert_eq!(list_backups(&path).len(), 1);
 }
@@ -280,4 +281,339 @@ fn history_queries_use_indexes() {
          ORDER BY sampled_at, sample_id",
     );
     assert!(free.contains("free_space_samples_volume"), "{free}");
+}
+
+// ---- v2 → v3 (hash-chained audit) ----------------------------------------------------------
+
+/// A v2 database with a plan, two operations, and v1-style audit rows for the first.
+fn v2_database_with_audit(path: &Path) {
+    let s = open_with(path, &MIGRATIONS[..2]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 2);
+    s.conn
+        .execute_batch(&format!(
+            "INSERT INTO plans (plan_id, content_hash, origin, scan_id, created_at, expires_at, \
+               item_count, reclaimable_bytes, canonical_json) \
+             VALUES ('plan_P1', '{h}', 'cli', 'scan_S1', 1, 2, 1, 10, '{{}}'); \
+             INSERT INTO operations (operation_id, plan_id, content_hash, approver, method, \
+               started_at) VALUES ('op_O1', 'plan_P1', '{h}', 'dev', 'cli_tty', 100), \
+               ('op_O2', 'plan_P1', '{h}', 'dev', 'desktop', 200); \
+             INSERT INTO audit (operation_id, recorded_at, item_id, path, action, outcome, \
+               reason, predicted_bytes, measured_bytes) \
+             VALUES ('op_O1', 101, '{ITEM_A}', '/work/a/target', 'delete', 'succeeded', NULL, \
+                     10, 9), \
+                    ('op_O1', 102, NULL, NULL, NULL, 'operation_finished', NULL, NULL, NULL);",
+            h = "a".repeat(64)
+        ))
+        .unwrap();
+}
+
+#[test]
+fn fx_data_01_v2_database_upgrades_to_v3_with_backup_and_chains_legacy_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+
+    let s = open_with(&path, &MIGRATIONS[..3]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 3);
+    assert_eq!(s.backups_taken().len(), 1);
+    let backup = s.backups_taken()[0].clone();
+    let name = backup.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.ends_with("-v2"), "{name}");
+
+    // The backup is the untouched v2 database, v1 audit table included.
+    let b = Connection::open(&backup).unwrap();
+    let v: u32 = b
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, 2);
+    let old: i64 = b
+        .query_row("SELECT sum(measured_bytes) FROM audit", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(old, 9);
+
+    // The v1 rows are kept, frozen, and chained after a started row per operation.
+    let n = |sql: &str| -> i64 { s.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(n("SELECT count(*) FROM audit_v1"), 2);
+    let err = s
+        .conn
+        .execute(
+            "INSERT INTO audit_v1 (operation_id, recorded_at, outcome) VALUES ('op_O2', 1, 'x')",
+            [],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("frozen"), "{err}");
+    for sql in ["UPDATE audit_v1 SET outcome = 'x'", "DELETE FROM audit_v1"] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    let o1 = scull_core::OperationId::from_suffix("O1").unwrap();
+    let o2 = scull_core::OperationId::from_suffix("O2").unwrap();
+    let rows = s.audit_rows(&o1).unwrap();
+    let kinds: Vec<&str> = rows.iter().map(|r| r.body.kind.as_str()).collect();
+    assert_eq!(kinds, ["started", "legacy", "legacy"]);
+    assert_eq!(rows[1].body.outcome.as_deref(), Some("succeeded"));
+    assert_eq!(
+        (rows[1].body.predicted_bytes, rows[1].body.freed_bytes),
+        (Some(10), Some(9))
+    );
+    assert_eq!(rows[2].body.outcome.as_deref(), Some("operation_finished"));
+    assert_eq!(s.audit_rows(&o2).unwrap().len(), 1);
+    assert!(s.verify_all_chains().unwrap().is_empty());
+    let rec = s.operation(&o1).unwrap().unwrap();
+    assert_eq!((rec.started_at, rec.approver.as_str()), (100, "dev"));
+    s.check_integrity().unwrap();
+    drop(s);
+
+    // Reopening takes no further backup.
+    let again = open_with(&path, &MIGRATIONS[..3]).unwrap();
+    assert!(again.backups_taken().is_empty());
+    assert_eq!(list_backups(&path).len(), 1);
+}
+
+#[test]
+fn audit_queries_use_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("x.db"), &DefaultPermissions).unwrap();
+    let plan = |sql: &str| -> String {
+        let mut stmt = s
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        rows.join(" | ")
+    };
+    for sql in [
+        "SELECT op_seq, row_hash FROM audit WHERE operation_id = 'op_x' \
+         ORDER BY op_seq DESC LIMIT 1",
+        "SELECT * FROM audit WHERE operation_id = 'op_x' AND op_seq >= 0 ORDER BY op_seq, seq",
+        "SELECT operation_id FROM operations WHERE started_at >= 0 \
+         ORDER BY started_at, operation_id",
+    ] {
+        let p = plan(sql);
+        assert!(
+            !p.contains("SCAN audit") && !p.contains("SCAN operations"),
+            "{sql}: {p}"
+        );
+    }
+}
+
+// ---- v3 → v4 (operation targets, quarantine manifest facts) -------------------------------
+
+#[test]
+fn fx_data_01_v3_database_upgrades_to_v4_with_backup_and_keeps_old_manifest_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    {
+        // v3, with a manifest row written the v1 way (no identity facts).
+        let s = open_with(&path, &MIGRATIONS[..3]).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 3);
+        s.conn
+            .execute(
+                "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
+                 quarantine_path, bytes, quarantined_at) \
+                 VALUES ('op_O1', 'item', '/work/a/target', '/work/.scull-quarantine/op_O1/1', \
+                 10, 100)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let s = open_with(&path, &MIGRATIONS[..4]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 4);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v3"), "{name}");
+
+    // The old row is kept but can't be verified, so it is never offered for restore or purge.
+    let n: i64 = s
+        .conn
+        .query_row("SELECT count(*) FROM quarantine_manifest", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    assert!(s.quarantine_entries(None).unwrap().is_empty());
+    // Its recorded paths stay immutable under the v4 trigger, and rows are never deleted.
+    let err = s
+        .conn
+        .execute(
+            "UPDATE quarantine_manifest SET original_path = '/home/me/.ssh'",
+            [],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("immutable"), "{err}");
+    assert!(
+        s.conn
+            .execute("DELETE FROM quarantine_manifest", [])
+            .is_err()
+    );
+    // The new table exists and is append-only.
+    s.conn
+        .execute(
+            "INSERT INTO operation_targets (operation_id, item_id, identity, recorded_at) \
+             VALUES ('op_O1', 'item', '7:1', 1)",
+            [],
+        )
+        .unwrap();
+    for sql in [
+        "UPDATE operation_targets SET identity = '7:2'",
+        "DELETE FROM operation_targets",
+    ] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    assert!(s.verify_all_chains().unwrap().is_empty());
+    s.check_integrity().unwrap();
+    drop(s);
+    assert!(
+        open_with(&path, &MIGRATIONS[..4])
+            .unwrap()
+            .backups_taken()
+            .is_empty()
+    );
+}
+
+// ---- v4 → v5 (quarantine log) -------------------------------------------------------------
+
+#[test]
+fn fx_data_01_v4_database_upgrades_to_v5_with_backup_and_an_append_only_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    {
+        let s = open_with(&path, &MIGRATIONS[..4]).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO quarantine_manifest (operation_id, item_id, original_path, \
+                 quarantine_path, bytes, quarantined_at, entry_identity, entry_kind, \
+                 parent_identity, logical_bytes) VALUES ('op_O1', '0123456789abcdef0123456789abcdef', '/work/a/target', \
+                 '/work/.scull-quarantine/op_O1/0001', 10, 100, '7:1', 'dir', '7:2', 8)",
+                [],
+            )
+            .unwrap();
+    }
+    let mut s = open_with(&path, &MIGRATIONS[..5]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 5);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v4"), "{name}");
+    // The v4 entry is intact and loggable; the log is append-only.
+    let entry = s.quarantine_entries(None).unwrap();
+    assert_eq!(entry.len(), 1);
+    s.log_quarantine_event(&crate::QuarantineLogEntry {
+        entry_id: entry[0].entry_id,
+        recorded_at: 200,
+        event: crate::QuarantineEvent::RestoreRefused,
+        path: None,
+        reason: Some("identity_changed".into()),
+        bytes: None,
+    })
+    .unwrap();
+    assert_eq!(s.quarantine_log(entry[0].entry_id).unwrap().len(), 1);
+    for sql in [
+        "UPDATE quarantine_log SET reason = 'x'",
+        "DELETE FROM quarantine_log",
+    ] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    s.check_integrity().unwrap();
+}
+
+// ---- v5 → v6 (write-ahead journal) ---------------------------------------------------------
+
+#[test]
+fn fx_data_01_v5_database_upgrades_to_v6_with_backup_and_an_append_only_journal() {
+    use crate::{
+        ItemOutcome, ItemRecord, JournalAction, JournalClose, JournalCloseKind, JournalIntent,
+        TreeFingerprint,
+    };
+    use scull_core::{FileIdentity, FsPath, ItemId, OperationId};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::DB_FILE_NAME);
+    v2_database_with_audit(&path);
+    drop(open_with(&path, &MIGRATIONS[..5]).unwrap());
+    let mut s = open_with(&path, MIGRATIONS).unwrap();
+    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(s.schema_version().unwrap(), 6);
+    assert_eq!(s.backups_taken().len(), 1);
+    let name = s.backups_taken()[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.ends_with("-v5"), "{name}");
+    // op_O1 carries pre-v3 (legacy) rows and predates the journal; op_O2 never finished.
+    let op = OperationId::try_from("op_O2".to_owned()).unwrap();
+    assert_eq!(s.unfinished_operations().unwrap(), vec![op.clone()]);
+    let item = ItemId::try_from(ITEM_A.to_owned()).unwrap();
+    let intent = JournalIntent {
+        operation_id: op.clone(),
+        item_id: item.clone(),
+        action: JournalAction::Delete,
+        source_path: FsPath::from("/work/a/target"),
+        source_identity: FileIdentity::new(7, 1),
+        source_kind: "dir".into(),
+        source_parent: Some(FileIdentity::new(7, 2)),
+        destination: None,
+        destination_dir: None,
+        tree: Some(TreeFingerprint {
+            entries: 3,
+            bytes: 10,
+        }),
+        recorded_at: 300,
+    };
+    let seq = s.journal_intent(&intent).unwrap();
+    let steps = s.journal_steps(&op).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].intent, intent);
+    assert!(steps[0].close.is_none());
+    let close = |rec: Option<ItemRecord>| JournalClose {
+        kind: JournalCloseKind::Done,
+        recorded_at: 301,
+        outcome: rec,
+    };
+    // Only stable codes; a touched-nothing outcome can't carry bytes.
+    let mut bad = ItemRecord::new(item.clone(), 301, ItemOutcome::Skipped).with_reason("x y");
+    assert!(s.journal_close(seq, &close(Some(bad.clone()))).is_err());
+    bad.reason = Some("interrupted".into());
+    bad.freed_bytes = Some(5);
+    assert!(s.journal_close(seq, &close(Some(bad))).is_err());
+    let rec = ItemRecord::new(item.clone(), 301, ItemOutcome::Removed);
+    s.journal_close(seq, &close(Some(rec.clone()))).unwrap();
+    // Closed exactly once.
+    assert!(s.journal_close(seq, &close(Some(rec.clone()))).is_err());
+    assert_eq!(
+        s.journal_steps(&op).unwrap()[0].close,
+        Some(close(Some(rec)))
+    );
+    for sql in ["UPDATE journal SET reason = 'x'", "DELETE FROM journal"] {
+        let err = s.conn.execute(sql, []).unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    // A close must reference an intent of the same operation and item.
+    let err = s
+        .conn
+        .execute(
+            "INSERT INTO journal (operation_id, item_id, kind, intent_seq, recorded_at) \
+             VALUES ('op_O2', 'ffffffffffffffffffffffffffffffff', 'done', ?1, 1)",
+            [seq],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("must reference an intent"),
+        "{err}"
+    );
+    s.check_integrity().unwrap();
 }

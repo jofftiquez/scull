@@ -24,14 +24,25 @@
 //!    data directory, announced as "A 12 GB cleanup plan is ready to review: scull clean
 //!    --plan …" (see [`super::review_plan`]). Without a scan, the current plan is shown.
 //!
-//! Writes nothing but history rows, the plan record and the plan file, and never deletes
-//! anything: an alert points to a reviewed cleanup, it never performs one, and the plan is a
-//! proposal that only `scull clean --plan` (with revalidation and confirmation) could run.
-//! Exit code 0 whether or not alerts fired (alerts are data).
+//! 6. **Auto-policies** (PRO-10, D-11; off by default, see [`super::auto_policy`]): only when
+//!    the user enabled a policy in the user config file, no kill switch is set
+//!    (`--no-auto-policies`, `SCULL_NO_AUTO_POLICIES`, the `auto-policies.off` file, `paused`),
+//!    the file is writable only by them and the check is not elevated: idle S0 build outputs
+//!    from this check's scan are moved into quarantine (never deleted) through the Executor,
+//!    within the per-run and per-day caps, after a dry run the first time. Each run is an
+//!    audited operation (`scull history`, `scull restore`) and leaves a digest. They run before
+//!    the review plan is refreshed, which then leaves out what they moved.
+//!
+//! Without an enabled auto-policy it writes nothing but history rows, the plan record and the
+//! plan file, and never deletes or moves anything: an alert points to a reviewed cleanup, it
+//! never performs one, and the plan is a proposal that only `scull clean --plan` (with
+//! revalidation and confirmation) could run. Even with one, nothing is deleted: auto-policies
+//! only quarantine S0 items. Exit code 0 whether or not alerts fired (alerts are data).
 //!
 //! Not in this command yet: registering it with the OS scheduler and running at low priority
 //! (`scull schedule enable|disable`, #114).
 
+use super::auto_policy::{self, AutoPolicyReport};
 use super::forecast::ForecastReport;
 use super::pipeline::{self, CancelBridge};
 use super::review_plan::{self, ReviewPlanReport};
@@ -46,7 +57,7 @@ use crate::output::escape::escape_for_terminal;
 use crate::output::json::SchemaId;
 use schemars::JsonSchema;
 use scull_core::{ErrorKind, FsPath, ScanId, ScullError};
-use scull_engine::{ScanReport, ScanRequest};
+use scull_engine::{Engine, ScanReport, ScanRequest};
 use scull_proactive::{Alert, Confidence, ForecastState, ScanInput, Severity};
 use scull_storage::{AlertEvent, VolumeSample};
 use serde::Serialize;
@@ -73,6 +84,8 @@ pub struct CheckReport {
     pub alerts: Vec<Alert>,
     /// The ready-to-review reclaim plan (PRO-05), when one is current. Never executed.
     pub review_plan: Option<ReviewPlanReport>,
+    /// Opt-in auto-policies (PRO-10, D-11): `off` unless the user enabled one.
+    pub auto_policies: AutoPolicyReport,
 }
 
 /// The scan a check ran (or why it did not).
@@ -117,6 +130,10 @@ pub struct NotSampled {
 pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     let loaded = load_config(&[])?;
     let (scan_state, scanned) = light_scan(&loaded, args, ui)?;
+    let (scanned, watermark, engine, roots) = match scanned {
+        Some((r, w, e, roots)) => (Some(r), Some(w), Some(e), roots),
+        None => (None, None, None, Vec::new()),
+    };
     let now = scull_engine::now_unix();
     let dirs = scull_platform::app_dirs().map_err(|e| {
         ScullError::new(
@@ -177,25 +194,69 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
     if let Err(e) = store.record_alerts(&alert_events(&alerts)) {
         pipeline::warn(ui, &format!("alerts were not recorded in history: {e}"));
     }
-    let review_plan = match &scanned {
-        Some(r) => match review_plan::Binding::current(&dirs.data).and_then(|binding| {
-            review_plan::refresh(
-                &mut store,
-                &dirs.data,
-                &r.scan_id,
-                &r.candidates,
-                args.include_s1,
-                &binding,
-                now,
-            )
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                pipeline::warn(ui, &format!("no cleanup plan was prepared: {}", e.message));
-                None
-            }
+    // Opt-in auto-policies (D-11): off unless enabled in the user config file.
+    let auto_policies = auto_policy::run_in_check(
+        &loaded,
+        args.no_auto_policies,
+        match (&scanned, &engine, &watermark) {
+            (Some(r), Some(e), Some(w)) => Some(auto_policy::CheckScan {
+                id: &r.scan_id,
+                candidates: r.candidates.as_slice(),
+                engine: e,
+                roots: roots.as_slice(),
+                operations_watermark: w.clone(),
+            }),
+            _ => None,
         },
-        None => review_plan::current(&store, now),
+        &mut store,
+        ui,
+    );
+    drop(engine);
+    // What the policies moved is gone: the review plan leaves it out.
+    let moved = auto_policies.moved_items();
+    let remaining: Option<Vec<scull_core::Candidate>> = scanned.as_ref().map(|r| {
+        r.candidates
+            .iter()
+            .filter(|c| !moved.contains(&c.id))
+            .cloned()
+            .collect()
+    });
+    let review_plan = match (&scanned, watermark, &remaining) {
+        // SAFE-09 needs to know which operations ran after the scan started: without the
+        // watermark no plan is prepared from this scan (a previous one stays announced).
+        (Some(_), Some(Err(why)), _) => {
+            pipeline::warn(
+                ui,
+                &format!(
+                    "no cleanup plan was prepared: scull's database could not be read before \
+                     the scan, so later changes to the items could not be detected ({why})"
+                ),
+            );
+            review_plan::current(&store, now)
+        }
+        (Some(r), Some(Ok(watermark)), Some(remaining)) => {
+            match review_plan::Binding::current(&dirs.data).and_then(|binding| {
+                review_plan::refresh(
+                    &mut store,
+                    &dirs.data,
+                    &review_plan::ReviewScan {
+                        id: &r.scan_id,
+                        candidates: remaining,
+                        operations_watermark: watermark,
+                    },
+                    args.include_s1,
+                    &binding,
+                    now,
+                )
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    pipeline::warn(ui, &format!("no cleanup plan was prepared: {}", e.message));
+                    None
+                }
+            }
+        }
+        _ => review_plan::current(&store, now),
     };
     let report = CheckReport {
         now,
@@ -213,6 +274,7 @@ pub fn run(args: &CheckArgs, ui: &Ui) -> Result<(), ScullError> {
         forecasts: forecasts.iter().map(ForecastReport::from).collect(),
         alerts,
         review_plan,
+        auto_policies,
     };
     if ui.format.is_machine() {
         return emit_machine(ui.format, CHECK_SCHEMA, "check", &report);
@@ -242,6 +304,10 @@ pub fn alert_events(alerts: &[Alert]) -> Vec<AlertEvent> {
         .collect()
 }
 
+/// A check's scan, the SAFE-09 operations watermark taken before it started (or why it could
+/// not be read), the engine (kept for the auto-policies' revalidation) and the roots.
+type Scanned = (ScanReport, Result<u64, String>, Engine, Vec<PathBuf>);
+
 /// Scan the configured roots for the check (step 1 in the module docs). A root `scull scan`
 /// would refuse without a flag, or a scan that fails, is reported as skipped; Ctrl-C stops the
 /// check.
@@ -249,7 +315,7 @@ fn light_scan(
     loaded: &pipeline::Loaded,
     args: &CheckArgs,
     ui: &Ui,
-) -> Result<(CheckScan, Option<ScanReport>), ScullError> {
+) -> Result<(CheckScan, Option<Scanned>), ScullError> {
     if loaded.config.scan.roots.is_empty() {
         return Ok((CheckScan::NotConfigured, None));
     }
@@ -265,12 +331,17 @@ fn light_scan(
         Ok(e) => e,
         Err(e) => return Ok((skipped(e), None)),
     };
+    // SAFE-09: the last recorded operation before the scan starts, for the review plan built
+    // from it. If it can't be read, no review plan is prepared from this scan.
+    let watermark = scull_platform::app_dirs()
+        .map_err(|e| e.to_string())
+        .and_then(|d| scull_engine::open_history(&d.data).map_err(|e| e.to_string()))
+        .and_then(|s| s.operations_watermark().map_err(|e| e.to_string()));
     let bridge = CancelBridge::start();
     let mut req = ScanRequest::full().history(true);
     req.threads = loaded.config.scan.threads as usize;
     let result = engine.scan(&roots, &req, bridge.token(), pipeline::progress(ui));
     drop(bridge);
-    drop(engine);
     let report = match result {
         Ok(r) => r,
         Err(e) => return Ok((skipped(e), None)),
@@ -285,7 +356,7 @@ fn light_scan(
         entries_scanned: report.entries_scanned,
         allocated_bytes: report.totals.allocated.total(),
     };
-    Ok((state, Some(report)))
+    Ok((state, Some((report, watermark, engine, roots))))
 }
 
 fn store_error(e: scull_storage::StoreError) -> ScullError {
@@ -378,6 +449,7 @@ pub fn render(r: &CheckReport) -> String {
         out.push_str(
             "scull check: no volumes to check yet; run `scull scan <path>` or set `scan.roots`\n",
         );
+        out.push_str(&auto_policy::render(&r.auto_policies));
         return out;
     }
     out.push_str(&format!(
@@ -446,6 +518,7 @@ pub fn render(r: &CheckReport) -> String {
     if r.alerts.is_empty() {
         out.push_str("no alerts\n");
     }
+    out.push_str(&auto_policy::render(&r.auto_policies));
     if let Some(p) = &r.review_plan {
         out.push_str(&review_plan_line(p));
         out.push('\n');
@@ -540,6 +613,7 @@ mod tests {
                 0,
             )],
             review_plan: None,
+            auto_policies: AutoPolicyReport::off(),
         };
         let text = render(&r);
         let mut with_plan = r.clone();
@@ -579,6 +653,7 @@ mod tests {
             forecasts: vec![],
             alerts: vec![],
             review_plan: None,
+            auto_policies: AutoPolicyReport::off(),
         };
         assert!(render(&empty).contains("no volumes to check yet"));
         empty.scan = CheckScan::Skipped {

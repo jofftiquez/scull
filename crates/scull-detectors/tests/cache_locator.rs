@@ -126,6 +126,7 @@ fn plan_params() -> PlanParams {
         machine_id: "machine-a".into(),
         user: "me".into(),
         origin: PlanOrigin::Cli,
+        operations_watermark: None,
     }
 }
 
@@ -905,6 +906,14 @@ fn skip(fx: &mut Fixture) {
     check(fx, &plan_inputs(&[]));
 }
 
+/// [`skip`] for a symlink that could not be created: a failure in CI (symlinks are permitted
+/// on every CI runner), see `scull_fixtures::skip`.
+fn skip_symlink(fx: &mut Fixture, test: &str) {
+    let why = format!("symlinks are not permitted here: {:?}", fx.skipped());
+    skip(fx);
+    scull_fixtures::skip::skip(test, &why);
+}
+
 fn assert_link_skipped(c: &LocatedCache, link_rel: &str, root: &Path) -> Candidate {
     assert!(
         c.problems
@@ -928,7 +937,7 @@ fn fx_qc_04_cache_symlinked_to_unexpected_location() {
     let canary = fx.canary().symlink_target_dir.clone();
     fx.dir("home/.npm").unwrap();
     if fx.symlink("home/.npm/_cacache", &canary).unwrap() != LinkOutcome::Created {
-        return skip(&mut fx);
+        return skip_symlink(&mut fx, "fx_qc_04_cache_symlinked_to_unexpected_location");
     }
     fx.checkpoint().unwrap();
     let scan = locate(&env(&fx, Os::Linux, &[]));
@@ -945,7 +954,7 @@ fn fx_qc_04_folder_above_cache_symlinked_elsewhere() {
     fx.dir("home").unwrap();
     let target = fx.path("elsewhere/cache").unwrap();
     if fx.symlink("home/.cache", &target).unwrap() != LinkOutcome::Created {
-        return skip(&mut fx);
+        return skip_symlink(&mut fx, "fx_qc_04_folder_above_cache_symlinked_elsewhere");
     }
     fx.checkpoint().unwrap();
     let scan = locate(&env(&fx, Os::Linux, &[]));
@@ -1009,7 +1018,11 @@ impl Platform for OtherVolume {
 
 #[test]
 fn qc_05_cache_on_other_volume_is_skipped() {
-    if !identity_available() {
+    if !scull_fixtures::skip::require(
+        identity_available(),
+        "qc_05_cache_on_other_volume_is_skipped",
+        "no file identity on this platform",
+    ) {
         return;
     }
     let mut fx = Fixture::new().unwrap();

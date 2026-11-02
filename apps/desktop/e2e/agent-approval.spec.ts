@@ -118,3 +118,31 @@ test('plan changed (D-34): a target changing voids the whole MCP plan', async ({
   await expect(plan).toContainText('plan no longer matches the disk');
   await shot('agent-8-plan-changed');
 });
+
+test('notification: scull shows the request anywhere; Review opens it, never approves', async ({ page, shot }) => {
+  // `?agent=request`: the mock announces its pending request (inside Tauri the core's broker
+  // lists the plans an AI agent prepared through MCP).
+  await open(page, '/?agent=request');
+  const notice = page.getByRole('region', { name: 'Agent request' });
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole('heading')).toHaveText(/^Claude Code wants to clean \d/);
+  await expect(notice).toContainText('5 items · plan 9c41·e07b · decide within');
+  await expect(notice).toContainText('Nothing runs until you approve in scull.');
+  // No Approve or Deny here: approving needs the full plan, every item reviewed and the code.
+  await expect(notice.getByRole('button')).toHaveText(['Review', 'Later']);
+  await shot('agent-0-notification', { show: notice });
+
+  await notice.getByRole('button', { name: 'Review' }).click();
+  await expect(page).toHaveURL(new RegExp(`/cleanup\\?request=${PLAN}`));
+  await expect(page.getByTestId('code')).toHaveText(CODE);
+  await expect(approve(page)).toHaveAttribute('aria-disabled', 'true');
+  await expect(notice).toHaveCount(0);
+
+  // Still undecided, so a fresh window shows it again (Review hid it in this one); Later hides
+  // it for this request.
+  await open(page, '/projects?agent=request');
+  await page.reload();
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Later' }).click();
+  await expect(notice).toHaveCount(0);
+});

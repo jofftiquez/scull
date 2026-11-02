@@ -184,6 +184,15 @@ pub fn create_file_owner_only(path: &Path) -> Result<File> {
         .map_err(|e| PlatformError::from_io(Operation::CreateFile, path, e))
 }
 
+/// Opens the existing regular file at `path` for reading **without following a link** at its
+/// last component (Unix `O_NOFOLLOW`; Windows `FILE_FLAG_OPEN_REPARSE_POINT`, a reparse point is
+/// refused), and returns it with the identity read from the opened handle. Used to read a file
+/// scull wrote itself (the headroom reserve's marker) knowing it is that object.
+pub fn open_file_no_follow(path: &Path) -> Result<(File, Option<scull_core::FileIdentity>)> {
+    native::open_file_no_follow(path)
+        .map_err(|e| PlatformError::from_io(Operation::OpenFile, path, e))
+}
+
 /// Creates one directory at `path` (the parent must exist) with owner-only permissions at
 /// creation. Fails with [`io::ErrorKind::AlreadyExists`] if anything exists at `path`,
 /// including a symlink, which is never followed.
@@ -249,4 +258,18 @@ pub fn ensure_owner_only(path: &Path) -> Result<()> {
             ErrorKind::NotOwnerOnly { exposures },
         ))
     }
+}
+
+/// Whether `path` (not followed) carries an extended ACL its permission bits don't show:
+/// macOS ACLs (`chmod +a`, `ls -le`), of any kind, allow or deny. `false` on Linux (a POSIX
+/// ACL's mask shows in the group bits, see [`ensure_owner_only`]) and on Windows (the DACL is
+/// what [`ensure_owner_only`] reads). For callers that must be sure no other account can write
+/// an entry (the auto-policy config check, P5-PRO-02) and so treat any such ACL as a grant.
+///
+/// # Errors
+///
+/// [`Operation::CheckPermissions`] with the I/O error (e.g. the path does not exist).
+pub fn has_extended_acl(path: &Path) -> Result<bool> {
+    native::has_extended_acl(path)
+        .map_err(|e| PlatformError::from_io(Operation::CheckPermissions, path, e))
 }

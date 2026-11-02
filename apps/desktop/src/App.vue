@@ -5,7 +5,9 @@
 import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue';
 import { START_LOCATION, useRoute, useRouter } from 'vue-router';
 import AppSidebar from './components/shell/AppSidebar.vue';
+import AgentRequestNotice from './components/review/AgentRequestNotice.vue';
 import { useBridge } from './bridge';
+import { openRequestRoute, usePlanBridge } from './bridge/plan';
 import { shell } from './state/shell';
 import { core, refresh } from './state/core';
 import { needsOnboarding } from './components/onboarding/model';
@@ -16,8 +18,16 @@ import { monitorControlFor } from './monitor/control';
 import { startMonitorSync } from './monitor/prefs';
 
 const bridge = useBridge();
+const plans = usePlanBridge();
 const route = useRoute();
 const router = useRouter();
+// `scull://approve/<plan-id>` (Tauri): open Cleanup Review on that agent request, unless one is
+// open already. A link only navigates; approving still needs the review and the typed code.
+const stopLinks = plans.onOpenRequest((planId) => {
+  const to = openRequestRoute(route, planId);
+  if (to) void router.push(to);
+});
+onBeforeUnmount(stopLinks);
 // WCAG 2.4.2 / 2.4.3: each screen has its own title, and after a navigation focus moves to the
 // new screen's <main> so keyboard and screen-reader users start there (not on the old link).
 watch(
@@ -83,5 +93,6 @@ onMounted(async () => {
     </a>
     <AppSidebar v-if="!route.meta.bare" :version="shell.version" :counts="shell.counts" />
     <RouterView />
+    <AgentRequestNotice v-if="!route.meta.bare" />
   </div>
 </template>

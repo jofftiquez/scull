@@ -288,6 +288,25 @@ pub(super) fn create_file_owner_only(path: &Path) -> io::Result<fs::File> {
         .open(path)
 }
 
+/// `open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)`, then `fstat` on the descriptor:
+/// a symlink at `path` fails (`ELOOP`), anything but a regular file is refused, and the
+/// identity comes from the opened descriptor (not from a second path lookup).
+pub(super) fn open_file_no_follow(path: &Path) -> io::Result<(fs::File, Option<FileIdentity>)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let md = f.metadata()?;
+    if !md.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok((f, Some(FileIdentity::new(md.dev(), u128::from(md.ino())))))
+}
+
 /// `fchmod(fd, mode & 0700)` on a descriptor opened with `O_NOFOLLOW | O_NONBLOCK`: a symlink
 /// fails to open instead of being followed, and nothing blocks. Only regular files and
 /// directories are opened (checked with `lstat` first, SAFE-18), and the opened descriptor
@@ -346,6 +365,19 @@ pub(super) fn owner_only_exposures(path: &Path) -> io::Result<Vec<crate::Exposur
         });
     }
     Ok(exposures)
+}
+
+/// Whether `path` carries an extended ACL that permission bits don't show: macOS ACLs. On Linux
+/// a POSIX ACL's mask is reflected in the group bits, which [`owner_only_exposures`] checks.
+#[cfg(target_os = "macos")]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    macos::has_extended_acl(path)
+}
+
+/// See the macOS version.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    fs::symlink_metadata(path).map(|_| false)
 }
 
 /// Known folders are a Windows concept.

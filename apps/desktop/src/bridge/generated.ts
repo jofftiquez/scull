@@ -2,20 +2,6 @@
 // Do not edit by hand.
 
 /**
- * Which bridge implementation answered.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "BridgeKind".
- */
-export type BridgeKind = "tauri" | "mock";
-/**
- * Operating system family.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Os".
- */
-export type Os = "macos" | "windows" | "linux" | "unknown";
-/**
  * The action proposed for a candidate.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -260,6 +246,36 @@ export type RegenerationCost =
  */
 export type Confidence = "high" | "medium" | "low" | "unknown";
 /**
+ * What happened to one item when the agent executed the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentItemOutcome".
+ */
+export type AgentItemOutcome =
+  "removed" | "quarantined" | "moved_to_trash" | "tool_run" | "partial" | "failed" | "refused" | "skipped" | "unknown";
+/**
+ * Where an agent plan stands, as the desktop shows it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentPlanState".
+ */
+export type AgentPlanState =
+  "awaiting_approval" | "denied" | "approved" | "running" | "executed" | "voided" | "expired" | "revoked";
+/**
+ * Which bridge implementation answered.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "BridgeKind".
+ */
+export type BridgeKind = "tauri" | "mock";
+/**
+ * Operating system family.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Os".
+ */
+export type Os = "macos" | "windows" | "linux" | "unknown";
+/**
  * Kinds of [`Issue`].
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -292,6 +308,13 @@ export type ElevationView = "elevated" | "not_elevated" | "unknown";
  * via the `definition` "HistoryState".
  */
 export type HistoryState = "present" | "not_created" | "off";
+/**
+ * What happened to one item of a run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RunItemOutcome".
+ */
+export type RunItemOutcome = "deleted" | "quarantined" | "trashed" | "skipped";
 /**
  * What kind of storage a volume is (mirrors [`VolumeKind`]).
  *
@@ -775,6 +798,21 @@ export type Observed2 =
       status: "unknown";
     };
 /**
+ * A duration: a whole number followed by s, m, h, d or w (e.g. "24h").
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DurationSpec".
+ */
+export type DurationSpec = string;
+/**
+ * What an auto-policy may clean. Deliberately small: there is no kind for S1–S3 items,
+ * package caches, worktrees or Docker data (D-11).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoKind".
+ */
+export type AutoKind = "build_outputs";
+/**
  * When to use color in terminal output.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -788,13 +826,6 @@ export type ColorChoice = "auto" | "always" | "never";
  * via the `definition` "SizeUnits".
  */
 export type SizeUnits = "binary" | "decimal";
-/**
- * A duration: a whole number followed by s, m, h, d or w (e.g. "24h").
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DurationSpec".
- */
-export type DurationSpec = string;
 /**
  * State of the user config file.
  *
@@ -816,6 +847,13 @@ export type DbState = "ok" | "missing" | "empty" | "newer_schema" | "needs_migra
  * via the `definition` "OwnFileKind".
  */
 export type OwnFileKind = "database" | "wal" | "shm" | "backup" | "damaged";
+/**
+ * What the reserve looks like now.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomState".
+ */
+export type HeadroomState = "none" | "ready" | "missing" | "changed" | "unreadable" | "unrecorded";
 /**
  * Where an effective config value came from.
  *
@@ -851,9 +889,19 @@ export type StatusState = "ok" | "no_scan" | "no_database" | "unavailable";
  * Every payload of the desktop bridge, by type name.
  */
 export interface BridgePayloads {
+  AgentApprovalRequest: AgentApprovalRequest;
+  AgentApproved: AgentApproved;
+  AgentDenied: AgentDenied;
+  AgentPlanStatus: AgentPlanStatus;
+  AgentRequests: AgentRequests;
+  AgentRevoked: AgentRevoked;
   AppInfo: AppInfo;
   CachesReport: CachesReport;
   CapabilitiesReport: CapabilitiesReport;
+  DesktopPlan: DesktopPlan;
+  DesktopQuickClean: DesktopQuickClean;
+  DesktopRestore: DesktopRestore;
+  DesktopRun: DesktopRun;
   Drives: Drives;
   ScullError: ScullError;
   FootprintHistory: FootprintHistory;
@@ -875,51 +923,62 @@ export interface BridgePayloads {
   WorktreesView: WorktreesView;
 }
 /**
- * Which bridge answers, and about what (`app_info` command).
+ * An agent plan opened for approval: the plan exactly as the broker verified it, and the
+ * code to show.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AppInfo".
+ * via the `definition` "AgentApprovalRequest".
  */
-export interface AppInfo {
-  bridge: BridgeKind;
-  os: Os;
+export interface AgentApprovalRequest {
   /**
-   * scull version of the core.
+   * Wrong codes still accepted before this opening closes.
    */
-  version: string;
+  attempts_left: number;
+  /**
+   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
+   * **unverified**, display only). `None` when unknown.
+   */
+  client?: string | null;
+  /**
+   * The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types
+   * it back. It is valid for this opening of the dialog only and never leaves this machine.
+   */
+  code: string;
+  /**
+   * Content hash (send it back with the approval).
+   */
+  content_hash: string;
+  /**
+   * When the agent prepared it (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires unapproved; an approval lapses at the same time (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * Every item, in plan order.
+   */
+  items: AgentPlanItem[];
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
 }
 /**
- * Result of locating package-manager caches (`scull caches`).
+ * One item of an agent plan as the human reviews it.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CachesReport".
+ * via the `definition` "AgentPlanItem".
  */
-export interface CachesReport {
+export interface AgentPlanItem {
+  candidate: Candidate;
   /**
-   * `true` when the user cancelled while sizing.
+   * `true`: evidence, reasons, flags and sizes come from this app's last scan, which found
+   * the same item (same ID, identity, path, tier, action and rule). `false`: only what the
+   * plan recorded is known; flags are unknown (never "no") and there is no evidence to show.
    */
-  cancelled: boolean;
-  /**
-   * One candidate per cache found (category `package_cache`).
-   */
-  candidates: Candidate[];
-  /**
-   * Places that could not be read.
-   */
-  issues: Issue[];
-  /**
-   * Unix time (seconds) of the measurement.
-   */
-  measured_at: number;
-  /**
-   * Tools whose cache location was refused (QC-05); nothing of them is offered.
-   */
-  refused: RefusedCacheReport[];
-  /**
-   * Signals this run could not observe.
-   */
-  signals_unavailable: SignalUnavailable[];
-  totals: Totals;
+  from_last_scan: boolean;
 }
 /**
  * A detected item with a risk tier and evidence. This is the unit the preview shows, plans
@@ -1094,6 +1153,256 @@ export interface Reclaimable {
    * this item will not free while the other links remain.
    */
   shared_bytes?: number;
+}
+/**
+ * The human approved the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentApproved".
+ */
+export interface AgentApproved {
+  /**
+   * When the unused approval lapses (Unix seconds).
+   */
+  approval_expires_at: number;
+  /**
+   * When (Unix seconds).
+   */
+  approved_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * The human denied the plan.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentDenied".
+ */
+export interface AgentDenied {
+  /**
+   * When (Unix seconds).
+   */
+  denied_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * The status of an agent plan. Contains no code and nothing that can approve anything.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentPlanStatus".
+ */
+export interface AgentPlanStatus {
+  /**
+   * When it was approved.
+   */
+  approved_at?: number | null;
+  /**
+   * How it was approved: `terminal` or `desktop`.
+   */
+  channel?: string | null;
+  /**
+   * How, when denied: `denied` (the human said no) or `wrong_code` (typed wrong too often).
+   */
+  denial_reason?: string | null;
+  /**
+   * When a human denied it.
+   */
+  denied_at?: number | null;
+  /**
+   * The execution, once the agent started it.
+   */
+  operation?: AgentOperation | null;
+  /**
+   * When the plan expires (Unix seconds).
+   */
+  plan_expires_at: number;
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+  state: AgentPlanState;
+  /**
+   * When the approval was used (executed, voided or revoked).
+   */
+  used_at?: number | null;
+}
+/**
+ * The agent's execution of the plan, as recorded by the Executor.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentOperation".
+ */
+export interface AgentOperation {
+  /**
+   * When it finished (Unix seconds); `None` while running.
+   */
+  finished_at?: number | null;
+  /**
+   * Bytes freed (sum of the items).
+   */
+  freed_bytes: number;
+  /**
+   * Item outcomes recorded so far, in order.
+   */
+  items: AgentItemResult[];
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * Bytes moved aside.
+   */
+  moved_bytes: number;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+  /**
+   * When it started (Unix seconds).
+   */
+  started_at: number;
+}
+/**
+ * One recorded item outcome of the agent's execution.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentItemResult".
+ */
+export interface AgentItemResult {
+  /**
+   * Bytes freed.
+   */
+  freed_bytes: number;
+  /**
+   * Plan item.
+   */
+  item_id: string;
+  /**
+   * Bytes moved aside (quarantine, Trash).
+   */
+  moved_bytes: number;
+  outcome: AgentItemOutcome;
+  /**
+   * Stable reason code (skipped, refused, failed).
+   */
+  reason?: string | null;
+}
+/**
+ * Agent plans waiting for the human, newest first.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRequests".
+ */
+export interface AgentRequests {
+  /**
+   * The requests (empty without a database or machine ID).
+   */
+  requests: AgentRequest[];
+}
+/**
+ * An agent plan waiting for the human, for the pending-requests notice.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRequest".
+ */
+export interface AgentRequest {
+  /**
+   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
+   * **unverified**, display only). `None` when unknown.
+   */
+  client?: string | null;
+  /**
+   * Content hash the approval will be bound to.
+   */
+  content_hash: string;
+  /**
+   * When the agent prepared it (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires unapproved (Unix seconds).
+   */
+  expires_at: number;
+  /**
+   * Items in the plan.
+   */
+  item_count: number;
+  /**
+   * Plan ID (open it with `open_approval_request`).
+   */
+  plan_id: string;
+  /**
+   * Bytes the plan predicts it frees.
+   */
+  reclaimable_bytes: number;
+}
+/**
+ * The human revoked the approval before the agent used it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AgentRevoked".
+ */
+export interface AgentRevoked {
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+  /**
+   * When (Unix seconds).
+   */
+  revoked_at: number;
+}
+/**
+ * Which bridge answers, and about what (`app_info` command).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AppInfo".
+ */
+export interface AppInfo {
+  bridge: BridgeKind;
+  os: Os;
+  /**
+   * scull version of the core.
+   */
+  version: string;
+}
+/**
+ * Result of locating package-manager caches (`scull caches`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CachesReport".
+ */
+export interface CachesReport {
+  /**
+   * `true` when the user cancelled while sizing.
+   */
+  cancelled: boolean;
+  /**
+   * One candidate per cache found (category `package_cache`).
+   */
+  candidates: Candidate[];
+  /**
+   * Places that could not be read.
+   */
+  issues: Issue[];
+  /**
+   * Unix time (seconds) of the measurement.
+   */
+  measured_at: number;
+  /**
+   * Tools whose cache location was refused (QC-05); nothing of them is offered.
+   */
+  refused: RefusedCacheReport[];
+  /**
+   * Signals this run could not observe.
+   */
+  signals_unavailable: SignalUnavailable[];
+  totals: Totals;
 }
 /**
  * Something the scan could not read or did not descend into.
@@ -1279,6 +1588,208 @@ export interface SignalView {
    * Stable name.
    */
   name: string;
+}
+/**
+ * A Cleanup Review plan as the human reviews it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopPlan".
+ */
+export interface DesktopPlan {
+  /**
+   * Content hash; send it back to execute.
+   */
+  content_hash: string;
+  /**
+   * When it was made (Unix seconds).
+   */
+  created_at: number;
+  /**
+   * When it expires (Unix seconds; D-25: 1 hour).
+   */
+  expires_at: number;
+  /**
+   * Every item that may be cleaned, as the last scan classified it (S0, S1, S2).
+   */
+  items: Candidate[];
+  /**
+   * What scull left out on purpose: S3 and items with no cleanup action.
+   */
+  left_out: LeftOut[];
+  /**
+   * Plan ID.
+   */
+  plan_id: string;
+}
+/**
+ * An item scull doesn't clean.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "LeftOut".
+ */
+export interface LeftOut {
+  /**
+   * Its path.
+   */
+  path: string;
+  /**
+   * Why.
+   */
+  reason: string;
+  tier: Tier;
+}
+/**
+ * The result of a Quick Clean.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopQuickClean".
+ */
+export interface DesktopQuickClean {
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * The recorded operation, when anything ran.
+   */
+  operation_id?: string | null;
+  /**
+   * Bytes the caches held before (estimate).
+   */
+  predicted_bytes: number;
+  /**
+   * Tools not run, with the reason (`not trusted`, `in use`, ...).
+   */
+  skipped: QuickCleanSkip[];
+  /**
+   * The tools that ran.
+   */
+  tools: QuickCleanTool[];
+}
+/**
+ * A tool Quick Clean didn't run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuickCleanSkip".
+ */
+export interface QuickCleanSkip {
+  /**
+   * Why, for display.
+   */
+  reason: string;
+  /**
+   * The tool.
+   */
+  tool: string;
+}
+/**
+ * One tool Quick Clean ran.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuickCleanTool".
+ */
+export interface QuickCleanTool {
+  /**
+   * Bytes the cache shrank by, when measured.
+   */
+  cache_bytes_freed?: number | null;
+  /**
+   * The cache's candidate (the Quick Clean chip).
+   */
+  item_id?: string | null;
+  /**
+   * Whether its command succeeded.
+   */
+  succeeded: boolean;
+  /**
+   * The tool (`npm`, `pnpm`, ...).
+   */
+  tool: string;
+}
+/**
+ * A restored quarantine entry.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopRestore".
+ */
+export interface DesktopRestore {
+  /**
+   * `true` when it had already been restored (nothing moved now).
+   */
+  already: boolean;
+  /**
+   * Where it is now.
+   */
+  restored_to: string;
+  /**
+   * `true` when the original path was taken and a `.scull-restored-<n>` sibling was used.
+   */
+  sibling: boolean;
+}
+/**
+ * The result of a Cleanup Review run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopRun".
+ */
+export interface DesktopRun {
+  /**
+   * Whether the run stopped early.
+   */
+  cancelled: boolean;
+  /**
+   * When it finished (Unix seconds).
+   */
+  finished_at: number;
+  /**
+   * Every item, in plan order.
+   */
+  items: RunItem[];
+  /**
+   * Free space after minus before, when measured.
+   */
+  measured_delta_bytes?: number | null;
+  /**
+   * Bytes moved aside.
+   */
+  moved_bytes: number;
+  /**
+   * The recorded operation (`scull history <id>`).
+   */
+  operation_id: string;
+  /**
+   * The plan that ran (the reviewed one, or the chosen subset of it).
+   */
+  plan_id: string;
+  /**
+   * Bytes the plan predicted.
+   */
+  predicted_bytes: number;
+}
+/**
+ * One item of a run.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "RunItem".
+ */
+export interface RunItem {
+  /**
+   * Bytes freed (the planned estimate for a completed delete).
+   */
+  freed_bytes: number;
+  /**
+   * Plan item.
+   */
+  item_id: string;
+  /**
+   * Bytes moved aside (quarantine, Trash).
+   */
+  moved_bytes: number;
+  outcome: RunItemOutcome;
+  /**
+   * Stable reason code when not cleaned (or only partly).
+   */
+  reason?: string | null;
 }
 /**
  * One volume in the drives widget. Unknown sizes are `null`, never 0.
@@ -1549,8 +2060,9 @@ export interface VolumeSampleView {
  */
 export interface HistoryView {
   /**
-   * Whether this build of the core can read operations and their audit chain. `false`
-   * before the Phase 2 audit API: the list is then empty by construction.
+   * Whether this build of the core can read operations and their audit chain (always
+   * `true` since the Phase 2 audit API; `false` only from a build without it, whose list
+   * is empty by construction).
    */
   audit_api: boolean;
   /**
@@ -2526,12 +3038,67 @@ export interface SettingsView {
  * via the `definition` "Config".
  */
 export interface Config {
+  auto?: AutoConfig;
   forge?: ForgeConfig;
   mcp?: McpConfig;
   output?: OutputConfig;
   proactive?: ProactiveConfig;
+  quarantine?: QuarantineConfig;
   rules?: RulesConfig;
   scan?: ScanConfig;
+}
+/**
+ * `[auto]` in the user config file: opt-in unattended auto-policies (PRO-10, D-11), read from
+ * that file only and off unless a policy says `enabled = true`. Only S0 build outputs, only
+ * into quarantine, within the caps below.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoConfig".
+ */
+export interface AutoConfig {
+  /**
+   * At most this many GiB within any 24 hours, across all policies and runs.
+   */
+  max_gib_per_day?: number;
+  /**
+   * At most this many GiB per run, across all policies.
+   */
+  max_gib_per_run?: number;
+  /**
+   * At most this many items per run, across all policies.
+   */
+  max_items_per_run?: number;
+  /**
+   * Kill switch: `true` stops every policy.
+   */
+  paused?: boolean;
+  /**
+   * The policies, each off unless it says `enabled = true`.
+   */
+  policy?: AutoPolicy[];
+}
+/**
+ * One auto-policy (`[[auto.policy]]`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AutoPolicy".
+ */
+export interface AutoPolicy {
+  /**
+   * Off unless `true`.
+   */
+  enabled?: boolean;
+  every: DurationSpec;
+  idle: DurationSpec;
+  kind: AutoKind;
+  /**
+   * A unique name (letters, digits, `.`, `_`, `-`; at most 64 characters).
+   */
+  name: string;
+  /**
+   * Only items inside one of these folders (`~` allowed). Empty: anywhere in `scan.roots`.
+   */
+  under?: string[];
 }
 /**
  * Git forge lookups, e.g. for squash-merge detection. Off by default (D-9).
@@ -2565,9 +3132,20 @@ export interface McpConfig {
    */
   hash_names?: boolean;
   /**
+   * Most agent plans awaiting approval (unexpired, unapproved) per machine and user; a
+   * `prepare_cleanup` beyond it is refused (`too_many_pending_plans`). File-only setting;
+   * `0` counts as `1`.
+   */
+  max_pending_plans?: number;
+  /**
    * Maximum number of results per tool call.
    */
   max_results?: number;
+  /**
+   * Most `prepare_cleanup` calls per minute in one MCP session; more are refused
+   * (`rate_limited`). File-only setting; `0` counts as `1`.
+   */
+  prepare_per_minute?: number;
   /**
    * Replace the home directory prefix with `~` in results (on by default, PRD §13.5).
    */
@@ -2667,6 +3245,47 @@ export interface Budget {
   path?: string | null;
 }
 /**
+ * Where the quarantine lives (P2-EXEC-13; PRD §10.6, D-3).
+ *
+ * By default the quarantine of a volume is `<base>/.scull-quarantine/`, where `<base>` is
+ * chosen automatically: the shallowest directory above the item, on its volume, that the
+ * current user owns (usually the home directory). These settings replace that choice:
+ *
+ * ```toml
+ * [quarantine]
+ * base = "~/.scull-q"                       # for items on the volume holding this directory
+ *
+ * [quarantine.bases]                        # per volume: longest matching prefix wins
+ * "/Volumes/Data" = "/Volumes/Data/me/.q"
+ * "D:\\" = "D:\\Users\\me\\q"
+ * ```
+ *
+ * * For an item, the entry of `bases` whose key is the longest path prefix of the item's path
+ *   applies; otherwise `base`; otherwise the automatic choice.
+ * * A configured base must be on the **same volume** as the item. If it isn't, that item is
+ *   not quarantined there: it falls back to the Trash (when enabled), else it is blocked. It
+ *   is never moved across volumes and never deleted instead.
+ * * The base is created owner-only (`0700` / protected DACL) when missing, must be a real
+ *   directory (not a link) and must not be inside an item being cleaned; the
+ *   `.scull-quarantine` folder inside it is created and checked owner-only.
+ * * Repository files (`.scull.toml`) can't set these (CFG-03).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "QuarantineConfig".
+ */
+export interface QuarantineConfig {
+  /**
+   * Directory that holds `.scull-quarantine` for items on its volume. `None`: automatic.
+   */
+  base?: string | null;
+  /**
+   * Per volume (or any directory): items under the key use the value as their base.
+   */
+  bases?: {
+    [k: string]: string | undefined;
+  };
+}
+/**
  * Optional (user or community) rules. Disabled until enabled here (CLS-04).
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -2737,6 +3356,11 @@ export interface DataInfo {
    * Their total size in bytes.
    */
   footprint_bytes: number;
+  /**
+   * The emergency headroom file (PRO-06, off by default; `None` without a data
+   * directory). Read-only here: `scull headroom create|release` changes it.
+   */
+  headroom?: HeadroomStatus | null;
 }
 /**
  * The database, from its header.
@@ -2779,6 +3403,72 @@ export interface OwnFile {
    * Where it is.
    */
   path: string;
+}
+/**
+ * The reserve's status (`scull headroom status`, `scull status`, the desktop).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomStatus".
+ */
+export interface HeadroomStatus {
+  /**
+   * Why it isn't ready, in one sentence.
+   */
+  detail?: string | null;
+  /**
+   * The manifest, when it could be read.
+   */
+  manifest?: HeadroomManifest | null;
+  /**
+   * The reserve's path.
+   */
+  path: string;
+  /**
+   * Bytes releasing it would free now (its allocated size), when [`HeadroomState::Ready`].
+   */
+  releasable_bytes?: number | null;
+  state: HeadroomState;
+}
+/**
+ * What scull recorded when it created the reserve.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "HeadroomManifest".
+ */
+export interface HeadroomManifest {
+  /**
+   * Its allocated size when created (bytes): the space it really holds.
+   */
+  allocated_bytes: number;
+  /**
+   * When it was created (Unix seconds).
+   */
+  created_at: number;
+  identity: FileIdentity;
+  /**
+   * The random marker written as its first [`MARKER_LEN`] bytes, lowercase hex.
+   */
+  marker: string;
+  /**
+   * Its modification time when created (Unix seconds), when the OS reports one.
+   */
+  mtime_unix?: number | null;
+  /**
+   * The reserve, relative to the data directory (always [`reserve_relative`]).
+   */
+  relative: string;
+  /**
+   * Its logical size (bytes).
+   */
+  size_bytes: number;
+  /**
+   * Format version ([`MANIFEST_VERSION`]).
+   */
+  version: number;
+  /**
+   * The volume it is on (mount point).
+   */
+  volume_id: string;
 }
 /**
  * `status`: the header's freshness line and the nav figures come from here.

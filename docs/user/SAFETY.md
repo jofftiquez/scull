@@ -1,0 +1,377 @@
+# How scull keeps your files safe
+
+scull deletes files, so safety comes first. This page explains, in plain language, what scull
+will and won't do. The architecture is described in [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+## The short version
+
+* **Looking is free.** `scan`, `projects`, `worktrees`, `caches`, `large-files`, `history`
+  and `status` only read. They never change your disk.
+* **Nothing happens without your say-so.** Every cleanup starts as a dry run. scull acts only
+  on a plan you reviewed, and only after you confirm it.
+* **Source code and Git history are off-limits.** Anything tracked by Git is protected.
+* **Most cleanups can be undone.** Uncertain or costly items go into quarantine for 7 days,
+  and `scull restore` puts them back. Only regenerable items (S0) are deleted outright, and
+  you can rebuild those.
+* **Nothing is ever deleted for good behind your back.** When scull can't quarantine an
+  item, it tries the Trash, and failing that it leaves the item alone.
+* **An AI agent can't approve a cleanup.** The MCP server is read-only unless you turn on
+  destructive mode. Even then an agent can only prepare a plan; it runs after you approve it
+  yourself, in your own terminal or in the desktop app. An AI tool call is not your consent.
+* **Nothing runs unattended unless you opt in.** Scheduled checks, the desktop's monitor and
+  `scull ask` only read and notify. The one exception is an auto-policy you enable in your
+  config file: it moves idle S0 build outputs into quarantine, never deletes them (see
+  [Auto-policies](#auto-policies-opt-in-s0-only-quarantine-only)).
+* **No telemetry.** Everything stays on your machine.
+
+## Risk tiers
+
+scull puts every item it finds into one of four tiers. The tier decides whether scull may
+touch the item and how.
+
+| Tier | Name | Meaning | Selected by default? | What a cleanup does |
+|---|---|---|---|---|
+| **S0** | Regenerable | A verified build output you can rebuild from files you have (e.g. `target/` next to `Cargo.toml` and `Cargo.lock`) | Yes, for review; never run without confirmation | Deleted. Rebuilding is the undo. |
+| **S1** | Costly | Reproducible, but slow or large to rebuild or re-download | No: opt in with `--include-s1` | Quarantined (restorable for 7 days) |
+| **S2** | Uncertain | Ownership, activity or reproducibility is unclear | Never: name each item with `--item` | Quarantined or moved to the Trash only |
+| **S3** | Protected | Might hold unique data, is in use, or you protected it | Never | Nothing. scull won't touch it. |
+
+### Telling tiers apart
+
+Color is never the only cue. Every view pairs it with a word or a pattern.
+
+| Tier | Terminal | Desktop and charts |
+|---|---|---|
+| S0 | `S0 regenerable`, bold magenta | solid violet (`#7C4DFF`) |
+| S1 | `S1 costly`, magenta | solid lilac (`#DCCBFF`) |
+| S2 | `S2 uncertain`, yellow | **amber diagonal stripes** |
+| S3 | `S3 protected`, bold blue | **dark plum cross-hatch** |
+
+The terminal always prints the tier in words, so the output reads the same without color
+(`--color never` or `NO_COLOR=1`). In charts, a folder never looks "safe" if anything inside
+it is S2 or S3: its badge shows the most protective tier among its contents.
+
+### How scull picks a tier
+
+Each item gets the **most protective** tier that any check triggers. Some examples:
+
+| If... | the item is at least |
+|---|---|
+| any file inside it is tracked by Git | S3 |
+| it is inside a protected folder, an exclusion, or a folder with a `.scull-protect` file | S3 |
+| a program is using it (open files, a running process's working folder, a tool's lock file) | S3 for this run |
+| it crosses onto another drive, or is reached through a link that leaves the scan folder | S3 |
+| it lives in a cloud-synced folder (iCloud, OneDrive, Dropbox) | S2 |
+| the project marker is there but no lockfile to rebuild from | S2 |
+| scull **could not check** whether it is tracked or in use | S2 |
+| it changed in the last 24 hours (configurable) | one tier more protective (S0 becomes S1) |
+
+A folder name alone is never enough. `target`, `build` or `dist` count only next to the
+project file that produces them. A folder with no matching project file is not a candidate
+at all.
+
+**Missing evidence counts as risk.** If scull can't tell whether a folder is in use, for
+example because the OS won't let it inspect some of your processes, it treats the folder as
+uncertain (S2) and says so: "could not check whether it is in use; not treated as idle".
+`scull doctor` lists which checks work on your machine.
+
+### Git worktrees
+
+scull reads worktrees from Git itself, never from folder names. A worktree with uncommitted
+or untracked changes, unpushed commits, a lock, or active use is S3. A clean, unlocked
+worktree whose commits are all pushed or merged is at best S1, never S0. scull never removes
+a worktree just because it is old, and it never deletes branches. Removing whole worktrees
+is not part of `scull clean` in this version; it lists them as excluded.
+
+## What scull never touches
+
+* Files tracked by Git, and Git history.
+* Your home folder itself, drive roots, OS and system folders.
+* Credentials: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.password-store`, and on macOS
+  `~/Library` (except its caches and Xcode's DerivedData).
+* Anything you protect: `scan.protect` in the config, `SCULL_PROTECT`, or a `.scull-protect`
+  file in a folder.
+* Anything outside the folders you asked it to scan. scull never follows a symlink or
+  junction out of a scan folder.
+* Other drives reached from inside a scan folder, network drives (unless you allow them) and
+  backup drives such as Time Machine.
+* Cloud placeholders. scull never downloads ("hydrates") files that only exist in the cloud.
+* Special files: pipes, sockets and devices are never opened.
+* Large files. `scull large-files` lists them for you to review; scull never cleans them.
+* Docker volumes, unless you choose them explicitly.
+
+Protection is matched by file identity (device and inode, or volume and file ID), not by
+path text. A different spelling, case, Unicode form or Windows short name can't slip past it.
+
+A repository's own settings (`.scull-protect`, `.scull.toml`) can only **add** protection.
+They can never lower a tier or widen what scull scans, because a cloned repository is
+untrusted.
+
+## Every cleanup is a dry run first
+
+`scull clean` with no flags only plans. It shows what it would do and changes nothing. You see,
+for every item:
+
+* the exact path and the project it belongs to;
+* what it is and the evidence for that (marker files, lockfile, rule);
+* its size three ways: logical, allocated on disk, and reclaimable, with a confidence level;
+* its tier and every reason for it;
+* how to rebuild it, and the cost if known ("unknown" otherwise);
+* warning flags: in use, hard-linked, crosses a drive, symlink, cloud placeholder;
+* the action (delete, quarantine, Trash, a tool's own command) and whether you can undo it.
+
+## Plans
+
+A plan is the exact list of items you approved. scull writes it as a JSON file
+(`--output plan.json`) and records it in its database.
+
+* **It expires.** A plan from the CLI is valid for 24 hours, a desktop plan for 1 hour. Agent
+  plans, planned for a later version, will last 15 minutes.
+* **It is sealed.** The plan carries a hash of its content. An edited plan is rejected.
+* **It belongs to you.** A plan is bound to the machine and user account that made it. A
+  plan from another machine or user is rejected.
+* **It can only shrink.** When you run a plan, scull scans again and runs only the items that
+  are still there and still at the same tier or safer. It never adds anything. An item that
+  changed (moved, replaced, now in use, tier raised) is dropped and reported.
+* **It is single-use.** Once a cleanup touched a plan's items, the plan is rejected. Make a
+  new one.
+
+A rejected plan exits with code 4 and changes nothing.
+
+## Checked again, right before each item
+
+Just before scull touches an item, it checks again that the item is the same folder (same
+identity and type), still not tracked by Git, still not in use, and still at the same tier.
+If any check fails, scull skips that item and tells you why. It never makes a "best effort"
+attempt.
+
+## What happens to each item
+
+| Tier | Action | How to undo |
+|---|---|---|
+| S0 | Deleted after your confirmation | Rebuild it (`cargo build`, `npm ci`, ...) |
+| S1, S2 | Moved into quarantine | `scull restore <operation>` within 7 days |
+| S1, S2 when quarantine is impossible | Moved to the Trash / Recycle Bin | Restore it from the Trash |
+| S1, S2 when the Trash is impossible too | **Left in place** and reported as blocked | Nothing to undo |
+| S3 | Never touched | — |
+
+scull deletes with its own careful code: it works relative to verified folder handles and
+never follows links. It never runs a shell `rm`.
+
+### Quarantine
+
+Quarantine moves an item aside instead of deleting it. The move is a rename on the same
+drive, so it is instant and never copies data across drives.
+
+* Items go to a `.scull-quarantine/<operation>/` folder on the same drive, inside the
+  shallowest folder you own there (usually your home folder), or inside the folder you set
+  with `[quarantine] base` in the config when it is on the item's drive. The folder is
+  readable by you only.
+* Quarantined items stay for **7 days**. Until then `scull restore <operation>` puts them back.
+* **Quarantine does not free space yet**: the bytes have only moved. scull reports them as
+  "moved", not "freed". The space comes back when you purge.
+* Restore puts items back exactly where they were and **never overwrites**. If something
+  now sits at the original path, the item comes back next to it as
+  `<name>.scull-restored-1`.
+* scull's database is the record of what was quarantined from where. Restore trusts it, not
+  files inside the quarantine folder.
+
+### Purging is permanent, and needs a stronger yes
+
+Purging the quarantine (`scull clean --purge-quarantine`) deletes items for good. So does any
+other action that would permanently remove an S1 or S2 item. These need an **elevated
+confirmation**: type the number of items at the prompt, or pass `--confirm --allow-permanent`
+when there is no terminal. Without it scull refuses with exit code 5. Permanent deletion is
+never presented as reversible.
+
+### Package caches (Quick Clean)
+
+Package-manager caches (npm, pnpm, Yarn, Bun and others) hold nothing you can't download
+again, so they get their own path, `scull clean caches`:
+
+* scull runs **each tool's own command** (for example `npm cache verify`, `pnpm store
+  prune`). It prefers a prune and offers a full wipe only with `--wipe`. It never wipes the
+  pnpm store, because your projects hard-link into it.
+* It runs the real tool from a trusted location, never from a project folder or
+  `node_modules/.bin`, with a clean environment and no shell. The preview shows the exact
+  binary and command.
+* It skips a tool that is running, or whose cache is a link or sits on an unexpected drive,
+  and tells you.
+* **This is not undoable**, and the preview says so: "Not undoable. Packages re-download on
+  next install; offline installs may fail until then." One confirmation covers all tools.
+* A cache whose tool is no longer installed is listed. scull removes it itself only if you
+  confirm **that tool** (`--remove-orphaned TOOL`, or its own question on a terminal), with
+  the same not-undoable note and every check repeated right before; otherwise it is left in
+  place for you to remove.
+
+## Auto-policies: opt-in, S0 only, quarantine only
+
+By default scull never cleans anything without your click. You can opt in to **auto-policies**
+in your config file: rules the scheduled `scull check` follows on its own, such as "move build
+outputs of projects idle for more than 60 days into quarantine, at most once a week":
+
+```toml
+[[auto.policy]]
+name = "old-build-outputs"
+enabled = true            # nothing runs without this line
+kind = "build_outputs"    # the only kind: S0 build outputs and dependency folders of projects
+idle = "60d"              # at least 7d
+every = "7d"              # at least 24h
+under = ["~/Projects"]    # optional
+```
+
+What keeps them safe:
+
+* **Only S0, only quarantine.** A policy only ever picks S0 build outputs (`target/`,
+  `node_modules/`, ...) that are idle, not in use, not links, not cloud placeholders and on the
+  scanned drive, whose project has had no changes (sources, manifests, Git) within the idle
+  window, and that you haven't restored from quarantine within it. It never deletes them: it
+  moves them into quarantine, so `scull restore <operation>` brings them back for 7 days.
+  Where quarantine is impossible, the item is left in place. It is **never** moved to the
+  Trash, because the system may empty the Trash by itself. It never touches S1–S3 items,
+  package caches, worktrees or Docker data.
+* **Your config file only.** Policies are read only from the user config file. The file and
+  its folder must be writable by you alone: not by your group or others (`chmod go-w`), and on
+  macOS with no extended ACL (`chmod -N`). The quarantine location comes from that file's
+  `[quarantine]` too. No command-line flag, environment variable, MCP tool, AI agent or
+  repository file can enable one, and the variables that would widen the scan
+  (`SCULL_ROOTS`, `SCULL_ACTIVITY_WINDOW`, `SCULL_RULES`) stop the policies instead.
+* **A dry run first.** The first time, a policy only reports what it would move. The same
+  happens after every edit of the policy, the caps, `scan.roots` or the enabled rules. It
+  acts at the earliest one interval later.
+* **Caps.** At most 50 items and 20 GiB per run and 50 GiB per day (counted on the space the
+  items take on disk), unless you set `max_items_per_run`, `max_gib_per_run` and
+  `max_gib_per_day` under `[auto]`. An item whose size is unknown is not taken.
+* **The same checks as a cleanup you confirm.** Each run is a plan and an operation in the
+  audit log (`scull history` shows "auto_policy"), taken under the one-cleanup-at-a-time lock,
+  with every item checked again right before it moves, including that it still qualifies for
+  the policy. Every run (and dry run) leaves a digest in `scull check`'s report.
+* **Kill switches.** Any of these stops every policy: `paused = true` under `[auto]`, a file
+  named `auto-policies.off` in scull's config folder, the environment variable
+  `SCULL_NO_AUTO_POLICIES=1`, or `scull check --no-auto-policies`. Policies never run as root
+  or Administrator.
+
+## One cleanup at a time
+
+Only one cleanup runs per user account at any moment, whether from the CLI, the desktop app
+or anywhere else. A second one fails at once with exit code 6. Scans can still run alongside.
+The OS releases the lock if scull exits or crashes, so there is never a stale lock to clear.
+
+## Crash-safe
+
+Before scull touches an item, it writes its intent to a journal in its database, and it
+closes the entry afterwards. If scull, the machine or the power fails mid-cleanup, the next
+cleanup command first compares the journal with the disk and records what really happened
+to each item. Recovery **never resumes** a deletion or a move. It only records the facts, and
+you plan again for what is left.
+
+## Every cleanup is recorded
+
+Each `scull clean` run gets an operation ID and an entry in an append-only audit log: the
+plan and its hash, who approved it and how, and one outcome per item (removed, quarantined,
+moved to the Trash, skipped and why, failed). It also records predicted bytes, freed bytes,
+moved bytes and the measured change in free space. Rows are hash-chained, so a gap or an
+edit shows up. Restores and purges are recorded against the quarantine entries.
+`scull history` lists operations and checks the chain; `scull history <operation>` shows one
+in detail, including where each quarantined item is now.
+
+Freed space is measured, not guessed. Hard links, file-system snapshots and compression can
+make the real gain differ from the estimate, and scull explains differences over 10%.
+
+## The emergency reserve (headroom)
+
+`scull headroom create` sets aside a reserve file, so a completely full disk still leaves room
+to clean up. It is off until you create one. The reserve lives only in scull's own data folder.
+scull releases only the file it created and recorded: the same identity, size and modification
+time, and the same 32 random bytes it wrote at the start of the file. Identity alone isn't
+enough, because filesystems reuse file numbers. A link
+or any other file at that path is left alone. Creating and releasing are both recorded.
+
+## scull refuses to run as root or Administrator
+
+Commands that change the disk refuse to run elevated (root, `sudo`, an Administrator prompt).
+An elevated run could reach files your normal account can't. Pass `--allow-root` only if you
+really mean it. scull never asks for elevation itself.
+
+## AI agents and MCP
+
+scull can serve AI coding agents over the Model Context Protocol (`scull mcp serve`). See
+[MCP.md](MCP.md). The rules:
+
+* **An AI tool call is not your consent.** By default no MCP tool can delete, move, plan or
+  approve anything; the agent can tell you to run `scull clean` yourself.
+* **Destructive mode is opt-in, twice.** Only with `[mcp] destructive = true` in scull's config
+  file *and* `scull mcp serve --allow-destructive` can an agent prepare a cleanup plan. It is
+  never offered when scull runs elevated.
+* **Only you approve, outside the chat.** In the desktop app's main window, Cleanup Review
+  shows the plan: you tick each item, type the short code shown next to it, and press
+  **Approve** or **Deny**. The code exists only in the app, and scull's core checks it; the
+  menu bar widget can't approve. In a terminal, `scull approve <plan-id>` shows the whole plan
+  and a short code that you type. It never runs as root, and it refuses a pipe, a script or
+  an agent's shell tool. It also refuses a terminal that looks driven by an agent (agent
+  environment variables, an agent or terminal-automation tool among its parent processes, or
+  parents it can't read). That check is a heuristic, not a proof that a human is typing; see
+  [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md) for what it does and doesn't stop.
+* **A denial is final,** in the app or the terminal: **Deny**, `deny`, or three wrong codes
+  means that plan can never be approved. You can withdraw an approval (**Revoke approval** in
+  the app, `scull approve --revoke <plan-id>` in a terminal) until the agent starts the
+  cleanup; exactly one of the two wins. Both show the agent client's name as it gave it,
+  not verified.
+* **An approval runs the exact plan once.** It is bound to the plan's content and lapses with
+  it (15 minutes at most). If anything in the plan changed on disk, the whole plan is void.
+  The cleanup goes through the same Executor, checks and quarantine as `scull clean`.
+* **Limits.** At most 5 plans can await your approval at once, and each server session can
+  prepare at most 6 plans a minute (`mcp.max_pending_plans`, `mcp.prepare_per_minute`).
+  Denials, refusals, revocations and every run are recorded (`scull history`).
+* The server is off until you enable it, and it can only see your configured scan folders.
+* Names from your disk reach the model as escaped data, and the model is told to treat them
+  as untrusted. File contents and commit messages are never sent.
+* **Out of scope:** an agent that can already run shell commands can delete files without
+  scull. scull only guarantees that *its own* tools can't delete without you.
+
+The desktop dialog works only in the app's main window, and a page from any other origin is
+refused. What remains (another program running as you that drives the screen, or injects
+code into the app) is described in [APPROVAL_HARDENING.md](../APPROVAL_HARDENING.md).
+
+### `scull ask`
+
+`scull ask` is an optional assistant that answers questions with a model you choose. It is
+off until you configure it. Before the first question to a provider, scull shows what will be
+sent and asks for your consent. The model calls scull's read-only tools, so it can't change
+files or approve or run a cleanup. Only if you set `[mcp] destructive = true` (and scull isn't
+elevated) may it prepare a plan, which changes nothing and runs only after you approve and
+run it yourself with `scull approve <plan-id> --run`. See [the CLI reference](CLI.md#scull-ask).
+
+## Unattended cleanup
+
+Off by default. `scull check` and `scull schedule` prepare a plan for you to review, and they
+never run it. The only unattended cleanup is an auto-policy you enable in your config file. It
+moves idle S0 build outputs into quarantine, after a dry run, within caps. See
+[Auto-policies](#auto-policies-opt-in-s0-only-quarantine-only).
+
+## Privacy
+
+* **No telemetry**, no analytics, no crash reporting, no update checks.
+* **No network by default.** Scans never fetch anything. Git is read with hooks, fsmonitor
+  and fetches disabled, so a repository can't run code on your machine. Lookups on a Git
+  host (for squash-merge detection) are off unless you enable them.
+* scull's database holds metadata (paths, sizes, tiers, history), never file contents.
+  `scull data show` shows what is recorded, `scull data export` copies it out, and
+  `scull data purge --all` deletes it.
+* Two opt-in exceptions. The MCP server's results go to your AI client and possibly its
+  model provider; scull shows a notice before you enable it. `scull ask` sends your question
+  and the read-only tool results to the provider you configured, after you agree to a notice
+  that shows exactly what is sent.
+* The desktop's notifications and weekly digest are computed and shown on this machine.
+
+## Terminal output is safe to read
+
+Control characters and right-to-left overrides in file names are escaped before printing,
+and suspicious names are flagged. A crafted file name can't rewrite your terminal or disguise
+a path.
+
+## Found a problem?
+
+Anything that could make scull delete, move or expose what it shouldn't is a security issue.
+Report it privately as described in [SECURITY.md](../../SECURITY.md). Wrong tiers and crashes
+are welcome as regular issues.

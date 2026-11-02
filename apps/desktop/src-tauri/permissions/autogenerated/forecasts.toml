@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-forecasts"
+description = "Enables the forecasts command without any pre-configured scope."
+commands.allow = ["forecasts"]
+
+[[permission]]
+identifier = "deny-forecasts"
+description = "Denies the forecasts command without any pre-configured scope."
+commands.deny = ["forecasts"]

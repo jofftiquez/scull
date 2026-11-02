@@ -58,10 +58,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/phase2' || github.event_name == 'pull_request' }}
+      - name: Test prerequisites (macOS)
+        # tmux drives a real terminal for the `scull approve --run` tests; a fixture's missing
+        # prerequisite fails in CI (scull_fixtures::skip, #113), so install it.
+        if: runner.os == 'macOS'
+        run: command -v tmux >/dev/null || brew install tmux
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
+        env:
+          # Linux: the measured free-space tests (scull-cleaner tests/measure.rs) run strict on a
+          # private tmpfs, re-running themselves as root in a private mount namespace
+          # (`sudo -n unshare --mount`); required, so a missing privilege fails instead of
+          # falling back to the shared volume. Ignored nightly fixtures are unaffected.
+          SCULL_FIXTURES_ALLOW_SUDO: ${{ runner.os == 'Linux' && '1' || '' }}
+          SCULL_FIXTURES_REQUIRE_PRIVILEGED: ${{ runner.os == 'Linux' && '1' || '' }}
         run: cargo test --workspace --locked --no-fail-fast
+      # The runners are elevated: scull refuses destructive MCP tools and `scull approve` there
+      # (SAFE-14), so those tests skip themselves, and `clean`/`restore` tests add
+      # `--allow-root`. Run them again as a standard user, where they must take the normal
+      # user's path (a skip or an elevated process is a failure, #65).
+      - name: Elevation-gated tests as a standard user (Windows)
+        # Runs even when `test` failed elsewhere: its coverage is independent.
+        if: runner.os == 'Windows' && !cancelled()
+        shell: pwsh
+        run: >-
+          ./scripts/ci/run-as-standard-user.ps1
+          -Tests scull-cli/mcp_approval,scull-cli/clean,scull-cli/clean_caches,scull-cli/history_restore,scull-fixtures/fx_out,scull-cli/auto_policies_check,scull-cli/ask,scull-desktop-bridge/cleanup
+          -MustRun agent_plan_runs_only_after_the_human_approves,approve_prompt_shows_the_plan_and_needs_the_shown_code,approve_without_a_terminal_creates_no_machine_id,revoke_through_the_cli_stops_the_agent,clean,clean_caches,history_restore,fx_out,fx_out_03_cli_and_mcp_plan_identical_contents,fx_exec_15_check_previews_then_quarantines_and_restore_undoes_it,opted_in_ask_prepares_a_plan_and_tells_the_user_to_approve_it,cleanup_review_runs_exactly_the_chosen_items_through_the_executor,an_s0_item_is_deleted_and_the_rest_left_alone,a_narrowed_plan_keeps_the_reviewed_plans_lifetime
       - name: doc
         if: runner.os == 'Linux'
         env:

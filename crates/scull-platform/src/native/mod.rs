@@ -4,6 +4,7 @@ use crate::{
     Capabilities, DirEntry, DirIter, DirSource, Exposure, Metadata, Operation, Platform,
     PlatformError, Result,
 };
+use scull_core::FileIdentity;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io;
@@ -15,7 +16,7 @@ mod unix;
 use unix as os;
 
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(windows)]
 use windows as os;
 
@@ -67,6 +68,12 @@ pub fn native_path_bytes(path: &Path) -> Cow<'_, [u8]> {
 
 // Crate-internal entry points for the OS-independent modules (`app_dirs`, `owner_only`).
 
+/// The effective user ID of this process.
+#[cfg(all(unix, feature = "delete"))]
+pub(crate) fn effective_uid() -> u32 {
+    os::effective_uid()
+}
+
 /// The account this process acts as: `uid:<n>` on Unix, the user SID on Windows.
 pub(crate) fn current_user_id() -> io::Result<String> {
     os::current_user_id()
@@ -87,6 +94,12 @@ pub(crate) fn create_file_owner_only(path: &Path) -> io::Result<File> {
     os::create_file_owner_only(path)
 }
 
+/// Opens an existing regular file read-only without following a link at its last component,
+/// with the identity read from the opened handle.
+pub(crate) fn open_file_no_follow(path: &Path) -> io::Result<(File, Option<FileIdentity>)> {
+    os::open_file_no_follow(path)
+}
+
 /// Narrows an existing file or directory to owner-only, without following a link.
 pub(crate) fn restrict_owner_only(path: &Path) -> io::Result<()> {
     os::restrict_owner_only(path)
@@ -95,6 +108,19 @@ pub(crate) fn restrict_owner_only(path: &Path) -> io::Result<()> {
 /// How `path` (already known not to be a link) is broader than owner-only.
 pub(crate) fn owner_only_exposures(path: &Path) -> io::Result<Vec<Exposure>> {
     os::owner_only_exposures(path)
+}
+
+/// Whether `path` has an extended ACL permission bits don't show (macOS); see
+/// [`crate::has_extended_acl`].
+#[cfg(unix)]
+pub(crate) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    os::has_extended_acl(path)
+}
+
+/// Windows: every grant is in the DACL, which [`owner_only_exposures`] already reads.
+#[cfg(windows)]
+pub(crate) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    std::fs::symlink_metadata(path).map(|_| false)
 }
 
 /// Whether this process is elevated (root / elevated administrator token).

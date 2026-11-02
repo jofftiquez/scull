@@ -147,3 +147,32 @@ fn info(st: &libc::statfs) -> VolumeInfo {
         mount_point,
     }
 }
+
+/// Whether `path` (not followed if it is a link) carries a macOS extended ACL (`ls -le`, set
+/// with `chmod +a`), of any kind. Permission bits don't show these, so a caller that must know
+/// nobody else can write an entry treats any ACL as a possible grant (P5-PRO-02).
+#[allow(unsafe_code)]
+pub(crate) fn has_extended_acl(path: &Path) -> io::Result<bool> {
+    // <sys/acl.h>: `acl_type_t` ACL_TYPE_EXTENDED; `acl_t` is an opaque pointer.
+    const ACL_TYPE_EXTENDED: libc::c_int = 0x0000_0100;
+    unsafe extern "C" {
+        fn acl_get_link_np(path: *const libc::c_char, ty: libc::c_int) -> *mut libc::c_void;
+        fn acl_free(obj: *mut libc::c_void) -> libc::c_int;
+    }
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call; the function
+    // does not follow a final symlink and returns either NULL (errno set) or an ACL we own.
+    let acl = unsafe { acl_get_link_np(c_path.as_ptr(), ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let e = io::Error::last_os_error();
+        // ENOENT: the entry exists but has no extended ACL.
+        return match e.raw_os_error() {
+            Some(libc::ENOENT) if fs::symlink_metadata(path).is_ok() => Ok(false),
+            _ => Err(e),
+        };
+    }
+    // SAFETY: `acl` is a non-NULL ACL returned by `acl_get_link_np`, freed exactly once.
+    unsafe { acl_free(acl) };
+    Ok(true)
+}

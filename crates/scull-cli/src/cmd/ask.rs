@@ -11,18 +11,29 @@
 //! * **Read-only**: the model gets exactly the tools `scull mcp serve` offers minus
 //!   `register_worktree`, over `scan.roots` with the `[mcp]` redaction settings. stdout is the
 //!   answer (escaped for the terminal); the tools it reads are listed on stderr.
+//! * **Preparing plans (AI-05), opt-in**: with `[mcp] destructive = true` in the user config
+//!   file and scull not elevated (MCP's gates), the model may also prepare cleanup plans
+//!   (`prepare_cleanup` and the read-only plan views; never approval or execution). Each plan
+//!   is an agent plan from client `scull ask`, limited by `mcp.max_pending_plans` and
+//!   `mcp.prepare_per_minute`. After the answer, scull itself (not the model) prints every
+//!   prepared plan's ID and the `scull approve <plan-id> --run` command, and that nothing changed.
+//!   The consent notice says so, and read-only consent doesn't cover it.
 
 use super::mcp::build_server;
-use super::pipeline;
+use super::{exec, pipeline};
 use crate::cancel;
 use crate::cli::AskArgs;
 use crate::output::Ui;
+use crate::output::bytes::format_bytes;
 use crate::output::escape::escape_for_terminal;
 use crate::output::style::Style;
 use scull_ask::{
-    AskConfig, CONFIG_FILE, CONSENT_FILE, ConsentLog, Event, Session, Stop, UreqTransport,
+    AskConfig, CONFIG_FILE, CONSENT_FILE, ConsentLog, Event, PreparedPlan, Session, Stop,
+    UreqTransport,
 };
 use scull_core::{ErrorKind, FsPath, ScullError};
+use scull_mcp::ScullMcp;
+use scull_mcp::approval::Principal;
 use scull_platform::app_dirs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -47,9 +58,15 @@ overrides: SCULL_ASK_ENABLED, SCULL_ASK_PROVIDER, SCULL_ASK_MODEL, SCULL_ASK_BAS
 Endpoints must use https:// unless they are on this machine.
 
 Before the first question to a provider and endpoint, scull shows what will be sent and asks
-for your consent. The model can only call scull's read-only tools (the same ones `scull mcp
-serve` offers, without register_worktree): it cannot delete, move or change files, or prepare
-or approve a cleanup. Paths are redacted as configured in [mcp] (redact_home, hash_names).";
+for your consent. The model calls scull's read-only tools (the same ones `scull mcp serve`
+offers, without register_worktree): it cannot delete, move or change files, or approve or run
+a cleanup. Paths are redacted as configured in [mcp] (redact_home, hash_names).
+
+With `[mcp] destructive = true` in config.toml (and scull not running elevated), the model may
+also prepare a cleanup plan when you ask it to free space. Preparing changes nothing: scull
+prints the plan ID afterwards, and the plan runs only after you review, approve and run it
+yourself with `scull approve <plan-id> --run`. Limits: [mcp] max_pending_plans,
+prepare_per_minute.";
 
 /// `scull ask`.
 pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
@@ -68,10 +85,11 @@ pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
     let cfg = load_ask_config(dirs.as_ref().map(|d| d.config.join(CONFIG_FILE)).as_deref())?;
     let loaded = pipeline::load_config(&[])?;
     let mcp = &loaded.config.mcp;
-    let notice = scull_ask::disclosure(&cfg, mcp.redact_home, mcp.hash_names);
+    let server = ask_server(&loaded, dirs.as_ref().map(|d| d.data.clone()), ui)?;
+    let can_prepare = server.in_process_plan_tools_enabled();
+    let notice = scull_ask::disclosure(&cfg, mcp.redact_home, mcp.hash_names, can_prepare);
 
     if args.show_request {
-        let server = build_server(&loaded, dirs.as_ref().map(|d| d.data.clone()), ui)?;
         let transport = UreqTransport::new(cfg.timeout, false);
         let body = Session::new(&cfg, &transport, &server).first_request(&question);
         let state = if cfg.enabled { "on" } else { "off" };
@@ -88,10 +106,10 @@ pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
         &notice,
         args.yes,
         dirs.as_ref().map(|d| d.state.as_path()),
+        can_prepare,
     )?;
     cancel::check()?;
 
-    let server = build_server(&loaded, dirs.map(|d| d.data), ui)?;
     let transport = UreqTransport::new(cfg.timeout, !cfg.endpoint.is_loopback());
     let session = Session::new(&cfg, &transport, &server);
     let bridge = pipeline::CancelBridge::start();
@@ -132,6 +150,9 @@ pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
     if !answer.text.is_empty() {
         print_stdout(&format!("{}\n", escape_lines(&answer.text)))?;
     }
+    if !answer.prepared_plans.is_empty() {
+        print_stdout(&prepared_notice(&answer.prepared_plans))?;
+    }
     status(&format!(
         "{} model call(s), {} tool call(s); {} input + {} cached input, {} output tokens",
         answer.turns,
@@ -171,6 +192,60 @@ pub fn run(args: &AskArgs, ui: &Ui) -> Result<(), ScullError> {
     }
 }
 
+/// The in-process tools for the model: the read-only server, plus plan preparation when the
+/// user opted in (`[mcp] destructive = true` in the config file) and scull is not elevated.
+fn ask_server(
+    loaded: &pipeline::Loaded,
+    data_dir: Option<std::path::PathBuf>,
+    ui: &Ui,
+) -> Result<ScullMcp, ScullError> {
+    let server = build_server(loaded, data_dir, ui)?;
+    if !loaded.config.mcp.destructive {
+        return Ok(server);
+    }
+    if exec::elevation().blocks_destructive() {
+        pipeline::warn(
+            ui,
+            "plan preparation is never offered to the assistant when scull runs as \
+             root/administrator (or when that can't be told); read-only tools only",
+        );
+        return Ok(server);
+    }
+    let who = exec::who()?;
+    Ok(server.with_in_process_plan_tools(
+        Principal {
+            machine_id: who.machine_id,
+            user: who.user,
+        },
+        scull_storage::AgentClient::new("scull ask", Some(env!("CARGO_PKG_VERSION"))),
+    ))
+}
+
+/// What scull (not the model) prints after an answer that prepared plans.
+pub fn prepared_notice(plans: &[PreparedPlan]) -> String {
+    let mut out = String::from(
+        "\nThe assistant prepared a cleanup plan; nothing has been changed. It runs only after you \
+         review and approve it yourself:\n",
+    );
+    for p in plans {
+        out.push_str(&format!(
+            "  plan {}: {} item(s), {} reclaimable\n    scull approve {} --run\n",
+            escape_for_terminal(&p.plan_id),
+            p.item_count,
+            format_bytes(p.reclaimable_bytes),
+            escape_for_terminal(&p.plan_id)
+        ));
+    }
+    out.push_str(
+        "Run that in your own terminal: it shows the whole plan, asks you to type a code, re-checks \
+         every item and runs the plan through scull's Executor (anything changed since it was \
+         prepared voids it). The plan expires 15 minutes after it was prepared. scull ask itself \
+         cannot run it. Without --run, `scull approve` (or the desktop app) only approves it, for \
+         an AI agent connected to `scull mcp serve` in destructive mode to run.\n",
+    );
+    out
+}
+
 /// `ask.toml` (if it exists) plus the environment.
 fn load_ask_config(path: Option<&Path>) -> Result<AskConfig, ScullError> {
     let text = match path.map(std::fs::read_to_string) {
@@ -199,6 +274,7 @@ fn consent(
     notice: &str,
     yes: bool,
     state: Option<&Path>,
+    can_prepare: bool,
 ) -> Result<(), ScullError> {
     let file = state.map(|s| s.join(CONSENT_FILE));
     let mut log = file
@@ -206,7 +282,7 @@ fn consent(
         .and_then(|f| std::fs::read_to_string(f).ok())
         .map(|t| ConsentLog::parse(&t))
         .unwrap_or_default();
-    if log.allows(cfg) {
+    if log.allows(cfg, can_prepare) {
         return Ok(());
     }
     let mut err = io::stderr().lock();
@@ -243,7 +319,11 @@ fn consent(
             ));
         }
     }
-    log.record(cfg, u64::try_from(scull_engine::now_unix()).unwrap_or(0));
+    log.record(
+        cfg,
+        can_prepare,
+        u64::try_from(scull_engine::now_unix()).unwrap_or(0),
+    );
     // Consent still applies to this run if it cannot be recorded; it is asked again next time.
     if let (Some(state), Some(file)) = (state, file.as_deref())
         && scull_platform::create_dir_owner_only(state).is_ok()

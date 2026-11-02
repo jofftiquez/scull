@@ -224,6 +224,8 @@ fn forbidden_reason(key: &str) -> Option<&'static str> {
         ("forge", _) => "repository files cannot enable forge lookups",
         ("output", _) => "repository files cannot change output preferences",
         ("proactive", _) => "repository files cannot change alert policies",
+        ("quarantine", _) => "repository files cannot change where the quarantine lives",
+        ("auto", _) => "repository files cannot set auto-policies (user config file only, D-11)",
         _ => return None,
     })
 }

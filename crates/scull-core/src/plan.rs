@@ -51,6 +51,10 @@ pub const MCP_PLAN_TTL_SECS: i64 = 15 * 60;
 /// it sits between the MCP and CLI defaults because the desktop review is interactive.
 pub const DESKTOP_PLAN_TTL_SECS: i64 = 60 * 60;
 
+/// Default (and maximum) lifetime of an auto-policy plan: 15 minutes. It is made and executed
+/// in the same unattended `scull check` run (PRO-10, D-11), so it never needs to live long.
+pub const POLICY_PLAN_TTL_SECS: i64 = 15 * 60;
+
 /// How far in the future a plan's creation time may be before it is rejected, to tolerate small
 /// clock adjustments between planning and execution.
 pub const MAX_CLOCK_SKEW_SECS: i64 = 5 * 60;
@@ -65,6 +69,11 @@ pub enum PlanOrigin {
     Mcp,
     /// The desktop Cleanup Review screen.
     Desktop,
+    /// An opt-in unattended auto-policy run by the scheduled `scull check` (PRO-10, D-11).
+    /// Such a plan may only hold S0 items whose action is [`Action::Quarantine`]
+    /// ([`Plan::new`] and [`Plan::verify`] refuse anything else), and only the auto-policy
+    /// runner starts an operation for it.
+    Policy,
 }
 
 impl PlanOrigin {
@@ -76,6 +85,23 @@ impl PlanOrigin {
             PlanOrigin::Cli => CLI_PLAN_TTL_SECS,
             PlanOrigin::Mcp => MCP_PLAN_TTL_SECS,
             PlanOrigin::Desktop => DESKTOP_PLAN_TTL_SECS,
+            PlanOrigin::Policy => POLICY_PLAN_TTL_SECS,
+        }
+    }
+
+    /// Why `item` may not be part of a plan from this origin, beyond the tier/action rules
+    /// every plan follows. Auto-policy plans (D-11) hold S0 items to be quarantined, nothing
+    /// else: no S1–S3 item, and no deletion, Trash move, tool command or Git operation.
+    fn refuses(self, item: &PlanItem) -> Option<String> {
+        match self {
+            PlanOrigin::Policy if item.tier != Tier::S0 || item.action != Action::Quarantine => {
+                Some(format!(
+                    "auto-policy plans hold only S0 items to quarantine (D-11), not {} with \
+                     action {:?}",
+                    item.tier, item.action
+                ))
+            }
+            _ => None,
         }
     }
 }
@@ -232,6 +258,11 @@ pub struct PlanParams {
     pub user: String,
     /// Which surface created the plan.
     pub origin: PlanOrigin,
+    /// SAFE-09: `scull_storage::Store::operations_watermark`, read **before** the scan the
+    /// items come from started: every operation recorded after it invalidates the plan.
+    /// Required for a plan built from a scan; `None` only for a plan that comes from no scan,
+    /// which then falls back to its creation time (operations started at or after it).
+    pub operations_watermark: Option<u64>,
 }
 
 /// An immutable cleanup plan (PRD §10.4, SAFE-11).
@@ -270,6 +301,7 @@ pub struct PlanParams {
 ///     machine_id: "machine-a".into(),
 ///     user: "me".into(),
 ///     origin: PlanOrigin::Cli,
+///     operations_watermark: Some(0),
 /// };
 /// let plan = Plan::new(params, vec![PlanItem::from_candidate(&candidate).unwrap()]).unwrap();
 /// assert!(plan.verify(1_800_000_060, "machine-a", "me").is_ok());
@@ -293,6 +325,12 @@ pub struct Plan {
     machine_id: String,
     user: String,
     origin: PlanOrigin,
+    /// SAFE-09: the position of the last recorded operation in scull's database when the scan
+    /// the items came from started (operations are append-only, so positions only grow). An
+    /// operation recorded after this position touched the targets after the scan saw them and
+    /// invalidates the plan. Absent in plans that predate it; those use the creation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operations_watermark: Option<u64>,
     items: Vec<PlanItem>,
     content_hash: ContentHash,
 }
@@ -303,8 +341,8 @@ const HASH_KEY: &str = "content_hash";
 impl Plan {
     /// Build a plan and compute its content hash. Items are sorted by item ID.
     ///
-    /// Refuses ([`ErrorKind::SafetyBlocked`]) any S3 item or action not allowed for its tier;
-    /// refuses ([`ErrorKind::Usage`]) duplicate item IDs, an empty machine ID or user, and a
+    /// Refuses ([`ErrorKind::SafetyBlocked`]) any S3 item or action not allowed for its tier,
+    /// and for [`PlanOrigin::Policy`] any item that is not an S0 quarantine; refuses ([`ErrorKind::Usage`]) duplicate item IDs, an empty machine ID or user, and a
     /// lifetime outside `1..=origin.max_ttl_secs()`.
     pub fn new(params: PlanParams, mut items: Vec<PlanItem>) -> Result<Self, ScullError> {
         let max = params.origin.max_ttl_secs();
@@ -326,9 +364,11 @@ impl Plan {
             ));
         }
         for item in &items {
-            item.check().map_err(|m| {
-                ScullError::new(ErrorKind::SafetyBlocked, m).with_item(item.item_id.clone())
-            })?;
+            item.check()
+                .and_then(|()| params.origin.refuses(item).map_or(Ok(()), Err))
+                .map_err(|m| {
+                    ScullError::new(ErrorKind::SafetyBlocked, m).with_item(item.item_id.clone())
+                })?;
         }
         items.sort_by(|a, b| a.item_id.cmp(&b.item_id));
         if let Some(w) = items.windows(2).find(|w| w[0].item_id == w[1].item_id) {
@@ -345,11 +385,19 @@ impl Plan {
             machine_id: params.machine_id,
             user: params.user,
             origin: params.origin,
+            operations_watermark: params.operations_watermark,
             items,
             content_hash: ContentHash("0".repeat(ContentHash::HEX_LEN)),
         };
         plan.content_hash = plan.compute_hash()?;
         Ok(plan)
+    }
+
+    /// SAFE-09: the last recorded operation's position in scull's database when the scan the
+    /// items came from started. Every operation recorded after it invalidates the plan. `None`
+    /// for plans without one: then operations started at or after [`Plan::created_unix`] do.
+    pub fn operations_watermark(&self) -> Option<u64> {
+        self.operations_watermark
     }
 
     /// Schema version the plan was written with.
@@ -512,6 +560,7 @@ impl Plan {
         let mut seen = BTreeSet::new();
         for item in &self.items {
             item.check()
+                .and_then(|()| self.origin.refuses(item).map_or(Ok(()), Err))
                 .map_err(|m| tampered(m).with_item(item.item_id.clone()))?;
             if !seen.insert(&item.item_id) {
                 return Err(
@@ -693,7 +742,14 @@ pub fn narrow(plan: &Plan, fresh: &[Candidate]) -> NarrowResult {
     let mut result = NarrowResult::default();
     let mut seen = BTreeSet::new();
     for item in &plan.items {
-        match narrow_item(item, &by_id, &mut seen) {
+        match narrow_item(item, &by_id, &mut seen).and_then(|kept| {
+            // Defense in depth: what runs must still be allowed for the plan's origin (an
+            // auto-policy item stays an S0 quarantine).
+            match plan.origin.refuses(&kept) {
+                Some(_) => Err(DropReason::InvalidPlanItem),
+                None => Ok(kept),
+            }
+        }) {
             Ok(kept) => result.executable.push(kept),
             Err(reason) => result.dropped.push((item.item_id.clone(), reason)),
         }
@@ -799,6 +855,7 @@ mod tests {
             machine_id: MACHINE.into(),
             user: USER.into(),
             origin,
+            operations_watermark: None,
         }
     }
 
@@ -1293,5 +1350,75 @@ mod tests {
         ] {
             assert!(required.contains(&k.into()), "{k}");
         }
+    }
+
+    /// D-11: an auto-policy plan holds S0 quarantines only. Anything else is refused when the
+    /// plan is built, a plan file edited to hold it is rejected as tampered, and narrowing never
+    /// turns an item into something else (a fresh tier above S0 drops it).
+    #[test]
+    fn policy_plans_hold_only_s0_quarantines() {
+        let quarantine = |c: &Candidate| PlanItem {
+            action: Action::Quarantine,
+            ..PlanItem::from_candidate(c).unwrap()
+        };
+        let s0 = candidate(1, Tier::S0, Action::Delete);
+        let plan = Plan::new(params(PlanOrigin::Policy), vec![quarantine(&s0)]).unwrap();
+        assert_eq!(
+            plan.expires_unix() - plan.created_unix(),
+            POLICY_PLAN_TTL_SECS
+        );
+        assert!(plan.verify(T0 + 60, MACHINE, USER).is_ok());
+
+        // Refused at construction: an S0 delete, an S1 quarantine, an S0 Trash move.
+        let s1 = candidate(2, Tier::S1, Action::Quarantine);
+        for item in [
+            PlanItem::from_candidate(&s0).unwrap(),
+            PlanItem::from_candidate(&s1).unwrap(),
+            PlanItem {
+                action: Action::Trash,
+                ..quarantine(&s0)
+            },
+        ] {
+            let err = Plan::new(params(PlanOrigin::Policy), vec![item]).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::SafetyBlocked, "{}", err.message);
+        }
+        // The same items are fine in a CLI plan.
+        assert!(
+            Plan::new(
+                params(PlanOrigin::Cli),
+                vec![PlanItem::from_candidate(&s1).unwrap()]
+            )
+            .is_ok()
+        );
+
+        // A plan file edited to delete instead (hash recomputed) is rejected as tampered.
+        let mut v = serde_json::to_value(&plan).unwrap();
+        v["items"][0]["action"] = serde_json::json!({"type": "delete"});
+        let mut edited: Plan = serde_json::from_value(v).unwrap();
+        edited.content_hash = edited.compute_hash().unwrap();
+        assert_eq!(
+            edited.verify(T0 + 60, MACHINE, USER).unwrap_err().kind,
+            ErrorKind::PlanTampered
+        );
+        // A policy plan may not live longer than 15 minutes.
+        let mut long = params(PlanOrigin::Policy);
+        long.ttl_secs = Some(POLICY_PLAN_TTL_SECS + 1);
+        assert!(Plan::new(long, vec![quarantine(&s0)]).is_err());
+
+        // Narrowing: still S0 → stays a quarantine even though the fresh action is a delete;
+        // now S1 (recent activity) → dropped, never quarantined at S1.
+        let n = narrow(&plan, std::slice::from_ref(&s0));
+        assert_eq!(n.executable.len(), 1);
+        assert_eq!(n.executable[0].action, Action::Quarantine);
+        assert_eq!(n.executable[0].tier, Tier::S0);
+        let raised = Candidate {
+            tier: Tier::S1,
+            reasons: vec![TierReason::new(Tier::S1, ReasonCode::Regenerable, "recent")],
+            action: Action::Quarantine,
+            ..s0.clone()
+        };
+        let n = narrow(&plan, &[raised]);
+        assert!(n.executable.is_empty());
+        assert!(matches!(n.dropped[0].1, DropReason::TierRaised { .. }));
     }
 }

@@ -1,5 +1,107 @@
 {
   "$defs": {
+    "AutoKind": {
+      "description": "What an auto-policy may clean. Deliberately small: there is no kind for S1–S3 items,\npackage caches, worktrees or Docker data (D-11).",
+      "oneOf": [
+        {
+          "const": "build_outputs",
+          "description": "S0 build outputs and dependency folders of projects (category `project_artifact`,\ne.g. `target/`, `node_modules/`), moved into quarantine.",
+          "type": "string"
+        }
+      ]
+    },
+    "AutoLayer": {
+      "additionalProperties": false,
+      "description": "`[auto]` in a [`ConfigLayer`](super::ConfigLayer). Honored from the user config file only.",
+      "properties": {
+        "max_gib_per_day": {
+          "description": "See [`AutoConfig::max_gib_per_day`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_gib_per_run": {
+          "description": "See [`AutoConfig::max_gib_per_run`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_items_per_run": {
+          "description": "See [`AutoConfig::max_items_per_run`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "paused": {
+          "description": "See [`AutoConfig::paused`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "policy": {
+          "description": "See [`AutoConfig::policy`].",
+          "items": {
+            "$ref": "#/$defs/AutoPolicy"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AutoPolicy": {
+      "additionalProperties": false,
+      "description": "One auto-policy (`[[auto.policy]]`).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Off unless `true`.",
+          "type": "boolean"
+        },
+        "every": {
+          "$ref": "#/$defs/DurationSpec",
+          "description": "Runs at most once per this interval (at least [`MIN_EVERY`])."
+        },
+        "idle": {
+          "$ref": "#/$defs/DurationSpec",
+          "description": "Only items whose project has been idle for longer than this (at least [`MIN_IDLE`])."
+        },
+        "kind": {
+          "$ref": "#/$defs/AutoKind",
+          "description": "What it cleans."
+        },
+        "name": {
+          "description": "A unique name (letters, digits, `.`, `_`, `-`; at most 64 characters).",
+          "type": "string"
+        },
+        "under": {
+          "description": "Only items inside one of these folders (`~` allowed). Empty: anywhere in `scan.roots`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "idle",
+        "every"
+      ],
+      "type": "object"
+    },
     "Budget": {
       "additionalProperties": false,
       "description": "A size cap (PRO-03): the allocated bytes of every candidate matching all the given filters\nmust stay at or below `max_gib`. A budget with no filter caps everything scull found.",
@@ -150,8 +252,26 @@
             "null"
           ]
         },
+        "max_pending_plans": {
+          "description": "Most agent plans awaiting approval per machine and user. Only honored from the user\nconfig file (see [`resolve`]).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_results": {
           "description": "Maximum results per tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prepare_per_minute": {
+          "description": "Most `prepare_cleanup` calls per minute in one MCP session. Only honored from the user\nconfig file (see [`resolve`]).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -304,6 +424,30 @@
       },
       "type": "object"
     },
+    "QuarantineLayer": {
+      "additionalProperties": false,
+      "description": "`[quarantine]` in a [`ConfigLayer`]. See [`super::QuarantineConfig`].",
+      "properties": {
+        "base": {
+          "description": "Directory that holds `.scull-quarantine` for items on its volume (replaces lower\nlayers).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per volume (or directory) → base directory (replaces lower layers).",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RulesLayer": {
       "additionalProperties": false,
       "description": "`[rules]` in a [`ConfigLayer`].",
@@ -439,8 +583,12 @@
   "$id": "https://scull.dev/schemas/v1/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.godot-import\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n```",
+  "description": "One trusted configuration source with every field optional: the user config file, the\nenvironment ([`EnvLayer`]) or CLI flags. `None` means \"not set here\".\n\nThis is also the **user config file format** (TOML). Unknown keys are rejected:\n\n```toml\n[scan]\nroots = [\"~/Projects\", \"~/work\"]\nexclude = [\"~/Projects/huge-monorepo\"]\nprotect = [\"~/Projects/thesis\"]\nactivity_window = \"48h\"\nthreads = 0              # 0 = automatic\nlow_resource = false\n\n[scan.min_tier]\n\"~/Projects/legacy\" = \"S2\"\n\n[rules]\nenabled = [\"community.godot-import\"]\n\n[mcp]\nenabled = true\ndestructive = false\nredact_home = true\nhash_names = false\nmax_results = 1000\nmax_pending_plans = 5    # agent plans awaiting approval (file only)\nprepare_per_minute = 6   # prepare_cleanup calls per session per minute (file only)\n\n[forge]\nenabled = false\n\n[output]\ncolor = \"auto\"           # auto | always | never\nunits = \"binary\"         # binary | decimal\n\n[proactive]              # alert policies; see `ProactiveConfig`\nreserve_gib = 10\nalert_days = 14\n\n[quarantine]             # optional; see `QuarantineConfig`\nbase = \"~/.scull-q\"\n\n[quarantine.bases]       # optional, per volume\n\"/Volumes/Data\" = \"/Volumes/Data/me/.q\"\n\n[[auto.policy]]           # opt-in unattended cleanup of S0 items; see `AutoConfig`\nname = \"old-build-outputs\"\nenabled = true\nkind = \"build_outputs\"\nidle = \"60d\"\nevery = \"7d\"\n```",
   "properties": {
+    "auto": {
+      "$ref": "#/$defs/AutoLayer",
+      "description": "Unattended auto-policies (honored from the user config file only, D-11)."
+    },
     "forge": {
       "$ref": "#/$defs/ForgeLayer",
       "description": "Git forge lookups."
@@ -456,6 +604,10 @@
     "proactive": {
       "$ref": "#/$defs/ProactiveLayer",
       "description": "Alert policies (user config file only)."
+    },
+    "quarantine": {
+      "$ref": "#/$defs/QuarantineLayer",
+      "description": "Where quarantined items are kept."
     },
     "rules": {
       "$ref": "#/$defs/RulesLayer",

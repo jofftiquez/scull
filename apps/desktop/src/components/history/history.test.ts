@@ -5,7 +5,7 @@ import type { HistoryOperation } from '../../bridge';
 import {
   RESTORED_SUFFIX,
   createMockHistoryActions,
-  createPendingHistoryActions,
+  createTauriHistoryActions,
   historyActionsFor,
   restoreTarget,
 } from './bridge';
@@ -136,13 +136,24 @@ describe('restore stub (screen-local, never on ScullBridge)', () => {
     expect(a.calls).toHaveLength(3);
   });
 
-  it('inside Tauri the pending stub refuses and moves nothing', async () => {
+  it('inside Tauri the core restores it (restore_quarantined, never overwriting)', async () => {
     const o = op('oct28');
-    await expect(createPendingHistoryActions().restoreQuarantined(o, o.items[2]!)).rejects.toMatchObject({
-      kind: 'unsupported_platform',
-    });
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    const t = {
+      invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ cmd, args });
+        return { restored_to: '/Users/ada/code/proto/Library.scull-restored-1', sibling: true, already: false } as T;
+      },
+      listen: async () => () => undefined,
+    };
+    const r = await createTauriHistoryActions(t).restoreQuarantined(o, o.items[2]!);
+    expect(calls).toEqual([{ cmd: 'restore_quarantined', args: { operationId: o.operation_id, itemId: o.items[2]!.item_id } }]);
+    expect(r).toEqual({ restored_to: '/Users/ada/code/proto/Library.scull-restored-1', sibling: true });
     expect(historyActionsFor(createMockBridge()).kind).toBe('mock');
-    expect(historyActionsFor({ ...createMockBridge(), kind: 'tauri' }).kind).toBe('pending');
+    expect(historyActionsFor({ ...createMockBridge(), kind: 'tauri' }).kind).toBe('tauri');
+    // A refusal (elevated, nothing in quarantine) comes back as the core's error.
+    const refusing = { ...t, invoke: async () => Promise.reject({ kind: 'not_found', message: 'not in quarantine' }) };
+    await expect(createTauriHistoryActions(refusing).restoreQuarantined(o, o.items[2]!)).rejects.toMatchObject({ kind: 'not_found' });
   });
 
   it('ScullBridge stays read-only: no restore on it', () => {

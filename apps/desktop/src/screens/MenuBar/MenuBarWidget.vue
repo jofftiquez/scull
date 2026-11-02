@@ -95,6 +95,12 @@ async function quickClean(): Promise<void> {
     return;
   }
   if (phase.value !== 'idle' || model.value.tools.length === 0) return;
+  // Cleaning is confirmed in the main window only (P3-EXEC-01): inside Tauri the widget opens
+  // the Overview, whose Quick Clean card asks before anything runs.
+  if (bridge.kind === 'tauri') {
+    open('/');
+    return;
+  }
   try {
     result.value = await quickCleanPreview(bridge, model.value.tools);
   } catch (e) {

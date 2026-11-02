@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_fixtures::registry::{
-    COVERED_SECTIONS, DocFixture, REGISTRY, Status, TestRef, lookup, parse_fixture_matrix,
+    COVERED_SECTIONS, DocFixture, OsRun, REGISTRY, Status, TestRef, lookup, parse_fixture_matrix,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -111,6 +111,51 @@ fn deferred_fixtures_are_not_mvp_ci() {
     }
 }
 
+/// The signed manual release checklist (docs/FIXTURES.md §2.2): the text from its heading to
+/// the next `### ` or `## ` heading.
+fn manual_checklist() -> String {
+    let text = fs::read_to_string(workspace_root().join("docs/FIXTURES.md")).unwrap();
+    let start = text
+        .find("### 2.2 Manual release checklist")
+        .expect("docs/FIXTURES.md has §2.2 Manual release checklist");
+    let rest = &text[start + 4..];
+    let end = [rest.find("\n### "), rest.find("\n## ")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// `ManualChecklist` is only for Manual-mode fixtures, and each has a checklist entry
+/// (a `**FX-...**` item with checkboxes) in docs/FIXTURES.md §2.2.
+#[test]
+fn manual_checklist_fixtures_have_a_checklist_entry() {
+    let checklist = manual_checklist();
+    let mut checked = 0;
+    for r in REGISTRY {
+        if r.status != Status::ManualChecklist {
+            continue;
+        }
+        assert_eq!(r.mode, scull_fixtures::registry::Mode::Manual, "{}", r.id);
+        let entry = format!("**{}**", r.id);
+        let at = checklist
+            .find(&entry)
+            .unwrap_or_else(|| panic!("{}: no {entry} entry in docs/FIXTURES.md §2.2", r.id));
+        let body = &checklist[at..];
+        let body = &body[..body[entry.len()..]
+            .find("\n**FX-")
+            .map_or(body.len(), |i| i + entry.len())];
+        assert!(
+            body.matches("- [ ]").count() >= 3,
+            "{}: the checklist entry needs at least three steps to tick",
+            r.id
+        );
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
 /// Whether `source` defines `#[test] fn name(`: the function exists and one of the attribute
 /// lines right above it is `#[test]`.
 fn defines_test(source: &str, name: &str) -> bool {
@@ -127,7 +172,18 @@ fn defines_test(source: &str, name: &str) -> bool {
     })
 }
 
-/// Every test the registry names exists, as a `#[test]` function, in the file it names.
+/// Whether `source` is a custom test harness (`harness = false`) that registers `name`: it
+/// defines `fn name()` and lists `"name"` in its `const TESTS` table.
+fn defines_custom_harness_test(source: &str, name: &str) -> bool {
+    source.contains("const TESTS")
+        && source.contains(&format!("\"{name}\""))
+        && source
+            .lines()
+            .any(|l| l.trim_start().starts_with(&format!("fn {name}()")))
+}
+
+/// Every test the registry names exists, as a `#[test]` function (or an entry of a custom
+/// harness's `TESTS` table), in the file it names.
 #[test]
 fn every_registered_test_fn_exists() {
     let root = workspace_root();
@@ -140,7 +196,7 @@ fn every_registered_test_fn_exists() {
                 problems.push(format!("{}: {file} does not exist", r.id));
                 continue;
             };
-            if !defines_test(&source, test_fn) {
+            if !defines_test(&source, test_fn) && !defines_custom_harness_test(&source, test_fn) {
                 problems.push(format!("{}: no #[test] fn {test_fn} in {file}", r.id));
             }
             let want = r.id.to_ascii_lowercase().replace('-', "_");
@@ -162,4 +218,69 @@ fn defines_test_needs_the_attribute() {
     assert!(!defines_test(src, "fx_b"));
     assert!(defines_test(src, "fx_c"));
     assert!(!defines_test(src, "fx_d"));
+}
+
+#[test]
+fn defines_custom_harness_test_needs_the_table_entry() {
+    let src = "const TESTS: &[Test] = &[(\"fx_a\", fx_a)];\nfn fx_a() {}\nfn fx_b() {}\n";
+    assert!(defines_custom_harness_test(src, "fx_a"));
+    assert!(!defines_custom_harness_test(src, "fx_b"));
+    assert!(!defines_custom_harness_test(
+        "fn fx_a() {}\n\"fx_a\"",
+        "fx_a"
+    ));
+}
+
+/// Per-OS run status: `pending_ci` and `missing_os` name only OSs the fixture runs on (never the
+/// same one), `pending_ci` only for fixtures with tests, `missing_os` only for tracked ones; the
+/// report lists, for every implemented or tracked fixture, where its tests ran green, where they
+/// wait for CI and where none exists yet.
+#[test]
+fn per_os_status_is_consistent_and_reported() {
+    let mut problems = Vec::new();
+    for r in REGISTRY {
+        let letters = r.os_letters();
+        for (field, value) in [("pending_ci", r.pending_ci), ("missing_os", r.missing_os)] {
+            for c in value.chars() {
+                if !letters.contains(&c) {
+                    problems.push(format!(
+                        "{}: {field} {c:?} is not one of its OSs {:?}",
+                        r.id, r.os
+                    ));
+                }
+            }
+        }
+        if let Some(c) = r.pending_ci.chars().find(|c| r.missing_os.contains(*c)) {
+            problems.push(format!("{}: {c:?} is both pending CI and missing", r.id));
+        }
+        if !r.pending_ci.is_empty() && r.status.tests().is_empty() {
+            problems.push(format!("{}: pending_ci without any test", r.id));
+        }
+        if !r.missing_os.is_empty() && !matches!(r.status, Status::Tracked { .. }) {
+            problems.push(format!(
+                "{}: misses {:?} but is not tracked by an issue",
+                r.id, r.missing_os
+            ));
+        }
+        if r.status.tests().is_empty() {
+            continue;
+        }
+        let status: Vec<String> = r
+            .os_status()
+            .iter()
+            .map(|(c, run)| match run {
+                OsRun::Verified => format!("{c}:ran"),
+                OsRun::PendingCi => format!("{c}:pending-CI"),
+                OsRun::Missing => format!("{c}:MISSING"),
+            })
+            .collect();
+        let kind = match r.status {
+            Status::Implemented(_) => "implemented",
+            Status::Tracked { .. } => "partial",
+            Status::ManualChecklist => "manual",
+            Status::Deferred => "deferred",
+        };
+        println!("{} [{kind}] {}", r.id, status.join(" "));
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

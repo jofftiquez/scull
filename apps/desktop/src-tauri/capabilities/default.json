@@ -1,7 +1,45 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window and the menu bar widget (menubar): scull's own commands and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: the desktop never mutates the filesystem).",
-  "windows": ["main", "menubar"],
-  "permissions": ["core:default"]
+  "description": "The main window: scull's own commands (including approving an AI agent's plan, P4-MCP-02, and running reviewed cleanups through the core Executor, P3-EXEC-01) and core events only. No filesystem, shell, process or HTTP plugin (SAFE-10: deletion only through the core Executor).",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-app-info",
+    "allow-drives",
+    "allow-scan",
+    "allow-caches",
+    "allow-cancel-operation",
+    "allow-projects",
+    "allow-worktrees",
+    "allow-status",
+    "allow-capabilities",
+    "allow-history",
+    "allow-settings",
+    "allow-free-space-history",
+    "allow-rollup-history",
+    "allow-regrowth",
+    "allow-footprint-history",
+    "allow-forecasts",
+    "allow-weekly-digest",
+    "allow-monitor-status",
+    "allow-configure-monitor",
+    "allow-pause-monitor",
+    "allow-send-digest-now",
+    "allow-open-main-window",
+    "allow-hide-menu-bar",
+    "allow-approval-requests",
+    "allow-open-approval-request",
+    "allow-approve-agent-plan",
+    "allow-deny-agent-plan",
+    "allow-revoke-agent-approval",
+    "allow-agent-plan-status",
+    "allow-take-deep-link",
+    "allow-prepare-desktop-plan",
+    "allow-execute-desktop-plan",
+    "allow-restore-quarantined",
+    "allow-quick-clean"
+  ]
 }
