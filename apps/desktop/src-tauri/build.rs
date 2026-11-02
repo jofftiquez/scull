@@ -43,6 +43,8 @@ const COMMANDS: &[&str] = &[
     "execute_desktop_plan",
     "restore_quarantined",
     "quick_clean",
+    "onboarding_context",
+    "pick_project_folders",
 ];
 
 fn main() {

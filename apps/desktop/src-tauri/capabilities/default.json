@@ -40,6 +40,8 @@
     "allow-prepare-desktop-plan",
     "allow-execute-desktop-plan",
     "allow-restore-quarantined",
-    "allow-quick-clean"
+    "allow-quick-clean",
+    "allow-onboarding-context",
+    "allow-pick-project-folders"
   ]
 }

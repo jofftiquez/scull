@@ -1,29 +1,16 @@
-// Onboarding's two calls that the core bridge does not have yet (P3-UI-03).
-//
-//   detect()       the metadata-only probe of `scull init` (ONB-01): toolchains, project
-//                  folders, AI-client configs. Planned bridge command: `onboarding_detect`.
-//   saveProfile()  writes the profile and `scan.roots` like `scull init` does (ONB-03, CFG-05).
-//                  Planned bridge command: `onboarding_save_profile`.
-//
-// Neither deletes anything; they stay out of `ScullBridge` until the Rust commands exist, so
-// the core bridge's command table and parity tests are unchanged. In a plain browser the mock
-// answers with the design's illustrative machine. Inside Tauri, detection is derived from the
-// existing read-only commands (projects, caches) and saving reports that it is not available
-// yet, so onboarding still works end to end without writing anything.
+// Onboarding discovery uses existing read-only reports; native context and folder selection
+// are restricted app commands. Survey preferences are saved locally by prefs.ts.
+import type { InjectionKey } from 'vue';
 import type { ScullBridge } from '../../bridge';
-import type { Detection, DetectedToolchain, Profile } from './model';
+import { createTauriOnboardingCommands, type OnboardingCommands } from '../../bridge/tauri';
+import type { Detection, DetectedToolchain } from './model';
 
-export interface SaveResult {
-  saved: boolean;
-  /** Why it was not saved (the command does not exist yet). */
-  reason?: string;
-}
-
-export interface OnboardingBridge {
-  readonly kind: 'mock' | 'pending';
+export interface OnboardingBridge extends OnboardingCommands {
+  readonly kind: 'mock' | 'tauri';
   detect(): Promise<Detection>;
-  saveProfile(profile: Profile): Promise<SaveResult>;
 }
+
+export const ONBOARDING_KEY: InjectionKey<OnboardingBridge> = Symbol('scull-onboarding');
 
 /** The design's machine (design/source/Onboarding.dc.html), under the mock's /Users/ada. */
 export const MOCK_DETECTION: Detection = {
@@ -56,20 +43,14 @@ export const MOCK_DETECTION: Detection = {
   ai_clients: ['claude-code', 'codex'],
 };
 
-export function createMockOnboardingBridge(opts: { latencyMs?: number } = {}): OnboardingBridge & { saved: Profile[] } {
-  const wait = () => new Promise<void>((r) => setTimeout(r, opts.latencyMs ?? 0));
-  const saved: Profile[] = [];
+export function createMockOnboardingBridge(opts: { latencyMs?: number } = {}): OnboardingBridge {
   return {
     kind: 'mock',
-    saved,
+    context: async () => ({ home: MOCK_DETECTION.home }),
+    pickFolders: async () => ['/Users/ada/Projects'],
     async detect() {
-      await wait();
+      if (opts.latencyMs) await new Promise<void>((r) => setTimeout(r, opts.latencyMs));
       return structuredClone(MOCK_DETECTION);
-    },
-    async saveProfile(profile) {
-      await wait();
-      saved.push(structuredClone(profile));
-      return { saved: true };
     },
   };
 }
@@ -91,14 +72,11 @@ function parent(p: string): string {
   return i > 0 ? p.slice(0, i) : p;
 }
 
-/**
- * Inside Tauri until the probe command exists: what the last scan and the cache report show.
- * The home folder is guessed from the cache paths (they live under it) and is only used to
- * shorten paths and to recognise broad roots.
- */
-export function createPendingOnboardingBridge(bridge: ScullBridge): OnboardingBridge {
+/** Reports are suggestions only. Home context comes from the native session. */
+export function createPendingOnboardingBridge(bridge: ScullBridge, native = createTauriOnboardingCommands()): OnboardingBridge {
   return {
-    kind: 'pending',
+    kind: 'tauri',
+    ...native,
     async detect() {
       const [projects, caches] = await Promise.allSettled([bridge.projects(), bridge.caches()]);
       const toolchains: DetectedToolchain[] = [];
@@ -108,13 +86,10 @@ export function createPendingOnboardingBridge(bridge: ScullBridge): OnboardingBr
         if (cache && !t.caches.includes(cache)) t.caches.push(cache);
         if (binary && !t.binaries.includes(binary)) t.binaries.push(binary);
       };
-      let home = '';
       if (caches.status === 'fulfilled') {
         for (const c of caches.value.candidates) {
           const tool = c.action.type === 'tool_command' ? c.action.tool : c.rule.id.split('.')[0] ?? 'cache';
           add(['npm', 'pnpm', 'yarn', 'bun'].includes(tool) ? 'node' : tool, 'web', c.path, tool);
-          const m = /^(.*?[\\/](?:Users|home)[\\/][^\\/]+)/.exec(c.path) ?? /^([A-Za-z]:\\Users\\[^\\]+)/.exec(c.path);
-          if (m?.[1]) home = m[1];
         }
       }
       const counts = new Map<string, number>();
@@ -126,16 +101,10 @@ export function createPendingOnboardingBridge(bridge: ScullBridge): OnboardingBr
       }
       const roots = projects.status === 'fulfilled' ? projects.value.roots : [];
       return {
-        home,
+        home: '',
         toolchains,
         folders: roots.map((path) => ({ path, repos: counts.get(path) ?? null, suggested: true })),
         ai_clients: [],
-      };
-    },
-    async saveProfile() {
-      return {
-        saved: false,
-        reason: 'Saving the profile from the app arrives with the onboarding_save_profile command; run `scull init` to write it now.',
       };
     },
   };
@@ -143,5 +112,5 @@ export function createPendingOnboardingBridge(bridge: ScullBridge): OnboardingBr
 
 /** The mock in a plain browser, the derived probe inside Tauri. */
 export function onboardingBridgeFor(bridge: ScullBridge): OnboardingBridge {
-  return bridge.kind === 'mock' ? createMockOnboardingBridge({ latencyMs: 120 }) : createPendingOnboardingBridge(bridge);
+  return bridge.kind === 'mock' ? createMockOnboardingBridge() : createPendingOnboardingBridge(bridge);
 }

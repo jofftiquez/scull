@@ -247,14 +247,29 @@ real commands land they move into `ScullBridge`.
 
 | Screen | Stub | Calls | Planned command |
 |---|---|---|---|
-| Onboarding | `src/components/onboarding/bridge.ts` | `detect()`: the `scull init` probe (ONB-01). Inside Tauri it is derived from `projects()` and `caches()` for now. | `onboarding_detect` |
-| | | `saveProfile(profile)`: writes the profile and `scan.roots` like `scull init` (ONB-03). Inside Tauri it returns `saved: false` with the reason. | `onboarding_save_profile` |
+| Onboarding | `src/components/onboarding/bridge.ts` | `detect()`: suggestions derived from existing project/cache reports; native folder selection is implemented. | Full metadata-only discovery remains separate. |
+| | | App-local survey preferences and scan roots are saved by `prefs.ts`. Shared core profile/config writes remain separate. | `onboarding_save_profile` |
 
-Onboarding opens at `#/onboarding`. The shell sends you there on first open, when `status()`
-reports `no_scan` or `no_database`. The route has `meta.bare`, so the sidebar is hidden. Scan
-roots follow CFG-04: a filesystem root, the home folder or a folder that contains it is never
-ticked by default. Ticking one asks for confirmation first, and only then does the scan send
-`allow_broad_roots`.
+Onboarding opens at `#/onboarding` before the first complete scan, with a six-step survey:
+what you build, project folders, coding-agent use, your goal, explanation preference, and review.
+Back and the review's Edit links retain answers. `Choose folders…` opens the native directory
+chooser in the desktop app; the browser mock supplies a recorded folder choice. Selection
+never starts a scan. Filesystem roots, home, and its ancestors require explicit confirmation.
+The native home directory comes from the desktop session, independently of previous scans.
+
+The survey remembers answers and selected folders in this app's local storage. The first scan
+and later desktop rescans use those selected folders, retaining core root validation. A save
+failure offers retry or an explicit one-time scan. This does not write `config.toml` or
+`profile.toml`, and it does not sync with `scull init`. Goals and explanation choices are
+recorded preferences; setup does not connect coding agents, change notification schedules,
+change cleanup selection, or weaken safety rules. `Set up later` exits without scanning or
+saving a draft. A stopped scan is labeled partial, and only a complete scan suppresses
+first-run onboarding on later launches.
+
+The restricted `onboarding_context` and `pick_project_folders` commands are main-window-only.
+The Rust `rfd` native picker is used directly because the Tauri dialog plugin also links a
+filesystem plugin, which this app forbids. No generic open/save-dialog or filesystem permission
+is granted to the webview.
 
 ## Plan bridge (Cleanup Review, Git Worktrees)
 

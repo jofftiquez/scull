@@ -1,81 +1,54 @@
 <script setup lang="ts">
-// "Here's what scull will focus on" (design 02, ONB-03): the live summary of the answers, then
-// the first scan's progress and result (02b), then the actions.
-import { computed } from 'vue';
 import { formatBytes } from '../../lib/format';
-import type { FirstScan, SummaryRow } from './model';
-
-const props = defineProps<{ rows: SummaryRow[]; scan: FirstScan; fill: number }>();
-
-const shown = computed(() => props.scan.phase !== 'idle');
-const entries = computed(() => (props.scan.result?.entries ?? props.scan.entries).toLocaleString('en-US'));
-const statusText = computed(() => {
-  switch (props.scan.phase) {
-    case 'done':
-      return 'Scan complete';
-    case 'cancelled':
-      return 'Scan stopped · partial';
-    case 'failed':
-      return 'Scan failed';
-    default:
-      return props.scan.activity || 'Starting…';
-  }
-});
+import type { FirstScan, OnboardingStep, SummaryRow } from './model';
+defineProps<{ rows: SummaryRow[]; scan: FirstScan }>();
+defineEmits<{ edit: [step: OnboardingStep] }>();
 </script>
 
 <template>
-  <section
-    aria-label="Your setup"
-    class="flex flex-wrap items-end gap-x-12 gap-y-6 rounded-tile border border-accent-tint-border bg-accent-tint p-8 text-ink"
-    data-testid="summary"
-  >
-    <div class="flex flex-[1_1_520px] flex-col gap-4">
-      <span class="text-label font-medium text-text-strong-muted">Here's what scull will focus on</span>
-      <dl class="m-0 grid grid-cols-1 gap-1.5 min-[640px]:grid-cols-2">
-        <div v-for="r in rows" :key="r.k" class="flex flex-col gap-1 rounded-[14px] bg-surface p-4" data-testid="summary-row">
-          <dt class="font-mono text-[11px] text-text-strong-muted">{{ r.k }}</dt>
-          <dd class="m-0 font-medium">{{ r.v }}</dd>
-        </div>
-      </dl>
-    </div>
-
-    <div v-if="shown" class="scan-rise flex flex-[1_1_100%] flex-col gap-3" data-testid="scan">
-      <div class="flex flex-wrap items-baseline justify-between gap-3" aria-live="polite">
-        <span class="text-[28px] font-semibold tracking-[-0.02em] tabular-nums" data-testid="entries">{{ entries }} entries</span>
-        <span class="font-mono text-label text-text-strong-muted">{{ statusText }}</span>
+  <section v-if="scan.phase === 'idle'" aria-label="Review your setup" data-testid="summary">
+    <dl class="review-list">
+      <div v-for="row in rows" :key="row.k" class="review-row" data-testid="review-row">
+        <div class="review-copy"><dt>{{ row.k }}</dt><dd>{{ row.v }}</dd></div>
+        <button v-if="row.step" type="button" class="edit" :aria-label="`Edit ${row.k.toLowerCase()}`" :data-testid="`edit-step-${row.step}`" @click="$emit('edit', row.step)">Edit</button>
       </div>
-      <div
-        class="h-3.5 overflow-hidden rounded-chip bg-surface"
-        role="progressbar"
-        aria-label="First scan"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="Math.round(fill * 100)"
-      >
-        <div class="scan-fill h-full rounded-chip" :style="{ width: `${Math.round(fill * 100)}%` }"></div>
-      </div>
-      <div v-if="scan.result" class="flex flex-wrap gap-2" data-testid="found-chips">
-        <span class="rounded-chip bg-surface px-3 py-1.5 text-label">{{ scan.result.projects }} project{{ scan.result.projects === 1 ? '' : 's' }}</span>
-        <span class="rounded-chip bg-surface px-3 py-1.5 text-label">{{ scan.result.worktrees }} worktree{{ scan.result.worktrees === 1 ? '' : 's' }}</span>
-        <span class="rounded-chip bg-tier-s0 px-3 py-1.5 text-label font-semibold text-tier-s0-text">{{ formatBytes(scan.result.safeBytes) }} safely reclaimable</span>
-      </div>
-      <p v-if="scan.error" class="m-0 text-label text-accent-text" role="alert">{{ scan.error }}</p>
+    </dl>
+    <p class="review-note">Your preferences are remembered on this device. This scan uses your selected folders. Agent connections, alerts, and cleanup settings are managed separately.</p>
+  </section>
+  <section v-else class="scan-status" data-testid="scan" aria-label="First scan">
+    <div aria-live="polite" role="status">
+      <p class="scan-label">{{ scan.phase === 'running' ? scan.activity : scan.phase === 'done' ? 'Scan complete' : scan.phase === 'cancelled' ? 'Scan stopped · partial results' : 'Scan failed' }}</p>
+      <p class="entry-count">{{ (scan.result?.entries ?? scan.entries).toLocaleString('en-US') }} <span>entries</span></p>
     </div>
-
-    <div class="flex flex-wrap gap-2">
-      <slot />
-    </div>
+    <div v-if="scan.phase === 'running'" class="scan-track" role="progressbar" aria-label="Scanning selected folders"><span></span></div>
+    <dl v-if="scan.result" class="result-list" data-testid="found-chips">
+      <div><dt>Projects</dt><dd>{{ scan.result.projects }}</dd></div>
+      <div><dt>Git worktrees</dt><dd>{{ scan.result.worktrees }}</dd></div>
+      <div><dt>Regenerable storage found</dt><dd>{{ formatBytes(scan.result.safeBytes) }}</dd></div>
+    </dl>
+    <p v-if="scan.error" class="scan-error" role="alert">{{ scan.error }}</p>
   </section>
 </template>
 
 <style scoped>
-.scan-rise {
-  animation: scull-rise 320ms ease-out;
-}
-.scan-fill {
-  background: repeating-linear-gradient(135deg, var(--color-tier-s0) 0 12px, var(--color-violet-light) 12px 24px);
-  background-size: 48px 100%;
-  animation: scull-shimmer 600ms linear infinite;
-  transition: width 120ms linear;
-}
+.review-list { margin: 0; }
+.review-row { display: flex; align-items: center; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--color-line); }
+.review-copy { flex: 1; min-width: 0; }
+dt { color: var(--color-text-secondary); font-size: 13px; }
+dd { margin: 6px 0 0; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.edit { padding: 8px; min-height: 44px; border: 0; background: transparent; color: var(--color-accent-text); font: inherit; cursor: pointer; }
+.edit:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; }
+.review-note { margin: 24px 0 0; font-size: 13px; line-height: 1.6; color: var(--color-text-secondary); }
+.scan-status { margin: 36px 0; }
+.scan-label { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; color: var(--color-text-secondary); }
+.entry-count { margin: 16px 0 24px; font-size: 40px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.entry-count span { font-size: 16px; font-weight: 400; color: var(--color-text-secondary); }
+.scan-track { height: 4px; background: var(--color-border); overflow: hidden; border-radius: 2px; }
+.scan-track span { display: block; width: 35%; height: 100%; background: var(--color-accent); animation: scanning 1.6s ease-in-out infinite alternate; }
+@keyframes scanning { from { transform: translateX(-90%); } to { transform: translateX(275%); } }
+.result-list { display: flex; flex-direction: column; gap: 0; margin: 24px 0; }
+.result-list > div { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--color-line); }
+.result-list dd { margin: 0; font-variant-numeric: tabular-nums; }
+.scan-error { color: var(--color-accent-text); line-height: 1.6; }
+@media (prefers-reduced-motion: reduce) { .scan-track span { animation: none; width: 100%; opacity: .6; } }
 </style>

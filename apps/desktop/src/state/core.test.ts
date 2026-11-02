@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createMockBridge, MOCK_DATA } from '../bridge/mock';
 import { BridgeError, type ScullBridge } from '../bridge';
 import { ago, cancelScan, core, refresh, rescan, statusLine } from './core';
+import { saveSetup } from '../components/onboarding/prefs';
+import { defaultAnswers } from '../components/onboarding/model';
+import { MOCK_DETECTION } from '../components/onboarding/bridge';
 import { NOT_SCANNED, shell } from './shell';
 
 beforeEach(() => {
+  localStorage.clear();
   Object.assign(core, { status: null, scanning: false, progress: null, error: null });
   shell.counts = {};
   shell.status = NOT_SCANNED;
@@ -32,6 +36,17 @@ describe('status line', () => {
 });
 
 describe('refresh and rescan', () => {
+  it('rescans saved desktop folders and falls back to core config without a saved setup', async () => {
+    const requests: unknown[] = [];
+    const base = createMockBridge();
+    const b: ScullBridge = { ...base, scan: async (params) => { requests.push(params); return MOCK_DATA.scanReport; } };
+    await rescan(b);
+    const answers = { ...defaultAnswers(MOCK_DETECTION), roots: ['/Users/ada/Projects'], connectAgents: false };
+    saveSetup({ version: 1, home: '/Users/ada', answers });
+    await rescan(b);
+    expect(requests).toEqual([{}, { roots: ['/Users/ada/Projects'], allow_broad_roots: false }]);
+  });
+
   it('fills the header and the nav figures from the bridge', async () => {
     await refresh(createMockBridge());
     expect(shell.status).toMatch(/^scanned /);

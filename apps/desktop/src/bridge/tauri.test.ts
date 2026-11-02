@@ -1,7 +1,7 @@
 // The Tauri bridge over a fake transport: command names and arguments, progress filtering by
 // operation ID, cancellation, and errors as BridgeError(ScullError).
 import { describe, expect, it } from 'vitest';
-import { MONITOR_COMMANDS, MONITOR_EVENT, createTauriBridge, createTauriMonitorControl, newOpId, type TauriTransport } from './tauri';
+import { MONITOR_COMMANDS, MONITOR_EVENT, createTauriBridge, createTauriMonitorControl, createTauriOnboardingCommands, newOpId, type TauriTransport } from './tauri';
 import { BridgeError, CANCEL_COMMAND, COMMANDS, PROGRESS_EVENT, type ProgressEvent } from './types';
 import { MOCK_DATA } from './mock';
 
@@ -33,6 +33,21 @@ function fake(answer: (c: Call, emit: (p: ProgressEvent) => void) => unknown = (
 }
 
 describe('tauri bridge', () => {
+  it('gets the actual home and preserves native picker cancellation and multiple paths', async () => {
+    let picked: string[] | null = null;
+    const { t, calls } = fake(({ cmd }) => cmd === 'onboarding_context' ? { home: '/Users/real' } : picked);
+    const onboarding = createTauriOnboardingCommands(t);
+    expect(await onboarding.context()).toEqual({ home: '/Users/real' });
+    expect(await onboarding.pickFolders()).toBeNull();
+    picked = ['/Users/real/My Projects', '/Volumes/Work'];
+    expect(await onboarding.pickFolders()).toEqual(['/Users/real/My Projects', '/Volumes/Work']);
+    expect(calls.map((c) => c.cmd)).toEqual(['onboarding_context', 'pick_project_folders', 'pick_project_folders']);
+  });
+
+  it('shows native picker failures as bridge errors', async () => {
+    const { t } = fake(() => new Error('dialog unavailable'));
+    await expect(createTauriOnboardingCommands(t).pickFolders()).rejects.toThrow('dialog unavailable');
+  });
   it('calls the commands by their Rust names', async () => {
     const { t, calls } = fake();
     const b = createTauriBridge(t);

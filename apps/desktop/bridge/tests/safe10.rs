@@ -782,6 +782,7 @@ const ALLOWED_DEPS: &[(&str, &[&str])] = &[
             "tauri-plugin-notification",
             "tauri-plugin-deep-link",
             "tauri-plugin-single-instance",
+            "rfd",
             "tauri-build",
         ],
     ),
@@ -971,7 +972,14 @@ fn desktop_sources_have_no_filesystem_mutation() {
             } else {
                 &code
             };
-            assert!(!text.contains(api), "{} uses {api}", f.display());
+            // Match directory-creation identifiers, not the dialog option that disables them.
+            let forbidden = if *api == "create_dir" {
+                text.split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|ident| ident.starts_with("create_dir"))
+            } else {
+                text.contains(api)
+            };
+            assert!(!forbidden, "{} uses {api}", f.display());
         }
     }
 }

@@ -8,11 +8,11 @@ test.use({ reducedMotion: 'reduce' });
 test('key flows reach their end states with no animation running', async ({ page, shot }) => {
   await open(page, '/?scenario=first-run');
   await expect(page).toHaveURL(/#\/onboarding$/);
+  for (let step = 1; step < 6; step++) await page.getByTestId('survey-next').click();
   await page.getByTestId('start-scan').click();
   const openOverview = page.getByTestId('open-overview');
   await expect(openOverview).toBeVisible();
-  // The bounce-in of "Open your overview" is 620 ms normally.
-  expect(await openOverview.evaluate((el) => getComputedStyle(el).animationDuration)).toBe('0.001s');
+  // Survey transitions and scan progress honor reduced motion.
   expect(await runningAnimations(page)).toEqual([]);
   await shot('reduced-motion-1-onboarding-done', { settle: false, show: openOverview });
 

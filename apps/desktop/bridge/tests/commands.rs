@@ -131,7 +131,13 @@ fn frontend_and_app_name_the_same_commands() {
         ts_window_commands(&read("src/bridge/tauri.ts")),
         "tray.rs commands vs src/bridge/tauri.ts WINDOW_COMMANDS"
     );
+    let onboarding = rust_commands(&read("src-tauri/src/onboarding.rs"));
+    assert_eq!(
+        onboarding,
+        ts_table(&read("src/bridge/tauri.ts"), "ONBOARDING_COMMANDS")
+    );
     let mut all = rust.clone();
+    all.extend(onboarding.iter().map(|c| format!("onboarding::{c}")));
     all.extend(window.iter().map(|c| format!("tray::{c}")));
     all.extend(monitor.iter().map(|c| format!("monitor::{c}")));
     assert_eq!(
@@ -145,7 +151,9 @@ fn frontend_and_app_name_the_same_commands() {
         .into_iter()
         .find(|h| h.contains("approve_agent_plan") && !h.contains("app_info"))
         .expect("main_window_handler");
-    assert_eq!(main_window, &approval | &cleanup);
+    let mut expected = &approval | &cleanup;
+    expected.extend(onboarding.iter().map(|c| format!("onboarding::{c}")));
+    assert_eq!(main_window, expected);
 }
 
 /// The quoted names in build.rs's `COMMANDS` (the app manifest).
@@ -196,6 +204,10 @@ fn approval_commands_are_granted_to_the_main_window_only() {
         all,
         "main window: everything"
     );
+    main_only.extend(ts_table(
+        &read("src/bridge/tauri.ts"),
+        "ONBOARDING_COMMANDS",
+    ));
     let menubar = granted("src-tauri/capabilities/menubar.json");
     assert!(
         menubar.is_disjoint(&main_only),

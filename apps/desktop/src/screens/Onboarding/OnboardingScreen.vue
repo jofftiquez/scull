@@ -1,348 +1,232 @@
 <script setup lang="ts">
-// First-run onboarding (P3-UI-03; PRD §14.7 ONB-01…07; design 02 / 02b). Detection first, then
-// five pre-filled questions, a live summary, and an animated first scan of the chosen roots.
-// Full window, no sidebar (route meta `bare`). Nothing here deletes anything: the scan is the
-// core's read-only scan, and the profile goes through the onboarding bridge stub (see
-// components/onboarding/bridge.ts).
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, inject, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import ScullLogo from '../../components/ScullLogo.vue';
-import ChoiceCard from '../../components/onboarding/ChoiceCard.vue';
-import FoundOnMachine from '../../components/onboarding/FoundOnMachine.vue';
 import ProjectFolders from '../../components/onboarding/ProjectFolders.vue';
-import QuestionTile from '../../components/onboarding/QuestionTile.vue';
 import SetupSummary from '../../components/onboarding/SetupSummary.vue';
-import { onboardingBridgeFor } from '../../components/onboarding/bridge';
-import {
-  AGENTS,
-  BUILDS,
-  CAUTION,
-  PRIORITIES,
-  aiClientLabel,
-  andList,
-  answeredCount,
-  canMove,
-  defaultAnswers,
-  displayPath,
-  initialScan,
-  machineNoun,
-  scanFill,
-  scanRoots,
-  summary,
-  toProfile,
-  totalEntries,
-  type Answers,
-  type BuildId,
-  type Detection,
-} from '../../components/onboarding/model';
-import { toBridgeError, useBridge, type Drive } from '../../bridge';
-import { refresh } from '../../state/core';
+import { ONBOARDING_KEY, onboardingBridgeFor } from '../../components/onboarding/bridge';
+import { AGENTS, BUILDS, CAUTION, PRIORITIES, canContinue, canMove, checkRoot, defaultAnswers, displayPath, initialScan, scanRoots, summary, totalEntries, type Answers, type Detection, type OnboardingStep } from '../../components/onboarding/model';
+import { loadSetup, saveSetup } from '../../components/onboarding/prefs';
+import { toBridgeError, useBridge } from '../../bridge';
+import { core, refresh } from '../../state/core';
 
 const bridge = useBridge();
-const onboarding = onboardingBridgeFor(bridge);
+const onboarding = inject(ONBOARDING_KEY, () => onboardingBridgeFor(bridge), true);
 const router = useRouter();
-
+const saved = loadSetup();
 const detection = ref<Detection | null>(null);
-const drive = ref<Drive | null>(null);
-const os = ref<string | undefined>(undefined);
-const answers = reactive<Answers>({
-  builds: [],
-  roots: [],
-  confirmedBroad: [],
-  agents: 'none',
-  connectAgents: false,
-  priority: 'free-space',
-  caution: 'balanced',
-});
-const scan = reactive(initialScan());
-const elapsed = ref(0);
+const home = ref('');
+const contextError = ref<string | null>(null);
+const detectionFailed = ref(false);
+const answers = reactive<Answers>(saved?.answers ?? { builds: ['other'], roots: [], confirmedBroad: [], agents: 'none', connectAgents: false, priority: 'free-space', caution: 'balanced' });
+const touched = new Set<keyof Answers>();
+const step = ref<OnboardingStep>(1);
+const folderBusy = ref(false);
+const removedFolders = ref<string[]>([]);
+const heading = ref<HTMLHeadingElement | null>(null);
 const saveNote = ref<string | null>(null);
-let timer: ReturnType<typeof setInterval> | null = null;
+const scan = reactive(initialScan());
+let alive = true;
+let starting = false;
 let controller: AbortController | null = null;
-
-const noun = computed(() => machineNoun(os.value));
-const home = computed(() => detection.value?.home ?? '');
-const rows = computed(() => (detection.value ? summary(answers, detection.value) : []));
-const answered = computed(() => answeredCount(answers, home.value));
 const roots = computed(() => scanRoots(answers, home.value));
-const fill = computed(() => scanFill(scan.phase, elapsed.value));
-const clients = computed(() => (detection.value?.ai_clients ?? []).map(aiClientLabel));
+const rows = computed(() => summary(answers, { home: home.value, toolchains: [], folders: [], ai_clients: [] }));
+const titles = ['What do you build?', 'Where do your projects live?', 'Do you use coding agents?', 'What would you like scull to help with?', 'How should suggestions and reminders behave?', 'Ready for your first scan?'];
+const hints = ['Pick all that apply. Your project folders determine what gets scanned.', 'Choose the folders you want scull to look through. Nothing is cleaned during a scan.', 'How often are coding agents part of your work?', 'Choose what brought you here. You can explore everything after your scan.', 'Choose how much explanation you prefer. Cleanup always requires your review.', 'Check your folders and preferences before scull takes a look.'];
+const options = computed(() => step.value === 3 ? AGENTS : step.value === 4 ? PRIORITIES : CAUTION);
+const choiceKey = computed(() => step.value === 3 ? 'agents' : step.value === 4 ? 'priority' : 'caution');
+const ready = computed(() => canContinue(step.value, answers, home.value) && !(step.value === 2 && folderBusy.value));
 
-onMounted(async () => {
-  const [det, drives, info] = await Promise.allSettled([onboarding.detect(), bridge.drives(), bridge.appInfo()]);
-  const d: Detection = det.status === 'fulfilled' ? det.value : { home: '', toolchains: [], folders: [], ai_clients: [] };
-  detection.value = d;
-  Object.assign(answers, defaultAnswers(d));
-  if (drives.status === 'fulfilled') drive.value = drives.value.find((x) => x.holds_home) ?? drives.value[0] ?? null;
-  if (info.status === 'fulfilled') os.value = info.value.os;
-});
-
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-  controller?.abort();
-});
-
-function toggleBuild(id: BuildId) {
-  answers.builds = answers.builds.includes(id)
-    ? answers.builds.filter((b) => b !== id)
-    : BUILDS.map((b) => b.id).filter((b) => b === id || answers.builds.includes(b));
+function applySuggestions() {
+  if (!detection.value || !home.value || saved) return;
+  const defaults = defaultAnswers({ ...detection.value, home: home.value });
+  if (!touched.has('builds')) answers.builds = defaults.builds;
+  if (!touched.has('roots')) answers.roots = defaults.roots;
+  if (!touched.has('agents')) answers.agents = defaults.agents;
 }
 
-const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-async function save(): Promise<void> {
-  if (!detection.value) return;
+async function getContext() {
+  contextError.value = null;
   try {
-    const r = await onboarding.saveProfile(toProfile(answers, detection.value));
-    saveNote.value = r.saved ? null : (r.reason ?? 'The profile was not saved.');
-  } catch (e) {
-    saveNote.value = `The profile was not saved: ${toBridgeError(e).message}`;
+    const context = await onboarding.context();
+    if (!alive) return;
+    if (!context.home || !checkRoot(context.home, '').ok) throw new Error('Your home folder is unavailable.');
+    home.value = context.home;
+    if (saved && saved.home !== home.value) {
+      answers.roots = [];
+      answers.confirmedBroad = [];
+    }
+    applySuggestions();
+  } catch {
+    if (alive) contextError.value = 'We could not identify your home folder. Try again before choosing folders.';
   }
 }
 
-async function skip() {
-  await save();
-  await router.push('/');
+onMounted(() => {
+  void getContext();
+  void onboarding.detect().then((d) => {
+    if (!alive) return;
+    detection.value = d;
+    applySuggestions();
+  }).catch(() => { if (alive) detectionFailed.value = true; });
+});
+onBeforeUnmount(() => { alive = false; controller?.abort(); });
+watch(() => scan.phase, async () => { await nextTick(); if (alive) heading.value?.focus(); });
+
+async function go(to: OnboardingStep) {
+  if (scan.phase === 'running' || folderBusy.value) return;
+  step.value = to;
+  await nextTick();
+  heading.value?.focus();
 }
 
-async function startScan() {
-  if (!detection.value || roots.value.length === 0 || !canMove(scan.phase, 'running')) return;
-  await save();
-  const scanRootsNow = roots.value;
-  Object.assign(scan, { phase: 'running', entries: 0, activity: '', result: null, error: null });
-  elapsed.value = 0;
-  const t0 = Date.now();
-  timer = setInterval(() => (elapsed.value = Date.now() - t0), 40);
+function editFolders() {
+  scan.phase = 'idle';
+  void go(2);
+}
+
+async function startScan(once = false) {
+  if (starting || !home.value || !roots.value.length || !canMove(scan.phase, 'running')) return;
+  starting = true;
+  saveNote.value = null;
+  if (!once) {
+    const result = saveSetup({ version: 1, home: home.value, answers: { ...answers, connectAgents: false } });
+    if (!result.saved) { saveNote.value = result.reason ?? 'Your choices could not be remembered.'; starting = false; return; }
+  }
+  const selectedRoots = [...roots.value];
+  Object.assign(scan, { phase: 'running', entries: 0, activity: 'Starting your scan…', result: null, error: null });
   controller = new AbortController();
   const perRoot: Record<string, number> = {};
   try {
-    const report = await bridge.scan(
-      { roots: scanRootsNow, allow_broad_roots: scanRootsNow.some((r) => answers.confirmedBroad.includes(r)) },
-      {
-        signal: controller.signal,
-        onProgress: (p) => {
-          if (p.phase === 'scanning') {
-            if (p.root && p.entries != null) perRoot[p.root] = p.entries;
-            scan.entries = totalEntries(perRoot);
-            scan.activity = p.root ? `${displayPath(p.root, home.value)}/…` : 'scanning…';
-          } else {
-            scan.activity = p.what ?? 'analysing…';
-          }
-        },
+    const report = await bridge.scan({ roots: selectedRoots, allow_broad_roots: selectedRoots.some((r) => answers.confirmedBroad.includes(r)) }, {
+      signal: controller.signal,
+      onProgress: (p) => {
+        if (!alive) return;
+        if (p.phase === 'scanning') {
+          if (p.root && p.entries != null) perRoot[p.root] = p.entries;
+          scan.entries = totalEntries(perRoot);
+          scan.activity = p.root ? `${displayPath(p.root, home.value)}/…` : 'Scanning…';
+        } else scan.activity = p.what ?? 'Analysing…';
       },
-    );
-    // Let the bar finish its ease so a fast scan doesn't flash past (design: 3.2 s).
-    if (!reducedMotion() && !report.cancelled) await wait(Math.max(0, 1600 - (Date.now() - t0)));
-    scan.result = {
-      entries: report.entries_scanned,
-      projects: report.projects.length,
-      worktrees: report.worktrees.length,
-      safeBytes: report.totals.reclaimable.s0,
-    };
+    });
+    if (!alive) return;
+    scan.result = { entries: report.entries_scanned, projects: report.projects.length, worktrees: report.worktrees.length, safeBytes: report.totals.reclaimable.s0 };
     scan.phase = report.cancelled ? 'cancelled' : 'done';
+    if (!report.cancelled || !core.report) core.report = markRaw(report);
     void refresh(bridge);
   } catch (e) {
+    if (!alive) return;
     scan.error = toBridgeError(e).message;
     scan.phase = 'failed';
   } finally {
-    if (timer) clearInterval(timer);
-    timer = null;
     controller = null;
+    starting = false;
   }
-}
-
-function cancelScan() {
-  controller?.abort();
 }
 </script>
 
 <template>
-  <main class="w-full" data-testid="onboarding">
-    <div class="mx-auto grid max-w-[1200px] grid-cols-12 gap-page-gap">
-      <header class="col-span-12 flex flex-wrap items-end justify-between gap-6 rounded-tile bg-surface p-8">
-        <div class="flex flex-col gap-4">
-          <div class="flex items-center gap-3">
-            <ScullLogo :size="30" :wink="scan.phase === 'done'" />
-            <span class="text-h2 font-semibold">scull</span>
+  <main class="onboarding" data-testid="onboarding">
+    <header class="setup-header">
+      <RouterLink to="/" class="brand" :aria-disabled="scan.phase === 'running'" @click="scan.phase === 'running' && $event.preventDefault()">
+        <ScullLogo :size="28" /><span>scull</span>
+      </RouterLink>
+      <button v-if="scan.phase === 'idle'" type="button" class="quiet-button" data-testid="skip" @click="router.push('/')">Set up later</button>
+      <span v-else class="text-label text-text-secondary">Your first scan</span>
+    </header>
+
+    <div class="survey-column">
+      <template v-if="scan.phase === 'idle'">
+        <div class="step-meta" aria-live="polite" data-testid="survey-progress">
+          <span>Step {{ step }} of 6</span><span>Getting to know your setup</span>
+        </div>
+        <div class="step-track" aria-hidden="true"><span v-for="n in 6" :key="n" :class="{ reached: n <= step }"></span></div>
+        <section :key="step" class="survey-question" aria-labelledby="survey-heading">
+          <h1 id="survey-heading" ref="heading" tabindex="-1">{{ titles[step - 1] }}</h1>
+          <p class="question-hint">{{ hints[step - 1] }}</p>
+          <fieldset v-if="step === 1" class="build-options">
+            <legend class="sr-only">What do you build? Pick all that apply</legend>
+            <label v-for="b in BUILDS" :key="b.id" class="build-option" :class="{ selected: answers.builds.includes(b.id) }">
+              <input v-model="answers.builds" type="checkbox" :value="b.id" @change="touched.add('builds')" />
+              <span>{{ b.label }}</span>
+            </label>
+          </fieldset>
+          <div v-else-if="step === 2">
+            <div v-if="contextError" class="context-error" role="alert"><p>{{ contextError }}</p><button type="button" class="outline-button" @click="getContext">Try again</button></div>
+            <p v-else-if="!home" class="text-text-secondary" role="status">Preparing folder selection…</p>
+            <ProjectFolders v-else v-model:roots="answers.roots" v-model:confirmed="answers.confirmedBroad" v-model:removed="removedFolders" :folders="detection?.folders ?? []" :home="home" :pick-folders="onboarding.pickFolders" @update:roots="touched.add('roots')" @busy="folderBusy = $event" />
           </div>
-          <h1 class="m-0 text-[40px] leading-[1.1] font-semibold tracking-[-0.03em]">Let's set scull up for how you work.</h1>
-          <p class="m-0 text-[16px] text-text-secondary">
-            Five quick questions, under a minute. We already looked around, so most answers are pre-filled. Everything
-            stays on this {{ noun }}.
-          </p>
-        </div>
-        <span class="font-mono text-caption text-text-secondary" data-testid="answered">{{ answered }} of 5 answered</span>
-      </header>
-
-      <FoundOnMachine class="tile col-span-12 row-span-2 min-[861px]:col-span-4" :detection="detection" :drive="drive" :noun="noun" />
-
-      <QuestionTile n="01" title="What do you build?" hint="Pick all that apply" gap="md" class="tile col-span-12 min-[861px]:col-span-8">
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="b in BUILDS"
-            :key="b.id"
-            type="button"
-            :aria-pressed="answers.builds.includes(b.id)"
-            class="min-h-touch cursor-pointer rounded-chip border-0 px-4 font-[inherit] font-medium"
-            :class="answers.builds.includes(b.id) ? 'bg-ink text-on-ink' : 'bg-surface-raised text-ink hover:bg-line'"
-            @click="toggleBuild(b.id)"
-          >
-            {{ b.label }}
-          </button>
-        </div>
-        <span class="text-caption text-text-secondary">Pre-selected from what we found. Decides which categories show first.</span>
-      </QuestionTile>
-
-      <QuestionTile n="02" title="Where do your projects live?" class="tile col-span-12 min-[861px]:col-span-4">
-        <ProjectFolders
-          v-if="detection"
-          v-model:roots="answers.roots"
-          v-model:confirmed="answers.confirmedBroad"
-          :folders="detection.folders"
-          :home="detection.home"
-        />
-      </QuestionTile>
-
-      <QuestionTile n="03" title="Do you use AI coding agents?" class="tile col-span-12 min-[861px]:col-span-4">
-        <div class="grid grid-cols-3 gap-1.5">
-          <button
-            v-for="o in AGENTS"
-            :key="o.id"
-            type="button"
-            :aria-pressed="answers.agents === o.id"
-            class="min-h-touch cursor-pointer rounded-button border-0 font-[inherit] font-medium"
-            :class="answers.agents === o.id ? 'bg-ink text-on-ink' : 'bg-surface-raised text-ink hover:bg-line'"
-            @click="answers.agents = o.id"
-          >
-            {{ o.label }}
-          </button>
-        </div>
-        <span class="text-label text-text-secondary">
-          {{ clients.length ? `Found ${andList(clients)}.` : 'No AI coding clients found.' }}
-        </span>
-        <label v-if="clients.length && answers.agents !== 'none'" class="flex min-h-touch cursor-pointer items-center gap-3">
-          <input v-model="answers.connectAgents" type="checkbox" class="m-0 size-[18px] accent-ink" />
-          <span>Connect scull to them, read-only</span>
-        </label>
-      </QuestionTile>
-
-      <QuestionTile n="04" title="What matters most right now?" class="tile col-span-12 min-[861px]:col-span-6">
-        <div class="flex flex-col gap-1.5">
-          <ChoiceCard
-            v-for="o in PRIORITIES"
-            :key="o.id"
-            :label="o.label"
-            :hint="o.hint"
-            :pressed="answers.priority === o.id"
-            @pick="answers.priority = o.id"
-          />
-        </div>
-      </QuestionTile>
-
-      <QuestionTile n="05" title="How cautious should scull be?" class="tile col-span-12 min-[861px]:col-span-6">
-        <div class="flex flex-col gap-1.5">
-          <ChoiceCard
-            v-for="o in CAUTION"
-            :key="o.id"
-            :label="o.label"
-            :hint="o.hint"
-            :pressed="answers.caution === o.id"
-            @pick="answers.caution = o.id"
-          />
-        </div>
-        <span class="text-caption text-text-secondary">
-          Safety rules are identical for every choice. This only changes suggestions and how often scull alerts you.
-        </span>
-      </QuestionTile>
-
-      <SetupSummary class="col-span-12" :rows="rows" :scan="scan" :fill="fill">
-        <template v-if="scan.phase === 'idle'">
-          <button type="button" class="btn-ghost" data-testid="skip" @click="skip">Skip, use defaults</button>
-          <button
-            type="button"
-            class="btn-accent"
-            data-testid="start-scan"
-            :disabled="roots.length === 0"
-            :title="roots.length === 0 ? 'Choose at least one folder' : undefined"
-            @click="startScan"
-          >
-            Start first scan
-          </button>
-        </template>
-        <button v-else-if="scan.phase === 'running'" type="button" class="btn-ghost" data-testid="cancel-scan" @click="cancelScan">
-          Stop scan
-        </button>
-        <template v-else-if="scan.phase === 'failed'">
-          <button type="button" class="btn-ghost" @click="skip">Skip for now</button>
-          <button type="button" class="btn-accent" @click="startScan">Try again</button>
-        </template>
-        <RouterLink v-else to="/" class="btn-open" data-testid="open-overview">Open your overview →</RouterLink>
-        <p v-if="saveNote" class="m-0 basis-full text-caption text-text-strong-muted" data-testid="save-note">{{ saveNote }}</p>
-      </SetupSummary>
+          <fieldset v-else-if="step < 6" class="choice-options">
+            <legend class="sr-only">{{ titles[step - 1] }}</legend>
+            <label v-for="option in options" :key="option.id" class="choice-option" :class="{ selected: answers[choiceKey] === option.id }">
+              <input v-model="answers[choiceKey]" type="radio" :name="choiceKey" :value="option.id" @change="touched.add(choiceKey)" />
+              <span class="choice-copy"><span class="font-medium">{{ option.label }}</span><span v-if="'hint' in option" class="text-label text-text-secondary">{{ option.hint }}</span></span>
+            </label>
+          </fieldset>
+          <SetupSummary v-else :rows="rows" :scan="scan" @edit="go" />
+          <p v-if="step === 3" class="preference-note">This records your usage preference. Connecting an agent is a separate action.</p>
+          <p v-if="step === 5" class="preference-note">Remembered on this device. Existing cleanup rules and reminder settings stay the same.</p>
+          <p v-if="detectionFailed && step === 1" class="preference-note">We couldn't suggest answers from your setup. You can choose everything yourself.</p>
+        </section>
+        <div v-if="saveNote" class="save-error" role="alert" data-testid="save-note"><p>{{ saveNote }}</p><button type="button" class="outline-button" data-testid="scan-once" @click="startScan(true)">Scan once without saving</button></div>
+        <footer class="survey-footer">
+          <button v-if="step > 1" type="button" class="quiet-button" data-testid="survey-back" :disabled="folderBusy" @click="go((step - 1) as OnboardingStep)">← Back</button>
+          <span v-else class="text-caption text-text-secondary">Your choices stay on this device.</span>
+          <button v-if="step < 6" type="button" class="primary-button" data-testid="survey-next" :disabled="!ready" @click="go((step + 1) as OnboardingStep)">Continue →</button>
+          <button v-else type="button" class="primary-button" data-testid="start-scan" :disabled="!ready" @click="startScan()">{{ saveNote ? 'Try saving again' : 'Start first scan' }}</button>
+        </footer>
+      </template>
+      <template v-else>
+        <h1 ref="heading" tabindex="-1">{{ scan.phase === 'running' ? 'Taking a look through your projects.' : scan.phase === 'done' ? 'Your first scan is ready.' : scan.phase === 'cancelled' ? 'Your scan was stopped.' : 'Let’s try that again.' }}</h1>
+        <p class="question-hint">{{ scan.phase === 'running' ? 'scull is reading file metadata. Nothing is being cleaned.' : 'Your files are unchanged. Review what scull found before deciding what to do.' }}</p>
+        <SetupSummary :rows="[]" :scan="scan" />
+        <footer class="survey-footer">
+          <button v-if="scan.phase === 'running'" type="button" class="outline-button" data-testid="cancel-scan" @click="controller?.abort()">Stop scan</button>
+          <template v-else>
+            <button v-if="scan.phase !== 'done'" type="button" class="quiet-button" data-testid="edit-folders" @click="editFolders">Edit folders</button>
+            <button v-if="scan.phase !== 'done'" type="button" class="outline-button" data-testid="retry-scan" @click="startScan()">Try again</button>
+            <RouterLink v-if="scan.phase !== 'failed'" to="/" class="primary-button" data-testid="open-overview">{{ scan.phase === 'cancelled' ? 'View partial results' : 'Open your overview' }} →</RouterLink>
+          </template>
+        </footer>
+        <p v-if="saveNote" class="preference-note" data-testid="save-note">{{ saveNote }}</p>
+      </template>
     </div>
   </main>
 </template>
 
 <style scoped>
-.btn-ghost,
-.btn-accent {
-  min-height: 48px;
-  border-radius: var(--radius-button);
-  font: inherit;
-  cursor: pointer;
-}
-.btn-ghost {
-  padding: 0 20px;
-  background: transparent;
-  color: var(--color-ink);
-  border: 1px solid var(--color-text-strong-muted);
-  font-weight: 500;
-}
-.btn-ghost:hover {
-  background: var(--color-surface);
-}
-.btn-accent {
-  padding: 0 24px;
-  border: 0;
-  background: var(--color-tier-s0);
-  color: var(--color-tier-s0-text);
-  font-weight: 600;
-}
-.btn-accent:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.btn-open {
-  min-height: 52px;
-  padding: 0 28px;
-  display: inline-flex;
-  align-items: center;
-  border-radius: var(--radius-button);
-  background: var(--color-tier-s0);
-  color: var(--color-tier-s0-text);
-  text-decoration: none;
-  font-weight: 700;
-  font-size: 16px;
-  animation: scull-bounce 620ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
-}
-.btn-open:hover {
-  color: var(--color-tier-s0-text);
-}
-@keyframes scull-bounce {
-  0% {
-    transform: scale(0.4);
-    opacity: 0;
-  }
-  55% {
-    transform: scale(1.12);
-    opacity: 1;
-  }
-  75% {
-    transform: scale(0.96);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
+.onboarding { flex: 1; min-width: 0; width: 100%; min-height: calc(100vh - 48px); padding: 12px 32px 32px; }
+.setup-header { max-width: 1120px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; min-height: 48px; }
+.brand { display: flex; align-items: center; min-height: 44px; gap: 10px; font-size: 20px; font-weight: 650; color: var(--color-ink); text-decoration: none; }
+.survey-column { max-width: 640px; margin: 60px auto 0; }
+.step-meta { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; color: var(--color-text-secondary); }
+.step-meta span:first-child { font-weight: 600; color: var(--color-ink); }
+.step-track { display: flex; gap: 6px; margin: 14px 0 42px; }
+.step-track span { flex: 1; height: 3px; background: var(--color-border); border-radius: 2px; }
+.step-track .reached { background: var(--color-accent); }
+.survey-question { min-height: 360px; animation: question-enter 160ms ease-out; }
+@keyframes question-enter { from { opacity: .65; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+h1 { margin: 0; font-size: 34px; line-height: 1.18; font-weight: 600; letter-spacing: -.025em; outline: none; }
+.question-hint { margin: 16px 0 32px; font-size: 16px; line-height: 1.65; color: var(--color-text-secondary); }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.build-options { display: grid; grid-template-columns: 1fr 1fr; column-gap: 32px; }
+.build-option { display: flex; align-items: center; gap: 12px; min-height: 52px; border-bottom: 1px solid var(--color-line); cursor: pointer; }
+input { width: 18px; height: 18px; flex-shrink: 0; margin: 0; accent-color: var(--color-ink); }
+.choice-options { display: flex; flex-direction: column; }
+.choice-option { display: flex; align-items: center; gap: 16px; padding: 18px 0; min-height: 64px; border-bottom: 1px solid var(--color-line); cursor: pointer; }
+.choice-copy { display: flex; flex-direction: column; gap: 5px; }
+.selected { color: var(--color-ink); }
+.preference-note { margin: 24px 0 0; font-size: 13px; line-height: 1.65; color: var(--color-text-secondary); }
+.survey-footer { position: sticky; bottom: 0; background: var(--color-ground); padding-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--color-border); padding-top: 24px; margin-top: 36px; }
+.primary-button, .outline-button, .quiet-button { display: inline-flex; justify-content: center; align-items: center; min-height: 46px; border-radius: var(--radius-button); font: inherit; font-weight: 500; cursor: pointer; text-decoration: none; }
+.primary-button { padding: 0 24px; background: var(--color-ink); color: var(--color-on-ink); border: 1px solid var(--color-ink); margin-left: auto; }
+.primary-button:hover { background: var(--color-ink-raised); }
+.outline-button { padding: 0 18px; border: 1px solid var(--color-border); background: transparent; color: var(--color-ink); }
+.quiet-button { padding: 0 8px; border: 0; background: transparent; color: var(--color-text-secondary); }
+.quiet-button:hover, .outline-button:hover { color: var(--color-ink); background: var(--color-surface-raised); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 4px; }
+.context-error, .save-error { color: var(--color-accent-text); font-size: 14px; line-height: 1.6; }
+@media (max-width: 640px) { .onboarding { padding: 0 4px 24px; } .survey-column { margin-top: 36px; } .step-meta span:last-child { display: none; } .build-options { grid-template-columns: 1fr; } h1 { font-size: 28px; } .survey-question { min-height: 0; } }
+@media (prefers-reduced-motion: reduce) { .survey-question { animation: none; } }
 </style>

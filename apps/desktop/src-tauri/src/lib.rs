@@ -64,6 +64,7 @@
 
 pub mod agent_requests;
 pub mod monitor;
+pub mod onboarding;
 pub mod tray;
 
 use scull_core::{ErrorKind, PlanId, ScullError};
@@ -450,7 +451,9 @@ pub fn main_window_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + 
         prepare_desktop_plan,
         execute_desktop_plan,
         restore_quarantined,
-        quick_clean
+        quick_clean,
+        onboarding::onboarding_context,
+        onboarding::pick_project_folders
     ]
 }
 
@@ -541,7 +544,9 @@ pub fn run() {
             prepare_desktop_plan,
             execute_desktop_plan,
             restore_quarantined,
-            quick_clean
+            quick_clean,
+            onboarding::onboarding_context,
+            onboarding::pick_project_folders
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {
