@@ -193,9 +193,10 @@ pub fn assert_matches_reference(got: &Totals, want: &Totals) {
 type MetaHook = dyn Fn(&Path, &mut Metadata) + Send + Sync;
 type ListHook = dyn Fn(&Path) -> Option<scull_platform::PlatformError> + Send + Sync;
 
-/// The native platform with hooks to alter metadata or fail / stall listings, for conditions
+/// A platform (native by default) with hooks to alter metadata or fail / stall listings, for conditions
 /// a temp dir can't produce portably (other volumes, identity loops, stalled mounts).
 pub struct Tweaked {
+    pub base: Arc<dyn Platform>,
     pub meta: Box<MetaHook>,
     pub list: Box<ListHook>,
 }
@@ -203,6 +204,7 @@ pub struct Tweaked {
 impl Tweaked {
     pub fn new() -> Self {
         Self {
+            base: Arc::new(Native),
             meta: Box::new(|_, _| {}),
             list: Box::new(|_| None),
         }
@@ -211,11 +213,11 @@ impl Tweaked {
 
 impl Platform for Tweaked {
     fn capabilities(&self) -> scull_platform::Capabilities {
-        Native.capabilities()
+        self.base.capabilities()
     }
 
     fn metadata(&self, path: &Path) -> scull_platform::Result<Metadata> {
-        let mut md = Native.metadata(path)?;
+        let mut md = self.base.metadata(path)?;
         (self.meta)(path, &mut md);
         Ok(md)
     }
@@ -224,7 +226,7 @@ impl Platform for Tweaked {
         if let Some(e) = (self.list)(path) {
             return Err(e);
         }
-        Native.read_dir(path)
+        self.base.read_dir(path)
     }
 }
 
