@@ -596,6 +596,352 @@ fn only_test_items_are_cut() {
     assert!(strip_test_items("fn broken( {").is_err());
 }
 
+/// std filesystem calls that write, move, delete or change permissions.
+const FS_WRITES: &[&str] = &[
+    "write",
+    "rename",
+    "copy",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "create_dir",
+    "create_dir_all",
+    "set_permissions",
+    "hard_link",
+    "soft_link",
+    "symlink",
+    "symlink_file",
+    "symlink_dir",
+];
+
+/// Every path `file` names: `use` trees flattened (groups, renames, globs as `*`), and every
+/// path in expressions, types and patterns. A rename is recorded as the path plus `as`.
+#[derive(Default)]
+struct Paths(Vec<Vec<String>>);
+
+impl Paths {
+    fn use_tree(&mut self, prefix: &[String], t: &syn::UseTree) {
+        let mut p = prefix.to_vec();
+        match t {
+            syn::UseTree::Path(x) => {
+                p.push(x.ident.to_string());
+                self.use_tree(&p, &x.tree);
+            }
+            syn::UseTree::Name(x) => {
+                p.push(x.ident.to_string());
+                self.0.push(p);
+            }
+            syn::UseTree::Rename(x) => {
+                p.push(x.ident.to_string());
+                p.push("as".into());
+                self.0.push(p);
+            }
+            syn::UseTree::Glob(_) => {
+                p.push("*".into());
+                self.0.push(p);
+            }
+            syn::UseTree::Group(g) => {
+                for t in &g.items {
+                    self.use_tree(&p, t);
+                }
+            }
+        }
+    }
+}
+
+impl Paths {
+    /// The `a::b::c` ident sequences in a macro's tokens (its arguments, or a `macro_rules!`
+    /// body), which `syn::visit` doesn't parse.
+    fn tokens(&mut self, ts: proc_macro2::TokenStream) {
+        let text = ts.to_string().replace(" :: ", "::").replace(":: ", "::");
+        for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':')) {
+            let segs: Vec<String> = word
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if !segs.is_empty() {
+                self.0.push(segs);
+            }
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Paths {
+    fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
+        self.use_tree(&[], &u.tree);
+    }
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        self.0
+            .push(p.segments.iter().map(|s| s.ident.to_string()).collect());
+        syn::visit::visit_path(self, p);
+    }
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        self.tokens(m.tokens.clone());
+        syn::visit::visit_macro(self, m);
+    }
+    fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
+        // A type alias of anything under fs/process is an alias too (`type Fl = std::fs::File`).
+        let mut inner = Paths::default();
+        syn::visit::visit_type(&mut inner, &t.ty);
+        for mut p in inner.0 {
+            p.push("as".into());
+            self.0.push(p);
+        }
+        syn::visit::visit_item_type(self, t);
+    }
+}
+
+/// The std write/spawn APIs `code` reaches, however they're spelled (empty when none).
+fn std_writes(code: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(code).map_err(|e| format!("does not parse: {e}"))?;
+    let mut paths = Paths::default();
+    syn::visit::Visit::visit_file(&mut paths, &file);
+    let mut bad = Vec::new();
+    for p in &paths.0 {
+        let joined = p.join("::");
+        let has = |a: &str, b: &[&str]| {
+            p.windows(2)
+                .any(|w| w[0] == a && (b.contains(&w[1].as_str())))
+        };
+        // A rename (or type alias) of anything under std's fs/process/os, or of std itself
+        // (`use std as s`, `use std::{self as s}`, `use std::fs::{self as f}`,
+        // `use std::fs::File as Fl`): later calls through the new name show no `fs`/`process`.
+        let aliased = p.last().is_some_and(|l| l == "as") && {
+            let named: Vec<&str> = p[..p.len() - 1]
+                .iter()
+                .map(String::as_str)
+                .filter(|s| *s != "self")
+                .collect();
+            named == ["std"]
+                || named
+                    .iter()
+                    .any(|s| matches!(*s, "fs" | "process" | "os" | "File" | "OpenOptions"))
+        };
+        if has("fs", FS_WRITES)
+            || has("fs", &["*"])
+            || has(
+                "File",
+                &["create", "create_new", "create_buffered", "options"],
+            )
+            || has("process", &["Command", "*"])
+            || p.iter().any(|s| s == "OpenOptions" || s == "DirBuilder")
+            || aliased
+        {
+            bad.push(joined);
+        }
+    }
+    Ok(bad)
+}
+
+/// No desktop production code writes through std or spawns a process: `std::fs` writes, moves,
+/// deletes and permission changes, `File::create/options`, `OpenOptions`, `process::Command`,
+/// in any spelling (use groups, renames, globs, full paths), and no alias of `std`, `std::fs`
+/// or `std::process` (#121).
+#[test]
+fn desktop_sources_use_no_std_writes() {
+    for f in desktop_rust_files() {
+        // cleanup.rs included: its one directory is created through scull_platform.
+        let bad = std_writes(&code_of(&f)).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        assert!(bad.is_empty(), "{}: {bad:?}", f.display());
+    }
+}
+
+/// The direct dependencies each desktop crate may have. Anything else (a crate such as `libc`,
+/// `nix`, `rustix`, `fs_err`, `tokio`, `duct`, `open` or `trash` could write, delete or spawn
+/// outside these checks) needs a deliberate change here, reviewed for SAFE-10.
+const ALLOWED_DEPS: &[(&str, &[&str])] = &[
+    (
+        "bridge",
+        &[
+            "scull-core",
+            "scull-platform",
+            "scull-engine",
+            "scull-detectors",
+            "scull-git",
+            "scull-safety",
+            "scull-storage",
+            "scull-proactive",
+            "scull-insights",
+            "scull-mcp",
+            "scull-cleaner",
+            "serde",
+            "serde_json",
+            "schemars",
+        ],
+    ),
+    (
+        "src-tauri",
+        &[
+            "scull-desktop-bridge",
+            "scull-core",
+            "scull-platform",
+            "serde",
+            "serde_json",
+            "tauri",
+            "tauri-plugin-notification",
+            "tauri-plugin-deep-link",
+            "tauri-plugin-single-instance",
+            "tauri-build",
+        ],
+    ),
+];
+
+/// The package names of a desktop crate's normal and build dependencies, every target, from
+/// `cargo metadata` (renames, comments and spacing are Cargo's business, not a text parser's).
+fn non_dev_dependencies(dir: &str) -> Vec<String> {
+    let manifest = desktop().join(dir).join("Cargo.toml");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args([
+            "metadata",
+            "--offline",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pkg = v["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            // Both sides canonical: on Windows `canonicalize` gives a `\\?\` path and
+            // cargo metadata a plain one.
+            p["manifest_path"].as_str().is_some_and(|m| {
+                Path::new(m).canonicalize().ok() == Some(manifest.canonicalize().unwrap())
+            })
+        })
+        .unwrap_or_else(|| panic!("{dir}: package not in cargo metadata"));
+    pkg["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["kind"].as_str() != Some("dev"))
+        .map(|d| d["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn desktop_crates_depend_only_on_allowed_crates() {
+    for (dir, allowed) in ALLOWED_DEPS {
+        let deps = non_dev_dependencies(dir);
+        assert!(deps.iter().any(|d| d == "scull-core"), "{dir}: {deps:?}");
+        for d in deps {
+            assert!(
+                allowed.contains(&d.as_str()),
+                "{dir}/Cargo.toml depends on {d}, which is not in ALLOWED_DEPS (tests/safe10.rs): \
+                 review it for SAFE-10 first"
+            );
+        }
+    }
+}
+
+/// Desktop sources can't reach the OS behind these checks: no `unsafe` at all (so no FFI call,
+/// not even through a `safe fn` in an `unsafe extern` block or an `allow(unsafe_code)`), no
+/// `extern` block, and no `macro_rules!` (a macro can paste the identifiers of a write call
+/// together, out of sight of the path checks). The bridge also forbids unsafe code at its root.
+#[test]
+fn desktop_sources_have_no_unsafe_ffi_or_macro_rules() {
+    for f in desktop_rust_files() {
+        let text = std::fs::read_to_string(&f).unwrap();
+        let file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        let rest = text.replace("#![forbid(unsafe_code)]", "");
+        assert!(
+            !words(&rest).any(|w| w == "unsafe" || w == "unsafe_code"),
+            "{} mentions unsafe",
+            f.display()
+        );
+        // As a word, anywhere: a definition inside another macro's arguments (`vec![{ .. }]`)
+        // is invisible to the parser.
+        assert!(
+            !words(&text).any(|w| w == "macro_rules"),
+            "{} mentions macro_rules",
+            f.display()
+        );
+        #[derive(Default)]
+        struct Items(Vec<String>);
+        impl<'ast> syn::visit::Visit<'ast> for Items {
+            fn visit_item_foreign_mod(&mut self, _: &'ast syn::ItemForeignMod) {
+                self.0.push("an extern block".into());
+            }
+            fn visit_item_macro(&mut self, m: &'ast syn::ItemMacro) {
+                if m.mac.path.is_ident("macro_rules") {
+                    self.0.push("macro_rules!".into());
+                }
+                syn::visit::visit_item_macro(self, m);
+            }
+            fn visit_macro(&mut self, m: &'ast syn::Macro) {
+                if m.path.is_ident("macro_rules") {
+                    self.0.push("macro_rules!".into());
+                }
+                syn::visit::visit_macro(self, m);
+            }
+        }
+        let mut items = Items::default();
+        syn::visit::Visit::visit_file(&mut items, &file);
+        assert!(items.0.is_empty(), "{}: {:?}", f.display(), items.0);
+    }
+    let lib = std::fs::read_to_string(desktop().join("bridge/src/lib.rs")).unwrap();
+    assert!(lib.contains("#![forbid(unsafe_code)]"), "bridge/src/lib.rs");
+}
+
+#[test]
+fn std_write_guard_sees_every_spelling() {
+    for code in [
+        "use std::fs::{rename};\nfn f() { rename(a, b); }",
+        "use std::fs::{write as w};\nfn f() { w(a, b); }",
+        "fn f() { std::fs::remove_dir_all(a); }",
+        "fn f() { let _ = std::fs::File::options().write(true).truncate(true).open(p); }",
+        "fn f() { let _ = std::fs::File::create(p); }",
+        "use std::fs::OpenOptions;",
+        "fn f() { std::process::Command::new(\"rm\"); }",
+        "use std::process::{Command};",
+        "use std::fs::*;",
+        "use std::fs as f;",
+        "use std::{fs as f};",
+        "use std as s;",
+        "use std::os::unix::fs::symlink;",
+        "use tokio::process::Command;",
+        // From the review of #127.
+        "use std::process::{self as pr};\nfn f() { pr::Command::new(\"rm\"); }",
+        "use std::fs::File as Fl;\nfn f() { Fl::create(p); }",
+        "use std::fs::{self as f};\nfn g() { f::rename(p, q); }",
+        "fn f() { let _ = vec![std::process::Command::new(\"rm\").arg(p).status()]; }",
+        "fn f() { let _ = std::fs::DirBuilder::new().recursive(true).create(p); }",
+        "type Fl = std::fs::File;",
+        "use std::{self as s};",
+        "macro_rules! m { () => { std::fs::File::options() } }",
+        "fn f() { let _ = std::fs::File::create_buffered(p); }",
+    ] {
+        assert!(!std_writes(code).unwrap().is_empty(), "not caught: {code}");
+    }
+    for code in [
+        "fn f() { let _ = std::fs::read_to_string(p); let _ = std::fs::File::open(p); }",
+        "fn f() { std::process::exit(1); let _ = std::process::id(); }",
+        "use std::fs::{read, metadata};",
+        "fn f() { let _ = Action::ToolCommand { tool, args }; }",
+        "use std::collections::HashMap as Map;",
+        "fn f() { println!(\"{}\", std::process::id()); }",
+        "type R = std::io::Result<()>;",
+    ] {
+        assert_eq!(
+            std_writes(code).unwrap(),
+            Vec::<String>::new(),
+            "false positive: {code}"
+        );
+    }
+}
+
 #[test]
 fn desktop_sources_have_no_filesystem_mutation() {
     let mut files = Vec::new();

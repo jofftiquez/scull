@@ -369,17 +369,20 @@ impl Gate {
                 "stopped by a kill switch ({why}); nothing was touched"
             )));
         }
-        if let Some(why) = &self.untrusted {
-            return Some(AutoPolicyReport::refused(format!(
-                "not run: the config file can't be trusted ({why}). Make it and its folder \
-                 writable only by you (e.g. `chmod go-w`); nothing was touched"
-            )));
-        }
+        // Elevated first: it refuses whatever the file says, and an elevated Windows account
+        // owns what it creates as BUILTIN\Administrators, which the trust check would report
+        // instead of the real reason (#120).
         if self.elevated {
             return Some(AutoPolicyReport::refused(
                 "not run: auto-policies never run as root/administrator (SAFE-14), and an \
                  unattended run has no --allow-root; nothing was touched",
             ));
+        }
+        if let Some(why) = &self.untrusted {
+            return Some(AutoPolicyReport::refused(format!(
+                "not run: the config file can't be trusted ({why}). Make it and its folder \
+                 writable only by you (e.g. `chmod go-w`); nothing was touched"
+            )));
         }
         None
     }
