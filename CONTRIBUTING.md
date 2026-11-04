@@ -22,6 +22,21 @@ Thanks for helping. scull deletes files, so safety comes before everything else.
 - Issues close only with an `## Evidence` comment. Screenshots are attached to the
   comment with `gh issue comment --attach` (`scripts/evidence/post.py`); never commit them.
 
+## Amp orbs
+
+Amp runs `.agents/setup` to prepare reusable Linux snapshots with the pinned Rust toolchain
+(including rustfmt and Clippy), pnpm matching desktop CI, locked npm and Cargo dependencies
+for both Rust workspaces, Tauri's native libraries, and Playwright Chromium. Re-running setup
+reuses installed packages and download caches; it does not compile the Rust workspaces.
+`.agents/resume` only checks tool availability: no installs, authentication, or database daemon
+is needed on wake. SQLite is embedded and tests use temporary fixture trees.
+
+Run `amp orb services ensure` to start the supervised desktop browser preview and print its
+portal URL. The preview uses recorded mock data, not native filesystem access. Run browser
+E2E tests without Docker using `bash apps/desktop/e2e/in-container.sh` (or add `dev` for Vite
+without a build). The normal Cargo and pnpm commands above and in `apps/desktop/README.md`
+work directly. Orbs run Linux; native macOS builds and tests still need a Mac.
+
 ## Contributing a detector rule
 
 Detector rules are data-only TOML files (`rules/`, format in `rules/README.md`). Start with

@@ -1,0 +1,8 @@
+services:
+  desktop-preview:
+    cwd: apps/desktop
+    command: pnpm dev --host 0.0.0.0 --port "$PORT"
+    health: /
+    portal:
+      title: scull desktop preview
+      description: Browser preview with recorded mock data; does not scan or clean the orb or your Mac.

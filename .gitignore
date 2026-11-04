@@ -14,3 +14,6 @@ CLAUDE.local.md
 
 # Python bytecode (packaging/ and scripts/ self-tests)
 __pycache__/
+
+# Generated, thread-specific orb portal links
+.amp/portals/

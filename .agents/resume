@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# No database daemon or per-thread authentication is needed. Amp supervises the
+# preview declared in .amp/services.yaml; never reinstall dependencies on wake.
+for tool in cargo rustc pnpm; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf 'Missing %s; run .agents/setup to repair this orb.\n' "$tool" >&2
+    exit 1
+  fi
+done
+printf 'scull orb ready; dependencies restored from the snapshot.\n'

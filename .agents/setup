@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Prepare the reusable Linux orb snapshot; never start services or authenticate here.
+set -euo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+setup_started=$SECONDS
+
+step() {
+  local label=$1 started=$SECONDS
+  shift
+  printf '\n==> %s\n' "$label"
+  "$@"
+  printf '==> %s finished in %ss\n' "$label" "$((SECONDS - started))"
+}
+
+# Check first: stale snapshots should not refresh apt or reinstall native libraries.
+packages=(
+  ca-certificates curl build-essential pkg-config libssl-dev file git tmux python3
+  libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev
+  libayatana-appindicator3-dev librsvg2-dev patchelf
+  # Chromium's runtime dependencies not already pulled in by GTK/WebKit.
+  libasound2 libgbm1 libnss3 libxss1 fonts-liberation
+)
+missing=()
+for package in "${packages[@]}"; do
+  if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) != 'install ok installed' ]]; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  step 'Refresh Debian package index' sudo -n apt-get update
+  step 'Install native build and browser dependencies' sudo -n env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends "${missing[@]}"
+else
+  printf 'Native build and browser dependencies already installed.\n'
+fi
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v rustup >/dev/null 2>&1; then
+  printf '\n==> Install rustup\n'
+  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --no-modify-path --default-toolchain none
+fi
+# Resolves the version and components from rust-toolchain.toml without updating a warm install.
+step 'Pinned Rust toolchain' rustup show active-toolchain
+
+# Match the desktop CI's package manager; use the orb's existing supported Node.js.
+if [[ $(pnpm --version 2>/dev/null || true) != 12.11.2 ]]; then
+  step 'Install pnpm 12.11.2' npm install --global --prefix "$HOME/.local" pnpm@12.11.2
+fi
+
+# Amp and supervised services start in new login shells, not this setup process.
+profile_marker='# scull orb toolchain paths'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+case "\$PWD" in
+  "$repo_root"|"$repo_root"/*)
+    export PATH="\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH"
+    ;;
+esac
+EOF
+fi
+
+step 'Install frontend dependencies' pnpm install --frozen-lockfile
+# Fetch all targets: the desktop's SAFE-10 tests inspect their graphs offline.
+step 'Fetch workspace Rust dependencies' cargo fetch --locked
+step 'Fetch Tauri Rust dependencies' cargo fetch --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+step 'Cache Playwright Chromium' pnpm --filter @scull/desktop exec playwright install chromium
+
+printf '\nOrb setup finished in %ss. Start the preview with: amp orb services ensure\n' \
+  "$((SECONDS - setup_started))"
