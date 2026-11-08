@@ -45,6 +45,8 @@ pub enum StepPoint<'a> {
     AfterClose(&'a ItemId),
     /// The item's audit row is appended.
     AfterAudit(&'a ItemId),
+    /// Worktree command preparation finished; final identity, registration and status checks follow.
+    BeforeWorktreeRemove(&'a ItemId),
 }
 
 impl StepPoint<'_> {
@@ -58,6 +60,7 @@ impl StepPoint<'_> {
             StepPoint::AfterManifest(_) => "after_manifest",
             StepPoint::AfterClose(_) => "after_close",
             StepPoint::AfterAudit(_) => "after_audit",
+            StepPoint::BeforeWorktreeRemove(_) => "before_worktree_remove",
         }
     }
 
@@ -70,7 +73,8 @@ impl StepPoint<'_> {
             | StepPoint::AfterMove(i)
             | StepPoint::AfterManifest(i)
             | StepPoint::AfterClose(i)
-            | StepPoint::AfterAudit(i) => i,
+            | StepPoint::AfterAudit(i)
+            | StepPoint::BeforeWorktreeRemove(i) => i,
         }
     }
 }

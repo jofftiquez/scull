@@ -8,6 +8,25 @@
 // 1.5 s to prove the pill clears itself. No sleeps, no retries.
 import { expect, open, test } from './fixtures';
 
+test('folder selection saves and drive switches follow the saved scan folders', async ({ page, shot }) => {
+  await open(page, '/settings');
+  await page.getByTestId('choose-scan-folders').click();
+  await expect(page.getByTestId('roots')).toContainText('~/Projects');
+  await expect(page.getByRole('textbox', { name: 'Folder to scan' })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Drives', exact: true }).click();
+  const system = page.getByRole('switch', { name: 'Scan Macintosh HD', exact: true });
+  await expect(system).toBeEnabled();
+  await expect(system).toBeChecked();
+  await shot('17-settings-selected-drive');
+  await system.click();
+  await expect(system).not.toBeChecked();
+  await system.click();
+  await expect(system).toBeChecked();
+  await page.getByRole('tab', { name: 'General', exact: true }).click();
+  await expect(page.getByTestId('roots')).toContainText('~/Projects');
+  await shot('18-settings-picked-folder');
+});
+
 const SAVED_FLASH_MS = 1500;
 
 test('change a setting, see Saved, and find destructive MCP locked', async ({ page, shot }) => {

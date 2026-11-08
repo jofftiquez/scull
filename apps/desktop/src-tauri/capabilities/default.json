@@ -39,9 +39,13 @@
     "allow-take-deep-link",
     "allow-prepare-desktop-plan",
     "allow-execute-desktop-plan",
+    "allow-execution-busy",
     "allow-restore-quarantined",
     "allow-quick-clean",
+    "allow-quick-clean-plan",
+    "allow-quick-clean-run",
     "allow-onboarding-context",
-    "allow-pick-project-folders"
+    "allow-pick-project-folders",
+    "allow-save-setting"
   ]
 }

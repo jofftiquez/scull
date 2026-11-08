@@ -19,8 +19,8 @@ const SCREENS: [string, string, string][] = [
   ['insights', '/insights?demo=design', '[data-testid="forecast-chart"]'],
   ['projects', '/projects?demo=design', 'h1'],
   ['explorer', '/explorer', 'svg .tile'],
-  ['caches', '/caches?demo=design', '[data-testid="hero"]'],
-  ['history', '/history', '[data-testid="log"]'],
+  ['caches', '/caches?demo=design', '[data-testid="start"]'],
+  ['history', '/history', 'h1'],
   ['settings', '/settings', '[data-testid="appearance"]'],
 ];
 

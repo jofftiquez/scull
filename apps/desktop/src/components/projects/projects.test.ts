@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
 import { BRIDGE_KEY, type ProjectSummary, type ScullBridge } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
+import { core, resetCore } from '../../state/core';
 import { routes } from '../../navigation';
 import { createMockProjectActions, createPendingProjectActions, designProjects } from './bridge';
 import {
@@ -126,14 +127,57 @@ async function mountAt(path: string, bridge: ScullBridge = createMockBridge()) {
 }
 
 describe('projects screen', () => {
+  it('limits visible filters to five and puts the rest in a dropdown', async () => {
+    const w = await mountAt('/projects?demo=design');
+    expect(w.findAll('[data-testid="filter"]')).toHaveLength(5);
+    const more = w.get('select[aria-label="More project filters"]');
+    expect(more.findAll('option').length).toBeGreaterThan(1);
+    const last = more.findAll('option').at(-1)!.attributes('value');
+    await more.setValue(last);
+    expect(w.findAll('[data-testid="project-row"]').length).toBeGreaterThan(0);
+    expect(w.findAll('[data-testid="filter"]').every((b) => b.attributes('aria-pressed') === 'false')).toBe(true);
+    w.unmount();
+  });
+  it('recovers from a failed load when a later scan refreshes the page', async () => {
+    resetCore();
+    const bridge = createMockBridge();
+    const projects = vi.fn().mockRejectedValueOnce(new Error('temporarily unavailable')).mockResolvedValue(MOCK_DATA.projects);
+    const w = await mountAt('/projects', { ...bridge, projects });
+    expect(w.find('[role="alert"]').exists()).toBe(true);
+    core.report = structuredClone(MOCK_DATA.scanReport);
+    await flushPromises();
+    expect(w.find('[role="alert"]').exists()).toBe(false);
+    expect(w.findAll('[data-testid="project-row"]')).toHaveLength(MOCK_DATA.projects.projects.length);
+    w.unmount();
+    resetCore();
+  });
+  it('paginates large lists and closes the selected details when changing page', async () => {
+    const bridge = createMockBridge();
+    const view = await bridge.projects();
+    view.projects = Array.from({ length: 53 }, (_, i) => ({ ...view.projects[0]!, root: `/p/${i}`, name: `Project ${i}` }));
+    const w = await mountAt('/projects', { ...bridge, projects: async () => view });
+    expect(w.findAll('[data-testid="project-row"]')).toHaveLength(25);
+    await w.findAll('[data-testid="project-row"]')[0]!.trigger('click');
+    expect(w.find('aside').exists()).toBe(true);
+    const next = () => w.findAll('button').find((b) => b.text() === 'Next')!;
+    await next().trigger('click');
+    expect(w.find('aside').exists()).toBe(false);
+    expect(w.findAll('[data-testid="project-row"]')).toHaveLength(25);
+    await next().trigger('click');
+    expect(w.findAll('[data-testid="project-row"]')).toHaveLength(3);
+    expect(next().attributes('disabled')).toBeDefined();
+    w.unmount();
+  });
   it('lists the real projects from the bridge, sorted by size, with nothing to clean', async () => {
     const w = await mountAt('/projects');
     const rows = w.findAll('[data-testid="project-row"]');
     expect(rows).toHaveLength(MOCK_DATA.projects.projects.length);
     expect(rows[0]!.text()).toContain('app');
-    expect(w.get('[data-testid="subtitle"]').text()).toContain('across ~/code');
+    expect(w.get('[data-testid="subtitle"]').text()).toContain('projects');
+    expect(w.find('aside').exists()).toBe(false);
+    await rows[0]!.trigger('click');
     expect(w.get('[data-testid="clean"]').attributes('disabled')).toBeDefined();
-    expect(w.get('[data-testid="clean"]').text()).toBe('Nothing regenerable to clean');
+    expect(w.get('[data-testid="clean"]').text()).toBe('Review cleanup');
   });
 
   it('filters by ecosystem', async () => {
@@ -144,20 +188,13 @@ describe('projects screen', () => {
     expect(w.findAll('[data-testid="project-row"]').map((r) => r.text())).toEqual([expect.stringContaining('web')]);
   });
 
-  it('cleans a project in the design demo and shows the toast (06b)', async () => {
+  it('opens the common review scoped to the selected project without cleaning immediately', async () => {
     const w = await mountAt('/projects?demo=design');
     await w.findAll('[data-testid="project-row"]')[1]!.trigger('click');
-    expect(w.get('[data-testid="clean"]').text()).toBe('Clean regenerable · 12.8 GiB');
+    expect(w.get('[data-testid="clean"]').text()).toBe('Review cleanup');
     await w.get('[data-testid="clean"]').trigger('click');
-    await vi.waitFor(async () => {
-      await flushPromises();
-      expect(w.get('[data-testid="toast"]').text()).toContain('Cleaned regenerable files in shop-api');
-    }, { timeout: 10000, interval: 25 });
-    expect(w.get('[data-testid="toast"]').text()).toContain('+12.8 GiB');
-    expect(w.get('[data-testid="detail-reclaim"]').text()).toBe('0 B');
-    expect(w.get('[data-testid="detail-total"]').text()).toBe('8.5 GiB');
-    expect(w.get('[data-testid="inside-cleaned"]').text()).toContain('cleaned');
-    expect(w.findAll('[data-testid="row-reclaim"]')[1]!.text()).toBe('—');
-    expect(w.get('[data-testid="clean"]').attributes('disabled')).toBeDefined();
+    await vi.waitFor(() => expect(w.find('[data-testid="plan-line"]').exists()).toBe(true));
+    expect(w.get('[data-testid="plan-line"]').text()).toContain('for /Users/ada/code/shop-api');
+    expect(w.find('[data-testid="toast"]').exists()).toBe(false);
   });
 });

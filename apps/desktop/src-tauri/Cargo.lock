@@ -3177,6 +3177,7 @@ dependencies = [
  "scull-core",
  "scull-detectors",
  "scull-engine",
+ "scull-git",
  "scull-platform",
  "scull-proactive",
  "scull-safety",
@@ -3196,6 +3197,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "toml 1.1.8+spec-1.1.0",
+ "toml_edit 0.25.17+spec-1.1.0",
 ]
 
 [[package]]
@@ -3208,6 +3210,7 @@ dependencies = [
  "scull-engine",
  "scull-mcp",
  "scull-platform",
+ "scull-safety",
  "scull-storage",
  "serde",
  "serde_json",
@@ -4402,6 +4405,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

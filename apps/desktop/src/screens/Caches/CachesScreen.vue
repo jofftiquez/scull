@@ -7,8 +7,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
+import { usePagination } from '../../lib/pagination';
+import ListPagination from '../../components/shell/ListPagination.vue';
 import CacheRow from '../../components/caches/CacheRow.vue';
-import QuickCleanHero from '../../components/caches/QuickCleanHero.vue';
+import ActionFooter from '../../components/shell/ActionFooter.vue';
+import ActionBar from '../../components/shell/ActionBar.vue';
+import ActionConfirm from '../../components/shell/ActionConfirm.vue';
+import { cacheTaskProgress } from '../../components/caches/progress';
+import { taskQueue } from '../../state/tasks';
 import { cacheActionsFor, designPreview } from '../../components/caches/bridge';
 import {
   GROUPS,
@@ -46,6 +52,10 @@ const order = ref<string[]>([]);
 const results = ref<RunResult[]>([]);
 const freed = reactive(new Set<string>());
 const runError = ref<string | null>(null);
+const reloading = ref(false);
+const loading = ref(true);
+const confirming = ref(false);
+const live = reactive<Record<string, 'active' | 'done' | 'failed'>>({});
 let alive = true;
 
 onMounted(async () => {
@@ -56,20 +66,20 @@ onMounted(async () => {
       Object.assign(choices, initialChoices(d.preview.tools));
       for (const t of d.preview.tools) choices[t.item_id]!.on = d.preselected.includes(t.item_id);
     } else {
-      const report = await bridge.caches();
+      const report = bridge.kind === 'mock' ? await bridge.caches() : undefined;
       preview.value = await actions.plan(report);
       Object.assign(choices, initialChoices(preview.value.tools));
     }
   } catch (e) {
     error.value = toBridgeError(e).message;
-  }
+  } finally { loading.value = false; }
 });
 onBeforeUnmount(() => (alive = false));
 
 const tools = computed(() => (preview.value?.tools ?? []).filter((t) => !freed.has(t.item_id)));
 const chosen = computed(() => selected(tools.value, choices));
 const chosenBytes = computed(() => selectedBytes(tools.value, choices));
-const groups = computed(() => {
+const allGroups = computed(() => {
   const p = preview.value;
   if (!p) return [];
   const totals = groupTotals(p.tools, p.skipped);
@@ -80,27 +90,39 @@ const groups = computed(() => {
     skipped: p.skipped.filter((s) => s.group === group),
   })).filter((g) => g.tools.length + g.skipped.length > 0);
 });
+const entries = computed(() => allGroups.value.flatMap((g) => [...g.tools.map((t) => t.item_id), ...g.skipped.map((t) => `skip:${t.tool}:${t.path}`)]));
+const { page, current: currentPage, rows: pageEntries } = usePagination(entries);
+const groups = computed(() => allGroups.value.map((g) => ({ ...g,
+  tools: g.tools.filter((t) => pageEntries.value.includes(t.item_id)),
+  skipped: g.skipped.filter((t) => pageEntries.value.includes(`skip:${t.tool}:${t.path}`)),
+})).filter((g) => g.tools.length + g.skipped.length));
 const allBytes = computed(() => {
   const p = preview.value;
   if (!p) return null;
   return p.tools.reduce((a, t) => a + t.bytes, 0) + p.skipped.reduce((a, s) => a + (s.bytes ?? 0), 0);
 });
-const remaining = computed(() => {
-  const n = order.value.length;
-  return (preview.value?.tools ?? [])
-    .filter((t) => order.value.includes(t.item_id))
-    .reduce((a, t) => a + t.bytes * (1 - rowProgress(order.value.indexOf(t.item_id), n, progress.value).pct / 100), 0);
-});
 const summary = computed(() => (phase.value === 'done' ? runSummary(results.value, plannedBytes.value) : null));
+const failures = computed(() => phase.value === 'done' ? results.value.filter((r) => !r.ok) : []);
 const plannedBytes = ref(0);
 
 function rowState(id: string) {
   if (phase.value === 'idle') return { state: 'idle' as const, pct: 0 };
+  if (actions.kind === 'tauri' && phase.value === 'running') return { state: live[id] ?? 'queued' as const, pct: live[id] === 'done' ? 100 : 0 };
   const k = order.value.indexOf(id);
   if (k < 0) return { state: 'idle' as const, pct: 0 };
   const r = results.value.find((x) => x.item_id === id);
   if (phase.value === 'done' && r && !r.ok) return { state: 'failed' as const, pct: 0 };
   return rowProgress(k, order.value.length, phase.value === 'done' ? 1 : progress.value);
+}
+
+function remainingBytes(id: string): number | undefined {
+  if (actions.kind !== 'tauri') return undefined;
+  // Live events finish commands; measured remaining bytes arrive with the final report.
+  if (phase.value === 'running') return tools.value.find((t) => t.item_id === id)?.bytes;
+  if (phase.value !== 'done') return undefined;
+  const result = results.value.find((r) => r.item_id === id);
+  const tool = tools.value.find((t) => t.item_id === id);
+  return result?.ok && tool ? Math.max(0, tool.bytes - result.freed_bytes) : undefined;
 }
 
 async function start() {
@@ -109,15 +131,29 @@ async function start() {
   const run = chosen.value.map((t) => ({ item_id: t.item_id, mode: choices[t.item_id]!.mode }));
   order.value = run.map((r) => r.item_id);
   plannedBytes.value = chosenBytes.value;
+  confirming.value = false;
   phase.value = 'running';
   progress.value = 0;
   runError.value = null;
+  for (const key of Object.keys(live)) delete live[key];
   try {
-    results.value = await actions.run(p, run, (i, f) => (progress.value = overall(i, f, run.length)));
+    results.value = await taskQueue.enqueue('Clean caches', async (update) => actions.run(p, run, (i, f) => {
+      progress.value = overall(i, f, run.length);
+    }, (event) => {
+      progress.value = event.total ? event.completed / event.total : 0;
+      if (event.item_id && event.kind === 'started') live[event.item_id] = 'active';
+      if (event.item_id && (event.kind === 'finished' || event.kind === 'skipped')) live[event.item_id] = event.succeeded ? 'done' : 'failed';
+      update(cacheTaskProgress(event));
+    }), (items) => ({
+      summary: `${items.filter((r) => r.ok).length} of ${run.length} caches cleaned · ${formatBytes(items.reduce((n, r) => n + r.freed_bytes, 0))} freed`,
+      partial: items.length !== run.length || items.some((r) => !r.ok),
+      failed: !items.some((r) => r.ok),
+      details: items.map((r) => ({ label: toolName(r.tool), path: p.tools.find((t) => t.item_id === r.item_id)?.cache, status: r.ok ? 'completed' as const : 'failed' as const, reason: r.error ?? r.explanation ?? `${formatBytes(r.freed_bytes)} freed` })),
+    }), `${run.length} selected caches`);
+    if (!demo) void refresh(bridge);
     if (!alive) return;
     progress.value = 1;
     phase.value = 'done';
-    if (!demo) void refresh(bridge);
   } catch (e) {
     runError.value = toBridgeError(e).message;
     phase.value = 'idle';
@@ -125,7 +161,26 @@ async function start() {
   }
 }
 
-function reset() {
+async function reset() {
+  if (reloading.value) return;
+  if (actions.kind === 'tauri') {
+    reloading.value = true;
+    try {
+      preview.value = await actions.plan();
+      for (const key of Object.keys(choices)) delete choices[key];
+      Object.assign(choices, initialChoices(preview.value.tools));
+    } catch (e) {
+      error.value = toBridgeError(e).message;
+      preview.value = null;
+    } finally {
+      reloading.value = false;
+    }
+    results.value = [];
+    phase.value = 'idle';
+    order.value = [];
+    progress.value = 0;
+    return;
+  }
   for (const r of results.value) if (r.ok) freed.add(r.item_id);
   for (const id of order.value) if (choices[id]) choices[id].on = false;
   phase.value = 'idle';
@@ -135,26 +190,16 @@ function reset() {
 </script>
 
 <template>
-  <ScreenLayout aside-label="Cache notes">
-    <header class="flex flex-col gap-0.5 rounded-tile bg-surface px-6 py-5">
-      <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Caches</h1>
+  <ScreenLayout :loading="loading" loading-label="Checking caches and available cleanup commands…" aside-label="Cache notes">
+    <header class="flex flex-col gap-1 px-2 py-2">
+      <h1 class="m-0 text-h2 font-semibold">Caches</h1>
       <span class="text-label text-text-secondary">Package managers, models, containers and test browsers · one tap, each tool’s own command</span>
     </header>
 
-    <QuickCleanHero
-      :phase="phase"
-      :bytes="chosenBytes"
-      :count="chosen.length"
-      :progress="progress"
-      :remaining="remaining"
-      :done="summary"
-      :disabled-reason="preview?.unavailable ?? null"
-      @start="start"
-      @reset="reset"
-    />
+
     <p v-if="runError" class="m-0 px-2 text-label text-accent-text" role="alert">{{ runError }}</p>
     <p v-if="error" class="m-0 rounded-tile bg-surface p-6 text-label text-accent-text" role="alert">{{ error }}</p>
-    <p v-else-if="preview && groups.length === 0" class="m-0 rounded-tile bg-surface p-6 text-center text-label text-text-secondary">
+    <p v-else-if="preview && allGroups.length === 0" class="m-0 rounded-tile bg-surface p-6 text-center text-label text-text-secondary">
       No package caches found.
     </p>
 
@@ -170,7 +215,8 @@ function reset() {
         :choice="choices[t.item_id]!"
         :state="rowState(t.item_id).state"
         :pct="rowState(t.item_id).pct"
-        :locked="phase !== 'idle'"
+        :remaining="remainingBytes(t.item_id)"
+        :locked="phase !== 'idle' || reloading"
         :freed="freed.has(t.item_id)"
         @toggle="(on) => (choices[t.item_id]!.on = on)"
         @mode="(m) => (choices[t.item_id]!.mode = m)"
@@ -195,7 +241,22 @@ function reset() {
       </div>
     </section>
 
-    <template #aside>
+    <section v-if="failures.length" class="rounded-tile bg-surface p-5" aria-label="Cache cleanup failures"><h2 class="m-0 text-h3 font-semibold">Some caches could not be cleaned</h2><p v-for="r in failures" :key="r.item_id" role="alert" class="text-label text-accent-text">{{ toolName(r.tool) }}: {{ r.error ?? 'The command did not finish successfully. Refresh the preview to check what remains.' }}</p></section>
+
+    <ListPagination :page="currentPage" :total="entries.length" @update:page="page = $event" />
+
+    <template v-if="!loading" #footer>
+      <ActionFooter>
+        <ActionBar :summary="phase === 'done' ? `${formatBytes(summary?.measured ?? 0)} freed` : `${chosen.length} caches selected · ${formatBytes(chosenBytes)} estimated`" :label="phase === 'done' ? 'Refresh preview' : phase === 'running' ? 'Queued / cleaning…' : 'Clean caches'" :busy="phase === 'running' || reloading" :disabled="phase !== 'done' && (!chosen.length || !!preview?.unavailable)" :error="preview?.unavailable" data-testid="start" @action="phase === 'done' ? reset() : confirming = true" />
+      </ActionFooter>
+      <ActionConfirm v-if="confirming" title="Clean selected caches?" label="Clean caches" @cancel="confirming = false" @confirm="start">
+        <ul class="m-0 pl-5"><li v-for="t in chosen" :key="t.item_id">{{ t.name }} · {{ choices[t.item_id]?.mode }} · {{ shortPath(t.cache) }}</li></ul>
+        <p>{{ NOT_UNDOABLE }}</p>
+      </ActionConfirm>
+    </template>
+
+    <details class="rounded-card bg-surface p-4">
+      <summary class="min-h-touch cursor-pointer font-medium">Cache details and skipped tools</summary>
       <section class="flex flex-col gap-2.5 rounded-tile bg-surface p-[22px]">
         <span class="text-label font-medium text-text-tertiary">All caches</span>
         <span class="text-stat-md leading-none font-bold tracking-[-0.03em] tabular-nums" data-testid="all-bytes">{{ formatBytes(allBytes) }}</span>
@@ -227,7 +288,7 @@ function reset() {
           <span class="font-mono">{{ formatBytes(r.freed_bytes) }}</span>
         </div>
       </section>
-    </template>
+    </details>
   </ScreenLayout>
 </template>
 

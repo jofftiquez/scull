@@ -396,3 +396,67 @@ fn hung_git_calls_time_out() {
     assert!(matches!(e, GitError::Timeout { .. }), "{e:?}");
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
+
+#[test]
+fn worktree_removal_preparation_is_hardened_exact_and_does_not_execute() {
+    let Some((sb, runner)) = setup() else { return };
+    let repo = sb.init_repo("repo");
+    fs::write(repo.join("README.md"), "committed\n").unwrap();
+    sb.git(&repo, &["add", "."]);
+    sb.git(&repo, &["commit", "-q", "-m", "initial"]);
+    let target = repo.parent().unwrap().join("linked tree");
+    sb.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            target.to_str().unwrap(),
+        ],
+    );
+    sb.git(
+        &repo,
+        &[
+            "config",
+            "filter.hostile.process",
+            "sh -c 'touch should-never-exist'",
+        ],
+    );
+    let command = runner.prepare_worktree_removal(&target).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        &args[args.len() - 4..],
+        ["worktree", "remove", "--", target.to_str().unwrap()]
+    );
+    assert!(
+        !args
+            .iter()
+            .any(|a| matches!(a.as_str(), "--force" | "-f" | "prune" | "branch"))
+    );
+    for required in [
+        "core.fsmonitor=false",
+        "filter.hostile.process=",
+        "protocol.allow=never",
+    ] {
+        assert!(args.iter().any(|arg| arg == required), "{args:?}");
+    }
+    assert_eq!(command.get_program(), runner.resolved_binary());
+    assert!(
+        command
+            .get_envs()
+            .any(|(name, value)| name == "GIT_CONFIG_NOSYSTEM" && value == Some("1".as_ref()))
+    );
+    assert!(
+        target.join("README.md").is_file(),
+        "preparation never executes removal"
+    );
+    assert!(
+        runner.prepare_worktree_removal(&repo).is_err(),
+        "main worktree is never removable"
+    );
+}

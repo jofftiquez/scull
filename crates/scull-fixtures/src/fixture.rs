@@ -466,6 +466,17 @@ impl Fixture {
     pub(crate) fn git_home(&self) -> Result<PathBuf> {
         let home = self.base.join("git-home");
         mkdir(&home)?;
+        // The `-c` overrides don't reach `git-receive-pack` on a local push (Git strips them
+        // from the child's environment), so it runs auto-maintenance in the remote and writes
+        // `objects/maintenance.lock` after the I-3 baseline. `GIT_CONFIG_GLOBAL` (this file)
+        // is inherited, so turn maintenance off here too.
+        let config = home.join(".gitconfig");
+        if !config.exists() {
+            write(
+                &config,
+                b"[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[receive]\n\tautogc = false\n",
+            )?;
+        }
         Ok(home)
     }
 

@@ -309,6 +309,28 @@ export type ElevationView = "elevated" | "not_elevated" | "unknown";
  */
 export type HistoryState = "present" | "not_created" | "off";
 /**
+ * Cache cleanup event kinds; tool progress is counted only at terminal events.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheProgressKind".
+ */
+export type CacheProgressKind = "preparing" | "started" | "output" | "output_truncated" | "finished" | "skipped";
+/**
+ * Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,
+ * and `cancel_operation` takes it.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "OpId".
+ */
+export type OpId = string;
+/**
+ * A native process output stream.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheOutputStream".
+ */
+export type CacheOutputStream = "stdout" | "stderr";
+/**
  * What happened to one item of a run.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -445,14 +467,6 @@ export type AlertKind =
   | "budget_exceeded"
   | "growth_spike"
   | "free_space_drop";
-/**
- * Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,
- * and `cancel_operation` takes it.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "OpId".
- */
-export type OpId = string;
 /**
  * Which stage an operation is in.
  *
@@ -896,8 +910,11 @@ export interface BridgePayloads {
   AgentRequests: AgentRequests;
   AgentRevoked: AgentRevoked;
   AppInfo: AppInfo;
+  CacheCleanChoice: CacheCleanChoice;
   CachesReport: CachesReport;
   CapabilitiesReport: CapabilitiesReport;
+  DesktopCachePreview: DesktopCachePreview;
+  DesktopCacheProgress: DesktopCacheProgress;
   DesktopPlan: DesktopPlan;
   DesktopQuickClean: DesktopQuickClean;
   DesktopRestore: DesktopRestore;
@@ -1372,6 +1389,59 @@ export interface AppInfo {
   version: string;
 }
 /**
+ * One explicitly selected mode and the command the human reviewed.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanChoice".
+ */
+export interface CacheCleanChoice {
+  command: CacheCleanCommand;
+  /**
+   * Cache item ID.
+   */
+  item_id: string;
+  /**
+   * Either `prune` or `wipe`; checked against the fresh core plan.
+   */
+  mode: string;
+}
+/**
+ * An exact native command shown for review. Display only; never interpreted as shell text.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanCommand".
+ */
+export interface CacheCleanCommand {
+  /**
+   * Arguments passed directly to the executable.
+   */
+  args: string[];
+  /**
+   * Canonical trusted executable.
+   */
+  binary: string;
+  /**
+   * Cache location variables added to the sanitized environment.
+   */
+  env: CacheCleanEnv[];
+}
+/**
+ * A cache-location variable in the sanitized native environment.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanEnv".
+ */
+export interface CacheCleanEnv {
+  /**
+   * Variable name.
+   */
+  name: string;
+  /**
+   * Located cache folder or other scoped value.
+   */
+  value: string;
+}
+/**
  * Result of locating package-manager caches (`scull caches`).
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -1590,6 +1660,136 @@ export interface SignalView {
   name: string;
 }
 /**
+ * The native Quick Clean preview. Unsupported or protected caches remain skipped.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopCachePreview".
+ */
+export interface DesktopCachePreview {
+  /**
+   * Tools left alone and the core planner's reasons.
+   */
+  skipped: CacheCleanSkip[];
+  /**
+   * Runnable tools.
+   */
+  tools: CacheCleanTool[];
+}
+/**
+ * A cache omitted by the native planner.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanSkip".
+ */
+export interface CacheCleanSkip {
+  /**
+   * Estimate from classification, when available.
+   */
+  bytes?: number | null;
+  /**
+   * Core's human-readable cache name.
+   */
+  name: string;
+  /**
+   * Located path, if known.
+   */
+  path?: string | null;
+  /**
+   * Core planner reason.
+   */
+  reason: string;
+  /**
+   * Tool name.
+   */
+  tool: string;
+}
+/**
+ * A tool and the modes the core planner currently permits.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanTool".
+ */
+export interface CacheCleanTool {
+  /**
+   * Estimated reclaimable bytes.
+   */
+  bytes: number;
+  /**
+   * Located cache folder.
+   */
+  cache: string;
+  /**
+   * Classified cache item ID.
+   */
+  item_id: string;
+  /**
+   * Core's human-readable cache name.
+   */
+  name: string;
+  /**
+   * Core planner's safety notes.
+   */
+  notes: string[];
+  /**
+   * Prune command, when supported.
+   */
+  prune?: CacheCleanCommand | null;
+  /**
+   * Tool name.
+   */
+  tool: string;
+  /**
+   * Wipe command, when supported.
+   */
+  wipe?: CacheCleanCommand | null;
+}
+/**
+ * Window-scoped live output from an approved cache cleanup.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "DesktopCacheProgress".
+ */
+export interface DesktopCacheProgress {
+  /**
+   * Validated executable and arguments at command start, without environment values.
+   */
+  command?: string | null;
+  /**
+   * Distinct selected caches that finished or were skipped.
+   */
+  completed: number;
+  /**
+   * Selected cache candidate, when this is a tool event.
+   */
+  item_id?: string | null;
+  kind: CacheProgressKind;
+  /**
+   * Escaped, capped output supplied by the core runner.
+   */
+  line?: string | null;
+  op_id: OpId;
+  /**
+   * Why a selected cache was skipped.
+   */
+  reason?: string | null;
+  /**
+   * Which process stream produced this line.
+   */
+  stream?: CacheOutputStream | null;
+  /**
+   * Command success, only present when it finished.
+   */
+  succeeded?: boolean | null;
+  /**
+   * Package manager, when known.
+   */
+  tool?: string | null;
+  /**
+   * Number of distinct selected cache IDs.
+   */
+  total: number;
+}
+/**
  * A Cleanup Review plan as the human reviews it.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -1693,6 +1893,10 @@ export interface QuickCleanTool {
    * Bytes the cache shrank by, when measured.
    */
   cache_bytes_freed?: number | null;
+  /**
+   * Core explanation when the tool kept referenced or otherwise needed files.
+   */
+  explanation?: string | null;
   /**
    * The cache's candidate (the Quick Clean chip).
    */

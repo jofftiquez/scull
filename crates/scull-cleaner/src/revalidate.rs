@@ -214,6 +214,23 @@ impl<'e> Revalidation<'e> {
             anchor_identity: root.identity,
             kind: md.kind,
             sizes,
+            scan_roots: self.root_paths(),
+            worktree: report
+                .worktrees
+                .into_iter()
+                .find(|w| w.candidate.as_ref() == Some(&item.item_id))
+                .map(|w| WorktreeBasis {
+                    common_identity: Native
+                        .metadata(&w.state.repo.common_dir.to_path_buf())
+                        .ok()
+                        .and_then(|m| m.identity),
+                    git_identity: Native
+                        .metadata(&w.state.git_dir.to_path_buf())
+                        .ok()
+                        .and_then(|m| m.identity),
+                    state: w.state,
+                    decision: w.decision,
+                }),
         })
     }
 }
@@ -238,6 +255,19 @@ pub struct Revalidated {
     /// The fresh size estimate (logical, allocated, reclaimable with confidence), for the
     /// operation's predicted reclaim (PHY-02).
     pub sizes: Sizes,
+    /// The fresh linked-worktree analysis, including which ignored artifacts were recognized.
+    pub(crate) worktree: Option<WorktreeBasis>,
+    /// Every trusted scan root, also excluded when resolving the Git executable.
+    pub(crate) scan_roots: Vec<PathBuf>,
+}
+
+/// Git metadata identities and classification captured with the freshly re-derived candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorktreeBasis {
+    pub state: scull_git::WorktreeState,
+    pub decision: scull_git::WorktreeDecision,
+    pub common_identity: Option<FileIdentity>,
+    pub git_identity: Option<FileIdentity>,
 }
 
 /// Why an item was skipped at revalidation. Nothing was touched.

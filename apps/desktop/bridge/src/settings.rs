@@ -8,9 +8,8 @@
 //! * scull's own data, like `scull data show`: its directories, the database state (header probe
 //!   only, see [`crate::db`]) and its own files with their sizes.
 //!
-//! Nothing here writes: changing a setting is a mutation, so the Settings screen calls a
-//! screen-local stub (`apps/desktop/src/components/settings/bridge.ts`) until config writes go
-//! through a core command.
+//! Nothing here writes: edits use the separate `Session::save_setting` mutation and the
+//! validated core/platform config writer.
 
 use crate::db::{DbState, probe};
 use crate::session::Session;

@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '../../App.vue';
 import { BRIDGE_KEY } from '../../bridge';
@@ -17,7 +17,7 @@ async function mountApp(path = '/', bridge: ScullBridge = createMockBridge()) {
 }
 
 describe('app shell', () => {
-  it('renders the design 01 sidebar: nav on top, search, supporter and drives at the bottom', async () => {
+  it('renders the design 01 sidebar: nav on top, search and drives at the bottom', async () => {
     const { wrapper } = await mountApp();
     const nav = wrapper.get('[data-testid="sidebar"]');
     expect(nav.attributes('aria-label')).toBe('Primary');
@@ -25,7 +25,9 @@ describe('app shell', () => {
     expect(labels).toEqual(NAV_ITEMS.map((i) => i.label));
     expect(nav.find('[role="separator"]').exists()).toBe(true);
     expect(nav.find('input[type="search"]').attributes('placeholder')).toBe('Search paths, projects…');
-    expect(nav.text()).toContain('Supporter');
+    expect(nav.text()).not.toContain('Supporter');
+    expect(wrapper.get('[data-testid="header"]').text()).not.toMatch(/scanned|reclaimable|Show regenerable/);
+    expect(wrapper.get('[data-testid="rescan"]').text()).toContain('Scan');
     expect(nav.find('[data-testid="drives"]').exists()).toBe(true);
   });
 
@@ -40,7 +42,7 @@ describe('app shell', () => {
     const { wrapper, router } = await mountApp('/');
     await router.push('/worktrees');
     await flushPromises();
-    expect(wrapper.get('h1').text()).toContain('Git Worktrees');
+    await vi.waitFor(() => expect(wrapper.find('h1').text()).toContain('Git Worktrees'));
   });
 
   it('shows drives from the bridge, unknown sizes as "size unknown"', async () => {

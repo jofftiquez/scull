@@ -1,18 +1,12 @@
-// The Caches screen's Quick Clean calls that the core bridge does not have yet (P3-UI-08).
-//
-//   plan(report)       the Quick Clean preview: per tool the resolved binary, the prune and wipe
-//                      arguments, and the tools that will be skipped, with reasons (QC-03…05).
-//                      Planned bridge command: `quick_clean_plan` (scull-cleaner
-//                      `QuickClean::plan`).
-//   run(choices, ...)  run the chosen tools one after another, each with its own command and no
-//                      shell, revalidating each first; orphaned caches the user confirmed go
-//                      through the Executor (D-36). Planned command: `quick_clean_run`.
-//
-// The desktop never deletes and never starts a process. In a plain browser the mock only
-// animates; inside Tauri the pending implementation says Quick Clean isn't available from the
-// app yet. These calls stay out of `ScullBridge`, so its read-only surface (SAFE-10) and its
-// tests are unchanged.
+// The native Caches screen uses the core planner and audited runner. Only the browser
+// fixture simulates cleaning; the webview never starts processes or deletes files.
+import { toRaw } from 'vue';
 import type { CachesReport, ScullBridge } from '../../bridge';
+import type { DesktopCachePreview, DesktopQuickClean } from '../../bridge/generated';
+import { realTransport, type TauriTransport } from '../../bridge/tauri';
+import { runCacheCommand, type CacheProgressHandler } from '../../bridge/cacheProgress';
+import { CLEANUP_COMMANDS } from '../../bridge/tauriPlans';
+import { toBridgeError } from '../../bridge/types';
 import {
   NOT_UNDOABLE,
   TOOL_COMMANDS,
@@ -33,10 +27,10 @@ export interface RunChoice {
 }
 
 export interface CacheActions {
-  readonly kind: 'mock' | 'pending';
-  plan(report: CachesReport): Promise<QuickCleanPreview>;
+  readonly kind: 'mock' | 'tauri';
+  plan(report?: CachesReport): Promise<QuickCleanPreview>;
   /** `onProgress(index, fraction)`: the index (in `choices`) of the running tool, 0–1. */
-  run(preview: QuickCleanPreview, choices: RunChoice[], onProgress?: (index: number, fraction: number) => void): Promise<RunResult[]>;
+  run(preview: QuickCleanPreview, choices: RunChoice[], onProgress?: (index: number, fraction: number) => void, onEvent?: CacheProgressHandler): Promise<RunResult[]>;
 }
 
 /** Where the mock machine's tools resolve (trusted directories, SAFE-12). */
@@ -91,20 +85,33 @@ export function createMockCacheActions(opts: { msPerTool?: number; stepMs?: numb
     kind: 'mock',
     runs,
     async plan(report) {
+      if (!report) throw new Error('A cache report is required for the browser preview.');
       return previewFrom(report, MOCK_BINARIES, null);
     },
-    async run(preview, choices, onProgress) {
+    async run(preview, choices, onProgress, onEvent) {
       runs.push(structuredClone(choices));
       const n = choices.length;
       const dur = opts.msPerTool === undefined ? runDuration(n) : opts.msPerTool * n;
       const t0 = Date.now();
+      const opId = 'mock-cache-run';
+      let last = -1;
+      onEvent?.({ op_id: opId, kind: 'preparing', completed: 0, total: n });
       for (;;) {
         const e = dur <= 0 ? 1 : Math.min(1, (Date.now() - t0) / dur);
         const index = Math.min(n - 1, Math.floor(e * n));
+        while (last < index) {
+          if (last >= 0) { const previous = preview.tools.find((t) => t.item_id === choices[last]?.item_id)!; onEvent?.({ op_id: opId, kind: 'finished', item_id: previous.item_id, tool: previous.tool, succeeded: true, completed: last + 1, total: n }); }
+          last++;
+          const tool = preview.tools.find((t) => t.item_id === choices[last]?.item_id)!;
+          onEvent?.({ op_id: opId, kind: 'started', item_id: tool.item_id, tool: tool.tool, command: `${tool.binary ?? tool.tool} ${(choices[last]?.mode === 'prune' ? tool.prune : tool.wipe)?.join(' ') ?? ''}`, completed: last, total: n });
+          onEvent?.({ op_id: opId, kind: 'output', item_id: tool.item_id, tool: tool.tool, stream: 'stdout', line: 'Simulated cleanup output (browser preview).', completed: last, total: n });
+        }
         onProgress?.(index, e >= 1 ? 1 : e * n - index);
         if (e >= 1) break;
         await new Promise((r) => setTimeout(r, opts.stepMs ?? 40));
       }
+      const final = preview.tools.find((t) => t.item_id === choices.at(-1)?.item_id);
+      if (final) onEvent?.({ op_id: opId, kind: 'finished', item_id: final.item_id, tool: final.tool, succeeded: true, completed: n, total: n });
       return choices.map((ch) => {
         const t = preview.tools.find((x) => x.item_id === ch.item_id)!;
         const pnpm = t.tool === 'pnpm';
@@ -121,23 +128,80 @@ export function createMockCacheActions(opts: { msPerTool?: number; stepMs?: numb
   };
 }
 
-export const PENDING_REASON =
-  'Quick Clean from the app arrives with the quick_clean_plan and quick_clean_run bridge commands. `scull clean caches` works now.';
-
-export function createPendingCacheActions(): CacheActions {
+/** Native preview commands are kept with their displayed preview for exact mode validation. */
+export function createTauriCacheActions(t: TauriTransport = realTransport): CacheActions {
+  const plans = new WeakMap<QuickCleanPreview, DesktopCachePreview>();
+  const call = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    try {
+      return await t.invoke<T>(command, args);
+    } catch (error) {
+      throw toBridgeError(error);
+    }
+  };
   return {
-    kind: 'pending',
-    async plan(report) {
-      return previewFrom(report, null, PENDING_REASON);
+    kind: 'tauri',
+    async plan() {
+      const native = await call<DesktopCachePreview>(CLEANUP_COMMANDS.quickCleanPlan);
+      const preview: QuickCleanPreview = {
+        unavailable: null,
+        tools: native.tools.map((tool) => ({
+          tool: tool.tool,
+          name: tool.name,
+          group: toolGroup(tool.tool),
+          item_id: tool.item_id,
+          cache: tool.cache,
+          bytes: tool.bytes,
+          runner: 'tool',
+          binary: (tool.prune ?? tool.wipe)?.binary ?? null,
+          prune: tool.prune?.args ?? null,
+          wipe: tool.wipe?.args ?? null,
+          commands: { prune: tool.prune, wipe: tool.wipe },
+          notes: tool.notes,
+        })),
+        skipped: native.skipped.map((skip) => ({
+          tool: skip.tool,
+          name: skip.name,
+          group: toolGroup(skip.tool),
+          path: skip.path ?? null,
+          bytes: skip.bytes ?? null,
+          reason: { kind: 'native', detail: skip.reason },
+        })),
+      };
+      plans.set(preview, native);
+      return preview;
     },
-    async run() {
-      throw new Error(PENDING_REASON);
+    async run(preview, choices, onProgress, onEvent) {
+      const native = plans.get(toRaw(preview));
+      if (!native) throw new Error('Refresh the cache preview before cleaning.');
+      if (choices.length === 0) return [];
+      const request = choices.map((choice) => {
+        const tool = native.tools.find((tool) => tool.item_id === choice.item_id);
+        const command = tool?.[choice.mode];
+        if (!command) throw new Error('This cache mode is unavailable. Refresh the preview.');
+        return { ...choice, command };
+      });
+      onProgress?.(0, 0);
+      const result = await runCacheCommand<DesktopQuickClean>(CLEANUP_COMMANDS.quickCleanRun, { choices: request }, onEvent, t);
+      onProgress?.(choices.length - 1, 1);
+      return choices.map((choice) => {
+        const tool = native.tools.find((tool) => tool.item_id === choice.item_id)!;
+        const ran = result.tools.find((ran) => ran.item_id === choice.item_id);
+        const skipped = result.skipped.find((skip) => skip.tool === tool.tool);
+        return {
+          tool: tool.tool,
+          item_id: choice.item_id,
+          ok: ran?.succeeded ?? false,
+          freed_bytes: Math.max(0, ran?.cache_bytes_freed ?? 0),
+          explanation: ran?.explanation ?? (ran?.cache_bytes_freed == null && ran?.succeeded ? 'The command succeeded; the freed size could not be measured.' : null),
+          error: ran?.succeeded ? null : (skipped?.reason ?? ran?.explanation ?? 'The tool did not finish successfully. See History for details.'),
+        };
+      });
     },
   };
 }
 
 export function cacheActionsFor(bridge: ScullBridge): CacheActions {
-  return bridge.kind === 'mock' ? createMockCacheActions() : createPendingCacheActions();
+  return bridge.kind === 'mock' ? createMockCacheActions() : createTauriCacheActions();
 }
 
 const GiB = 1024 ** 3;

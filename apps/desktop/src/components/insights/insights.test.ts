@@ -203,7 +203,7 @@ async function mountScreen(path = '/insights') {
   // The screen loads the range, then the six-month mix, worktrees and status: wait for the last.
   await vi.waitUntil(async () => {
     await flushPromises();
-    return w.find('[data-testid="knows"]').text().includes('of history') && !w.find('[data-testid="mix"]').text().includes('appears after');
+    return w.find('[data-testid="knows"]').exists() && w.find('[data-testid="knows"]').text().includes('of history') && !w.find('[data-testid="mix"]').text().includes('appears after');
   }, { timeout: 10_000 });
   return w;
 }

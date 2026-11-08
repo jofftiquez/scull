@@ -7,7 +7,7 @@ import { clickSegment, expect, open, test } from './fixtures';
 async function overviewReady(page: Page) {
   await open(page, '/?scenario=design');
   const rescan = page.getByTestId('rescan');
-  await expect(rescan).toHaveText(/Rescan/);
+  await expect(rescan).toHaveText(/Scan/);
   await expect(rescan).toBeEnabled();
   await expect(page.locator('[data-kind="item"]')).toHaveCount(16);
 }
@@ -33,10 +33,10 @@ test('filter the wheel, add items to cleanup, review and confirm the plan', asyn
   await expect(s0.first()).toHaveAttribute('aria-pressed', 'true');
   const detail = page.getByTestId('selected');
   await expect(detail.getByTestId('badge')).toHaveText('Regenerable');
-  await expect(detail.getByTestId('detail-action')).toHaveText('Add to cleanup');
+  await expect(page.getByTestId('detail-action')).toHaveText('Add to cleanup');
   await shot('cleanup-2-filtered-and-selected');
 
-  await detail.getByTestId('detail-action').click();
+  await page.getByTestId('detail-action').click();
   await expect(page.getByTestId('announce')).toContainText('to cleanup');
   await expect(page.getByTestId('basket')).toHaveText('1 item marked for cleanup');
 
@@ -65,26 +65,26 @@ test('filter the wheel, add items to cleanup, review and confirm the plan', asyn
   expect(await plan.locator('[data-item]').evaluateAll((rows) => rows.map((r) => r.getAttribute('data-item')))).toEqual(marked);
   // Both are Regenerable, so both are preselected; the refused S3 item is not in the plan.
   await expect(plan.getByRole('checkbox', { checked: true })).toHaveCount(2);
-  await expect(confirm).toHaveText('Delete 2 items');
+  await expect(confirm).toHaveText('Review cleanup');
   await expect(plan.getByText('Protected · never offered')).toHaveCount(0);
   await shot('cleanup-4-review');
 
   // Narrow the plan by one item, then confirm.
-  const before = await confirm.textContent();
+  const before = await page.getByTestId('main-footer').textContent();
   await plan.getByRole('checkbox', { checked: true }).first().uncheck();
-  await expect(confirm).not.toHaveText(before ?? '');
+  await expect(page.getByTestId('main-footer')).not.toHaveText(before ?? '');
   await confirm.click();
-  await expect(page.getByRole('region', { name: 'Confirm' }).getByRole('heading')).toHaveText(/^Cleaning/);
+  await page.getByTestId('confirm-action').click();
+  await expect(page.getByTestId('toolbar-tasks')).toBeVisible();
   await shot('cleanup-5-running', { settle: false, show: confirm });
 
   const done = page.getByTestId('done');
   await expect(done).toBeVisible();
   await expect(done).toContainText('freed');
-  await expect(done).toContainText('Measured');
-  await expect(page.getByRole('region', { name: 'Confirm' }).getByRole('heading')).toHaveText('Cleanup complete');
+  await expect(done).toContainText('items completed');
   await shot('cleanup-6-done', { show: done });
 
-  await done.getByRole('link', { name: 'Back to overview' }).click();
+  await page.getByTestId('main-footer').getByRole('link', { name: 'Overview', exact: true }).click();
   await expect(page).toHaveURL(/#\/$/);
   // The cleaned item left the basket; the unticked one is still marked.
   await expect(page.getByTestId('basket')).toHaveText('1 item marked for cleanup');
@@ -111,5 +111,5 @@ test('Escape clears the selection and the filter', async ({ page }) => {
   await expect(page.getByTestId('selected').getByTestId('badge')).toHaveText('Costly');
   await page.keyboard.press('Escape');
   await expect(tools.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('selected').getByTestId('badge')).toHaveText('—');
+  await expect(page.locator('aside')).toHaveCount(0);
 });

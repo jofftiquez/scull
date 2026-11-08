@@ -15,13 +15,15 @@ const props = defineProps<{
   remaining: number;
   done: { count: number; planned: number; measured: number } | null;
   disabledReason: string | null;
+  indeterminate?: boolean;
+  refreshing?: boolean;
 }>();
 defineEmits<{ start: []; reset: [] }>();
 
 const running = computed(() => props.phase === 'running');
 const burst = particles();
 const label = computed(() => {
-  if (running.value) return `Cleaning ${Math.round(props.progress * 100)}%`;
+  if (running.value) return props.indeterminate ? 'Cleaning caches…' : `Cleaning ${Math.round(props.progress * 100)}%`;
   return props.count ? `Clean ${props.count} cache${props.count === 1 ? '' : 's'} · ${formatBytes(props.bytes)}` : 'Select caches';
 });
 </script>
@@ -61,13 +63,13 @@ const label = computed(() => {
           :style="{ width: `${p.size}px`, height: `${p.size}px`, borderRadius: p.round ? '50%' : '3px', background: p.color, animation: p.anim }"
         ></span>
       </div>
-      <span class="bounce text-[52px] font-bold tracking-[-0.03em]">+{{ formatBytes(done.planned) }}</span>
+      <span class="bounce text-[52px] font-bold tracking-[-0.03em]">+{{ formatBytes(done.measured) }}</span>
       <span class="rise1 flex flex-col">
         <span class="font-semibold">freed from {{ done.count }} cache{{ done.count === 1 ? '' : 's' }}</span>
-        <span class="text-label text-on-ink-muted">measured {{ formatBytes(done.measured) }}</span>
+        <span class="text-label text-on-ink-muted">estimated {{ formatBytes(done.planned) }} before cleaning</span>
       </span>
-      <button type="button" class="rise2 min-h-touch cursor-pointer rounded-chip border-0 bg-surface px-5 font-[inherit] font-semibold text-ink" @click="$emit('reset')">
-        Nice
+      <button type="button" class="rise2 min-h-touch cursor-pointer rounded-chip border-0 bg-surface px-5 font-[inherit] font-semibold text-ink disabled:cursor-progress" :disabled="refreshing" @click="$emit('reset')">
+        {{ refreshing ? 'Refreshing caches…' : 'Nice' }}
       </button>
     </div>
   </section>

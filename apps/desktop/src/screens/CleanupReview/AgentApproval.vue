@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import LoadingState from '../../components/shell/LoadingState.vue';
+import ActionFooter from '../../components/shell/ActionFooter.vue';
 // Cleanup Review in "agent request" mode (design 12, PRD §13.3, D-7, D-34 provisional).
 //
 // An AI tool call is not consent: the human reviews every item, types the confirmation code
@@ -32,6 +34,8 @@ import { clock, displayPath, itemTitle, mmss, planTotals, shortId, undoLabel } f
 import ReviewHeader from './ReviewHeader.vue';
 import { downloadJson } from '../../components/review/download';
 import '../../components/review/review.css';
+import { usePagination } from '../../lib/pagination';
+import ListPagination from '../../components/shell/ListPagination.vue';
 
 const props = defineProps<{ planId: string }>();
 const plans = usePlanBridge();
@@ -365,6 +369,7 @@ const measured = computed(() => st.value?.result?.measured_freed_bytes ?? 0);
 const predictedFreed = computed(() => totals.value.deleteBytes);
 
 const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border border-border bg-surface px-5 font-medium text-ink no-underline hover:border-ink';
+const { page, current: currentPage, rows: pageItems } = usePagination(items);
 </script>
 
 <template>
@@ -377,6 +382,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
     plan and asks for a code of its own.
   </p>
 
+  <LoadingState v-if="!req && !loadError" label="Loading agent request…" />
   <section v-if="loadError" role="alert" class="rounded-tile border border-accent-tint-border bg-accent-tint p-tile-padding">
     <h2 class="m-0 text-h3 font-semibold">No request to review</h2>
     <p class="m-0 text-label text-text-strong-muted">{{ loadError }}</p>
@@ -520,7 +526,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             <span class="pr-4 text-right">Predicted</span><span>{{ phase === 'executed' ? 'Outcome' : phase === 'running' ? 'Now' : 'Undo' }}</span><span></span>
           </div>
           <PlanRow
-            v-for="it in items"
+            v-for="it in pageItems"
             :key="it.candidate.id"
             :item="it"
             grid="agent-grid"
@@ -593,6 +599,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
           </template>
         </div>
       </div>
+      <ListPagination :page="currentPage" :total="items.length" @update:page="page = $event" />
     </section>
 
     <section aria-label="What approving does" class="tile col-span-12 flex flex-col gap-2.5 rounded-tile bg-surface p-tile-padding lg:col-span-6">
@@ -619,7 +626,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
     <SafetyChecks :footnote="footnote" />
 
     <!-- Pending / ready (12, 12c) -->
-    <section
+    <ActionFooter
       v-if="pending"
       aria-label="Approve or deny"
       class="tile col-span-12 flex flex-col gap-[18px] rounded-tile border border-accent-tint-border bg-accent-tint p-tile-padding text-ink"
@@ -710,10 +717,10 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
           </span>
         </div>
       </div>
-    </section>
+    </ActionFooter>
 
     <!-- Approved / running (12d, 12e) -->
-    <section
+    <ActionFooter
       v-if="phase === 'approved' || phase === 'running'"
       aria-label="Approved"
       aria-live="polite"
@@ -754,10 +761,10 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
       >
         Revoke approval
       </button>
-    </section>
+    </ActionFooter>
 
     <!-- Closed: expired / denied / revoked / changed (12g, 12h, 12i) -->
-    <section
+    <ActionFooter
       v-if="closedInfo"
       :aria-label="closedInfo.title"
       role="status"
@@ -780,6 +787,6 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
           Dismiss
         </RouterLink>
       </div>
-    </section>
+    </ActionFooter>
   </div>
 </template>

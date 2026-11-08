@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ActionBar from '../shell/ActionBar.vue';
+import ActionFooter from '../shell/ActionFooter.vue';
 // The Explorer's right column (design 07 / 07b): the folder shown, or the selected tile, with
 // its size, tier split, largest items, a one-line note and the main action.
 import { computed } from 'vue';
@@ -64,31 +66,16 @@ const legendLabel = (t: Tier) => `${TIERS[t].label} ${formatBytes(props.tiers[t]
     </div>
 
     <span class="text-label text-text-secondary" data-testid="detail-note">{{ note }}</span>
-    <div class="flex gap-2">
-      <button
-        type="button"
-        class="min-h-touch flex-1 cursor-pointer rounded-button border-0 bg-ink px-3 font-[inherit] font-semibold text-on-ink"
-        :aria-expanded="action === 'why' ? reasons !== null : undefined"
-        data-testid="detail-action"
-        @click="$emit('action')"
-      >
-        {{ ACTION_LABEL[action] }}
-      </button>
-      <button
-        v-if="canReveal"
-        type="button"
-        class="min-h-touch flex-1 cursor-pointer rounded-button border border-border bg-surface px-3 font-[inherit] font-medium text-ink"
-        data-testid="detail-reveal"
-        @click="$emit('reveal')"
-      >
-        {{ revealLabel }}
-      </button>
-    </div>
     <ul v-if="reasons" class="m-0 flex list-none flex-col gap-1.5 rounded-card bg-surface-raised p-3.5 text-label" data-testid="reasons">
       <li v-for="r in reasons" :key="r">{{ r }}</li>
       <li v-if="reasons.length === 0">Nothing in here is protected.</li>
     </ul>
     <p v-if="message" class="m-0 text-label text-text-secondary" role="status" data-testid="detail-message">{{ message }}</p>
+    <ActionFooter panel="aside" class="flex flex-col gap-3" aria-label="Folder actions">
+      <ActionBar :summary="name" :aria-expanded="action === 'why' ? reasons !== null : undefined" :label="ACTION_LABEL[action]" data-testid="detail-action" @action="$emit('action')">
+        <button v-if="canReveal" type="button" class="min-h-touch cursor-pointer rounded-button border border-border bg-surface px-4 text-label text-ink" data-testid="detail-reveal" @click="$emit('reveal')">{{ revealLabel }}</button>
+      </ActionBar>
+    </ActionFooter>
   </section>
 </template>
 

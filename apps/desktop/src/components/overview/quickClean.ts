@@ -10,6 +10,7 @@
 //     opens the main window instead.
 import { toBridgeError, type Candidate, type ScullBridge } from '../../bridge';
 import type { DesktopQuickClean } from '../../bridge/generated';
+import { runCacheCommand, type CacheProgressHandler } from '../../bridge/cacheProgress';
 import { realTransport, type TauriTransport } from '../../bridge/tauri';
 import { CLEANUP_COMMANDS } from '../../bridge/tauriPlans';
 import { formatBytes } from '../../lib/format';
@@ -113,6 +114,8 @@ export function quickCleanFrame(tools: readonly QuickCleanTool[], off: ReadonlyS
 }
 
 export interface QuickCleanResult {
+  cleaned?: string[];
+  issues?: string[];
   /** Bytes the cleaned caches held. */
   freed: number;
   /** Measured change in free space. */
@@ -131,14 +134,15 @@ export async function quickCleanPreview(
   bridge: ScullBridge,
   tools: readonly QuickCleanTool[],
   t: TauriTransport = realTransport,
+  onProgress?: CacheProgressHandler,
 ): Promise<QuickCleanResult> {
   if (bridge.kind === 'mock') {
     const freed = tools.reduce((a, x) => a + x.bytes, 0);
-    return { freed, measured: Math.round(freed * 0.98), simulated: true };
+    return { freed, measured: Math.round(freed * 0.98), simulated: true, cleaned: tools.map((t) => t.id) };
   }
   let r: DesktopQuickClean;
   try {
-    r = await t.invoke<DesktopQuickClean>(CLEANUP_COMMANDS.quickClean, { items: tools.map((x) => x.id) });
+    r = await runCacheCommand<DesktopQuickClean>(CLEANUP_COMMANDS.quickClean, { items: tools.map((x) => x.id) }, onProgress, t);
   } catch (e) {
     throw toBridgeError(e);
   }
@@ -147,7 +151,12 @@ export async function quickCleanPreview(
     throw new Error(`Nothing was run${why ? ` (${why})` : ''}. Nothing was deleted.`);
   }
   const freed = r.tools.reduce((a, x) => a + Math.max(0, x.cache_bytes_freed ?? 0), 0);
-  return { freed, measured: Math.max(0, r.measured_delta_bytes ?? freed), simulated: false };
+  const issues = [...r.skipped.map((s) => `${s.tool}: ${s.reason}`), ...r.tools.filter((t) => !t.succeeded).map((t) => `${t.tool}: ${t.explanation ?? 'command failed'}`)];
+  if (r.tools.length + r.skipped.length !== tools.length) issues.push('Not every selected cache reported a result. Check History.');
+  return { freed, measured: Math.max(0, r.measured_delta_bytes ?? freed), simulated: false,
+    cleaned: r.tools.filter((t) => t.succeeded && t.item_id && (t.cache_bytes_freed ?? 0) >= (tools.find((x) => x.id === t.item_id)?.bytes ?? Infinity)).map((t) => t.item_id!),
+    ...(issues.length ? { issues } : {}),
+  };
 }
 
 /** Particles of the burst (design: 20, five colors, keyframes scull-b0..b9). */

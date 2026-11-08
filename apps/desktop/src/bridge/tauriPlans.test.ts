@@ -196,6 +196,8 @@ describe('Tauri plan bridge: commands', () => {
     expect(r).toMatchObject({ plan_id: 'plan_01JSUB', measured_freed_bytes: 980, finished_at: iso(T0 + 5) });
     expect(r.items).toEqual([{ item_id: 'a1', outcome: 'deleted', freed_bytes: 1000, moved_bytes: 0 }]);
     expect(events).toEqual(['item_finished']);
+    await b.executePlan({ plan_id: p.plan_id, hash: p.hash, items: ['a1'], typed_count: 1 });
+    expect(t.calls.at(-1)).toEqual({ cmd: 'execute_desktop_plan', args: { planId: 'plan_01JDESK', contentHash: HASH, items: ['a1'], typedCount: 1 } });
   });
 
   it('a refused run (elevated, lock held, plan changed) comes back as the core error', async () => {

@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "CacheCleanCommand": {
+      "additionalProperties": false,
+      "description": "An exact native command shown for review. Display only; never interpreted as shell text.",
+      "properties": {
+        "args": {
+          "description": "Arguments passed directly to the executable.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "binary": {
+          "description": "Canonical trusted executable.",
+          "type": "string"
+        },
+        "env": {
+          "description": "Cache location variables added to the sanitized environment.",
+          "items": {
+            "$ref": "#/$defs/CacheCleanEnv"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "binary",
+        "args",
+        "env"
+      ],
+      "type": "object"
+    },
+    "CacheCleanEnv": {
+      "additionalProperties": false,
+      "description": "A cache-location variable in the sanitized native environment.",
+      "properties": {
+        "name": {
+          "description": "Variable name.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Located cache folder or other scoped value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/cache-clean-choice.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One explicitly selected mode and the command the human reviewed.",
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CacheCleanCommand",
+      "description": "The exact command previously shown for this mode."
+    },
+    "item_id": {
+      "description": "Cache item ID.",
+      "type": "string"
+    },
+    "mode": {
+      "description": "Either `prune` or `wipe`; checked against the fresh core plan.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "mode",
+    "command"
+  ],
+  "title": "CacheCleanChoice",
+  "type": "object"
+}

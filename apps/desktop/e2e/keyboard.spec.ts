@@ -4,7 +4,7 @@ import { expect, isFocused, open, tabTo, test } from './fixtures';
 
 test('select, add to cleanup and confirm the plan using only the keyboard', async ({ page, shot }) => {
   await open(page, '/?scenario=design');
-  await expect(page.getByTestId('rescan')).toHaveText(/Rescan/);
+  await expect(page.getByTestId('rescan')).toHaveText(/Scan/);
   await expect(page.getByTestId('rescan')).toBeEnabled();
 
   // The first Tab stop skips the navigation.
@@ -40,13 +40,16 @@ test('select, add to cleanup and confirm the plan using only the keyboard', asyn
   await tabTo(page, confirm, { max: 120 });
   await shot('keyboard-2-confirm-focused');
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await tabTo(page, page.getByTestId('confirm-action'));
+  await page.keyboard.press('Enter');
   const done = page.getByTestId('done');
   await expect(done).toBeVisible();
 
-  const back = done.getByRole('link', { name: 'Back to overview' });
+  const back = page.getByTestId('main-footer').getByRole('link', { name: 'Overview', exact: true });
   await expect(back).toBeVisible();
-  // Focus stays on the (now disabled) confirm button; Shift+Tab walks back up to the result.
-  await tabTo(page, back, { back: true, max: 120 });
+  // The task indicator receives focus while the job runs; return to the footer with Tab.
+  await tabTo(page, back, { max: 120 });
   expect(await isFocused(back)).toBe(true);
   await shot('keyboard-3-done');
   await page.keyboard.press('Enter');

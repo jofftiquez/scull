@@ -17,7 +17,7 @@ test('key flows reach their end states with no animation running', async ({ page
   await shot('reduced-motion-1-onboarding-done', { settle: false, show: openOverview });
 
   await openOverview.click();
-  await expect(page.getByTestId('rescan')).toHaveText(/Rescan/);
+  await expect(page.getByTestId('rescan')).toHaveText(/Scan/);
   await expect(page.getByTestId('rescan')).toBeEnabled();
   await expect(page.locator('[data-kind="item"]').first()).toBeVisible();
   expect(await runningAnimations(page)).toEqual([]);
@@ -26,6 +26,7 @@ test('key flows reach their end states with no animation running', async ({ page
   await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /Cleanup Review/ }).click();
   await expect(page.getByTestId('confirm')).toBeEnabled();
   await page.getByTestId('confirm').click();
+  await page.getByTestId('confirm-action').click();
   await expect(page.getByTestId('done')).toBeVisible();
   expect(await runningAnimations(page)).toEqual([]);
   await shot('reduced-motion-3-cleanup-done', { settle: false, show: page.getByTestId('done') });
@@ -34,7 +35,8 @@ test('key flows reach their end states with no animation running', async ({ page
 test('Quick Clean finishes without its burst and bounce animating', async ({ page, shot }) => {
   await open(page, '/caches?demo=design');
   await page.getByTestId('start').click();
-  const done = page.getByTestId('hero').getByTestId('done');
+  await page.getByTestId('confirm-action').click();
+  const done = page.getByTestId('task-success');
   await expect(done).toBeVisible();
   expect(await runningAnimations(page)).toEqual([]);
   await shot('reduced-motion-4-quick-clean-done', { settle: false });

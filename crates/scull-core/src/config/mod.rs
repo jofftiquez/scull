@@ -45,6 +45,7 @@
 
 mod auto;
 mod duration;
+mod edit;
 mod layer;
 mod proactive;
 mod repo;
@@ -56,6 +57,7 @@ pub use auto::{
     MAX_ITEMS_PER_RUN_CEILING, MIN_EVERY, MIN_IDLE,
 };
 pub use duration::DurationSpec;
+pub use edit::edit_setting;
 pub use layer::{
     ConfigLayer, ENV_VARS, EnvLayer, EnvVar, ForgeLayer, McpLayer, Origin, OutputLayer,
     QuarantineLayer, ResolvedConfig, RulesLayer, ScanLayer, resolve,

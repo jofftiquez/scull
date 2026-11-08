@@ -4,12 +4,16 @@
 // Restore is a mutation, so it goes through the screen-local stub (components/history/bridge.ts):
 // the mock animates without touching anything; inside Tauri it refuses until the core restore
 // command exists. A restore never overwrites: a taken path restores to a sibling (P2-EXEC-06).
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { toBridgeError, useBridge, type HistoryItem, type HistoryOperation, type HistoryView } from '../../bridge';
+import { taskQueue } from '../../state/tasks';
 import { formatBytes } from '../../lib/format';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
-import RemovalToast from '../../components/worktrees/RemovalToast.vue';
+import { usePagination } from '../../lib/pagination';
+import ListPagination from '../../components/shell/ListPagination.vue';
+import ActionFooter from '../../components/shell/ActionFooter.vue';
+import ActionBar from '../../components/shell/ActionBar.vue';
 import { downloadJson } from '../../components/review/download';
 import { historyActionsFor, type HistoryActions, type RestoreResult } from '../../components/history/bridge';
 import {
@@ -40,13 +44,12 @@ const actions = props.actions ?? historyActionsFor(bridge);
 
 const raw = ref<HistoryView | null>(null);
 const loadError = ref('');
+const loading = ref(true);
 const picked = ref<string | null>(null);
 const restored = ref<Map<string, RestoreResult>>(new Map());
 const justRestored = ref<string | null>(null);
 const restoring = ref<string | null>(null);
 const restoreError = ref('');
-const toast = ref<{ text: string; amount: string } | null>(null);
-const timers: ReturnType<typeof setTimeout>[] = [];
 
 onMounted(async () => {
   try {
@@ -55,19 +58,21 @@ onMounted(async () => {
     raw.value = empty
       ? { state: 'ok', detail: null, now: Math.floor(Date.now() / 1000), audit_api: true, operations: [] }
       : await bridge.history();
-    const ops = raw.value.operations;
-    picked.value = (ops.find((o) => o.items.some((i) => isRestorable(i, raw.value!.now))) ?? ops[0])?.operation_id ?? null;
+
   } catch (e) {
     loadError.value = toBridgeError(e).message;
+  } finally {
+    loading.value = false;
   }
 });
-onBeforeUnmount(() => timers.forEach(clearTimeout));
 
 const view = computed(() => (raw.value ? withRestores(raw.value, restored.value) : null));
 const now = computed(() => view.value?.now ?? Math.floor(Date.now() / 1000));
 const ops = computed(() => view.value?.operations ?? []);
+const { page, current: currentPage, rows: pageRows } = usePagination(ops);
+watch(page, () => { picked.value = null; });
 const current = computed<HistoryOperation | null>(
-  () => ops.value.find((o) => o.operation_id === picked.value) ?? ops.value[0] ?? null,
+  () => ops.value.find((o) => o.operation_id === picked.value) ?? null,
 );
 const fig = computed(() => (view.value ? figures(view.value) : null));
 
@@ -92,7 +97,7 @@ function onKey(e: KeyboardEvent, i: number) {
   const d = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
   if (!d) return;
   e.preventDefault();
-  const next = ops.value[i + d];
+  const next = pageRows.value[i + d];
   if (!next) return;
   pick(next);
   const el = (e.currentTarget as HTMLElement).closest('ul')?.querySelectorAll<HTMLButtonElement>('button[data-row]')[i + d];
@@ -103,18 +108,10 @@ async function restore(op: HistoryOperation, it: HistoryItem) {
   if (restoring.value || !isRestorable(it, now.value)) return;
   restoring.value = it.item_id;
   restoreError.value = '';
-  toast.value = null;
   try {
-    const r = await actions.restoreQuarantined(op, it);
+    const r = await taskQueue.enqueue('Restore item', () => actions.restoreQuarantined(op, it), (r) => ({ summary: `Restored to ${displayPath(r.restored_to)}` }));
     restored.value = new Map([...restored.value, [it.item_id, r]]);
     justRestored.value = it.item_id;
-    toast.value = {
-      text: r.sibling
-        ? `Restored beside ${displayPath(it.path)} as ${r.restored_to.split(/[\\/]/).pop()}`
-        : `Restored ${displayPath(it.path)}`,
-      amount: formatBytes(it.moved_bytes ?? it.predicted_bytes),
-    };
-    timers.push(setTimeout(() => (toast.value = null), 4000));
   } catch (e) {
     restoreError.value = `${toBridgeError(e).message}`;
   } finally {
@@ -132,21 +129,12 @@ function exportLog() {
 </script>
 
 <template>
-  <ScreenLayout aside-label="Operation details">
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <ScreenLayout :loading="loading" loading-label="Reading operation history…" aside-label="Operation details" :detail-open="!!current" @close-details="picked = null">
+    <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
       <div class="flex flex-col gap-0.5">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">History</h1>
+        <h1 class="m-0 text-h2 font-semibold">History</h1>
         <span class="text-label text-text-secondary">Every operation, what it freed, and what you can still restore</span>
       </div>
-      <button
-        type="button"
-        class="min-h-[44px] cursor-pointer rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink hover:border-ink disabled:cursor-not-allowed disabled:text-text-secondary"
-        :disabled="!ops.length"
-        data-testid="export"
-        @click="exportLog"
-      >
-        Export log
-      </button>
     </header>
 
     <section v-if="loadError" role="alert" class="rounded-tile border border-accent-tint-border bg-accent-tint p-tile-padding">
@@ -184,7 +172,7 @@ function exportLog() {
           </p>
         </div>
         <ul class="m-0 flex list-none flex-col gap-0.5 p-0">
-          <li v-for="(o, i) in ops" :key="o.operation_id">
+          <li v-for="(o, i) in pageRows" :key="o.operation_id">
             <button
               type="button"
               data-row
@@ -214,8 +202,13 @@ function exportLog() {
             </button>
           </li>
         </ul>
+        <ListPagination :page="currentPage" :total="ops.length" @update:page="page = $event" />
       </section>
     </template>
+
+    <ActionFooter aria-label="History actions">
+      <ActionBar :summary="`${ops.length} recorded operation${ops.length === 1 ? '' : 's'}`" label="Export log" :disabled="!ops.length" data-testid="export" @action="exportLog" />
+    </ActionFooter>
 
     <template v-if="current" #aside>
       <section aria-live="polite" class="flex flex-col gap-3.5 rounded-tile bg-surface p-tile-padding" data-testid="details">
@@ -285,8 +278,6 @@ function exportLog() {
             </span>
           </div>
         </div>
-
-        <RemovalToast v-if="toast" :text="toast.text" :amount="toast.amount" />
       </section>
     </template>
   </ScreenLayout>

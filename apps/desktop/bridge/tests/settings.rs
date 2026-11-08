@@ -42,6 +42,43 @@ fn session(root: &Path, env: &[(&str, &str)]) -> Session {
     })
 }
 
+#[test]
+fn native_edits_persist_and_keep_environment_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session(dir.path(), &[("SCULL_MCP_HASH_NAMES", "false")]);
+    session
+        .save_setting("mcp.hash_names", &serde_json::json!(true))
+        .unwrap();
+    let view = session.settings();
+    assert!(!view.config.mcp.hash_names);
+    assert!(
+        std::fs::read_to_string(dir.path().join("config/config.toml"))
+            .unwrap()
+            .contains("hash_names = true")
+    );
+    let fresh = self::session(dir.path(), &[]);
+    assert!(fresh.settings().config.mcp.hash_names);
+    let before = snapshot(dir.path());
+    assert!(
+        fresh
+            .save_setting("mcp.destructive", &serde_json::json!(true))
+            .is_err()
+    );
+    assert_eq!(snapshot(dir.path()), before);
+}
+
+#[test]
+fn invalid_environment_refuses_a_config_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session(dir.path(), &[("SCULL_MCP_HASH_NAMES", "invalid")]);
+    assert!(
+        session
+            .save_setting("mcp.hash_names", &serde_json::json!(true))
+            .is_err()
+    );
+    assert!(snapshot(dir.path()).is_empty());
+}
+
 /// Every file under `dir`, recursively, with its bytes.
 fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();

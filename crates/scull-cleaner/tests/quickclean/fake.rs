@@ -257,6 +257,15 @@ fn fake_main(dir: &Path, tool: &str, args: Vec<String>, script: Option<&str>) ->
         println!("{}", get("version").unwrap_or(default));
         return 0;
     }
+    if tool == "bun" && args.starts_with(&["pm".into(), "cache".into()]) {
+        let manifest = fs::read("package.json")
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if !manifest.as_ref().is_some_and(serde_json::Value::is_object) {
+            eprintln!("error: No package.json was found for directory");
+            return 1;
+        }
+    }
     if let Some(ms) = get("sleep_ms").and_then(|v| v.parse::<u64>().ok()) {
         std::thread::sleep(Duration::from_millis(ms));
         let _ = fs::write(dir.join(format!("{tool}.finished")), b"");

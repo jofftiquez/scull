@@ -2,6 +2,7 @@
 // preview's shape mirrors scull-cleaner's `QuickCleanPlan` (PlannedTool / SkippedTool /
 // SkipReason), so the planned bridge command can return it unchanged.
 import type { Candidate, Tier } from '../../bridge';
+import type { CacheCleanCommand } from '../../bridge/generated';
 
 /** scull-detectors' NOT_UNDOABLE_NOTE (shown with every Quick Clean, QC-04). */
 export const NOT_UNDOABLE = 'Not undoable. Packages re-download on next install; offline installs may fail until then.';
@@ -12,6 +13,7 @@ export const GROUPS: readonly Group[] = ['Package managers', 'Models', 'Containe
 
 /** Why a tool will not run (scull-cleaner `SkipReason`). */
 export type SkipReason =
+  | { kind: 'native'; detail: string }
   | { kind: 'refused'; detail: string }
   | { kind: 'not_eligible'; tier: Tier }
   | { kind: 'in_use'; by: string[] }
@@ -29,6 +31,8 @@ export type SkipReason =
 /** The reason as a sentence (same wording as scull-cleaner's `Display`). */
 export function skipText(r: SkipReason): string {
   switch (r.kind) {
+    case 'native':
+      return r.detail;
     case 'refused':
       return `location refused: ${r.detail}`;
     case 'not_eligible':
@@ -71,6 +75,8 @@ export interface PlannedCache {
   runner: 'tool' | 'executor';
   /** Resolved binary: canonical absolute path from a trusted directory (SAFE-12). */
   binary: string | null;
+  /** Exact native commands for each mode, including the scoped environment. */
+  commands?: Partial<Record<Mode, CacheCleanCommand | null>>;
   /** Arguments of the prune and the wipe; `null` when the tool has none. */
   prune: string[] | null;
   wipe: string[] | null;
@@ -91,7 +97,7 @@ export interface SkippedCache {
 export interface QuickCleanPreview {
   tools: PlannedCache[];
   skipped: SkippedCache[];
-  /** Set when the app can't run Quick Clean yet (inside Tauri until the commands exist). */
+  /** Set when planning is unavailable. */
   unavailable: string | null;
 }
 
@@ -111,6 +117,7 @@ const TOOL_NAMES: Record<string, [string, Group]> = {
   ollama: ['Ollama models', 'Models'],
   docker: ['Docker build cache', 'Containers & system'],
   brew: ['Homebrew', 'Containers & system'],
+  homebrew: ['Homebrew', 'Containers & system'],
   playwright: ['Playwright browsers', 'Test browsers'],
   cypress: ['Cypress binaries', 'Test browsers'],
 };
@@ -151,6 +158,8 @@ export function defaultMode(p: Pick<PlannedCache, 'prune' | 'wipe'>): Mode {
 /** What the row shows as its command: the resolved binary and the arguments, or the executor. */
 export function commandLine(p: PlannedCache, mode: Mode): string {
   if (p.runner === 'executor') return 'removed safely by scull';
+  const command = p.commands?.[mode];
+  if (command) return [...command.env.map(({ name, value }) => `${name}=${value}`), command.binary, ...command.args].join(' ');
   const args = (mode === 'prune' ? (p.prune ?? p.wipe) : (p.wipe ?? p.prune)) ?? [];
   return [p.binary ?? p.tool, ...args].join(' ');
 }

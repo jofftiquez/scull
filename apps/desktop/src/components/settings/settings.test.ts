@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createMockBridge, MOCK_DRIVES } from '../../bridge/mock';
 import { designSettings } from '../../bridge/settingsMock';
 import type { ProjectsView } from '../../bridge';
-import { createMockSettingsWriter, createPendingSettingsWriter, settingsWriterFor } from './bridge';
+import { createMockSettingsWriter, createNativeSettingsWriter, createPendingSettingsWriter, settingsWriterFor } from './bridge';
 import { activityOption, databaseLine, driveRows, durationSecs, isTab, originLabel, rootNote, tilde } from './model';
 
 describe('settings model', () => {
@@ -28,17 +28,17 @@ describe('settings model', () => {
     const rows = driveRows([
       ...MOCK_DRIVES,
       { mount_point: '/Volumes/nas', label: 'studio-nas', kind: 'network', scan_policy: 'off_by_default', holds_home: false, total_bytes: null, free_bytes: null },
-    ]);
+    ], ['~/code', '/Volumes/Dev SSD/work'], '/Users/ada');
     expect(rows.map((r) => [r.name, r.kind, r.mode, r.on, r.locked])).toEqual([
-      ['Macintosh HD', 'internal', 'always', true, false],
-      ['Dev SSD', 'external', 'when connected', true, false],
+      ['Macintosh HD', 'internal', '1 folder', true, false],
+      ['Dev SSD', 'external', '1 folder', true, false],
       ['Backup (Time Machine)', 'Time Machine', 'never', false, true],
-      ['studio-nas', 'network', 'off by default', false, false],
+      ['studio-nas', 'network', 'no folders selected', false, false],
     ]);
     expect(rows[0]!.sub).toBe('494.0 GiB · 41.2 GiB free');
     // A backup drive stays off whatever the override says.
-    expect(driveRows(MOCK_DRIVES, new Map([['/Volumes/Backup', true]]))[2]!.on).toBe(false);
-    expect(driveRows(MOCK_DRIVES, new Map([['/', false]]))[0]!.on).toBe(false);
+    expect(driveRows(MOCK_DRIVES, ['/Volumes/Backup/work'])[2]!.on).toBe(false);
+    expect(driveRows(MOCK_DRIVES, [])[0]!.on).toBe(false);
   });
 
   it('counts projects under a root from the last scan', () => {
@@ -66,7 +66,7 @@ describe('settings model', () => {
   });
 });
 
-describe('settings writer stub (screen-local, never on ScullBridge)', () => {
+describe('settings writers (screen-local, never on ScullBridge)', () => {
   it('the mock keeps values in memory and touches nothing', async () => {
     const w = createMockSettingsWriter();
     await w.save('mcp.hash_names', true);
@@ -79,13 +79,30 @@ describe('settings writer stub (screen-local, never on ScullBridge)', () => {
     await expect(createPendingSettingsWriter().save('mcp.destructive', true)).rejects.toMatchObject({ kind: 'safety_blocked' });
   });
 
-  it('inside Tauri every write refuses until the core config command exists', async () => {
+  it('the pending demo writer keeps refusing writes', async () => {
     const w = createPendingSettingsWriter();
     for (const p of [w.save('scan.roots', []), w.connectAgent('x'), w.disconnectAgent('x'), w.exportData(), w.deleteHistory()]) {
       await expect(p).rejects.toMatchObject({ kind: 'unsupported_platform' });
     }
-    expect(settingsWriterFor({ ...createMockBridge(), kind: 'tauri' }).kind).toBe('pending');
+    expect(settingsWriterFor({ ...createMockBridge(), kind: 'tauri' }).kind).toBe('native');
     expect(settingsWriterFor(createMockBridge()).kind).toBe('mock');
+  });
+
+  it('the native writer invokes only editable config keys and keeps security/action refusals', async () => {
+    const calls: unknown[] = [];
+    const w = createNativeSettingsWriter({
+      async invoke<T>(command: string, args?: Record<string, unknown>) {
+        calls.push({ command, args });
+        return undefined as T;
+      },
+      async listen() { return () => {}; },
+    });
+    await w.save('mcp.hash_names', true);
+    expect(calls).toEqual([{ command: 'save_setting', args: { key: 'mcp.hash_names', value: true } }]);
+    await expect(w.save('mcp.destructive', true)).rejects.toMatchObject({ kind: 'safety_blocked' });
+    await expect(w.save('app.open_at_login', true)).rejects.toMatchObject({ kind: 'unsupported_platform' });
+    await expect(w.deleteHistory()).rejects.toMatchObject({ kind: 'unsupported_platform' });
+    expect(calls).toHaveLength(1);
   });
 
   it('ScullBridge stays read-only: no write on it', () => {

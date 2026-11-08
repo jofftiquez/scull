@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ActionBar from '../shell/ActionBar.vue';
 // Selected segment (design 01): what it is, its tier badge, size, why it has that tier, and
 // what you can do. Actions never delete: "Add to cleanup" marks it for Cleanup Review, "Review"
 // opens Cleanup Review, "Why protected?" lists the reasons.
@@ -64,11 +65,6 @@ function act() {
   else emit('tiers');
 }
 
-const fileManager = /Mac/i.test(globalThis.navigator?.userAgent ?? '')
-  ? 'Show in Finder'
-  : /Win/i.test(globalThis.navigator?.userAgent ?? '')
-    ? 'Show in Explorer'
-    : 'Show in folder';
 </script>
 
 <template>
@@ -93,25 +89,8 @@ const fileManager = /Mac/i.test(globalThis.navigator?.userAgent ?? '')
     <ul v-if="why" class="m-0 flex flex-col gap-1 pl-4 text-caption text-text-secondary" data-testid="why">
       <li v-for="r in reasons" :key="r">{{ r }}</li>
     </ul>
-    <div class="mt-1 flex gap-2">
-      <button
-        type="button"
-        class="min-h-11 cursor-pointer rounded-small border border-border bg-transparent px-3.5 text-label font-medium text-ink"
-        :aria-expanded="view.action === 'Why protected?' ? why : undefined"
-        data-testid="detail-action"
-        @click="act"
-      >
-        {{ view.action }}
-      </button>
-      <!-- Revealing a path needs a bridge call that does not exist yet (no shell plugin). -->
-      <button
-        type="button"
-        disabled
-        class="min-h-11 cursor-not-allowed rounded-small border-0 bg-transparent px-3 text-label text-text-strong-muted"
-        :title="view.path ? `${view.path} · opening folders is not available yet` : 'Opening folders is not available yet'"
-      >
-        {{ fileManager }}
-      </button>
+    <div class="flex flex-col gap-2" aria-label="Selection actions">
+      <ActionBar :summary="view.name" :label="view.action" :aria-expanded="view.action === 'Why protected?' ? why : undefined" data-testid="detail-action" @action="act" />
     </div>
   </section>
 </template>

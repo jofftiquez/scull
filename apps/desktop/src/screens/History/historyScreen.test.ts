@@ -6,6 +6,7 @@ import { createMockBridge } from '../../bridge/mock';
 import { createMockHistoryActions, createPendingHistoryActions, type HistoryActions } from '../../components/history/bridge';
 import { routes } from '../../navigation';
 import HistoryScreen from './HistoryScreen.vue';
+import { taskQueue } from '../../state/tasks';
 
 async function mountScreen(opts: { actions?: HistoryActions; bridge?: ScullBridge; query?: string } = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes });
@@ -24,9 +25,13 @@ const restoreButtons = (w: W) => w.findAll('[data-testid="restore"]');
 const states = (w: W) => w.findAll('[data-testid="item-state"]').map((s) => s.text());
 
 describe('History screen', () => {
-  it('lists every operation, figures on top, the restorable one selected', async () => {
+  it('lists operations full width and reveals details after selection', async () => {
     const w = await mountScreen();
     await vi.waitFor(() => expect(w.findAll('button[data-row]')).toHaveLength(7));
+    expect(w.find('aside').exists()).toBe(false);
+    expect(w.get('[data-testid="main-footer"] [data-testid="export"]').text()).toBe('Export log');
+    expect(w.get('[data-testid="main-scroll"]').find('[data-testid="export"]').exists()).toBe(false);
+    await w.findAll('button[data-row]')[1]!.trigger('click');
     expect(w.get('[aria-current="true"]').text()).toContain('Cleanup · 4 items');
     expect(w.get('[data-testid="figures"]').text()).toContain('Operations7');
     expect(w.get('[data-testid="restorable"]').text()).toBe('2');
@@ -46,14 +51,16 @@ describe('History screen', () => {
     expect(w.get('[data-testid="details"] h2').text()).toBe('Cleanup · 4 items');
   });
 
-  it('restores to the original path (09b): state, counter and toast', async () => {
+  it('restores to the original path with one shared completion notification', async () => {
     const actions = createMockHistoryActions({ durationMs: 0, occupied: [] });
     const w = await mountScreen({ actions });
+    await vi.waitFor(() => expect(w.findAll('button[data-row]')).toHaveLength(7));
+    await w.findAll('button[data-row]')[1]!.trigger('click');
     await vi.waitFor(() => expect(restoreButtons(w)).toHaveLength(2));
     await restoreButtons(w)[0]!.trigger('click');
-    await vi.waitFor(() => expect(w.find('[data-testid="toast"]').exists()).toBe(true));
-    expect(w.get('[data-testid="toast"]').text()).toContain('Restored ~/code/old-ml/.venv');
-    expect(w.get('[data-testid="toast"]').text()).toContain('2.4 GiB');
+    await vi.waitFor(() => expect(states(w)[2]).toBe('restored to original path'));
+    expect(w.find('[data-testid="toast"]').exists()).toBe(false);
+    expect(taskQueue.state.tasks.at(-1)).toMatchObject({ status: 'succeeded', summary: 'Restored to ~/code/old-ml/.venv' });
     expect(states(w)[2]).toBe('restored to original path');
     expect(restoreButtons(w)).toHaveLength(1);
     expect(w.get('[data-testid="restorable"]').text()).toBe('1');
@@ -62,10 +69,13 @@ describe('History screen', () => {
 
   it('never overwrites: a taken path restores beside the original', async () => {
     const w = await mountScreen();
+    await vi.waitFor(() => expect(w.findAll('button[data-row]')).toHaveLength(7));
+    await w.findAll('button[data-row]')[1]!.trigger('click');
     await vi.waitFor(() => expect(restoreButtons(w)).toHaveLength(2));
     await restoreButtons(w)[1]!.trigger('click');
     await vi.waitFor(() => expect(states(w)[3]).toBe('path taken · restored beside it as Library.scull-restored-1'));
-    expect(w.get('[data-testid="toast"]').text()).toContain('as Library.scull-restored-1');
+    expect(w.find('[data-testid="toast"]').exists()).toBe(false);
+    expect(taskQueue.state.tasks.at(-1)?.summary).toContain('Library.scull-restored-1');
   });
 
   it('shows "Restoring…" while the restore runs and blocks a second one', async () => {
@@ -78,6 +88,8 @@ describe('History screen', () => {
         }),
     };
     const w = await mountScreen({ actions });
+    await vi.waitFor(() => expect(w.findAll('button[data-row]')).toHaveLength(7));
+    await w.findAll('button[data-row]')[1]!.trigger('click');
     await vi.waitFor(() => expect(restoreButtons(w)).toHaveLength(2));
     await restoreButtons(w)[0]!.trigger('click');
     expect(restoreButtons(w)[0]!.text()).toBe('Restoring…');
@@ -89,6 +101,8 @@ describe('History screen', () => {
 
   it('inside Tauri the stub refuses: error shown, nothing restored', async () => {
     const w = await mountScreen({ actions: createPendingHistoryActions() });
+    await vi.waitFor(() => expect(w.findAll('button[data-row]')).toHaveLength(7));
+    await w.findAll('button[data-row]')[1]!.trigger('click');
     await vi.waitFor(() => expect(restoreButtons(w)).toHaveLength(2));
     await restoreButtons(w)[0]!.trigger('click');
     await vi.waitFor(() => expect(w.find('[data-testid="restore-error"]').exists()).toBe(true));

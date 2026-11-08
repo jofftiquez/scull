@@ -47,7 +47,11 @@ fn invoke(w: &WebviewWindow<MockRuntime>, origin: &str, cmd: &str) -> Result<Val
             callback: CallbackFn(0),
             error: CallbackFn(1),
             url: origin.parse().unwrap(),
-            body: InvokeBody::Json(json!({})),
+            body: InvokeBody::Json(if cmd == "save_setting" {
+                json!({"key": "mcp.enabled", "value": true})
+            } else {
+                json!({})
+            }),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         },
@@ -70,10 +74,23 @@ fn native_context_uses_session_home_without_needing_a_previous_scan() {
 }
 
 #[test]
+fn main_window_setting_edits_reach_the_validated_session_writer() {
+    let (_app, w) = app("main", None);
+    let error = invoke(&w, "tauri://localhost", "save_setting").unwrap_err();
+    assert_eq!(error["kind"], "config");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("config file location")
+    );
+}
+
+#[test]
 fn onboarding_commands_refuse_widget_and_remote_pages_before_opening_a_dialog() {
     for label in ["main", "menubar"] {
         let (_app, w) = app(label, None);
-        for cmd in ["onboarding_context", "pick_project_folders"] {
+        for cmd in ["onboarding_context", "pick_project_folders", "save_setting"] {
             if label == "menubar" {
                 let error = invoke(&w, "tauri://localhost", cmd).unwrap_err();
                 assert!(error.to_string().contains("not allowed"), "{cmd}: {error}");

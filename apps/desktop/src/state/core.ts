@@ -114,8 +114,13 @@ export async function rescan(bridge: ScullBridge): Promise<void> {
   core.progress = null;
   publish();
   try {
+    let params = savedScanParams(loadSetup()) ?? {};
+    if (bridge.kind === 'tauri') {
+      const settings = await bridge.settings();
+      if (settings.origins['scan.roots']?.some((origin) => origin.source !== 'default')) params = {};
+    }
     const report = await bridge.scan(
-      savedScanParams(loadSetup()) ?? {},
+      params,
       {
         signal: controller.signal,
         onProgress: (p) => {

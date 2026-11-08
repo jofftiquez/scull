@@ -53,7 +53,7 @@ interface Look {
 
 function look(n: ExNode): Look {
   if (n.kind === 'drive') return { fill: 'var(--color-drive-tile)', fg: 'var(--color-on-drive-tile)' };
-  if (n.kind === 'folder') return { fill: 'var(--color-category-ring)', fg: 'var(--color-ink)' };
+  if (n.kind === 'folder') return { fill: 'var(--color-violet-tint)', fg: 'var(--color-ink)' };
   if (n.kind === 'group') return { fill: 'var(--color-surface-raised)', fg: 'var(--color-ink)' };
   switch (n.tier) {
     case 'S0':

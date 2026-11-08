@@ -39,6 +39,16 @@ pub enum ItemOutcome {
     /// The removal walker ran. Its report may be [`RemoveOutcome::Incomplete`] or
     /// [`RemoveOutcome::Aborted`]; see [`ItemReport::succeeded`].
     Deleted(RemoveReport),
+    /// Removed the exact linked worktree through hardened Git, preserving all branches.
+    WorktreeRemoved {
+        /// Allocated bytes of the verified tree before removal.
+        freed_bytes: u64,
+    },
+    /// Git started but did not prove a complete removal; its effects may be partial.
+    WorktreeRemovalFailed {
+        /// Why it did not finish.
+        reason: String,
+    },
     /// Moved into same-volume quarantine (restorable).
     Quarantined(Quarantined),
     /// Moved to the platform Trash because quarantine was impossible here (D-3: the
@@ -89,7 +99,9 @@ impl ItemReport {
     pub fn succeeded(&self) -> bool {
         match &self.outcome {
             ItemOutcome::Deleted(r) => r.outcome == RemoveOutcome::Complete,
-            ItemOutcome::Quarantined(_) | ItemOutcome::Trashed(_) => true,
+            ItemOutcome::WorktreeRemoved { .. }
+            | ItemOutcome::Quarantined(_)
+            | ItemOutcome::Trashed(_) => true,
             _ => false,
         }
     }
@@ -102,7 +114,10 @@ impl ItemReport {
                 RemoveOutcome::Incomplete => Some("incomplete"),
                 _ => Some("aborted"),
             },
-            ItemOutcome::Quarantined(_) | ItemOutcome::Trashed(_) => None,
+            ItemOutcome::WorktreeRemoved { .. }
+            | ItemOutcome::Quarantined(_)
+            | ItemOutcome::Trashed(_) => None,
+            ItemOutcome::WorktreeRemovalFailed { .. } => Some("git_worktree_remove_failed"),
             ItemOutcome::Skipped(s) => Some(s.code()),
             ItemOutcome::Refused(e) => Some(e.kind.as_str()),
             ItemOutcome::Blocked { code, .. } => Some(code),
@@ -132,6 +147,15 @@ impl ItemReport {
                     reason: None,
                 },
             ),
+            ItemOutcome::WorktreeRemoved { freed_bytes } => {
+                let mut rec = ItemRecord::new(id, at, AuditOutcome::Removed)
+                    .with_reason("git_worktree_remove");
+                rec.freed_bytes = Some(*freed_bytes);
+                rec
+            }
+            ItemOutcome::WorktreeRemovalFailed { reason } => {
+                ItemRecord::new(id, at, AuditOutcome::Partial).with_reason(reason)
+            }
             ItemOutcome::Quarantined(q) => {
                 let mut rec = ItemRecord::new(id, at, AuditOutcome::Quarantined);
                 rec.moved_bytes = Some(q.bytes);
@@ -163,6 +187,14 @@ impl ItemReport {
                     ItemExecution::Partial { removed, moved: 0 }
                 }
             }
+            ItemOutcome::WorktreeRemoved { freed_bytes } => ItemExecution::Done {
+                removed: *freed_bytes,
+                moved: 0,
+            },
+            ItemOutcome::WorktreeRemovalFailed { .. } => ItemExecution::Partial {
+                removed: 0,
+                moved: 0,
+            },
             ItemOutcome::Quarantined(q) => ItemExecution::Done {
                 removed: 0,
                 moved: q.bytes,
@@ -248,6 +280,9 @@ impl Executor {
     ///   deleted as a fallback. A quarantine refused because the item changed is not retried
     ///   in the Trash ([`ItemOutcome::Refused`]);
     /// * [`Action::Trash`]: a move to the configured Trash, else blocked;
+    /// * [`Action::GitWorktreeRemove`]: only an eligible S1 linked worktree, in an operation,
+    ///   through fixed hardened Git arguments, fresh identity/registration/status checks, no force
+    ///   and no branch deletion;
     /// * anything else is refused per item (tool-native #78); a Docker command
     ///   ([`crate::DOCKER_UNSUPPORTED`]) is refused before revalidation, without touching the
     ///   disk.
@@ -360,7 +395,7 @@ impl Executor {
                     Ok(ok) => {
                         entry.fresh_tier = Some(ok.fresh_tier);
                         sizes = ok.sizes;
-                        self.act(&ok, operation.as_deref_mut())
+                        self.act(&ok, operation.as_deref_mut(), cancel)
                     }
                 };
             }
@@ -393,8 +428,36 @@ impl Executor {
     }
 
     /// Executes one revalidated item.
-    fn act(&self, ok: &Revalidated, operation: Option<&mut Operation<'_>>) -> ItemOutcome {
+    fn act(
+        &self,
+        ok: &Revalidated,
+        operation: Option<&mut Operation<'_>>,
+        cancel: &CancelToken,
+    ) -> ItemOutcome {
         match (&ok.item.action, operation) {
+            (Action::GitWorktreeRemove, Some(op)) => {
+                if let Err(e) =
+                    crate::executor::check_item_for(&ok.item, &Action::GitWorktreeRemove)
+                        .and_then(|()| journal_delete(op, ok, self))
+                {
+                    return ItemOutcome::Refused(e);
+                }
+                match crate::worktree::remove(ok, cancel, self.hook()) {
+                    Ok(r) if r.succeeded => ItemOutcome::WorktreeRemoved {
+                        freed_bytes: r.bytes,
+                    },
+                    Ok(r) => ItemOutcome::WorktreeRemovalFailed {
+                        reason: r
+                            .reason
+                            .unwrap_or_else(|| "worktree removal did not complete".into()),
+                    },
+                    Err(e) => ItemOutcome::Refused(e),
+                }
+            }
+            (Action::GitWorktreeRemove, None) => ItemOutcome::Refused(ScullError::new(
+                ErrorKind::SafetyBlocked,
+                "worktree removal requires an audited operation",
+            )),
             (Action::Quarantine, Some(op)) => {
                 if let Err(e) = crate::executor::check_item_for(&ok.item, &Action::Quarantine) {
                     return ItemOutcome::Refused(e);

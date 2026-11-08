@@ -25,6 +25,8 @@ import { formatBytes } from '../../lib/format';
 import { formatWhen } from '../../monitor/format';
 import { forecastOf } from '../../lib/forecast';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
+import ActionFooter from '../../components/shell/ActionFooter.vue';
+import ActionBar from '../../components/shell/ActionBar.vue';
 import ForecastChart from '../../components/insights/ForecastChart.vue';
 import { insightsActionsFor } from '../../components/insights/actions';
 import { DESIGN_ACCURACY, DESIGN_DUPLICATION } from '../../components/insights/designScenario';
@@ -60,10 +62,15 @@ const digest = ref<DigestView | null>(null);
 const forecasts = ref<Forecast[]>([]);
 const monitor = ref<MonitorStatus | null>(null);
 const loadError = ref('');
+const loading = ref(true);
+const updating = ref(false);
+let loadSequence = 0;
 const actionNote = ref('');
 const now = ref(Date.now() / 1000);
 
 async function load() {
+  const sequence = ++loadSequence;
+  updating.value = true;
   now.value = Date.now() / 1000;
   const since = Math.floor(now.value - rangeDays(range.value) * DAY);
   try {
@@ -73,18 +80,21 @@ async function load() {
       bridge.regrowth(since),
       bridge.footprintHistory(since),
     ]);
+    if (sequence !== loadSequence) return;
     free.value = f;
     rollups.value = r;
     regrowth.value = g;
     footprint.value = p;
     loadError.value = '';
   } catch (e) {
-    loadError.value = toBridgeError(e).message;
+    if (sequence === loadSequence) loadError.value = toBridgeError(e).message;
+  } finally {
+    if (sequence === loadSequence) updating.value = false;
   }
 }
 
 onMounted(async () => {
-  await load();
+  const initialRange = load();
   // Six months for the mix, the last scan's worktrees and reclaimable bytes: once.
   const [m, w, s, d, ms, fc] = await Promise.allSettled([
     bridge.rollupHistory(Math.floor(now.value - 183 * DAY)),
@@ -100,6 +110,8 @@ onMounted(async () => {
   if (s.status === 'fulfilled') status.value = s.value;
   if (d.status === 'fulfilled') digest.value = d.value;
   if (ms.status === 'fulfilled') monitor.value = ms.value;
+  await initialRange;
+  loading.value = false;
 });
 watch(range, load);
 
@@ -191,11 +203,11 @@ async function exportHistory() {
 </script>
 
 <template>
-  <ScreenLayout>
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <ScreenLayout :loading="loading" loading-label="Reading storage trends…">
+    <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
       <div class="flex flex-col gap-1">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Insights</h1>
-        <span class="text-label text-text-secondary">Trends from your own history · last {{ rangeLabel }}</span>
+        <h1 class="m-0 text-h2 font-semibold">Insights</h1>
+        <span role="status" aria-live="polite" class="text-label text-text-secondary">{{ updating ? 'Updating storage trends…' : `Trends from your own history · last ${rangeLabel}` }}</span>
       </div>
       <div role="group" aria-label="Range" class="flex gap-0.5">
         <button
@@ -458,11 +470,12 @@ async function exportHistory() {
             <span>{{ formatBytes(fp?.bytes ?? 0) }} used</span><span>{{ formatBytes(HISTORY_BUDGET) }} budget</span>
           </div>
         </div>
-        <div class="flex flex-wrap gap-2">
-          <button type="button" class="min-h-11 cursor-pointer rounded-button border border-border bg-surface px-4 font-medium text-ink hover:bg-surface-raised" @click="exportHistory">Export</button>
-          <RouterLink to="/settings" class="flex min-h-11 items-center rounded-button bg-ink px-4 font-medium text-on-ink no-underline">Open data page</RouterLink>
-        </div>
       </section>
     </div>
+    <ActionFooter aria-label="Insights actions">
+      <ActionBar summary="Storage history stays on this computer" label="Export history" @action="exportHistory">
+        <RouterLink to="/settings?tab=data" class="flex min-h-12 items-center rounded-button border border-border bg-surface px-4 font-medium text-ink no-underline">Open data page</RouterLink>
+      </ActionBar>
+    </ActionFooter>
   </ScreenLayout>
 </template>

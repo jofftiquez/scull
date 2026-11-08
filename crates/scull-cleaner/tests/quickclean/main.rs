@@ -27,9 +27,9 @@
 mod fake;
 
 use scull_cleaner::quickclean::{
-    CleanMode, Ended, NOT_UNDOABLE_NOTE, OrphanedReport, QuickClean, QuickCleanOptions,
-    QuickCleanPlan, QuickCleanReport, QuickCleanRequest, SkipReason, SkippedTool, Spawn,
-    needs_escape,
+    CleanMode, Ended, NOT_UNDOABLE_NOTE, OrphanedReport, OutputStream, QuickClean, QuickCleanEvent,
+    QuickCleanOptions, QuickCleanPlan, QuickCleanReport, QuickCleanRequest, SkipReason,
+    SkippedTool, Spawn, needs_escape,
 };
 use scull_cleaner::{Executor, LockOptions, Operation, RemoveOutcome};
 use scull_core::{Action, Candidate, OperationId, PlanId, PlanOrigin, PlanParams, ScanId, Tier};
@@ -145,6 +145,14 @@ const TESTS: &[Test] = &[
     ),
     ("timeout_kills_the_tool", timeout_kills_the_tool),
     ("output_is_escaped_and_capped", output_is_escaped_and_capped),
+    (
+        "progress_matches_capture_and_finishes_after_audit",
+        progress_matches_capture_and_finishes_after_audit,
+    ),
+    (
+        "progress_reports_approved_tools_skipped_at_runtime",
+        progress_reports_approved_tools_skipped_at_runtime,
+    ),
     (
         "failing_tool_reports_its_exit_status",
         failing_tool_reports_its_exit_status,
@@ -2355,6 +2363,109 @@ fn output_is_escaped_and_capped() {
         assert!(!l.chars().any(needs_escape), "{l:?}");
     }
     check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
+}
+
+fn progress_matches_capture_and_finishes_after_audit() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let (cache, scan, cands) = fx_npm_planned(&mut fx, &[("evil", "1"), ("spam", "200000")]);
+    let mut o = options(&fx, &[tools(&fx)]);
+    o.max_output = 4096;
+    let q = quick(o);
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    let events = std::sync::Mutex::new(Vec::new());
+    let exec = locked_executor(&fx);
+    let report = in_operation(&fx, &exec, &plan, &BTreeSet::new(), |op| {
+        let op_id = op.id().clone();
+        let database = fx.base().join("data/scull.db");
+        let r = q
+            .run_with_progress(op, &plan, &Probe::idle(), &CancelToken::new(), &|event| {
+                if matches!(event, QuickCleanEvent::Finished { .. }) {
+                    assert_eq!(
+                        Store::open(&database, &PlatformOwnerOnly)
+                            .unwrap()
+                            .audit_items(&op_id)
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                }
+                events.lock().unwrap().push(event);
+            })
+            .unwrap();
+        let (cancelled, spawned) = (r.cancelled, r.spawned.clone());
+        (r, cancelled, spawned)
+    });
+    let events = events.into_inner().unwrap();
+    let item_id = plan.tools[0].item.item_id.clone();
+    assert_eq!(
+        events.first(),
+        Some(&QuickCleanEvent::Started {
+            item_id: item_id.clone(),
+            tool: CacheTool::Npm
+        })
+    );
+    assert_eq!(
+        events.last(),
+        Some(&QuickCleanEvent::Finished {
+            item_id,
+            tool: CacheTool::Npm,
+            succeeded: true
+        })
+    );
+    for (stream, capture) in [
+        (OutputStream::Stdout, &report.results[0].stdout),
+        (OutputStream::Stderr, &report.results[0].stderr),
+    ] {
+        let lines: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                QuickCleanEvent::Output {
+                    stream: s, line, ..
+                } if *s == stream => Some(line.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, capture.lines);
+        assert_eq!(events.iter().filter(|event| matches!(event, QuickCleanEvent::OutputTruncated { stream: s, .. } if *s == stream)).count(), usize::from(capture.truncated));
+    }
+    check(&fx, &plan, &cands, &[rel(&fx, &cache)], &[&report.rec]);
+}
+
+fn progress_reports_approved_tools_skipped_at_runtime() {
+    if !identity_available() {
+        return;
+    }
+    let mut fx = Fixture::new().unwrap();
+    let (cache, scan, cands) = fx_npm_planned(&mut fx, &[]);
+    let q = quick(options(&fx, &[tools(&fx)]));
+    let plan = q.plan(&scan, &cands, &QuickCleanRequest::default(), &Probe::idle());
+    let events = std::sync::Mutex::new(Vec::new());
+    let exec = locked_executor(&fx);
+    let report = in_operation(&fx, &exec, &plan, &BTreeSet::new(), |op| {
+        let r = q
+            .run_with_progress(
+                op,
+                &plan,
+                &Probe::holding(cache.join("index-v5/1a/2b/3c4d")),
+                &CancelToken::new(),
+                &|event| {
+                    events.lock().unwrap().push(event);
+                },
+            )
+            .unwrap();
+        let (cancelled, spawned) = (r.cancelled, r.spawned.clone());
+        (r, cancelled, spawned)
+    });
+    let events = events.into_inner().unwrap();
+    assert!(
+        matches!(&events[..], [QuickCleanEvent::Skipped { item_id, tool: CacheTool::Npm, reason }] if *item_id == plan.tools[0].item.item_id && !reason.is_empty())
+    );
+    assert!(report.results.is_empty());
+    only_row(&fx, &report.rec, ItemOutcome::Skipped, Some("in_use"));
+    check(&fx, &plan, &cands, &[], &[&report.rec]);
 }
 
 fn failing_tool_reports_its_exit_status() {

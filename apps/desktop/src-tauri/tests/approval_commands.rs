@@ -12,11 +12,11 @@ use scull_desktop::{DeepLinks, approve_link_plan, main_window_handler};
 use scull_desktop_bridge::{ApprovalDesk, Session, Setup, now_unix};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{INVOKE_KEY, MockRuntime, mock_builder};
 use tauri::webview::InvokeRequest;
-use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 
 fn candidate(n: u128, path: &str) -> Candidate {
     let identity = FileIdentity::new(7, n);
@@ -138,6 +138,181 @@ fn invoke_from(
         },
     )
     .map(|b| b.deserialize::<Value>().unwrap())
+}
+
+#[test]
+fn worktree_confirmation_count_survives_the_frontend_invoke_payload() {
+    if scull_platform::is_elevated().blocks_destructive() {
+        assert!(std::env::var_os("SCULL_TEST_REQUIRE_NOT_ELEVATED").is_none());
+        eprintln!("SKIPPED: worktree execution requires a non-elevated process");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    let worktree = root.join("linked");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--initial-branch=main"]);
+    std::fs::write(repo.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "initial",
+    ]);
+    git(&["worktree", "add", "-b", "feature", "../linked", "main"]);
+
+    let data = root.join("data");
+    let machine_id = scull_platform::machine_id(&data).unwrap();
+    let session = Arc::new(
+        Session::new(Setup {
+            home: Some(root.join("home")),
+            config_file: None,
+            data_dir: Some(data.clone()),
+            env: Arc::new(|_| None),
+            record_history: true,
+            git: true,
+            detect_synced_roots: false,
+            allow_network_roots: true,
+            in_use: false,
+        })
+        // Nothing holds this fresh tree; the real probe turns it S2 on a runner where some of
+        // the user's processes can't be inspected (what this test checks is the confirmation).
+        .with_in_use_source(scull_engine::InUseSource::Probe(Arc::new(
+            scull_engine::FixedInUse(scull_safety::Tri::No),
+        ))),
+    );
+    session
+        .scan(
+            &scull_desktop_bridge::OpId::parse("ipc-worktree").unwrap(),
+            &scull_desktop_bridge::views::ScanParams {
+                roots: vec![root.to_string_lossy().into_owned()],
+                allow_broad_roots: true,
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+    let scan = session.last_scan().unwrap();
+    let candidate = scan
+        .candidates
+        .iter()
+        .find(|c| c.path.to_path_buf() == worktree)
+        .unwrap();
+    assert_eq!(
+        candidate.action,
+        Action::GitWorktreeRemove,
+        "{candidate:#?}"
+    );
+    let app = mock_builder()
+        .manage(session)
+        .manage(Arc::new(scull_desktop_bridge::CleanupDesk::with(
+            scull_desktop_bridge::cleanup::Who {
+                machine_id,
+                user: scull_platform::current_user().unwrap(),
+            },
+            scull_platform::trash::TrashLocations {
+                home: Some(root.join("Trash")),
+                topdir: Some(root.clone()),
+            },
+            root.join("execution.lock"),
+        )))
+        .invoke_handler(main_window_handler())
+        .build(tauri::generate_context!(test = true))
+        .unwrap();
+    let w = WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let plan = invoke(
+        &w,
+        "prepare_desktop_plan",
+        json!({"items": [candidate.id.as_str()]}),
+    )
+    .unwrap();
+    let mut args = json!({
+        "planId": plan["plan_id"],
+        "contentHash": plan["content_hash"],
+        "items": [candidate.id.as_str()],
+    });
+    for count in [None, Some(0), Some(2)] {
+        args.as_object_mut().unwrap().remove("typedCount");
+        if let Some(count) = count {
+            args["typedCount"] = json!(count);
+        }
+        let error = invoke(&w, "execute_desktop_plan", args.clone()).unwrap_err();
+        assert_eq!(error["kind"], "safety_blocked", "{error}");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("type 1 to confirm"),
+            "{error}"
+        );
+        assert!(worktree.join("README.md").is_file());
+    }
+    // Execution re-checks activity with the real OS probe (no seam, by design). Where this
+    // runner can't verify it, the right count must still be accepted and fail closed.
+    let probe =
+        scull_safety::NativeActivityProbe::capture(scull_platform::activity::Limits::default());
+    let verifiable =
+        scull_safety::check_in_use(&worktree, &[], &probe).in_use == scull_safety::Tri::No;
+    args["typedCount"] = json!(1);
+    let result = invoke(&w, "execute_desktop_plan", args).unwrap();
+    if !verifiable {
+        assert_eq!(result["items"][0]["outcome"], "skipped", "{result}");
+        assert!(worktree.join("README.md").is_file());
+        eprintln!("PARTIAL: native worktree activity could not be verified; removal skipped");
+        return;
+    }
+    assert_eq!(result["items"][0]["outcome"], "deleted", "{result}");
+    assert!(!worktree.exists());
+    git(&["show-ref", "--verify", "refs/heads/feature"]);
+}
+
+#[test]
+fn execution_busy_tracks_the_live_lock_without_releasing_another_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("execution.lock");
+    assert!(!scull_desktop::execution_busy_at(&path).unwrap());
+    let held = scull_platform::exec_lock::try_lock_exclusive(&path)
+        .unwrap()
+        .unwrap();
+    assert!(scull_desktop::execution_busy_at(&path).unwrap());
+    assert!(
+        scull_platform::exec_lock::try_lock_exclusive(&path)
+            .unwrap()
+            .is_none()
+    );
+    drop(held);
+    assert!(!scull_desktop::execution_busy_at(&path).unwrap());
+    assert!(scull_desktop::execution_busy_at(dir.path()).is_err());
+}
+
+#[test]
+fn execution_busy_is_denied_to_the_menu_bar_and_remote_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_app, widget) = app_as(dir.path(), "menubar");
+    let error = invoke(&widget, "execution_busy", json!({})).unwrap_err();
+    assert!(error.to_string().contains("not allowed"), "{error}");
+    let (_app, main) = app(dir.path());
+    let error = invoke_from(&main, "https://example.com", "execution_busy", json!({})).unwrap_err();
+    assert!(error.to_string().contains("not allowed"), "{error}");
 }
 
 #[test]
@@ -337,6 +512,8 @@ fn cleanup_commands_are_the_main_windows_only() {
             json!({"operationId": "op_01JX", "itemId": "a"}),
         ),
         ("quick_clean", json!({"items": []})),
+        ("quick_clean_plan", json!({})),
+        ("quick_clean_run", json!({"choices": []})),
     ];
     let (_app, widget) = app_as(dir.path(), "menubar");
     for (cmd, args) in &cmds {
@@ -352,6 +529,85 @@ fn cleanup_commands_are_the_main_windows_only() {
     assert_eq!(e["kind"], "usage", "no scan yet: {e}");
     let e = invoke(&main, "execute_desktop_plan", cmds[1].1.clone()).unwrap_err();
     assert!(!e.to_string().contains("not allowed"), "{e}");
+}
+
+#[test]
+fn cache_progress_reaches_only_the_requesting_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, main) = app(dir.path());
+    let widget = WebviewWindowBuilder::new(&app, "menubar", Default::default())
+        .build()
+        .unwrap();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let capture = received.clone();
+    main.listen(
+        scull_desktop_bridge::DesktopCacheProgress::NAME,
+        move |event| {
+            capture
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str::<Value>(event.payload()).unwrap());
+        },
+    );
+    let leaked = Arc::new(Mutex::new(Vec::new()));
+    let capture = leaked.clone();
+    widget.listen(
+        scull_desktop_bridge::DesktopCacheProgress::NAME,
+        move |event| {
+            capture.lock().unwrap().push(event.payload().to_owned());
+        },
+    );
+    let capture = leaked.clone();
+    app.listen(
+        scull_desktop_bridge::DesktopCacheProgress::NAME,
+        move |event| {
+            capture.lock().unwrap().push(event.payload().to_owned());
+        },
+    );
+    // With no configured home, preparation fails before any native tool can run.
+    let error = invoke(
+        &main,
+        "quick_clean",
+        json!({"items": ["selected"], "opId": "cleanup-stream"}),
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("not allowed"), "{error}");
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0]["kind"], "preparing");
+    assert_eq!(received[0]["op_id"], "cleanup-stream");
+    assert_eq!(received[0]["total"], 1);
+    assert_eq!(received[0]["completed"], 0);
+    assert!(leaked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cache_commands_validate_optional_progress_operation_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_app, main) = app(dir.path());
+    for command in ["quick_clean", "quick_clean_run"] {
+        let args = if command == "quick_clean" {
+            json!({"items": []})
+        } else {
+            json!({"choices": []})
+        };
+        // Old callers may omit opId and still reach the bridge validation.
+        let old = invoke(&main, command, args.clone()).unwrap_err();
+        assert!(
+            !old.to_string().contains("missing required key"),
+            "{command}: {old}"
+        );
+        for op_id in ["", "bad/id", "with space", &"a".repeat(65)] {
+            let mut invalid = args.clone();
+            invalid["opId"] = json!(op_id);
+            let error = invoke(&main, command, invalid).unwrap_err();
+            assert_eq!(error["kind"], "usage", "{command}: {error}");
+            assert!(
+                error["message"].as_str().unwrap().contains("operation IDs"),
+                "{error}"
+            );
+        }
+    }
 }
 
 #[test]

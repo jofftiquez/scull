@@ -39,7 +39,7 @@ async function mountOverview(bridge: ScullBridge = designScenarioBridge(createMo
  *  for the scan report itself, then for the sweep to finish. */
 async function scanned(w: Awaited<ReturnType<typeof mountOverview>>) {
   await until(() => core.report !== null);
-  await until(() => w.get('[data-testid="rescan"]').text() === 'Rescan');
+  await until(() => w.get('[data-testid="wheel"]').attributes('aria-busy') === 'false');
 }
 
 beforeEach(() => {
@@ -115,7 +115,7 @@ describe('overview screen', () => {
     await scanned(w);
     expect(w.findAll('path[data-kind="item"]')).toHaveLength(16);
     expect(w.get('[data-testid="center"]').text()).toContain('186.0 GiB');
-    expect(w.get('[data-testid="show-regenerable"]').text()).toBe('Show regenerable · 38.6 GiB');
+    expect(w.find('[data-testid="show-regenerable"]').exists()).toBe(false);
     w.unmount();
   });
 
@@ -125,7 +125,7 @@ describe('overview screen', () => {
     await w.get('[data-seg="design-hf"]').trigger('click');
     expect(w.get('[data-testid="center"]').text()).toContain('Hugging Face models');
     expect(w.get('[data-testid="selected"]').text()).toContain('Hugging Face models');
-    await w.get('[data-testid="show-regenerable"]').trigger('click');
+    await w.get('[data-filter="S0"]').trigger('click');
     expect(w.get('[data-filter="S0"]').attributes('aria-pressed')).toBe('true');
     expect(w.get('[data-seg="design-hf"]').attributes('opacity')).toBe('0.14');
     await w.get('[data-seg="design-hf"]').trigger('click');
@@ -161,7 +161,7 @@ describe('overview screen', () => {
     const w = await mountOverview(designScenarioBridge(createMockBridge(), 0));
     await vi.waitFor(() => expect(core.report).not.toBeNull());
     // The report is in, but the arm is still turning (one turn = 3.4 s).
-    expect(w.get('[data-testid="rescan"]').text()).toMatch(/^Scanning \d+%$/);
+    expect(w.get('[data-testid="rescan"]').text()).toBe('Scanning…');
     expect(w.get('[data-testid="ring"]').classes()).toContain('spinning');
     w.unmount();
   });
@@ -182,7 +182,7 @@ describe('overview screen', () => {
     const rescan = w.get('[data-testid="rescan"]');
     expect(core.scanning).toBe(false);
     expect(core.report).toBeNull();
-    expect(rescan.text()).not.toBe('Rescan');
+    expect(rescan.text()).not.toBe('Scan');
     expect(rescan.attributes('disabled')).toBeDefined();
     release();
     await scanned(w);

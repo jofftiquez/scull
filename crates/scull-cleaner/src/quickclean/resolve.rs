@@ -60,6 +60,8 @@ pub enum Lookup {
     /// No trusted executable, but a script shim that needs a shell exists in a trusted
     /// directory (SAFE-12: no shell); its path.
     ShellShimOnly(PathBuf),
+    /// Only a version-manager launcher alias was found; its dispatch name would be lost.
+    LauncherAlias(PathBuf),
     /// No trusted executable at all.
     NotFound,
 }
@@ -83,7 +85,7 @@ impl Lookup {
         match self {
             Lookup::Found(b) => Some((b.clone(), None)),
             Lookup::NodeScript(n) => Some((n.node.clone(), Some(n.script.clone()))),
-            Lookup::ShellShimOnly(_) | Lookup::NotFound => None,
+            Lookup::ShellShimOnly(_) | Lookup::LauncherAlias(_) | Lookup::NotFound => None,
         }
     }
 }
@@ -175,8 +177,12 @@ impl TrustedDirs {
         if let Some(b) = self.executable(tool) {
             return Lookup::Found(b);
         }
+        let launcher = self.dirs.iter().find_map(|dir| {
+            self.checked_binary(&dir.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)))
+                .filter(|p| is_launcher(p))
+        });
         if !self.cmd_shims {
-            return Lookup::NotFound;
+            return launcher.map_or(Lookup::NotFound, Lookup::LauncherAlias);
         }
         let mut shell_only = None;
         for dir in &self.dirs {
@@ -193,15 +199,19 @@ impl TrustedDirs {
                 shell_only.get_or_insert(shim);
             }
         }
-        shell_only.map_or(Lookup::NotFound, Lookup::ShellShimOnly)
+        shell_only.map_or_else(
+            || launcher.map_or(Lookup::NotFound, Lookup::LauncherAlias),
+            Lookup::ShellShimOnly,
+        )
     }
 
     /// A trusted `<tool>` executable (`.exe` on Windows): canonical, not in an untrusted place.
     fn executable(&self, tool: &str) -> Option<PathBuf> {
         let name = format!("{tool}{}", std::env::consts::EXE_SUFFIX);
-        self.dirs
-            .iter()
-            .find_map(|dir| self.checked_binary(&dir.join(&name)))
+        self.dirs.iter().find_map(|dir| {
+            self.checked_binary(&dir.join(&name))
+                .filter(|p| !is_launcher(p))
+        })
     }
 
     /// `candidate` canonicalized, if it is a file outside every untrusted place.
@@ -245,7 +255,7 @@ impl TrustedDirs {
         // Node: next to the shim when the shim prefers it, else a trusted `node` executable.
         let adjacent = dir.join(format!("node{}", std::env::consts::EXE_SUFFIX));
         let node = if target.node == shim::NodeRef::AdjacentThenPath && adjacent.is_file() {
-            self.checked_binary(&adjacent)
+            self.checked_binary(&adjacent).filter(|p| !is_launcher(p))
         } else {
             self.executable("node")
         }
@@ -278,6 +288,14 @@ pub(crate) fn strip_verbatim(p: PathBuf) -> PathBuf {
     p
 }
 
+fn is_launcher(p: &Path) -> bool {
+    // Canonicalizing these aliases loses the tool name used for multicall dispatch.
+    matches!(
+        p.file_stem().and_then(OsStr::to_str),
+        Some("mise" | "rtx" | "asdf" | "volta")
+    )
+}
+
 fn has_node_modules(p: &Path) -> bool {
     p.components().any(|c| match c {
         Component::Normal(s) => s
@@ -290,6 +308,44 @@ fn has_node_modules(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn launcher_aliases_do_not_hide_a_trusted_runtime_or_bypass_exclusions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let shims = tmp.path().join("shims");
+        let runtime = tmp.path().join("runtime/bin");
+        let manager = tmp.path().join("manager/mise");
+        fs::create_dir_all(&shims).expect("shims");
+        fs::create_dir_all(&runtime).expect("runtime");
+        fs::create_dir_all(manager.parent().expect("parent")).expect("manager");
+        fs::write(&manager, "").expect("mise");
+        fs::write(runtime.join("bun"), "").expect("bun");
+        std::os::unix::fs::symlink(&manager, shims.join("bun")).expect("launcher alias");
+        let path = std::env::join_paths([&shims, &runtime]).expect("path");
+        let trusted = TrustedDirs::new(&path, None, &[]);
+        assert_eq!(
+            trusted.find("bun"),
+            Lookup::Found(canonical(&runtime.join("bun")).expect("canonical"))
+        );
+        assert_eq!(
+            TrustedDirs::new(&path, None, std::slice::from_ref(&runtime)).find("bun"),
+            Lookup::LauncherAlias(canonical(&manager).expect("canonical"))
+        );
+        fs::remove_file(shims.join("bun")).expect("remove alias");
+        std::os::unix::fs::symlink(runtime.join("bun"), shims.join("bun"))
+            .expect("normal package symlink");
+        assert_eq!(
+            trusted.find("bun"),
+            Lookup::Found(canonical(&runtime.join("bun")).expect("canonical"))
+        );
+        assert!(
+            TrustedDirs::new(&path, None, &[runtime])
+                .find("bun")
+                .program()
+                .is_none()
+        );
+    }
 
     fn exe(tool: &str) -> String {
         format!("{tool}{}", std::env::consts::EXE_SUFFIX)

@@ -27,6 +27,22 @@ export function canRemove(r: WorktreeReport): boolean {
   );
 }
 
+/** Explain a core refusal beside the disabled action, with a practical next step. */
+export function removalBlock(r: WorktreeReport): { title: string; detail: string } | null {
+  if (canRemove(r)) return null;
+  if (r.kind === 'main') return { title: 'Main working tree', detail: 'This is the main checkout. Only linked worktrees can be removed here.' };
+  if (!r.inside_roots) return { title: 'Outside scan folders', detail: 'Add this worktree folder to your scan folders in Settings, then run Scan so its contents can be checked.' };
+  if (r.state.lock.state === 'locked') return { title: 'Worktree is locked', detail: `Keep it locked while it is needed${r.state.lock.reason ? ` (${r.state.lock.reason})` : ''}. Unlock it in Git only when that work is finished, then scan again.` };
+  const checks = checksOf(r).filter((c) => c.status !== 'pass');
+  const next: string[] = [];
+  if (checks.some((c) => /uncommitted|untracked/.test(c.label))) next.push('Commit or save any local files you need.');
+  if (checks.some((c) => /pushed|Merged/.test(c.label))) next.push('Merge or push the commits you want to keep.');
+  if (checks.some((c) => /Ignored/.test(c.label))) next.push('Move unique ignored files somewhere safe.');
+  if (checks.some((c) => /in use/.test(c.label))) next.push('Close processes using this folder.');
+  const reason = verdictReason(r);
+  return { title: 'Needs review before removal', detail: `${reason}. ${next.join(' ')} Run Scan again after resolving these checks.` };
+}
+
 /** "Removable · S1". */
 export function verdictLine(r: WorktreeReport): string {
   return `${VERDICT_LABEL[verdictOf(r)]} · ${r.decision.tier}`;

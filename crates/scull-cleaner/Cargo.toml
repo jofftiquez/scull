@@ -20,6 +20,7 @@ scull-platform = { workspace = true, features = ["delete"] }
 scull-safety.workspace = true
 # Read-only pipeline, used to re-derive candidates at revalidation (SAFE-05, SAFE-11).
 scull-engine.workspace = true
+scull-git.workspace = true
 serde_json.workspace = true
 scull-storage.workspace = true
 # Headroom (PRO-06): the reserve's layout, limits and manifest (read-only side).
@@ -45,7 +46,6 @@ bare-api = []
 # This crate's own integration tests exercise the bare calls.
 scull-cleaner = { path = ".", features = ["bare-api"] }
 scull-fixtures.workspace = true
-scull-git.workspace = true
 serde_json.workspace = true
 
 # Quick Clean fixtures: the test executable doubles as fake `npm`/`pnpm`/`bun`/`yarn`, so it

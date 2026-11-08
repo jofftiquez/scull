@@ -65,21 +65,22 @@
 pub mod agent_requests;
 pub mod monitor;
 pub mod onboarding;
+mod settings_write;
 pub mod tray;
 
 use scull_core::{ErrorKind, PlanId, ScullError};
 use scull_desktop_bridge::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
-    AppInfo, ApprovalDesk, CachesReport, CapabilitiesReport, CleanupDesk, DesktopPlan,
-    DesktopQuickClean, DesktopRestore, DesktopRun, DesktopStatus, DigestView, Drive,
-    FootprintHistory, ForecastsView, FreeSpaceHistory, HistoryView, OpId, ProgressEvent,
-    ProjectsView, RegrowthHistory, RollupHistory, ScanParams, ScanReport, Session, SettingsView,
-    Setup, WorktreesView, now_unix,
+    AppInfo, ApprovalDesk, CacheCleanChoice, CachesReport, CapabilitiesReport, CleanupDesk,
+    DesktopCachePreview, DesktopCacheProgress, DesktopPlan, DesktopQuickClean, DesktopRestore,
+    DesktopRun, DesktopStatus, DigestView, Drive, FootprintHistory, ForecastsView,
+    FreeSpaceHistory, HistoryView, OpId, ProgressEvent, ProjectsView, RegrowthHistory,
+    RollupHistory, ScanParams, ScanReport, Session, SettingsView, Setup, WorktreesView, now_unix,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Invoke;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State, WebviewWindow};
 
 /// The session shared by every command.
 type Shared<'a> = State<'a, Arc<Session>>;
@@ -157,6 +158,19 @@ async fn drives() -> Result<Vec<Drive>, ScullError> {
 fn emitter(app: AppHandle) -> impl Fn(ProgressEvent) + Send + Sync + 'static {
     move |e| {
         let _ = app.emit(ProgressEvent::NAME, e);
+    }
+}
+
+/// Cache output belongs only to the webview that requested the approved cleanup.
+fn cache_emitter<R: Runtime>(
+    window: WebviewWindow<R>,
+) -> impl Fn(DesktopCacheProgress) + Send + Sync + 'static {
+    move |event| {
+        let _ = window.emit_to(
+            EventTarget::webview_window(window.label()),
+            DesktopCacheProgress::NAME,
+            event,
+        );
     }
 }
 
@@ -362,7 +376,7 @@ async fn execute_desktop_plan(
     typed_count: Option<u64>,
 ) -> Result<DesktopRun, ScullError> {
     let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
-    blocking(move || {
+    let result = blocking(move || {
         cleanup.execute(
             &session,
             &plan_id,
@@ -372,7 +386,27 @@ async fn execute_desktop_plan(
             now_unix(),
         )
     })
-    .await
+    .await;
+    if let Err(error) = &result {
+        let message: String = error.message.chars().take(2048).collect();
+        eprintln!(
+            "scull: execute_desktop_plan rejected ({:?}): {}",
+            error.kind,
+            message.escape_debug()
+        );
+    }
+    result
+}
+
+/// Check the live execution lock without recovering or running an operation.
+pub fn execution_busy_at(path: &std::path::Path) -> Result<bool, ScullError> {
+    scull_desktop_bridge::cleanup::execution_busy_at(path)
+}
+
+/// `execution_busy`: an advisory live lock check for the main window's cleanup queue.
+#[tauri::command]
+async fn execution_busy() -> Result<bool, ScullError> {
+    blocking(scull_desktop_bridge::cleanup::execution_busy).await
 }
 
 /// `restore_quarantined`: put a quarantined item back (never overwriting). The main window only.
@@ -389,13 +423,60 @@ async fn restore_quarantined(
 
 /// `quick_clean`: run the trusted tools of the ticked cache chips. The main window only.
 #[tauri::command]
-async fn quick_clean(
+async fn quick_clean<R: Runtime>(
+    window: WebviewWindow<R>,
     session: Shared<'_>,
     cleanup: Cleanup<'_>,
     items: Vec<String>,
+    op_id: Option<String>,
 ) -> Result<DesktopQuickClean, ScullError> {
+    let op = op_id.as_deref().map(OpId::parse).transpose()?;
     let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
-    blocking(move || cleanup.quick_clean(&session, &items, now_unix())).await
+    blocking(move || match op {
+        Some(op) => cleanup.quick_clean_with_progress(
+            &session,
+            &items,
+            &op,
+            now_unix(),
+            &cache_emitter(window),
+        ),
+        None => cleanup.quick_clean(&session, &items, now_unix()),
+    })
+    .await
+}
+
+/// `quick_clean_plan`: exact native commands and skip reasons for review, main window only.
+#[tauri::command]
+async fn quick_clean_plan(
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+) -> Result<DesktopCachePreview, ScullError> {
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || cleanup.quick_clean_plan(&session)).await
+}
+
+/// `quick_clean_run`: the selected IDs, modes and commands confirmed in the Caches screen.
+#[tauri::command]
+async fn quick_clean_run<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: Shared<'_>,
+    cleanup: Cleanup<'_>,
+    choices: Vec<CacheCleanChoice>,
+    op_id: Option<String>,
+) -> Result<DesktopQuickClean, ScullError> {
+    let op = op_id.as_deref().map(OpId::parse).transpose()?;
+    let (session, cleanup) = (Arc::clone(&session), Arc::clone(&cleanup));
+    blocking(move || match op {
+        Some(op) => cleanup.quick_clean_run_with_progress(
+            &session,
+            &choices,
+            &op,
+            now_unix(),
+            &cache_emitter(window),
+        ),
+        None => cleanup.quick_clean_run(&session, &choices, now_unix()),
+    })
+    .await
 }
 
 /// `take_deep_link`: the plan a `scull://approve/<plan-id>` link opened the app with, once.
@@ -450,9 +531,13 @@ pub fn main_window_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + 
         take_deep_link,
         prepare_desktop_plan,
         execute_desktop_plan,
+        execution_busy,
         restore_quarantined,
         quick_clean,
+        quick_clean_plan,
+        quick_clean_run,
         onboarding::onboarding_context,
+        settings_write::save_setting,
         onboarding::pick_project_folders
     ]
 }
@@ -543,9 +628,13 @@ pub fn run() {
             take_deep_link,
             prepare_desktop_plan,
             execute_desktop_plan,
+            execution_busy,
             restore_quarantined,
             quick_clean,
+            quick_clean_plan,
+            quick_clean_run,
             onboarding::onboarding_context,
+            settings_write::save_setting,
             onboarding::pick_project_folders
         ])
         .run(tauri::generate_context!());

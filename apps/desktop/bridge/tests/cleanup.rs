@@ -155,6 +155,20 @@ fn skip_if_elevated(test: &str) -> bool {
 }
 
 #[test]
+fn execution_busy_tracks_a_live_lock_without_recovering_or_releasing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("execution.lock");
+    let busy = scull_desktop_bridge::cleanup::execution_busy_at;
+    assert!(!busy(&path).unwrap());
+    let holder = scull_cleaner::Executor::acquire(&scull_cleaner::LockOptions::at(&path)).unwrap();
+    assert!(busy(&path).unwrap());
+    assert!(busy(&path).unwrap());
+    drop(holder);
+    assert!(!busy(&path).unwrap());
+    assert!(busy(dir.path()).is_err());
+}
+
+#[test]
 fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
     if skip_if_elevated("cleanup_review_runs_exactly_the_chosen_items_through_the_executor") {
         return;
@@ -321,6 +335,99 @@ fn a_plan_from_a_scan_older_than_an_operation_on_its_items_is_refused() {
     e.fx.check_invariants(
         &scull_fixtures::InvariantInputs::new()
             .plan(first.items.iter())
+            .allow("app/target"),
+    )
+    .assert_ok();
+}
+
+#[test]
+fn a_scan_before_crash_recovery_requires_a_fresh_scan_before_cleaning() {
+    if skip_if_elevated("a_scan_before_crash_recovery_requires_a_fresh_scan_before_cleaning") {
+        return;
+    }
+    let e = env();
+    let now = now_unix();
+    e.scan();
+    let target = e.id_of("app/target");
+    let first = e
+        .desk
+        .prepare(&e.session, Some(std::slice::from_ref(&target)), now)
+        .unwrap();
+    let mut store = scull_engine::open_history(&e.data).unwrap();
+    let plan = store
+        .get_plan(&scull_core::PlanId::try_from(first.plan_id).unwrap())
+        .unwrap()
+        .unwrap();
+    let operation_id = scull_core::OperationId::from_suffix("CRASHED").unwrap();
+    store
+        .begin_operation(
+            &scull_storage::OperationStart {
+                operation_id: operation_id.clone(),
+                plan_id: plan.id().clone(),
+                content_hash: plan.content_hash().clone(),
+                approver: who().user,
+                method: scull_storage::ApprovalMethod::Desktop,
+                started_at: now,
+            },
+            &scull_engine::PlatformOwnerOnly,
+        )
+        .unwrap();
+    store
+        .record_operation_targets(
+            &operation_id,
+            &plan
+                .items()
+                .iter()
+                .map(|i| (i.item_id.clone(), i.identity))
+                .collect::<Vec<_>>(),
+            now,
+        )
+        .unwrap();
+    drop(store);
+    e.scan();
+    let stale = e
+        .desk
+        .prepare(&e.session, Some(std::slice::from_ref(&target)), now)
+        .unwrap();
+    let err = e
+        .desk
+        .execute(
+            &e.session,
+            &stale.plan_id,
+            &stale.content_hash,
+            std::slice::from_ref(&target),
+            None,
+            now,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PlanInvalidated);
+    assert!(err.message.contains("Run Scan again"), "{}", err.message);
+    assert!(e.fx.root().join("app/target").exists());
+    assert_eq!(
+        e.operations(),
+        1,
+        "rejection must not start another operation"
+    );
+    e.scan();
+    let fresh = e
+        .desk
+        .prepare(&e.session, Some(std::slice::from_ref(&target)), now)
+        .unwrap();
+    let run = e
+        .desk
+        .execute(
+            &e.session,
+            &fresh.plan_id,
+            &fresh.content_hash,
+            &[target],
+            None,
+            now,
+        )
+        .unwrap();
+    assert_eq!(run.items[0].outcome, RunItemOutcome::Quarantined);
+    e.fx.check_invariants(
+        &scull_fixtures::InvariantInputs::new()
+            .plan(fresh.items.iter())
             .allow("app/target"),
     )
     .assert_ok();
@@ -624,4 +731,267 @@ fn a_narrowed_plan_keeps_the_reviewed_plans_lifetime() {
             .allow("app/target"),
     )
     .assert_ok();
+}
+
+#[test]
+fn cache_preview_and_invalid_selections_never_start_cleanup() {
+    use scull_desktop_bridge::cleanup::{CacheCleanChoice, CacheCleanCommand};
+    if skip_if_elevated("cache_preview_and_invalid_selections_never_start_cleanup") {
+        return;
+    }
+    let e = env();
+    let preview = e.desk.quick_clean_plan(&e.session).unwrap();
+    assert!(preview.tools.is_empty());
+    let choice = CacheCleanChoice {
+        item_id: "not-a-current-cache".into(),
+        mode: "wipe".into(),
+        command: CacheCleanCommand {
+            binary: "/untrusted/npm".into(),
+            args: vec!["cache".into(), "clean".into()],
+            env: vec![],
+        },
+    };
+    assert_eq!(
+        e.desk
+            .quick_clean_run(&e.session, &[], now_unix())
+            .unwrap_err()
+            .kind,
+        ErrorKind::Usage
+    );
+    let mut invalid_mode = choice.clone();
+    invalid_mode.mode = "shell".into();
+    assert_eq!(
+        e.desk
+            .quick_clean_run(&e.session, &[invalid_mode], now_unix())
+            .unwrap_err()
+            .kind,
+        ErrorKind::Usage
+    );
+    assert_eq!(
+        e.desk
+            .quick_clean_run(&e.session, &[choice.clone(), choice.clone()], now_unix())
+            .unwrap_err()
+            .kind,
+        ErrorKind::Usage
+    );
+    assert_eq!(
+        e.desk
+            .quick_clean_run(&e.session, &[choice], now_unix())
+            .unwrap_err()
+            .kind,
+        ErrorKind::PlanInvalidated
+    );
+    assert_eq!(e.operations(), 0);
+    e.fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+        .assert_ok();
+}
+
+#[test]
+fn a_settings_change_invalidates_the_old_scan_and_prepared_plan() {
+    if skip_if_elevated("a_settings_change_invalidates_the_old_scan_and_prepared_plan") {
+        return;
+    }
+    let mut e = env();
+    let mut setup = e.session.setup().clone();
+    setup.config_file = Some(e.data.join("config.toml"));
+    e.session = Session::new(setup);
+    e.scan();
+    let target = e.id_of("app/target");
+    let chosen = vec![target];
+    let plan = e
+        .desk
+        .prepare(&e.session, Some(&chosen), now_unix())
+        .unwrap();
+    e.session
+        .save_setting(
+            "scan.protect",
+            &serde_json::json!([e.fx.root().join("app").to_string_lossy()]),
+        )
+        .unwrap();
+    let error = e
+        .desk
+        .execute(
+            &e.session,
+            &plan.plan_id,
+            &plan.content_hash,
+            &chosen,
+            None,
+            now_unix(),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::PlanInvalidated);
+    assert!(
+        e.desk.prepare(&e.session, None, now_unix()).is_err(),
+        "a new plan needs a new scan under the changed config"
+    );
+    assert!(e.fx.root().join("app/target").is_dir());
+    assert_eq!(e.operations(), 0);
+    e.scan();
+    let new_plan = e.desk.prepare(&e.session, None, now_unix()).unwrap();
+    assert!(
+        !new_plan
+            .items
+            .iter()
+            .any(|c| c.path.as_str().ends_with("app/target"))
+    );
+    e.fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+        .assert_ok();
+}
+
+#[test]
+fn desktop_worktree_removal_requires_typed_confirmation_and_preserves_the_branch() {
+    if skip_if_elevated(
+        "desktop_worktree_removal_requires_typed_confirmation_and_preserves_the_branch",
+    ) {
+        return;
+    }
+    let mut e = env();
+    let repo = e.fx.git_repo("repo").unwrap();
+    e.fx.file("repo/README.md", "committed fixture data\n")
+        .unwrap();
+    repo.commit_all("initial").unwrap();
+    repo.run([
+        "worktree",
+        "add",
+        "--quiet",
+        "-b",
+        "feature",
+        "../repo-wt",
+        "main",
+    ])
+    .unwrap();
+    e.fx.checkpoint().unwrap();
+    let probe =
+        scull_safety::NativeActivityProbe::capture(scull_platform::activity::Limits::default());
+    if scull_safety::check_in_use(&e.fx.root().join("repo-wt"), &[], &probe).in_use
+        != scull_safety::Tri::No
+    {
+        e.fx.check_invariants(&scull_fixtures::InvariantInputs::new())
+            .assert_ok();
+        println!("SKIPPED: native worktree activity could not be verified");
+        return;
+    }
+    let mut setup = e.session.setup().clone();
+    setup.git = true;
+    e.session = Session::new(setup).with_in_use_source(scull_engine::InUseSource::Probe(Arc::new(
+        scull_engine::FixedInUse(scull_safety::Tri::No),
+    )));
+    e.scan();
+    let id = e.id_of("repo-wt");
+    let chosen = vec![id];
+    let plan = e
+        .desk
+        .prepare(&e.session, Some(&chosen), now_unix())
+        .unwrap();
+    assert_eq!(plan.items[0].action, scull_core::Action::GitWorktreeRemove);
+    let refused = e
+        .desk
+        .execute(
+            &e.session,
+            &plan.plan_id,
+            &plan.content_hash,
+            &chosen,
+            None,
+            now_unix(),
+        )
+        .unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::SafetyBlocked);
+    assert!(e.fx.root().join("repo-wt/README.md").is_file());
+    let run = e
+        .desk
+        .execute(
+            &e.session,
+            &plan.plan_id,
+            &plan.content_hash,
+            &chosen,
+            Some(1),
+            now_unix(),
+        )
+        .unwrap();
+    assert_eq!(run.items[0].outcome, RunItemOutcome::Deleted, "{run:#?}");
+    assert!(!e.fx.root().join("repo-wt").exists());
+    assert!(
+        !repo
+            .run(["rev-parse", "refs/heads/feature"])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(e.operations(), 1);
+    e.fx.check_invariants(
+        &scull_fixtures::InvariantInputs::new()
+            .allow("repo-wt")
+            .allow("repo/.git/worktrees"),
+    )
+    .assert_ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn explicitly_scanned_project_roots_are_not_trusted_cache_tool_locations() {
+    use std::os::unix::fs::PermissionsExt;
+    if skip_if_elevated("explicitly_scanned_project_roots_are_not_trusted_cache_tool_locations") {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let tools = root.join("tools");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::create_dir_all(home.join(".npm/_cacache/content-v2")).unwrap();
+    std::fs::write(
+        home.join(".npm/_cacache/content-v2/fake-package"),
+        "fake cached contents",
+    )
+    .unwrap();
+    let npm = tools.join("npm");
+    std::fs::write(&npm, "#!/bin/sh\nexit 99\n").unwrap();
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let search = tools.to_string_lossy().into_owned();
+    let session = Session::new(Setup {
+        home: Some(home),
+        config_file: Some(temp.path().join("config.toml")),
+        data_dir: Some(temp.path().join("data")),
+        env: Arc::new(move |key| (key == "PATH").then(|| search.clone())),
+        record_history: false,
+        git: false,
+        detect_synced_roots: false,
+        allow_network_roots: true,
+        in_use: false,
+    })
+    .with_in_use_source(scull_engine::InUseSource::Probe(Arc::new(
+        scull_engine::FixedInUse(scull_safety::Tri::No),
+    )));
+    let desk = CleanupDesk::new();
+    let before = desk.quick_clean_plan(&session).unwrap();
+    // The preview uses the real OS probe: on a runner where some of the user's processes
+    // can't be inspected, the located npm is skipped as "could not check whether it is in
+    // use" instead of offered. Either way it is found, never "not installed".
+    assert!(
+        before.tools.iter().any(|tool| tool.tool == "npm")
+            || before
+                .skipped
+                .iter()
+                .any(|skip| skip.tool == "npm" && !skip.reason.contains("not installed")),
+        "{before:#?}"
+    );
+    session
+        .scan(
+            &OpId::parse("explicit-root-test").unwrap(),
+            &ScanParams {
+                roots: vec![root.to_string_lossy().into_owned()],
+                ..ScanParams::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+    assert!(session.settings().config.scan.roots.is_empty());
+    let after = desk.quick_clean_plan(&session).unwrap();
+    assert!(after.tools.iter().all(|tool| tool.tool != "npm"));
+    assert!(
+        after
+            .skipped
+            .iter()
+            .any(|skip| skip.tool == "npm" && skip.reason.contains("not installed")),
+        "{after:#?}"
+    );
 }
