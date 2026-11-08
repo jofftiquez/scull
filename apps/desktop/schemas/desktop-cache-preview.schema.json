@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "CacheCleanCommand": {
+      "additionalProperties": false,
+      "description": "An exact native command shown for review. Display only; never interpreted as shell text.",
+      "properties": {
+        "args": {
+          "description": "Arguments passed directly to the executable.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "binary": {
+          "description": "Canonical trusted executable.",
+          "type": "string"
+        },
+        "env": {
+          "description": "Cache location variables added to the sanitized environment.",
+          "items": {
+            "$ref": "#/$defs/CacheCleanEnv"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "binary",
+        "args",
+        "env"
+      ],
+      "type": "object"
+    },
+    "CacheCleanEnv": {
+      "additionalProperties": false,
+      "description": "A cache-location variable in the sanitized native environment.",
+      "properties": {
+        "name": {
+          "description": "Variable name.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Located cache folder or other scoped value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "CacheCleanSkip": {
+      "additionalProperties": false,
+      "description": "A cache omitted by the native planner.",
+      "properties": {
+        "bytes": {
+          "description": "Estimate from classification, when available.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Core's human-readable cache name.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Located path, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Core planner reason.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Tool name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "tool",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CacheCleanTool": {
+      "additionalProperties": false,
+      "description": "A tool and the modes the core planner currently permits.",
+      "properties": {
+        "bytes": {
+          "description": "Estimated reclaimable bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache": {
+          "description": "Located cache folder.",
+          "type": "string"
+        },
+        "item_id": {
+          "description": "Classified cache item ID.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Core's human-readable cache name.",
+          "type": "string"
+        },
+        "notes": {
+          "description": "Core planner's safety notes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prune": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheCleanCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Prune command, when supported."
+        },
+        "tool": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "wipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheCleanCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wipe command, when supported."
+        }
+      },
+      "required": [
+        "name",
+        "item_id",
+        "tool",
+        "cache",
+        "bytes",
+        "notes"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "scull-desktop/desktop-cache-preview.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The native Quick Clean preview. Unsupported or protected caches remain skipped.",
+  "properties": {
+    "skipped": {
+      "description": "Tools left alone and the core planner's reasons.",
+      "items": {
+        "$ref": "#/$defs/CacheCleanSkip"
+      },
+      "type": "array"
+    },
+    "tools": {
+      "description": "Runnable tools.",
+      "items": {
+        "$ref": "#/$defs/CacheCleanTool"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "tools",
+    "skipped"
+  ],
+  "title": "DesktopCachePreview",
+  "type": "object"
+}

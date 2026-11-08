@@ -1,6 +1,7 @@
 // What the Settings screen shows (design 10), derived from the `settings` and `drives` bridge
 // payloads. Pure functions, tested without rendering.
 import type { Drive, Origin, ProjectsView, SettingsView } from '../../bridge';
+import { driveOf } from '../overview/drives';
 import { formatBytes } from '../../lib/format';
 
 export type TabId = 'general' | 'drives' | 'safety' | 'alerts' | 'agents' | 'data' | 'about';
@@ -142,11 +143,15 @@ const KIND_LABEL: Record<Drive['kind'], string> = {
 };
 
 /** One row per drive: how scull treats it (D-22). Backup drives are locked off. */
-export function driveRows(drives: readonly Drive[], overrides: ReadonlyMap<string, boolean> = new Map()): DriveRow[] {
+export function expandRoot(path: string, home: string): string {
+  return home && /^~[\\/]/.test(path) ? `${home}${path.slice(1)}` : path;
+}
+
+export function driveRows(drives: readonly Drive[], roots: readonly string[] = [], home = ''): DriveRow[] {
   return drives.map((d) => {
     const locked = d.scan_policy === 'never';
-    const base = d.scan_policy === 'scan';
-    const on = locked ? false : (overrides.get(d.mount_point) ?? base);
+    const selected = roots.filter((root) => driveOf(expandRoot(root, home), drives)?.mount_point === d.mount_point);
+    const on = !locked && selected.length > 0;
     const size =
       d.total_bytes != null && d.free_bytes != null
         ? `${formatBytes(d.total_bytes)} · ${formatBytes(d.free_bytes)} free`
@@ -157,13 +162,7 @@ export function driveRows(drives: readonly Drive[], overrides: ReadonlyMap<strin
         : d.kind === 'network' || d.kind === 'virtual'
           ? 'Network drives are slow to scan; off unless you need it'
           : size;
-    const mode = locked
-      ? 'never'
-      : d.scan_policy === 'off_by_default'
-        ? 'off by default'
-        : d.holds_home
-          ? 'always'
-          : 'when connected';
+    const mode = locked ? 'never' : selected.length ? `${selected.length} folder${selected.length === 1 ? '' : 's'}` : 'no folders selected';
     return { key: d.mount_point, name: d.label || d.mount_point, kind: KIND_LABEL[d.kind], sub, mode, on, locked };
   });
 }

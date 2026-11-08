@@ -6,18 +6,19 @@ import { computed, nextTick, ref } from 'vue';
 import { formatBytes } from '../../lib/format';
 import { commandLine, shortPath, type Choice, type Mode, type PlannedCache, type RowState } from './model';
 
-const props = defineProps<{ cache: PlannedCache; choice: Choice; state: RowState; pct: number; locked: boolean; freed: boolean }>();
+const props = defineProps<{ cache: PlannedCache; choice: Choice; state: RowState; pct: number; locked: boolean; freed: boolean; remaining?: number }>();
 const emit = defineEmits<{ toggle: [on: boolean]; mode: [mode: Mode] }>();
 
 const confirming = ref(false);
 const confirmBtn = ref<HTMLButtonElement | null>(null);
 const cmd = computed(() => commandLine(props.cache, props.choice.mode));
 const size = computed(() => {
+  if (props.remaining != null) return formatBytes(props.remaining);
   if (props.freed || props.state === 'done') return formatBytes(0);
   if (props.state === 'active') return formatBytes(Math.round(props.cache.bytes * (1 - props.pct / 100)));
   return formatBytes(props.cache.bytes);
 });
-const label = computed(() => ({ idle: '', queued: 'queued', active: 'cleaning…', done: 'cleaned ✓', failed: 'failed' })[props.state]);
+const label = computed(() => props.state === 'done' && props.remaining ? 'completed ✓' : ({ idle: '', queued: 'queued', active: 'cleaning…', done: 'cleaned ✓', failed: 'failed' })[props.state]);
 const modes = computed(() => [
   { id: 'prune' as const, label: 'Prune', available: props.cache.runner === 'tool' && props.cache.prune !== null },
   { id: 'wipe' as const, label: 'Wipe', available: props.cache.wipe !== null },

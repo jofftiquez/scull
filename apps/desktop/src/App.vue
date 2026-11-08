@@ -4,6 +4,9 @@
 // whole window.
 import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue';
 import { START_LOCATION, useRoute, useRouter } from 'vue-router';
+import TaskCelebration from './components/shell/TaskCelebration.vue';
+import { taskQueue } from './state/tasks';
+import { realTransport } from './bridge/tauri';
 import AppSidebar from './components/shell/AppSidebar.vue';
 import AgentRequestNotice from './components/review/AgentRequestNotice.vue';
 import { useBridge } from './bridge';
@@ -19,6 +22,14 @@ import { startMonitorSync } from './monitor/prefs';
 
 const bridge = useBridge();
 const plans = usePlanBridge();
+if (bridge.kind === 'tauri') taskQueue.setProbe(() => realTransport.invoke<boolean>('execution_busy'));
+else taskQueue.setProbe(async () => false);
+let taskPoll: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  void taskQueue.checkBusy().catch(() => undefined);
+  taskPoll = setInterval(() => void taskQueue.checkBusy().catch(() => undefined), 2000);
+});
+onBeforeUnmount(() => clearInterval(taskPoll));
 const route = useRoute();
 const router = useRouter();
 // `scull://approve/<plan-id>` (Tauri): open Cleanup Review on that agent request, unless one is
@@ -80,7 +91,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-wrap items-stretch gap-page-gap bg-ground p-page-padding text-body text-ink">
+  <div class="app-shell text-body text-ink" :class="{ 'app-shell--bare': route.meta.bare }">
     <!-- WCAG 2.4.1: the first Tab stop skips the sidebar's navigation. -->
     <a
       v-if="!route.meta.bare"
@@ -94,5 +105,11 @@ onMounted(async () => {
     <AppSidebar v-if="!route.meta.bare" :version="shell.version" :counts="shell.counts" />
     <RouterView />
     <AgentRequestNotice v-if="!route.meta.bare" />
+    <TaskCelebration v-if="!route.meta.bare" />
   </div>
 </template>
+
+<style scoped>
+.app-shell { display: flex; width: 100%; height: 100dvh; min-width: 0; overflow: hidden; background: var(--color-ground); }
+.app-shell--bare { height: auto; min-height: 100dvh; overflow: visible; flex-wrap: wrap; align-items: stretch; gap: var(--spacing-page-gap); padding: var(--spacing-page-padding); }
+</style>

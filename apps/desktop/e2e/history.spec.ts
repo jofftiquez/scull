@@ -4,6 +4,7 @@ import { expect, open, test } from './fixtures';
 
 test('restore a quarantined item next to the occupied original (sibling restore)', async ({ page, shot }) => {
   await open(page, '/history');
+  await page.locator('button[data-row]').filter({ hasText: 'Cleanup · 4 items' }).click();
   const details = page.getByTestId('details');
   const restore = details.getByRole('button', { name: 'Restore ~/code/proto/Library' });
   await expect(restore).toBeVisible();
@@ -15,8 +16,8 @@ test('restore a quarantined item next to the occupied original (sibling restore)
 
   await restore.click();
   await expect(details.getByText('restoring…', { exact: true })).toBeVisible();
-  const toast = page.getByTestId('toast');
-  await expect(toast).toContainText('Restored beside ~/code/proto/Library as Library.scull-restored-1');
+  const toast = page.getByTestId('task-success');
+  await expect(toast).toContainText('Restored to ~/code/proto/Library.scull-restored-1');
   await expect(restorable).toHaveText(String(before - 1));
   await expect(restore).toHaveCount(0);
   await expect(details.locator('li', { hasText: '~/code/proto/Library' }).getByTestId('item-state')).toContainText(/restored/i);

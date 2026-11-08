@@ -68,7 +68,10 @@ pub use approvals::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
     ApprovalDesk,
 };
-pub use cleanup::{CleanupDesk, DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun};
+pub use cleanup::{
+    CacheCleanChoice, CacheOutputStream, CacheProgressKind, CleanupDesk, DesktopCachePreview,
+    DesktopCacheProgress, DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun,
+};
 pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
 pub use forecasts::ForecastsView;
 pub use history::HistoryView;

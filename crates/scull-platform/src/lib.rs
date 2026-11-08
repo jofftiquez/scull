@@ -62,6 +62,7 @@ pub mod activity;
 pub mod ancestry;
 pub mod app_dirs;
 pub mod cloud;
+pub mod config;
 #[cfg(all(windows, feature = "test-support"))]
 pub mod console;
 pub mod docker;

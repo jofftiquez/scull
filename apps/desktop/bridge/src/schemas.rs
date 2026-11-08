@@ -8,7 +8,10 @@
 use crate::approvals::{
     AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
 };
-use crate::cleanup::{DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun};
+use crate::cleanup::{
+    CacheCleanChoice, DesktopCachePreview, DesktopCacheProgress, DesktopPlan, DesktopQuickClean,
+    DesktopRestore, DesktopRun,
+};
 use crate::forecasts::ForecastsView;
 use crate::history::HistoryView;
 use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
@@ -135,8 +138,20 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
             schema::<DesktopRestore>("desktop-restore", "DesktopRestore"),
         ),
         (
+            "desktop-cache-preview",
+            schema::<DesktopCachePreview>("desktop-cache-preview", "DesktopCachePreview"),
+        ),
+        (
+            "cache-clean-choice",
+            schema::<CacheCleanChoice>("cache-clean-choice", "CacheCleanChoice"),
+        ),
+        (
             "desktop-quick-clean",
             schema::<DesktopQuickClean>("desktop-quick-clean", "DesktopQuickClean"),
+        ),
+        (
+            "desktop-cache-progress",
+            schema::<DesktopCacheProgress>("desktop-cache-progress", "DesktopCacheProgress"),
         ),
         ("error", schema::<ScullError>("error", "ScullError")),
     ]

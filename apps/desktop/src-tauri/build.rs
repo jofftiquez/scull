@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "capabilities",
     "history",
     "settings",
+    "save_setting",
     "free_space_history",
     "rollup_history",
     "regrowth",
@@ -41,8 +42,11 @@ const COMMANDS: &[&str] = &[
     // Cleaning through the core Executor (P3-EXEC-01): the main window only.
     "prepare_desktop_plan",
     "execute_desktop_plan",
+    "execution_busy",
     "restore_quarantined",
     "quick_clean",
+    "quick_clean_plan",
+    "quick_clean_run",
     "onboarding_context",
     "pick_project_folders",
 ];

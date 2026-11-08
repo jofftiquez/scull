@@ -118,6 +118,7 @@ pub mod recover;
 mod restore;
 mod revalidate;
 pub mod trash;
+mod worktree;
 
 pub use execution::{ExecutionReport, ItemOutcome, ItemReport, PlanContext};
 pub use executor::{

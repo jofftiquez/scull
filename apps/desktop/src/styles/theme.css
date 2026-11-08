@@ -46,8 +46,8 @@
   --color-on-ink-magenta: #FF8CC6;
   --color-on-ink-amber: #FFB547;
   --color-on-fill: #FFFFFF;
-  --color-drive-tile: #15121A;
-  --color-on-drive-tile: #FFFFFF;
+  --color-drive-tile: #9C78FF;
+  --color-on-drive-tile: #15121A;
 
   --color-tier-s0: #7C4DFF;
   --color-tier-s0-text: #FFFFFF;
@@ -148,8 +148,8 @@
     --color-on-ink-magenta: #B01C6E;
     --color-on-ink-amber: #7A4800;
     --color-on-fill: #FFFFFF;
-    --color-drive-tile: #3A3632;
-    --color-on-drive-tile: #F4F1EC;
+    --color-drive-tile: #9C78FF;
+    --color-on-drive-tile: #15121A;
     --color-tier-s0: #7C4DFF;
     --color-tier-s0-text: #FFFFFF;
     --color-tier-s0-fg: #B9A2FF;
@@ -213,8 +213,8 @@
   --color-on-ink-magenta: #B01C6E;
   --color-on-ink-amber: #7A4800;
   --color-on-fill: #FFFFFF;
-  --color-drive-tile: #3A3632;
-  --color-on-drive-tile: #F4F1EC;
+  --color-drive-tile: #9C78FF;
+  --color-on-drive-tile: #15121A;
   --color-tier-s0: #7C4DFF;
   --color-tier-s0-text: #FFFFFF;
   --color-tier-s0-fg: #B9A2FF;

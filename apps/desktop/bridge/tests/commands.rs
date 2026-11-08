@@ -137,6 +137,15 @@ fn frontend_and_app_name_the_same_commands() {
         ts_table(&read("src/bridge/tauri.ts"), "ONBOARDING_COMMANDS")
     );
     let mut all = rust.clone();
+    let settings = rust_commands(&read("src-tauri/src/settings_write.rs"));
+    assert_eq!(
+        settings,
+        ts_table(
+            &read("src/components/settings/bridge.ts"),
+            "SETTINGS_COMMANDS"
+        )
+    );
+    all.extend(settings.iter().map(|c| format!("settings_write::{c}")));
     all.extend(onboarding.iter().map(|c| format!("onboarding::{c}")));
     all.extend(window.iter().map(|c| format!("tray::{c}")));
     all.extend(monitor.iter().map(|c| format!("monitor::{c}")));
@@ -152,6 +161,7 @@ fn frontend_and_app_name_the_same_commands() {
         .find(|h| h.contains("approve_agent_plan") && !h.contains("app_info"))
         .expect("main_window_handler");
     let mut expected = &approval | &cleanup;
+    expected.extend(settings.iter().map(|c| format!("settings_write::{c}")));
     expected.extend(onboarding.iter().map(|c| format!("onboarding::{c}")));
     assert_eq!(main_window, expected);
 }
@@ -209,6 +219,10 @@ fn approval_commands_are_granted_to_the_main_window_only() {
         "ONBOARDING_COMMANDS",
     ));
     let menubar = granted("src-tauri/capabilities/menubar.json");
+    main_only.extend(ts_table(
+        &read("src/components/settings/bridge.ts"),
+        "SETTINGS_COMMANDS",
+    ));
     assert!(
         menubar.is_disjoint(&main_only),
         "the menu bar widget must not approve or clean: {menubar:?}"
@@ -304,7 +318,7 @@ fn no_command_can_mutate() {
     // the core Executor, main window only, checked above); every other command is read-only by
     // name too. (The approval commands record a human's decision in scull's database.)
     let cleanup = ts_table(&read("src/bridge/tauriPlans.ts"), "CLEANUP_COMMANDS");
-    assert_eq!(cleanup.len(), 4, "{cleanup:?}");
+    assert_eq!(cleanup.len(), 7, "{cleanup:?}");
     let mut names = rust_commands(&read("src-tauri/src/lib.rs"));
     names.extend(rust_commands(&read("src-tauri/src/tray.rs")));
     names.extend(rust_commands(&read("src-tauri/src/monitor.rs")));

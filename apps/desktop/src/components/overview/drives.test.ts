@@ -158,7 +158,7 @@ describe('overview drive switcher', () => {
     const w = mount(App, { attachTo: document.body, global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: bridge } } });
     await flushPromises();
     await until(() => core.report !== null);
-    await until(() => w.get('[data-testid="rescan"]').text() === 'Rescan');
+    await until(() => w.get('[data-testid="wheel"]').attributes('aria-busy') === 'false');
     await until(() => w.find('[data-testid="drive-switcher"]').exists());
     return w;
   }
@@ -175,15 +175,17 @@ describe('overview drive switcher', () => {
     expect(opts().every((o) => o.attributes('aria-label') === undefined)).toBe(true);
     expect(opts()[0]!.attributes('aria-pressed')).toBe('true');
     expect(w.get('[data-testid="center"]').text()).toContain('338.7 GiB');
+    await w.find('[data-kind="category"]').trigger('click');
     expect(w.get('[data-testid="forecast"]').text()).toContain('Macintosh HD full in about 9 days.');
 
     await opts()[2]!.trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="center"]').text()).toContain('152.7 GiB'));
     expect(opts()[2]!.attributes('aria-pressed')).toBe('true');
     expect(w.findAll('path[data-kind="item"]')).toHaveLength(4);
+    await w.find('[data-kind="category"]').trigger('click');
     expect(w.get('[data-testid="forecast"]').text()).toContain('Dev SSD full in about 27 days.');
     expect(w.get('[data-testid="drive-context"]').text()).toBe('Dev SSD · 390.0 GiB free · cleanups here are quarantined on Dev SSD');
-    expect(w.get('[data-testid="show-regenerable"]').text()).toBe('Show regenerable · 48.2 GiB');
+    expect(w.find('[data-testid="show-regenerable"]').exists()).toBe(false);
 
     await opts()[1]!.trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="center"]').text()).toContain('186.0 GiB'));

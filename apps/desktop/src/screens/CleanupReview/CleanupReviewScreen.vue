@@ -19,6 +19,6 @@ const request = computed(() => {
 <template>
   <ScreenLayout>
     <AgentApproval v-if="request" :key="request" :plan-id="request" />
-    <DesktopReview v-else />
+    <DesktopReview v-else :key="typeof route.query.project === 'string' ? route.query.project : typeof route.query.worktree === 'string' ? route.query.worktree : 'scan'" />
   </ScreenLayout>
 </template>

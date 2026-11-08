@@ -9,14 +9,15 @@ import { routes } from '../../navigation';
 import SettingsScreen from './SettingsScreen.vue';
 import { mockMonitor } from '../../monitor/mock';
 import { STORAGE_KEYS } from '../../monitor/prefs';
+import { ONBOARDING_KEY, createMockOnboardingBridge, type OnboardingBridge } from '../../components/onboarding/bridge';
 
-async function mountScreen(opts: { writer?: SettingsWriter; bridge?: ScullBridge; tab?: string } = {}) {
+async function mountScreen(opts: { writer?: SettingsWriter; bridge?: ScullBridge; tab?: string; folders?: Partial<OnboardingBridge> } = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes });
   router.push(opts.tab ? `/settings?tab=${opts.tab}` : '/settings');
   await router.isReady();
   const w = mount(SettingsScreen, {
     props: { writer: opts.writer ?? createMockSettingsWriter() },
-    global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: opts.bridge ?? createMockBridge() } },
+    global: { plugins: [router], provide: { [BRIDGE_KEY as symbol]: opts.bridge ?? createMockBridge(), [ONBOARDING_KEY as symbol]: { ...createMockOnboardingBridge(), ...opts.folders } } },
   });
   await flushPromises();
   await vi.waitFor(() => expect(w.find('[role="tablist"]').exists()).toBe(true));
@@ -31,6 +32,50 @@ const tabTo = async (w: W, id: string) => {
 };
 
 describe('Settings screen', () => {
+  it('picks multiple scan folders without a manual path field and leaves cancellation unchanged', async () => {
+    const writer = createMockSettingsWriter();
+    const pickFolders = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(['/Users/ada/Projects', '/Volumes/Dev SSD/work']);
+    const w = await mountScreen({ writer, folders: { pickFolders } });
+    await w.get('[data-testid="choose-scan-folders"]').trigger('click');
+    await flushPromises();
+    expect(writer.calls).toEqual([]);
+    await w.get('[data-testid="choose-scan-folders"]').trigger('click');
+    await flushPromises();
+    expect(writer.values.get('scan.roots')).toEqual(['~/code', '~/work', '~/.cache', '/Users/ada/Projects', '/Volumes/Dev SSD/work']);
+    expect(w.find('input[aria-label="Folder to scan"]').exists()).toBe(false);
+    await tabTo(w, 'drives');
+    expect(sw(w, 'Scan Dev SSD').attributes('aria-checked')).toBe('true');
+    expect(sw(w, 'Scan Dev SSD').attributes('disabled')).toBeUndefined();
+    await sw(w, 'Scan Dev SSD').trigger('click');
+    await flushPromises();
+    expect(writer.values.get('scan.roots')).not.toContain('/Volumes/Dev SSD/work');
+    w.unmount();
+  });
+  it('disables unimplemented native preferences while keeping working controls available', async () => {
+    const w = await mountScreen({ bridge: { ...createMockBridge(), kind: 'tauri' } });
+    expect(sw(w, 'Open at login').element.matches(':disabled')).toBe(true);
+    expect(w.get('fieldset[aria-label="Open at login"]').text()).toContain('Not available yet');
+    expect(w.get('[role="group"][aria-label="Theme"] button').element.matches(':disabled')).toBe(false);
+    await tabTo(w, 'safety');
+    expect(w.get('[role="group"][aria-label="Recently used means"] button').element.matches(':disabled')).toBe(false);
+    expect(w.get('[role="group"][aria-label="How cautious"] button').element.matches(':disabled')).toBe(true);
+    w.unmount();
+  });
+
+  it('does not report a successful save as unsaved when rereading settings fails', async () => {
+    const base = createMockBridge();
+    const settings = vi.fn().mockResolvedValueOnce(await base.settings()).mockRejectedValue(new Error('read unavailable'));
+    const writer = { ...createMockSettingsWriter(), kind: 'native' as const };
+    const w = await mountScreen({ bridge: { ...base, kind: 'tauri', settings }, writer, tab: 'safety' });
+    const group = w.get('[role="group"][aria-label="Recently used means"]');
+    await group.findAll('button').find((b) => b.text() === '7 days')!.trigger('click');
+    await flushPromises();
+    expect(writer.calls).toEqual(['save scan.activity_window="168h"']);
+    expect(w.find('[data-testid="save-error"]').exists()).toBe(false);
+    expect(w.get('[data-testid="notice"]').text()).toContain('Saved');
+    expect(group.get('[aria-pressed="true"]').text()).toBe('7 days');
+    w.unmount();
+  });
   it('has the seven tabs and opens on General with the configured scan folders', async () => {
     const w = await mountScreen();
     expect(w.findAll('[role="tab"]').map((t) => t.text())).toEqual([
@@ -87,19 +132,16 @@ describe('Settings screen', () => {
     expect(w.get('[role="group"][aria-label="Recently used means"] [aria-pressed="true"]').text()).toBe('7 days');
   });
 
-  it('removes and adds scan folders (validated) through the stub', async () => {
+  it('removes scan folders and adds picked folders through the validated writer', async () => {
     const writer = createMockSettingsWriter();
-    const w = await mountScreen({ writer });
+    const w = await mountScreen({ writer, folders: { pickFolders: async () => ['/Users/ada/projects'] } });
     await w.get('[aria-label="Remove ~/.cache"]').trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="roots"]').text()).not.toContain('~/.cache'));
-    await w.findAll('button').find((b) => b.text() === 'Add folder')!.trigger('click');
-    await w.get('input[aria-label="Folder to scan"]').setValue('relative/path');
-    await w.get('form').trigger('submit');
-    expect(w.get('[data-testid="save-error"]').text()).toMatch(/absolute/);
-    await w.get('input[aria-label="Folder to scan"]').setValue('~/projects');
-    await w.get('form').trigger('submit');
-    await vi.waitFor(() => expect(w.get('[data-testid="roots"]').text()).toContain('~/projects'));
-    expect(writer.calls).toEqual(['save scan.roots=["~/code","~/work"]', 'save scan.roots=["~/code","~/work","~/projects"]']);
+    await w.get('[data-testid="choose-scan-folders"]').trigger('click');
+    await flushPromises();
+    expect(w.get('[data-testid="roots"]').text()).toContain('~/projects');
+    expect(writer.calls).toEqual(['save scan.roots=["~/code","~/work"]', 'save scan.roots=["~/code","~/work","/Users/ada/projects"]']);
+    w.unmount();
   });
 
   it('AI agents: MCP settings with origins; destructive is locked off; redaction on', async () => {

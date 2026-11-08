@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "CacheOutputStream": {
+      "description": "A native process output stream.",
+      "oneOf": [
+        {
+          "const": "stdout",
+          "description": "Standard output.",
+          "type": "string"
+        },
+        {
+          "const": "stderr",
+          "description": "Standard error.",
+          "type": "string"
+        }
+      ]
+    },
+    "CacheProgressKind": {
+      "description": "Cache cleanup event kinds; tool progress is counted only at terminal events.",
+      "oneOf": [
+        {
+          "const": "preparing",
+          "description": "Refreshing the safe plan before running any command.",
+          "type": "string"
+        },
+        {
+          "const": "started",
+          "description": "A command is about to run.",
+          "type": "string"
+        },
+        {
+          "const": "output",
+          "description": "One escaped process output line.",
+          "type": "string"
+        },
+        {
+          "const": "output_truncated",
+          "description": "Further process output exceeded the capture limit.",
+          "type": "string"
+        },
+        {
+          "const": "finished",
+          "description": "A command exited.",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "The cache was not touched.",
+          "type": "string"
+        }
+      ]
+    },
+    "OpId": {
+      "description": "Client-chosen ID of one long-running operation (scan, caches). Progress events carry it,\nand `cancel_operation` takes it.",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    }
+  },
+  "$id": "scull-desktop/desktop-cache-progress.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Window-scoped live output from an approved cache cleanup.",
+  "properties": {
+    "command": {
+      "description": "Validated executable and arguments at command start, without environment values.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completed": {
+      "description": "Distinct selected caches that finished or were skipped.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "item_id": {
+      "description": "Selected cache candidate, when this is a tool event.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/CacheProgressKind",
+      "description": "The reported change."
+    },
+    "line": {
+      "description": "Escaped, capped output supplied by the core runner.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "op_id": {
+      "$ref": "#/$defs/OpId",
+      "description": "Client-chosen operation ID, independent of the audited operation ID."
+    },
+    "reason": {
+      "description": "Why a selected cache was skipped.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stream": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CacheOutputStream"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Which process stream produced this line."
+    },
+    "succeeded": {
+      "description": "Command success, only present when it finished.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "tool": {
+      "description": "Package manager, when known.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "total": {
+      "description": "Number of distinct selected cache IDs.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "op_id",
+    "kind",
+    "completed",
+    "total"
+  ],
+  "title": "DesktopCacheProgress",
+  "type": "object"
+}

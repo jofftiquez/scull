@@ -1,10 +1,9 @@
 <script setup lang="ts">
 // Settings (design 10 / 10b / 10c): seven tabs. Values come from the read-only `settings`
 // command (effective config + the origin of each value, built-in protection, scull's own data)
-// and `drives`. Changing anything is a mutation, so it goes through the screen-local stub
-// (components/settings/bridge.ts): the mock keeps changes in memory; inside Tauri it refuses,
-// the control reverts and the reason is shown. `mcp.destructive` is file-only and locked here.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+// and `drives`. Native configuration edits are validated by the core. Unimplemented app
+// preferences are disabled; `mcp.destructive` remains file-only and locked here.
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   toBridgeError,
@@ -14,6 +13,10 @@ import {
   type ProjectsView,
   type SettingsView,
 } from '../../bridge';
+import { ONBOARDING_KEY, onboardingBridgeFor } from '../../components/onboarding/bridge';
+import { checkRoot } from '../../components/onboarding/model';
+import { driveOf } from '../../components/overview/drives';
+import { loadSetup, savedScanParams } from '../../components/onboarding/prefs';
 import { formatBytes } from '../../lib/format';
 import { THEME_OPTIONS, isThemePref, useTheme } from '../../lib/theme';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
@@ -42,6 +45,7 @@ import {
   activityOption,
   databaseLine,
   driveRows,
+  expandRoot,
   isTab,
   originLabel,
   rootNote,
@@ -57,6 +61,8 @@ import { formatWhen, secsUntilTomorrowMorning } from '../../monitor/format';
 const props = defineProps<{ writer?: SettingsWriter }>();
 
 const bridge = useBridge();
+const folders = inject(ONBOARDING_KEY, null) ?? onboardingBridgeFor(bridge);
+const home = ref(loadSetup()?.home ?? '');
 const route = useRoute();
 const router = useRouter();
 // `?demo=pending` (mock only): the writer the app uses inside Tauri today, which refuses.
@@ -70,6 +76,7 @@ const drives = ref<Drive[]>([]);
 const projects = ref<ProjectsView | null>(null);
 const info = ref<AppInfo | null>(null);
 const loadError = ref('');
+const loading = ref(true);
 
 const tab = ref<TabId>(isTab(route?.query.tab) ? route.query.tab : 'general');
 watch(
@@ -99,15 +106,15 @@ const saved = ref(false);
 const saveError = ref('');
 const busy = ref<string | null>(null);
 const notice = ref('');
-const newRoot = ref<string | null>(null);
-const newProtect = ref<string | null>(null);
+const picking = ref(false);
 const showFiles = ref(false);
 const connected = ref<Map<string, boolean>>(new Map(DESIGN_CLIENTS.map((c) => [c.id, c.connected])));
 let savedTimer: ReturnType<typeof setTimeout> | undefined;
 
 onMounted(async () => {
   try {
-    const [s, d, p, a] = await Promise.all([bridge.settings(), bridge.drives(), bridge.projects(), bridge.appInfo()]);
+    const [s, d, p, a, context] = await Promise.all([bridge.settings(), bridge.drives(), bridge.projects(), bridge.appInfo(), folders.context().catch(() => null)]);
+    if (context?.home) home.value = context.home;
     view.value = s;
     drives.value = d;
     projects.value = p;
@@ -116,6 +123,7 @@ onMounted(async () => {
     loadError.value = toBridgeError(e).message;
   }
   await loadMonitorStatus(() => bridge.monitorStatus()).catch(() => undefined);
+  loading.value = false;
 });
 onBeforeUnmount(() => clearTimeout(savedTimer));
 
@@ -139,7 +147,16 @@ async function set(key: string, value: SettingValue) {
       void loadMonitorStatus(() => bridge.monitorStatus()).catch(() => undefined);
     } else {
       await writer.save(key, value);
+      if (bridge.kind === 'tauri') {
+        try {
+          view.value = await bridge.settings();
+          changed.value.delete(key);
+        } catch {
+          notice.value = 'Saved. Settings could not be refreshed; reopen this page to reload them.';
+        }
+      }
     }
+    if (key.startsWith('scan.') && !notice.value) notice.value = 'Saved. Run Scan to refresh the results.';
     flashSaved();
   } catch (e) {
     changed.value = before;
@@ -173,7 +190,12 @@ function pickTheme(v: string) {
 
 const app = <K extends AppKey>(k: K) => (changed.value.get(k) ?? APP_DEFAULTS[k]) as (typeof APP_DEFAULTS)[K];
 const cfg = computed(() => view.value?.config);
-const roots = computed(() => (changed.value.get('scan.roots') as string[] | undefined) ?? cfg.value?.scan?.roots ?? []);
+const roots = computed(() => {
+  const configured = view.value?.origins['scan.roots']?.some((origin) => origin.source !== 'default');
+  return (changed.value.get('scan.roots') as string[] | undefined)
+    ?? (!configured && bridge.kind === 'tauri' ? savedScanParams(loadSetup())?.roots : undefined)
+    ?? cfg.value?.scan?.roots ?? [];
+});
 const protect = computed(() => (changed.value.get('scan.protect') as string[] | undefined) ?? cfg.value?.scan?.protect ?? []);
 const activity = computed(
   () => (changed.value.get('scan.activity_window') as string | undefined) ?? activityOption(cfg.value?.scan?.activity_window),
@@ -183,12 +205,42 @@ const mcp = (k: 'enabled' | 'redact_home' | 'hash_names'): boolean =>
 /** Origin of a config key; a value changed here is now in config.toml. */
 const origin = (key: string) => (changed.value.has(key) ? 'config.toml' : originLabel(view.value?.origins[key]));
 
-const driveOverrides = computed(() => {
-  const m = new Map<string, boolean>();
-  for (const [k, v] of changed.value) if (k.startsWith('drives.')) m.set(k.slice(7), v as boolean);
-  return m;
-});
-const driveList = computed(() => driveRows(drives.value, driveOverrides.value));
+const driveList = computed(() => driveRows(drives.value, roots.value, home.value));
+
+async function chooseFolders(kind: 'scan.roots' | 'scan.protect', mount?: string) {
+  if (busy.value || picking.value) return;
+  picking.value = true;
+  saveError.value = '';
+  try {
+    const paths = await folders.pickFolders();
+    if (!paths?.length) return;
+    for (const path of paths) {
+      const checked = checkRoot(path, home.value);
+      if (!checked.ok) throw new Error(checked.error);
+      if (mount && driveOf(expandRoot(path, home.value), drives.value)?.mount_point !== mount) {
+        throw new Error('Choose folders on the selected drive. No folders were changed.');
+      }
+    }
+    const current = kind === 'scan.roots' ? roots.value : protect.value;
+    const seen = new Set(current.map((p) => expandRoot(p, home.value)));
+    const added = paths.filter((p) => {
+      const key = expandRoot(p, home.value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (added.length) await set(kind, [...current, ...added]);
+  } catch (e) {
+    saveError.value = toBridgeError(e).message;
+  } finally {
+    picking.value = false;
+  }
+}
+
+async function toggleDrive(mount: string, on: boolean) {
+  if (!on) { await chooseFolders('scan.roots', mount); return; }
+  await set('scan.roots', roots.value.filter((p) => driveOf(expandRoot(p, home.value), drives.value)?.mount_point !== mount));
+}
 
 function pickTab(t: TabId) {
   tab.value = t;
@@ -208,21 +260,6 @@ function onTabKey(e: KeyboardEvent, i: number) {
   list?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[TABS.indexOf(next)]?.focus();
 }
 
-function addPath(kind: 'scan.roots' | 'scan.protect', input: string | null, current: string[]) {
-  const p = (input ?? '').trim().replace(/[\\/]+$/, '');
-  if (!p) return;
-  if (!/^(~|\/|[A-Za-z]:\\)/.test(p)) {
-    saveError.value = 'Use an absolute folder or one under your home (~/…).';
-    return;
-  }
-  if (current.includes(p)) {
-    saveError.value = `${p} is already listed.`;
-    return;
-  }
-  if (kind === 'scan.roots') newRoot.value = null;
-  else newProtect.value = null;
-  void set(kind, [...current, p]);
-}
 
 async function pauseAlerts(secs: number | null) {
   saveError.value = '';
@@ -275,10 +312,10 @@ const versionText = computed(() => info.value?.version ?? '');
 </script>
 
 <template>
-  <ScreenLayout>
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <ScreenLayout :loading="loading" loading-label="Reading settings…">
+    <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
       <div class="flex flex-col gap-0.5">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Settings</h1>
+        <h1 class="m-0 text-h2 font-semibold">Settings</h1>
         <span class="text-label text-text-secondary">Changes save automatically</span>
       </div>
       <span
@@ -341,24 +378,19 @@ const versionText = computed(() => info.value?.version ?? '');
                 <button type="button" class="min-h-[44px] cursor-pointer rounded-small border-0 bg-transparent px-2.5 text-caption font-medium text-text-strong-muted hover:text-ink" :aria-label="`Remove ${tilde(r)}`" @click="set('scan.roots', roots.filter((x) => x !== r))">Remove</button>
               </li>
             </ul>
-            <form v-if="newRoot !== null" class="flex flex-wrap items-center gap-2 py-2" @submit.prevent="addPath('scan.roots', newRoot, roots)">
-              <input v-model="newRoot" aria-label="Folder to scan" placeholder="~/projects" class="min-h-[44px] min-w-0 flex-1 rounded-button border border-border bg-surface px-3 font-mono text-label outline-none focus:border-ink" />
-              <button type="submit" class="min-h-[44px] cursor-pointer rounded-button border-0 bg-ink px-4 text-label font-semibold text-on-ink">Add</button>
-              <button type="button" class="min-h-[44px] cursor-pointer rounded-button border-0 bg-transparent px-3 text-label text-text-strong-muted" @click="newRoot = null">Cancel</button>
-            </form>
-            <div v-else class="pt-1.5 pb-4">
-              <button type="button" class="settings-outline" @click="newRoot = ''">Add folder</button>
+            <div class="pt-1.5 pb-4">
+              <button type="button" class="settings-outline" :disabled="picking || !!busy" data-testid="choose-scan-folders" @click="chooseFolders('scan.roots')">{{ picking ? 'Choosing folders…' : 'Choose folders…' }}</button>
             </div>
           </section>
           <section class="settings-section">
             <h2>Schedule</h2>
-            <SettingRow title="Check every" description="Light check of free space and known caches, run by the OS scheduler, not a background app.">
+            <SettingRow :unavailable="!demo" title="Check every" description="Light check of free space and known caches, run by the OS scheduler, not a background app.">
               <SegmentedControl label="Check every" :options="CHECK_EVERY" :value="app('app.check_every')" @pick="set('app.check_every', $event)" />
             </SettingRow>
-            <SettingRow title="Menu bar widget" description="Free space, forecast and Quick Clean from the menu bar.">
+            <SettingRow :unavailable="!demo" title="Menu bar widget" description="Free space, forecast and Quick Clean from the menu bar.">
               <SettingSwitch label="Menu bar widget" :on="app('app.menu_bar')" @toggle="set('app.menu_bar', !app('app.menu_bar'))" />
             </SettingRow>
-            <SettingRow title="Open at login" description="Only the menu bar widget starts; scanning stays on schedule.">
+            <SettingRow :unavailable="!demo" title="Open at login" description="Only the menu bar widget starts; scanning stays on schedule.">
               <SettingSwitch label="Open at login" :on="app('app.open_at_login')" @toggle="set('app.open_at_login', !app('app.open_at_login'))" />
             </SettingRow>
           </section>
@@ -374,6 +406,7 @@ const versionText = computed(() => info.value?.version ?? '');
         <template v-else-if="tab === 'drives'">
           <section class="settings-section">
             <h2>Drives</h2>
+            <p class="m-0 text-label text-text-secondary">A drive is selected when it contains your scan folders. Turning it off removes those folders from future scans.</p>
             <p v-if="!driveList.length" class="m-0 border-t border-line py-3.5 text-label text-text-secondary">No drives found.</p>
             <div v-for="d in driveList" :key="d.key" class="flex items-center gap-3.5 border-t border-line py-3" data-testid="drive-row">
               <span class="flex h-[40px] w-[40px] flex-none items-center justify-center rounded-button" :class="d.on ? 'bg-ink text-on-ink' : 'bg-surface-raised text-text-tertiary'" aria-hidden="true">
@@ -384,7 +417,8 @@ const versionText = computed(() => info.value?.version ?? '');
                 <span class="text-label text-text-secondary">{{ d.sub }}</span>
               </span>
               <span class="text-caption text-text-tertiary">{{ d.mode }}</span>
-              <SettingSwitch :label="`Scan ${d.name}`" :on="d.on" :locked="d.locked" @toggle="set(`drives.${d.key}`, !d.on)" />
+              <button v-if="!d.locked" type="button" class="settings-outline" :disabled="picking || !!busy" :aria-label="`Choose folders on ${d.name}`" @click="chooseFolders('scan.roots', d.key)">Choose folders…</button>
+              <SettingSwitch :label="`Scan ${d.name}`" :on="d.on" :locked="d.locked || !!busy || picking" @toggle="toggleDrive(d.key, d.on)" />
             </div>
             <div class="pb-4" />
           </section>
@@ -406,13 +440,13 @@ const versionText = computed(() => info.value?.version ?? '');
             <SettingRow title="Recently used means" description="Anything modified this recently is treated one tier more carefully." :origin="origin('scan.activity_window')">
               <SegmentedControl label="Recently used means" :options="ACTIVITY_WINDOWS" :value="activity" @pick="set('scan.activity_window', $event)" />
             </SettingRow>
-            <SettingRow title="How cautious" description="Changes what is preselected. Safety checks are identical at every level.">
+            <SettingRow :unavailable="!demo" title="How cautious" description="Changes what is preselected. Safety checks are identical at every level.">
               <SegmentedControl label="How cautious" :options="CAUTION" :value="app('app.caution')" @pick="set('app.caution', $event)" />
             </SettingRow>
-            <SettingRow title="Quarantine keeps items for" description="Costly and uncertain items wait here before being freed.">
+            <SettingRow :unavailable="!demo" title="Quarantine keeps items for" description="Costly and uncertain items wait here before being freed.">
               <SegmentedControl label="Quarantine keeps items for" :options="RETENTION" :value="app('app.quarantine_retention')" @pick="set('app.quarantine_retention', $event)" />
             </SettingRow>
-            <SettingRow title="Type to confirm permanent deletes" description="Required for costly or uncertain items that skip quarantine.">
+            <SettingRow :unavailable="!demo" title="Type to confirm permanent deletes" description="Required for costly or uncertain items that skip quarantine.">
               <SettingSwitch label="Type to confirm permanent deletes" :on="app('app.type_to_confirm')" @toggle="set('app.type_to_confirm', !app('app.type_to_confirm'))" />
             </SettingRow>
           </section>
@@ -430,13 +464,8 @@ const versionText = computed(() => info.value?.version ?? '');
                 <button type="button" class="min-h-[44px] cursor-pointer rounded-small border-0 bg-transparent px-2.5 text-caption font-medium text-text-strong-muted hover:text-ink" :aria-label="`Unprotect ${tilde(p)}`" @click="set('scan.protect', protect.filter((x) => x !== p))">Unprotect</button>
               </li>
             </ul>
-            <form v-if="newProtect !== null" class="flex flex-wrap items-center gap-2 py-2" @submit.prevent="addPath('scan.protect', newProtect, protect)">
-              <input v-model="newProtect" aria-label="Folder to protect" placeholder="~/code/important" class="min-h-[44px] min-w-0 flex-1 rounded-button border border-border bg-surface px-3 font-mono text-label outline-none focus:border-ink" />
-              <button type="submit" class="min-h-[44px] cursor-pointer rounded-button border-0 bg-ink px-4 text-label font-semibold text-on-ink">Protect</button>
-              <button type="button" class="min-h-[44px] cursor-pointer rounded-button border-0 bg-transparent px-3 text-label text-text-strong-muted" @click="newProtect = null">Cancel</button>
-            </form>
-            <div v-else class="pt-1.5 pb-4">
-              <button type="button" class="settings-outline" @click="newProtect = ''">Add folder</button>
+            <div class="pt-1.5 pb-4">
+              <button type="button" class="settings-outline" :disabled="picking || !!busy" data-testid="choose-protected-folders" @click="chooseFolders('scan.protect')">Choose protected folders…</button>
             </div>
           </section>
         </template>
@@ -579,7 +608,7 @@ const versionText = computed(() => info.value?.version ?? '');
               </div>
               <span class="text-label text-text-secondary">Stored only on this machine. No telemetry, ever. File contents and secrets are never recorded.</span>
             </div>
-            <SettingRow title="Keep detailed history for" description="Older data is summarized, then kept as monthly totals.">
+            <SettingRow :unavailable="!demo" title="Keep detailed history for" description="Older data is summarized, then kept as monthly totals.">
               <SegmentedControl label="Keep detailed history for" :options="HISTORY_KEEP" :value="app('app.history_keep')" @pick="set('app.history_keep', $event)" />
             </SettingRow>
             <SettingRow title="Emergency headroom" description="-">
@@ -588,10 +617,11 @@ const versionText = computed(() => info.value?.version ?? '');
               </template>
             </SettingRow>
             <div class="flex flex-wrap gap-2 border-t border-line py-3.5">
-              <button type="button" class="settings-outline" @click="act(() => writer.exportData(), 'Export requested.')">Export everything</button>
+              <button type="button" :disabled="!demo" class="settings-outline" @click="act(() => writer.exportData(), 'Export requested.')">Export everything</button>
               <button type="button" class="settings-outline" :aria-expanded="showFiles ? 'true' : 'false'" aria-controls="what-scull-knows" @click="showFiles = !showFiles">What scull knows</button>
-              <button type="button" class="settings-outline text-accent-text" @click="act(() => writer.deleteHistory(), 'Delete requested (the mock deletes nothing).')">Delete all history</button>
+              <button type="button" :disabled="!demo" class="settings-outline text-accent-text" @click="act(() => writer.deleteHistory(), 'Delete requested (the mock deletes nothing).')">Delete all history</button>
             </div>
+            <p v-if="!demo" class="m-0 pb-3 text-caption text-text-secondary">Export and history deletion are not available yet.</p>
             <div v-if="showFiles" id="what-scull-knows" class="flex flex-col gap-1 border-t border-line py-3.5 text-label" data-testid="what-scull-knows">
               <span><span class="text-text-secondary">Database:</span> {{ databaseLine(view) }}</span>
               <span v-if="view.data.data_dir"><span class="text-text-secondary">Data folder:</span> <span class="font-mono [overflow-wrap:anywhere]">{{ tilde(view.data.data_dir) }}</span></span>
@@ -614,10 +644,10 @@ const versionText = computed(() => info.value?.version ?? '');
               <span class="text-h3 font-semibold">scull</span>
               <span class="text-label text-text-secondary" data-testid="version">v{{ versionText }} · MIT OR Apache-2.0 · free and open source</span>
             </div>
-            <SettingRow title="Supporter key" description="Unlocks signed auto-updates, early builds and extra skull themes. Every feature stays free.">
+            <SettingRow :unavailable="!demo" title="Supporter key" description="Unlocks signed auto-updates, early builds and extra skull themes. Every feature stays free.">
               <input type="text" placeholder="SCULL-XXXX-XXXX" aria-label="Supporter key" class="min-h-[44px] w-48 rounded-button border border-border bg-surface px-3 font-mono text-label outline-none focus:border-ink" @change="set('app.supporter_key', ($event.target as HTMLInputElement).value)" />
             </SettingRow>
-            <SettingRow title="Check for updates" description="Opt-in. The only network request scull makes on its own.">
+            <SettingRow :unavailable="!demo" title="Check for updates" description="Opt-in. The only network request scull makes on its own.">
               <SettingSwitch label="Check for updates" :on="app('app.check_updates')" @toggle="set('app.check_updates', !app('app.check_updates'))" />
             </SettingRow>
             <SettingRow title="Configuration" :description="view.config_file ? tilde(view.config_file) : 'No config location on this machine'" :origin="view.config_state" />
@@ -659,6 +689,7 @@ const versionText = computed(() => info.value?.version ?? '');
   font-weight: 500;
   cursor: pointer;
 }
+.settings-outline:disabled { cursor: not-allowed; opacity: 0.45; }
 .settings-outline:hover {
   border-color: var(--color-ink);
 }

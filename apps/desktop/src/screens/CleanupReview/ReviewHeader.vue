@@ -5,10 +5,10 @@ defineProps<{ subline: string; agent?: boolean; pulse?: boolean }>();
 </script>
 
 <template>
-  <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
     <div class="flex flex-col gap-1">
       <div class="flex flex-wrap items-center gap-3">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Cleanup Review</h1>
+        <h1 class="m-0 text-h2 font-semibold">Cleanup Review</h1>
         <span
           v-if="agent"
           class="inline-flex items-center gap-2 rounded-chip bg-ink px-3 py-1 text-caption font-semibold text-on-ink"

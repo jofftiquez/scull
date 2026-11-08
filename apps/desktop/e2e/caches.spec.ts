@@ -4,7 +4,7 @@ import { expect, open, test } from './fixtures';
 
 test('Quick Clean with an orphaned cache confirmed and another kept', async ({ page, shot }) => {
   await open(page, '/caches?demo=design');
-  const hero = page.getByTestId('hero');
+  const hero = page.getByTestId('main-footer');
   await expect(hero.getByTestId('start')).toBeEnabled();
   await expect(hero).toContainText('4 caches');
   await expect(page.getByTestId('skipped-row')).toHaveCount(3);
@@ -37,14 +37,13 @@ test('Quick Clean with an orphaned cache confirmed and another kept', async ({ p
   await expect(page.getByRole('checkbox', { name: 'Hugging Face is skipped' })).toBeDisabled();
 
   await hero.getByTestId('start').click();
+  await page.getByTestId('confirm-action').click();
   await expect(page.getByTestId('row-state').first()).toBeVisible();
   await shot('caches-3-running', { settle: false });
-  const done = hero.getByTestId('done');
-  await expect(done).toContainText('freed from 5 caches');
-  await expect(done).toContainText('measured');
+  const done = page.getByTestId('task-success');
+  await expect(done).toContainText('Clean caches complete');
+  await expect(done).toContainText('freed');
   await shot('caches-4-done');
-
-  await done.getByRole('button', { name: 'Nice' }).click();
-  await expect(done).toHaveCount(0);
+  await hero.getByTestId('start').click();
   await expect(playwright).toBeDisabled();
 });

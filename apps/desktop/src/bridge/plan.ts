@@ -1,16 +1,9 @@
 // Plan bridge: the calls the Cleanup Review and Git Worktrees screens need to prepare, approve
 // and execute a cleanup plan.
 //
-// SAFE-10: the desktop never deletes. Its own plans (`preparePlan` / `executePlan`) will run
-// through the core Executor behind a reviewed plan (`scull_cleaner::Executor`, Phase 2), over a
-// Tauri command the core bridge does not have yet. AI agent plans (MCP, PRD §13.3) are
-// connected: inside Tauri `createTauriPlanBridge` (./tauriPlans.ts) lists, opens, approves,
-// denies and revokes them through the core's approval broker (P4-MCP-02) and reports what the
-// agent did; the agent executes an approved plan itself, never the desktop.
-//   - in a plain browser (mock bridge) `createMockPlanBridge` answers with illustrative data
-//     and simulated progress, touching nothing;
-//   - `createUnavailablePlanBridge` rejects every call with `unsupported_platform` so a screen
-//     shows its error state instead of pretending to clean.
+// SAFE-10: desktop plans execute through the audited native Executor. Agent requests use
+// the approval broker; an agent executes its own approved plan. The browser mock simulates
+// outcomes without touching files. The unavailable bridge rejects mutations explicitly.
 //
 // The payload types below are LOCAL and provisional: they mirror the core's plan model (PRD
 // §10.2, §10.4, §13.3) and reuse the generated `Candidate` for every preview field. When the
@@ -161,7 +154,7 @@ export interface PlanBridge {
    *  S3 items are never planned. Dry run: nothing changes. */
   preparePlan(req: { items?: ItemId[] }): Promise<PlanPreview>;
   /** Execute the selected items of a reviewed plan through the core Executor. */
-  executePlan(req: { plan_id: string; hash: string; items: ItemId[] }, opts?: ExecuteOptions): Promise<ExecutionResult>;
+  executePlan(req: { plan_id: string; hash: string; items: ItemId[]; typed_count?: number }, opts?: ExecuteOptions): Promise<ExecutionResult>;
   /** AI agent plans waiting for the human, newest first. */
   approvalRequests(): Promise<AgentRequestSummary[]>;
   /** Open the agent request for a plan ID (MCP), or null when there is none. Each call starts
@@ -179,7 +172,7 @@ export interface PlanBridge {
   onOpenRequest(onOpen: (planId: string) => void): () => void;
 }
 
-/** Inside Tauri: the core has no plan commands yet, so every call fails clearly. */
+/** Explicit failure bridge for unsupported integrations and test fixtures. */
 export function createUnavailablePlanBridge(): PlanBridge {
   const no = (): never => {
     throw new BridgeError({

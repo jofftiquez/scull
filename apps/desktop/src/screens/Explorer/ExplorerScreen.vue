@@ -44,6 +44,7 @@ const demo = bridge.kind === 'mock' && route.query.demo === 'design';
 
 const drives = ref<Drive[] | null>(null);
 const drivesError = ref<string | null>(null);
+const loading = ref(true);
 const os = ref('macos');
 const designReport = shallowRef<ScanReport | null>(demo ? designExplorerReport() : null);
 const path = ref<string[]>([]);
@@ -58,11 +59,8 @@ const trail = computed(() => (explorer.value ? trailOf(explorer.value.root, path
 const here = computed<ExNode | null>(() => trail.value.at(-1) ?? null);
 const atRoot = computed(() => trail.value.length <= 1);
 const tiles = computed(() => (here.value ? visibleChildren(here.value, showAll.value) : []));
-const target = computed<ExNode | null>(() => tiles.value.find((t) => t.id === selected.value) ?? here.value);
-const scannedDrives = computed(() => explorer.value?.root.children.length ?? 0);
-const subtitle = computed(
-  () => `Every drive and development folder by size, colored by risk tier · ${scannedDrives.value} drive${scannedDrives.value === 1 ? '' : 's'} scanned`,
-);
+const target = computed<ExNode | null>(() => selected.value === here.value?.id ? here.value : tiles.value.find((t) => t.id === selected.value) ?? null);
+const subtitle = 'Explore scanned folders by size';
 const revealLabel = computed(() => (os.value === 'windows' ? 'Show in Explorer' : os.value === 'linux' ? 'Show in Files' : 'Show in Finder'));
 const zoomKey = computed(() => path.value.join('\u0000'));
 
@@ -126,6 +124,7 @@ onMounted(async () => {
     const status = core.status ?? (await bridge.status().catch(() => null));
     if (!needsOnboarding(status)) void rescan(bridge);
   }
+  loading.value = false;
 });
 
 watch(
@@ -185,10 +184,10 @@ async function reveal() {
 </script>
 
 <template>
-  <ScreenLayout aside-label="Selection details">
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <ScreenLayout :loading="loading" loading-label="Reading drives…" aside-label="Selection details" :detail-open="!!selected" @close-details="selected = null">
+    <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
       <div class="flex flex-col gap-0.5">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Storage Explorer</h1>
+        <h1 class="m-0 text-h2 font-semibold">Storage Explorer</h1>
         <span class="text-label text-text-secondary" data-testid="subtitle">{{ subtitle }}</span>
       </div>
       <button
@@ -237,10 +236,10 @@ async function reveal() {
         <span v-if="here" class="ml-auto font-mono text-label text-text-secondary" data-testid="here">
           {{ formatBytes(here.bytes) }} · {{ tiles.length }} item{{ tiles.length === 1 ? '' : 's' }}
         </span>
+        <button v-if="here && !atRoot" type="button" class="min-h-touch rounded-button border border-border bg-surface px-3 text-label text-ink" data-testid="inspect-folder" @click="selected = here.id">Folder details</button>
       </div>
 
-      <div v-if="!explorer" class="grid h-[560px] place-items-center text-label text-text-secondary" aria-busy="true">Reading drives…</div>
-      <div v-else-if="tiles.length === 0" class="grid h-[560px] place-items-center rounded-card bg-surface-subtle p-6 text-center" data-testid="empty">
+      <div v-if="tiles.length === 0" class="grid h-[560px] place-items-center rounded-card bg-surface-subtle p-6 text-center" data-testid="empty">
         <div class="flex max-w-md flex-col items-center gap-3">
           <template v-if="core.scanning && !report">
             <span class="text-h3 font-semibold">Scanning…</span>
@@ -261,7 +260,7 @@ async function reveal() {
         <Treemap :nodes="tiles" :total="here?.bytes ?? 0" :selected="selected" @open="open" @select="select" />
       </div>
 
-      <span class="font-mono text-caption text-text-hint">click a folder to open it · click a file group to inspect · ↑ goes up</span>
+
       <p v-if="atRoot && report && explorer && explorer.unscanned.length" class="m-0 text-caption text-text-secondary" data-testid="unscanned">
         Not in the map:
         <template v-for="(u, i) in explorer.unscanned" :key="u.drive.mount_point">

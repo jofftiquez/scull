@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import LoadingState from '../../components/shell/LoadingState.vue';
+import ActionBar from '../../components/shell/ActionBar.vue';
+import ActionConfirm from '../../components/shell/ActionConfirm.vue';
+import { taskQueue } from '../../state/tasks';
+import ActionFooter from '../../components/shell/ActionFooter.vue';
 // Cleanup Review, the user's own plan (design 03 / 03b): review → running → done.
 //
 // The plan covers the items marked on the Overview ("Add to cleanup", basket.ts) when there are
@@ -6,28 +11,25 @@
 // planned, and items that changed since the scan are skipped.
 //
 // Nothing changes until the user confirms. Confirming calls the plan bridge's `executePlan`
-// STUB (src/bridge/plan.ts): in the browser the mock simulates it; inside Tauri it rejects,
-// because the desktop never deletes and the core Executor is not connected yet (SAFE-10).
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RouterLink } from 'vue-router';
+// through the audited core Executor. The browser preview simulates the result (SAFE-10).
+import { computed, onMounted, ref } from 'vue';
+import { RouterLink, useRoute } from 'vue-router';
 import { toBridgeError, useBridge, type ItemId } from '../../bridge';
 import { usePlanBridge, type ExecutionResult, type ItemOutcome, type PlanPreview } from '../../bridge/plan';
 import { formatBytes } from '../../lib/format';
 import { rescan } from '../../state/core';
 import PlanRow from '../../components/review/PlanRow.vue';
 import SafetyChecks from '../../components/review/SafetyChecks.vue';
-import StatTile from '../../components/review/StatTile.vue';
-import SuccessMark from '../../components/review/SuccessMark.vue';
 import TierBadge from '../../components/review/TierBadge.vue';
 import ReviewHeader from './ReviewHeader.vue';
 import { downloadJson } from '../../components/review/download';
 import { basketPlanRequest, cleanupBasket, removeFromCleanup } from '../../components/overview/basket';
 import {
-  confirmLabel,
   displayPath,
   duration,
   initialSelection,
   isSelectable,
+  isIrreversible,
   itemTitle,
   planTotals,
   shortId,
@@ -35,9 +37,15 @@ import {
   undoLabel,
 } from '../../components/review/plan';
 import '../../components/review/review.css';
+import { usePagination } from '../../lib/pagination';
+import ListPagination from '../../components/shell/ListPagination.vue';
 
 const bridge = useBridge();
 const plans = usePlanBridge();
+const route = useRoute();
+const projectRoot = typeof route.query.project === 'string' ? route.query.project : null;
+const worktreeRoot = typeof route.query.worktree === 'string' ? route.query.worktree : null;
+const scopeRoot = projectRoot ?? worktreeRoot;
 
 type Phase = 'loading' | 'review' | 'running' | 'done' | 'error';
 const phase = ref<Phase>('loading');
@@ -48,24 +56,30 @@ const active = ref<ItemId | null>(null);
 const gone = ref<Set<ItemId>>(new Set());
 const result = ref<ExecutionResult | null>(null);
 const error = ref('');
+const confirming = ref(false);
 /** How many Overview-marked items the plan was asked for (0: planned from the whole last scan). */
 const marked = ref(0);
 /** The selection as it was when cleaning started (totals stay put while rows sweep out). */
 const chosen = ref<ItemId[]>([]);
-const timers: ReturnType<typeof setTimeout>[] = [];
-let abort: AbortController | null = null;
+
 
 async function load() {
+  confirming.value = false;
   phase.value = 'loading';
   error.value = '';
   outcomes.value = {};
   gone.value = new Set();
   result.value = null;
   active.value = null;
-  const req = basketPlanRequest();
+  const req = scopeRoot ? {} : basketPlanRequest();
   marked.value = req.items?.length ?? 0;
   try {
-    const p = await plans.preparePlan(req);
+    let p = await plans.preparePlan(req);
+    if (scopeRoot) {
+      const root = scopeRoot.replace(/[\\/]$/, '');
+      const inside = (path: string) => path.startsWith(`${root}/`) || path.startsWith(`${root}\\`);
+      p = { ...p, items: p.items.filter((it) => it.candidate.tier === 'S0' && ((projectRoot && it.candidate.project?.root === projectRoot) || inside(it.candidate.path))), left_out: p.left_out.filter((it) => inside(it.label)), skipped: p.skipped.filter((it) => inside(it.label)) };
+    }
     plan.value = p;
     sel.value = initialSelection(p.items);
     phase.value = 'review';
@@ -75,30 +89,17 @@ async function load() {
   }
 }
 onMounted(load);
-onBeforeUnmount(() => {
-  timers.forEach(clearTimeout);
-  abort?.abort();
-});
-
 const items = computed(() => plan.value?.items ?? []);
+const typedRequired = computed(() => items.value.filter((it) => sel.value.has(it.candidate.id) && isSelectable(it.candidate) && it.candidate.tier !== 'S0' && isIrreversible(it.candidate.action)).length);
 const running = computed(() => phase.value === 'running');
 const done = computed(() => phase.value === 'done');
 const totals = computed(() =>
   planTotals(items.value, phase.value === 'review' || phase.value === 'loading' ? sel.value : new Set(chosen.value)),
 );
-const finishedBytes = computed(() =>
-  Object.values(outcomes.value).reduce((a, o) => a + o.freed_bytes + o.moved_bytes, 0),
-);
-const progress = computed(() => {
-  if (phase.value === 'done') return 1;
-  if (!running.value || chosen.value.length === 0) return 0;
-  return Object.keys(outcomes.value).length / chosen.value.length;
-});
 const visibleItems = computed(() => items.value.filter((i) => !gone.value.has(i.candidate.id)));
-const activeItem = computed(() => items.value.find((i) => i.candidate.id === active.value));
 
 const source = computed(() =>
-  marked.value ? `from ${marked.value} ${marked.value === 1 ? 'item' : 'items'} marked on the Overview` : 'from the last scan',
+  scopeRoot ? `for ${scopeRoot}` : marked.value ? `from ${marked.value} ${marked.value === 1 ? 'item' : 'items'} marked on the Overview` : 'from the last scan',
 );
 const subline = computed(() => {
   const p = plan.value;
@@ -113,18 +114,6 @@ const subline = computed(() => {
   ].join(' · ');
 });
 
-const confirmTitle = computed(() => {
-  if (running.value) return activeItem.value ? `Cleaning ${itemTitle(activeItem.value)}…` : 'Cleaning…';
-  if (done.value) return 'Cleanup complete';
-  const t = totals.value;
-  return t.count ? `Clean ${t.count} ${t.count === 1 ? 'item' : 'items'} · ${formatBytes(t.bytes)} predicted` : 'Select items to clean';
-});
-const buttonLabel = computed(() => {
-  if (running.value) return `${Math.round(progress.value * 100)}% · cleaning`;
-  if (done.value) return 'Done';
-  return confirmLabel(totals.value);
-});
-
 function toggle(id: ItemId, on: boolean) {
   if (phase.value !== 'review') return;
   const it = items.value.find((i) => i.candidate.id === id);
@@ -134,38 +123,40 @@ function toggle(id: ItemId, on: boolean) {
 async function start() {
   const p = plan.value;
   if (!p || phase.value !== 'review' || totals.value.count === 0) return;
-  chosen.value = items.value.filter((i) => sel.value.has(i.candidate.id) && isSelectable(i.candidate)).map((i) => i.candidate.id);
+  const ids = items.value.filter((i) => sel.value.has(i.candidate.id) && isSelectable(i.candidate)).map((i) => i.candidate.id);
+  const count = typedRequired.value;
+  chosen.value = ids;
+  confirming.value = false;
   phase.value = 'running';
-  abort = new AbortController();
+  error.value = '';
   try {
-    const r = await plans.executePlan(
-      { plan_id: p.plan_id, hash: p.hash, items: chosen.value },
-      {
-        signal: abort.signal,
-        onEvent: (e) => {
+    const r = await taskQueue.enqueue('Clean files', async (update) => {
+      const result = await plans.executePlan(
+        { plan_id: p.plan_id, hash: p.hash, items: ids, ...(count ? { typed_count: count } : {}) },
+        { onEvent: (e) => {
           if (e.kind === 'item_started') active.value = e.item_id;
           else {
             const id = e.outcome.item_id;
             outcomes.value = { ...outcomes.value, [id]: e.outcome };
+            update(Object.keys(outcomes.value).length / ids.length);
             if (active.value === id) active.value = null;
-            // The row sweeps out (520ms), then leaves the list.
-            if (e.outcome.outcome !== 'skipped') {
-              timers.push(setTimeout(() => (gone.value = new Set([...gone.value, id])), 560));
-            }
+            if (e.outcome.outcome !== 'skipped') setTimeout(() => (gone.value = new Set([...gone.value, id])), 560);
           }
-        },
-      },
-    );
+        } },
+      );
+      removeFromCleanup(result.items.filter((o) => o.outcome !== 'skipped').map((o) => o.item_id));
+      return result;
+    }, (result) => ({
+      summary: `${result.items.filter((o) => o.outcome !== 'skipped').length} of ${ids.length} items completed · ${formatBytes(result.measured_freed_bytes)} freed${result.moved_bytes ? ` · ${formatBytes(result.moved_bytes)} moved to quarantine / Trash` : ''}`,
+      partial: result.items.length !== ids.length || result.items.some((o) => o.outcome === 'skipped'),
+      failed: !result.items.some((o) => o.outcome !== 'skipped'),
+      details: result.items.map((o) => ({ label: p.items.find((i) => i.candidate.id === o.item_id)?.candidate.artifact ?? 'File cleanup', path: p.items.find((i) => i.candidate.id === o.item_id)?.candidate.path, status: o.outcome === 'skipped' ? 'skipped' as const : 'completed' as const, reason: o.reason ?? (o.outcome === 'quarantined' ? 'Moved to quarantine; available to restore in History.' : o.outcome === 'trashed' ? 'Moved to Trash.' : `${formatBytes(o.freed_bytes)} freed`) })),
+    }), `${ids.length} selected items`);
+
     result.value = r;
-    // Cleaned items leave the Overview basket; skipped ones stay marked.
-    removeFromCleanup(r.items.filter((o) => o.outcome !== 'skipped').map((o) => o.item_id));
-    timers.push(setTimeout(() => (phase.value = 'done'), 420));
-  } catch (e) {
-    error.value = toBridgeError(e).message;
-    phase.value = 'review';
-  } finally {
-    active.value = null;
-  }
+    phase.value = 'done';
+  } catch (e) { error.value = toBridgeError(e).message; phase.value = 'review'; }
+  finally { active.value = null; }
 }
 
 function rowState(id: ItemId): Record<string, boolean> {
@@ -178,15 +169,8 @@ function rowState(id: ItemId): Record<string, boolean> {
 }
 
 const measured = computed(() => result.value?.measured_freed_bytes ?? 0);
-const predictedFreed = computed(() => {
-  const r = result.value;
-  if (!r) return 0;
-  const freedIds = new Set(r.items.filter((o) => o.outcome === 'deleted' || o.outcome === 'removed').map((o) => o.item_id));
-  return items.value.filter((i) => freedIds.has(i.candidate.id)).reduce((a, i) => a + i.candidate.sizes.reclaimable.bytes, 0);
-});
-const accuracy = computed(() => (predictedFreed.value > 0 ? Math.round((measured.value / predictedFreed.value) * 100) : null));
 const doneCount = computed(() => result.value?.items.filter((o) => o.outcome !== 'skipped').length ?? 0);
-const quarantined = computed(() => result.value?.items.filter((o) => o.outcome === 'quarantined' || o.outcome === 'trashed').length ?? 0);
+const skippedCount = computed(() => result.value?.items.filter((o) => o.outcome === 'skipped').length ?? 0);
 
 function exportPlan() {
   const p = plan.value;
@@ -205,6 +189,7 @@ async function doRescan() {
 }
 
 const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border border-border bg-surface px-5 font-medium text-ink hover:border-ink disabled:cursor-not-allowed disabled:opacity-60';
+const { page, current: currentPage, rows: pageItems } = usePagination(visibleItems);
 </script>
 
 <template>
@@ -213,42 +198,11 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
     <button type="button" :class="btn" :disabled="running" @click="doRescan">Rescan</button>
   </ReviewHeader>
 
-  <div class="grid grid-cols-12 gap-page-gap">
-    <section
-      v-if="done && result"
-      aria-label="Cleanup complete"
-      aria-live="polite"
-      class="tile relative col-span-12 flex flex-wrap items-center gap-7 overflow-hidden rounded-tile bg-surface p-8"
-      style="animation: scull-rise 320ms ease-out"
-      data-testid="done"
-    >
-      <SuccessMark burst />
-      <div class="flex flex-[1_1_320px] flex-col gap-1">
-        <span class="text-[48px] leading-none font-bold tracking-[-0.03em]" style="animation: scull-bounce 640ms 200ms cubic-bezier(.2,.9,.3,1.3) both">
-          {{ formatBytes(measured) }} freed
-        </span>
-        <span class="text-[16px]" style="animation: scull-rise 420ms 700ms ease-out both">
-          Measured <strong>{{ formatBytes(measured) }}</strong>
-          <template v-if="accuracy !== null"> · {{ accuracy }}% of the {{ formatBytes(predictedFreed) }} predicted</template>
-          <template v-if="result.moved_bytes"> · <strong>{{ formatBytes(result.moved_bytes) }}</strong> moved to quarantine</template>
-          · {{ doneCount }} {{ doneCount === 1 ? 'item' : 'items' }}
-        </span>
-        <span class="text-label text-text-secondary" style="animation: scull-rise 420ms 900ms ease-out both">
-          {{
-            quarantined
-              ? `${quarantined} quarantined item${quarantined > 1 ? 's' : ''} can be restored for 7 days from History.`
-              : 'Deleted items are rebuilt by your tools the next time you build.'
-          }}
-        </span>
-      </div>
-      <div class="flex flex-wrap gap-2" style="animation: scull-rise 420ms 1000ms ease-out both">
-        <button type="button" class="min-h-12 cursor-pointer rounded-button border border-border bg-surface px-5 font-medium text-ink" @click="load">
-          Review again
-        </button>
-        <RouterLink to="/" class="inline-flex min-h-12 items-center rounded-button bg-ink px-[22px] font-semibold text-on-ink no-underline hover:text-on-ink">
-          Back to overview
-        </RouterLink>
-      </div>
+  <LoadingState v-if="phase === 'loading'" label="Preparing cleanup review…" />
+  <div v-else class="grid grid-cols-12 gap-page-gap">
+    <section v-if="done && result" aria-label="Cleanup results" class="col-span-12 rounded-tile bg-surface p-5" data-testid="done">
+      <h2 class="m-0 text-h3 font-semibold">{{ skippedCount ? 'Cleanup finished with skipped items' : 'Cleanup complete' }}</h2>
+      <p class="m-0 mt-2 text-label">{{ formatBytes(measured) }} freed · {{ doneCount }} items completed<span v-if="result.moved_bytes"> · {{ formatBytes(result.moved_bytes) }} moved to quarantine / Trash</span><span v-if="skippedCount"> · {{ skippedCount }} skipped</span></p>
     </section>
 
     <section
@@ -264,14 +218,10 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
     </section>
 
     <template v-if="plan">
-      <StatTile
-        :label="running || done ? (totals.quarantineCount ? 'Cleaned so far' : 'Freed so far') : 'Selected'"
-        :value="formatBytes(running || done ? finishedBytes : totals.bytes)"
-        :sub="done ? 'All done' : running ? `of ${formatBytes(totals.bytes)}` : `${totals.count} ${totals.count === 1 ? 'item' : 'items'} · predicted`"
-      />
-      <StatTile label="Delete · S0" :value="formatBytes(totals.deleteBytes)" sub="Freed now · rebuilt by your tools" tone="accent" />
-      <StatTile label="Quarantine · S1/S2" :value="formatBytes(totals.quarantineBytes)" sub="7-day undo · freed when purged" />
-      <StatTile label="Skipped" :value="String(plan.skipped.length)" sub="In use or changed since scan" />
+      <div class="col-span-12 flex flex-wrap items-center justify-between gap-3 px-2 text-label">
+        <strong>{{ totals.count }} selected · {{ formatBytes(totals.bytes) }} predicted</strong>
+        <span class="text-text-secondary">Delete {{ formatBytes(totals.deleteBytes) }} · Quarantine {{ formatBytes(totals.quarantineBytes) }} · {{ plan.skipped.length }} skipped</span>
+      </div>
 
       <section aria-label="Plan items" class="tile col-span-12 overflow-hidden rounded-tile bg-surface pt-2">
         <div class="overflow-x-auto">
@@ -281,7 +231,7 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
               <span class="pr-4 text-right">Predicted</span><span>Undo</span><span></span>
             </div>
             <PlanRow
-              v-for="it in visibleItems"
+              v-for="it in pageItems"
               :key="it.candidate.id"
               :item="it"
               grid="plan-grid"
@@ -335,49 +285,19 @@ const btn = 'inline-flex h-11 cursor-pointer items-center rounded-button border 
             </template>
           </div>
         </div>
+        <ListPagination :page="currentPage" :total="visibleItems.length" @update:page="page = $event" />
       </section>
 
-      <section aria-label="How much you will really get back" class="tile col-span-12 flex flex-col gap-2.5 rounded-tile bg-surface p-tile-padding lg:col-span-6">
-        <h2 class="m-0 text-label font-medium text-text-secondary">What you'll really get back</h2>
-        <p class="m-0">scull measures free space before and after, and shows the difference next to this prediction.</p>
-        <p v-for="n in plan.estimate_notes" :key="n" class="m-0 text-label text-text-secondary">{{ n }}</p>
-      </section>
-      <SafetyChecks />
-
-      <section
-        aria-label="Confirm"
-        class="tile col-span-12 flex flex-wrap items-center justify-between gap-4 rounded-tile border border-accent-tint-border bg-accent-tint p-tile-padding text-ink"
-      >
-        <div class="flex flex-col gap-1">
-          <h2 class="m-0 text-h3 font-semibold" aria-live="polite">{{ confirmTitle }}</h2>
-          <span class="text-label text-text-strong-muted">
-            Deleted S0 items can't be undone; rebuild them with your tools. Quarantined items can be restored for 7 days.
-          </span>
-          <span v-if="error && phase === 'review'" role="alert" class="text-label text-accent-text">{{ error }}</span>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <RouterLink
-            v-if="!running"
-            to="/"
-            class="inline-flex min-h-12 items-center rounded-button border border-text-strong-muted px-5 font-medium text-ink no-underline"
-          >Cancel</RouterLink>
-          <button
-            type="button"
-            class="relative min-h-12 min-w-[220px] overflow-hidden rounded-button border-0 px-6 font-semibold transition-[background] duration-200"
-            :class="running || done ? 'cursor-default bg-surface-raised text-ink' : totals.count ? 'cursor-pointer bg-ink text-on-ink' : 'cursor-not-allowed bg-surface-raised text-text-secondary'"
-            :disabled="phase !== 'review' || totals.count === 0"
-            data-testid="confirm"
-            @click="start"
-          >
-            <span
-              aria-hidden="true"
-              class="striped-fill absolute inset-y-0 left-0 rounded-button transition-[width] duration-700 ease-linear"
-              :style="{ width: `${Math.round(progress * 100)}%` }"
-            />
-            <span class="relative">{{ buttonLabel }}</span>
-          </button>
-        </div>
-      </section>
+      <details class="col-span-12 rounded-tile bg-surface p-5"><summary class="min-h-touch cursor-pointer font-medium">Safety checks and estimate details</summary><SafetyChecks /><p v-for="n in plan.estimate_notes" :key="n" class="text-label text-text-secondary">{{ n }}</p></details>
+      <ActionFooter aria-label="Cleanup actions">
+        <ActionBar :summary="done ? `${doneCount} completed · ${skippedCount} skipped` : `${totals.count} selected · ${formatBytes(totals.bytes)} predicted`" :label="done ? 'Review again' : running ? 'Queued / cleaning…' : 'Review cleanup'" :busy="running" :disabled="!done && (phase !== 'review' || !totals.count)" :error="error" data-testid="confirm" @action="done ? load() : confirming = true">
+          <RouterLink v-if="!running" to="/" class="inline-flex min-h-12 items-center rounded-button border border-border px-4 text-ink no-underline">{{ done ? 'Overview' : 'Cancel' }}</RouterLink>
+        </ActionBar>
+      </ActionFooter>
+      <ActionConfirm v-if="confirming" :title="`Clean ${totals.count} selected items?`" label="Confirm cleanup" :count="typedRequired" @cancel="confirming = false" @confirm="start">
+        <p>{{ formatBytes(totals.deleteBytes) }} selected for deletion · {{ formatBytes(totals.quarantineBytes) }} for quarantine.</p>
+        <p>Deleted items cannot be undone by scull. Quarantined items can be restored for 7 days. Worktree branches are kept.</p>
+      </ActionConfirm>
     </template>
   </div>
 </template>

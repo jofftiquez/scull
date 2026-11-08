@@ -3,8 +3,8 @@
 // `projects()`, with ecosystem filters, tier bars, a detail column and the per-project clean
 // with its shrink animation. The clean goes through the Projects action stub
 // (components/projects/bridge.ts): the desktop itself never deletes (SAFE-10).
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import ScreenLayout from '../../components/shell/ScreenLayout.vue';
 import ProjectAvatar from '../../components/projects/ProjectAvatar.vue';
 import ProjectDetail from '../../components/projects/ProjectDetail.vue';
@@ -27,14 +27,18 @@ import {
 } from '../../components/projects/model';
 import { toBridgeError, useBridge, type ProjectSummary, type ProjectsView } from '../../bridge';
 import { formatBytes } from '../../lib/format';
-import { refresh } from '../../state/core';
+import { core } from '../../state/core';
+import { usePagination } from '../../lib/pagination';
+import ListPagination from '../../components/shell/ListPagination.vue';
 
 const bridge = useBridge();
 const actions = projectActionsFor(bridge);
 const route = useRoute();
+const router = useRouter();
 
 const view = ref<ProjectsView | null>(null);
 const error = ref<string | null>(null);
+const loading = ref(true);
 const filter = ref(ALL);
 const selected = ref<string | null>(null);
 const clean = reactive(idleClean());
@@ -45,14 +49,19 @@ const os = ref<string>('macos');
 const now = ref(Math.floor(Date.now() / 1000));
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-onMounted(async () => {
+async function load() {
+  loading.value = true;
   try {
     const demo = bridge.kind === 'mock' && route.query.demo === 'design';
     view.value = demo ? designProjects() : await bridge.projects();
-    selected.value = sortBySize(view.value.projects)[0]?.root ?? null;
+    error.value = null;
+    if (!view.value.projects.some((p) => p.root === selected.value)) selected.value = null;
   } catch (e) {
     error.value = toBridgeError(e).message;
-  }
+  } finally { loading.value = false; }
+}
+onMounted(async () => {
+  await load();
   try {
     os.value = (await bridge.appInfo()).os;
   } catch {
@@ -73,37 +82,21 @@ function shown(p: ProjectSummary): ProjectSummary {
 const all = computed(() => view.value?.projects ?? []);
 const filterList = computed(() => filtersOf(all.value));
 const rows = computed(() => sortBySize(all.value.filter((p) => matches(p, filter.value))).map(shown));
+const { page, current: currentPage, rows: pageRows } = usePagination(rows);
+watch(filter, () => { page.value = 1; selected.value = null; });
+watch(page, () => { selected.value = null; });
+watch(() => core.report, () => { void load(); });
 const detail = computed(() => {
   const p = all.value.find((x) => x.root === selected.value);
   return p ? shown(p) : null;
 });
-const roots = computed(() => (view.value?.roots ?? []).map(shortPath));
-const subtitle = computed(() => {
-  const n = all.value.length;
-  const where = roots.value.length ? ` across ${roots.value.join(' and ')}` : '';
-  return `${n} project${n === 1 ? '' : 's'}${where} · ${rows.value.length} shown · found by project markers, never by folder name`;
-});
+const subtitle = computed(() => `${all.value.length} projects`);
 const revealLabel = computed(() => (os.value === 'windows' ? 'Show in Explorer' : os.value === 'linux' ? 'Show in Files' : 'Show in Finder'));
 
 async function cleanSelected() {
   const p = all.value.find((x) => x.root === selected.value);
   if (!p || !canClean(clean, shown(p))) return;
-  const bytes = regenerable(p);
-  Object.assign(clean, { phase: 'cleaning', root: p.root, fraction: 0, freed: 0, error: null });
-  toast.value = null;
-  note.value = null;
-  try {
-    const r = await actions.cleanRegenerable(p.root, bytes, (f) => (clean.fraction = f));
-    cleaned.add(p.root);
-    Object.assign(clean, { phase: 'cleaned', fraction: 1, freed: r.freed_bytes });
-    toast.value = { text: `Cleaned regenerable files in ${p.name}`, bytes: r.freed_bytes };
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast.value = null), 4000);
-    if (route.query.demo !== 'design') void refresh(bridge);
-  } catch (e) {
-    Object.assign(clean, { phase: 'failed', fraction: 0, error: toBridgeError(e).message });
-    note.value = toBridgeError(e).message;
-  }
+  await router.push({ path: '/cleanup', query: { project: p.root } });
 }
 
 async function run(action: 'neverSuggest' | 'reveal') {
@@ -118,15 +111,15 @@ async function run(action: 'neverSuggest' | 'reveal') {
 </script>
 
 <template>
-  <ScreenLayout aside-label="Project details">
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-tile bg-surface px-6 py-5">
+  <ScreenLayout :loading="loading && !view" loading-label="Loading projects…" aside-label="Project details" :detail-open="!!detail" @close-details="selected = null">
+    <header class="flex flex-wrap items-center justify-between gap-3 px-2 py-2">
       <div class="flex flex-col gap-0.5">
-        <h1 class="m-0 text-h1 font-semibold tracking-[-0.02em]">Projects</h1>
+        <h1 class="m-0 text-h2 font-semibold">Projects</h1>
         <span class="text-label text-text-secondary" data-testid="subtitle">{{ subtitle }}</span>
       </div>
       <div role="group" aria-label="Filter by ecosystem" class="flex flex-wrap gap-1 rounded-chip bg-surface-raised p-1">
         <button
-          v-for="f in filterList"
+          v-for="f in filterList.slice(0, 5)"
           :key="f.id"
           type="button"
           :aria-pressed="filter === f.id"
@@ -137,6 +130,17 @@ async function run(action: 'neverSuggest' | 'reveal') {
         >
           {{ f.label }}
         </button>
+        <select
+          v-if="filterList.length > 5"
+          aria-label="More project filters"
+          :value="filterList.slice(5).some((f) => f.id === filter) ? filter : ''"
+          class="min-h-touch cursor-pointer rounded-chip border-0 px-3 text-label"
+          :class="filterList.slice(5).some((f) => f.id === filter) ? 'bg-ink text-on-ink' : 'bg-transparent text-text-strong-muted'"
+          @change="filter = ($event.target as HTMLSelectElement).value"
+        >
+          <option value="" disabled>More…</option>
+          <option v-for="f in filterList.slice(5)" :key="f.id" :value="f.id">{{ f.label }}</option>
+        </select>
       </div>
     </header>
 
@@ -151,7 +155,7 @@ async function run(action: 'neverSuggest' | 'reveal') {
             <span></span><span>Project</span><span>Last activity</span><span>By tier</span><span class="text-right">Size</span><span class="text-right">Reclaimable</span>
           </div>
           <ul class="m-0 flex list-none flex-col gap-0.5 p-0">
-            <li v-for="p in rows" :key="p.root">
+            <li v-for="p in pageRows" :key="p.root">
               <button
                 type="button"
                 class="row-grid min-h-[68px] w-full cursor-pointer rounded-card border-0 px-3.5 py-2.5 text-left font-[inherit] text-ink transition-colors duration-200"
@@ -176,9 +180,7 @@ async function run(action: 'neverSuggest' | 'reveal') {
           </ul>
         </div>
       </div>
-      <div v-if="view && all.length" class="px-3.5 pt-3 pb-1.5 text-label text-text-tertiary">
-        Showing {{ rows.length }} of {{ all.length }} · sorted by size
-      </div>
+      <ListPagination v-if="view" :page="currentPage" :total="rows.length" @update:page="page = $event" />
     </section>
 
     <template v-if="detail" #aside>

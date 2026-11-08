@@ -313,6 +313,7 @@ const ALLOWED_CLEANER_CALLS: &[&str] = &[
     "restore",
     "plan",
     "run",
+    "run_with_progress",
     "with_quarantine",
     "with_trash",
     "with_elevation",
@@ -344,9 +345,13 @@ const ALLOWED_CLEANER_IMPORTS: &[&str] = &[
     "Revalidation",
     "Ended",
     "QuickClean",
+    "QuickCleanEvent",
+    "OutputStream",
     "QuickCleanOptions",
     "QuickCleanRequest",
     "ToolResult",
+    "CapturedOutput",
+    "CleanMode",
     "TrashLocations",
 ];
 

@@ -9,7 +9,7 @@ test('remove a removable worktree and keep its branch', async ({ page, shot }) =
   const summary = page.getByTestId('worktrees-summary');
   await expect(summary).toContainText(/\d+ worktrees? across/);
   const list = page.getByRole('region', { name: 'Worktree list' });
-  const details = page.getByRole('region', { name: 'Worktree details' });
+  const details = page.getByRole('complementary', { name: 'Worktree details' });
   const rows = list.locator('button[data-row]');
   const before = Number((await summary.textContent())!.trim().match(/^(\d+) worktree/)![1]);
   expect(before).toBeGreaterThan(1);
@@ -17,23 +17,29 @@ test('remove a removable worktree and keep its branch', async ({ page, shot }) =
 
   // A protected one first: whole-worktree removal is blocked.
   await rows.filter({ has: page.locator('[data-verdict="protected"]') }).first().click();
-  await expect(details.getByTestId('remove')).toBeDisabled();
-  await expect(details.getByTestId('remove')).toHaveText('Whole-worktree removal blocked');
+  await expect(page.getByTestId('remove')).toBeDisabled();
+  await expect(details.getByTestId('removal-block')).toBeVisible();
 
   const removable = rows.filter({ has: page.locator('[data-verdict="removable"]') }).first();
   await removable.click();
   await expect(removable).toHaveAttribute('aria-current', 'true');
   const branch = (await details.getByRole('heading', { level: 2 }).textContent())!.trim();
-  const remove = details.getByTestId('remove');
+  const remove = page.getByTestId('remove');
   await expect(remove).toBeEnabled();
-  await expect(remove).toHaveText(/^Remove worktree, keep branch · /);
+  await expect(remove).toHaveText('Remove worktree');
   await expect(details.getByTestId('verdict')).toBeVisible();
   await shot('worktrees-1-removable');
 
   await remove.click();
-  await expect(remove).toHaveText('Removing worktree…');
-  const toast = page.getByTestId('toast');
-  await expect(toast).toContainText(`Removed ${branch} · branch kept`);
+  const confirm = page.getByTestId('confirm-action');
+  await expect(confirm).toBeDisabled();
+  await expect(page.getByTestId('worktree-confirmation')).toContainText('cannot be undone');
+  await page.getByRole('textbox', { name: 'Confirm irreversible item count' }).fill('1');
+  await shot('worktrees-1-confirmation');
+  await confirm.click();
+  await expect(page.getByTestId('toolbar-tasks')).toBeVisible();
+  await expect(page.getByTestId('task-success')).toContainText('Remove worktree complete');
+  await expect(page.getByTestId('task-success')).toContainText('branch kept');
   await expect(rows).toHaveCount(before - 1);
   await expect(list.getByText(branch, { exact: true })).toHaveCount(0);
   await expect(summary).toContainText(`${before - 1} worktrees`);

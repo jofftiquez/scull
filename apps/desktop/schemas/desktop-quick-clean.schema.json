@@ -31,6 +31,13 @@
             "null"
           ]
         },
+        "explanation": {
+          "description": "Core explanation when the tool kept referenced or otherwise needed files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "item_id": {
           "description": "The cache's candidate (the Quick Clean chip).",
           "type": [

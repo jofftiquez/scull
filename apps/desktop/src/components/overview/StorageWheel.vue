@@ -106,6 +106,7 @@ const empty = computed(() => props.arcs.length === 0);
     class="wheel h-auto w-full max-w-[660px]"
     role="group"
     aria-label="Storage wheel: inner ring shows categories, outer ring shows items colored by risk tier. Use the arrow keys to move between segments and Enter to inspect one."
+    :aria-busy="scanning"
     data-testid="wheel"
   >
     <defs>

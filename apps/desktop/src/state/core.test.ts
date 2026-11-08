@@ -36,6 +36,19 @@ describe('status line', () => {
 });
 
 describe('refresh and rescan', () => {
+  it('uses native config roots after they are saved instead of the old survey roots', async () => {
+    const base = createMockBridge();
+    const answers = { ...defaultAnswers(MOCK_DETECTION), roots: ['/Users/ada/old'], connectAgents: false };
+    saveSetup({ version: 1, home: '/Users/ada', answers });
+    const settings = await base.settings();
+    settings.origins['scan.roots'] = [{ source: 'user_config' }];
+    settings.config.scan!.roots = [];
+    let requested: unknown;
+    const bridge: ScullBridge = { ...base, kind: 'tauri', settings: async () => settings,
+      scan: async (params) => { requested = params; return MOCK_DATA.scanReport; } };
+    await rescan(bridge);
+    expect(requested).toEqual({});
+  });
   it('rescans saved desktop folders and falls back to core config without a saved setup', async () => {
     const requests: unknown[] = [];
     const base = createMockBridge();

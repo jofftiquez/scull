@@ -16,7 +16,8 @@ export default defineConfig({
     port: Number(process.env.SCULL_DEV_PORT ?? 1420),
     strictPort: true,
     host: host || false,
-    watch: { ignored: ['**/src-tauri/**', '**/bridge/**', '**/docker/**'] },
+    // Ignore the Rust bridge only; src/bridge must invalidate live command payloads.
+    watch: { ignored: ['**/src-tauri/**', '**/apps/desktop/bridge/**', '**/docker/**', '**/e2e/**'] },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_'],
   build: {

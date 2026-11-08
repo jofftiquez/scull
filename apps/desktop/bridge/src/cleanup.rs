@@ -11,12 +11,12 @@
 //!   process is refused before anything is touched.
 //! * **A recorded plan** (`PlanOrigin::Desktop`, D-25: 1 h): prepared from this app's last
 //!   complete scan, with the SAFE-09 watermark read **before** that scan. Only eligible items
-//!   (D-28: delete S0 only, S1/S2 quarantine or Trash only, S3 never, no tool or Git action).
+//!   (D-28: delete S0 only, S1/S2 quarantine or Trash only, S3 never; linked worktrees only at S1).
 //! * **The human's confirmation in the main window** (the Confirm button, sent as the
 //!   reviewed plan ID, hash and the exact items chosen; recorded with `ApprovalMethod::Desktop`
 //!   and the OS user as approver). An item whose action scull can't undo at S1/S2
-//!   (SAFE-07, `needs_elevated_confirmation`) additionally needs the typed count; D-28 plans
-//!   never contain one, but the rule is enforced on every run.
+//!   (SAFE-07, `needs_elevated_confirmation`) additionally needs the typed count, including
+//!   removal of an eligible linked worktree.
 //! * **The Executor under the execution lock** (SAFE-09), after reconciling any interrupted
 //!   operation (SAFE-19): the operation is refused if another touched the items after the scan
 //!   (watermark); every item is revalidated against the disk right before it is touched
@@ -27,9 +27,11 @@
 //! crate).
 
 use crate::session::{ScanBasis, Session};
+use crate::views::OpId;
 use schemars::JsonSchema;
 use scull_cleaner::quickclean::{
-    Ended, QuickClean, QuickCleanOptions, QuickCleanRequest, ToolResult,
+    Ended, OutputStream, QuickClean, QuickCleanEvent, QuickCleanOptions, QuickCleanRequest,
+    ToolResult, escape_line,
 };
 use scull_cleaner::trash::TrashLocations;
 use scull_cleaner::{
@@ -49,10 +51,10 @@ use scull_platform::activity::Limits;
 use scull_platform::{Elevation, Native};
 use scull_safety::NativeActivityProbe;
 use scull_storage::{ApprovalMethod, OperationEnd, OperationStart, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Test hook (same as the CLI's): when set, the desktop behaves as if it ran elevated. It can
 /// only add a refusal, never remove one.
@@ -60,6 +62,20 @@ pub const ASSUME_ELEVATED_ENV: &str = "SCULL_TEST_ASSUME_ELEVATED";
 
 /// Folder under scull's state directory for Quick Clean's private tool sandbox (as the CLI).
 const QUICK_CLEAN_SANDBOX: &str = "quickclean";
+
+/// Probe the execution lock without recovering or running an operation.
+pub fn execution_busy_at(path: &std::path::Path) -> Result<bool, ScullError> {
+    match Executor::acquire(&LockOptions::at(path)) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind == ErrorKind::LockHeld => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether another operation holds the current user's execution lock.
+pub fn execution_busy() -> Result<bool, ScullError> {
+    execution_busy_at(&LockOptions::for_current_user()?.path)
+}
 
 /// A Cleanup Review plan as the human reviews it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -168,6 +184,8 @@ pub struct QuickCleanTool {
     pub succeeded: bool,
     /// Bytes the cache shrank by, when measured.
     pub cache_bytes_freed: Option<i64>,
+    /// Core explanation when the tool kept referenced or otherwise needed files.
+    pub explanation: Option<String>,
 }
 
 /// The result of a Quick Clean.
@@ -186,6 +204,176 @@ pub struct DesktopQuickClean {
     pub measured_delta_bytes: Option<i64>,
 }
 
+/// Window-scoped live output from an approved cache cleanup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCacheProgress {
+    /// Client-chosen operation ID, independent of the audited operation ID.
+    pub op_id: OpId,
+    /// The reported change.
+    pub kind: CacheProgressKind,
+    /// Selected cache candidate, when this is a tool event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    /// Package manager, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Which process stream produced this line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<CacheOutputStream>,
+    /// Escaped, capped output supplied by the core runner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// Validated executable and arguments at command start, without environment values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Why a selected cache was skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Command success, only present when it finished.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub succeeded: Option<bool>,
+    /// Distinct selected caches that finished or were skipped.
+    pub completed: usize,
+    /// Number of distinct selected cache IDs.
+    pub total: usize,
+}
+
+impl DesktopCacheProgress {
+    /// Event name emitted only to the requesting webview.
+    pub const NAME: &'static str = "scull://cache-clean-progress";
+}
+
+/// Cache cleanup event kinds; tool progress is counted only at terminal events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheProgressKind {
+    /// Refreshing the safe plan before running any command.
+    Preparing,
+    /// A command is about to run.
+    Started,
+    /// One escaped process output line.
+    Output,
+    /// Further process output exceeded the capture limit.
+    OutputTruncated,
+    /// A command exited.
+    Finished,
+    /// The cache was not touched.
+    Skipped,
+}
+
+/// A native process output stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheOutputStream {
+    /// Standard output.
+    Stdout,
+    /// Standard error.
+    Stderr,
+}
+
+type CacheProgressSink<'a> = (
+    &'a Mutex<CacheProgress>,
+    &'a (dyn Fn(DesktopCacheProgress) + Send + Sync),
+);
+
+struct CacheProgress {
+    current: DesktopCacheProgress,
+    chosen: BTreeSet<String>,
+    completed: BTreeSet<String>,
+}
+
+impl CacheProgress {
+    fn new(op_id: &OpId, chosen: &[String]) -> Self {
+        let chosen: BTreeSet<_> = chosen.iter().cloned().collect();
+        Self {
+            current: DesktopCacheProgress {
+                op_id: op_id.clone(),
+                kind: CacheProgressKind::Preparing,
+                item_id: None,
+                tool: None,
+                stream: None,
+                line: None,
+                command: None,
+                reason: None,
+                succeeded: None,
+                completed: 0,
+                total: chosen.len(),
+            },
+            chosen,
+            completed: BTreeSet::new(),
+        }
+    }
+
+    fn event(&mut self, event: QuickCleanEvent) -> Option<DesktopCacheProgress> {
+        let mut payload = self.current.clone();
+        let (item_id, tool) = match event {
+            QuickCleanEvent::Started { item_id, tool } => {
+                payload.kind = CacheProgressKind::Started;
+                (item_id, tool)
+            }
+            QuickCleanEvent::Output {
+                item_id,
+                tool,
+                stream,
+                line,
+            } => {
+                payload.kind = CacheProgressKind::Output;
+                payload.stream = Some(match stream {
+                    OutputStream::Stdout => CacheOutputStream::Stdout,
+                    OutputStream::Stderr => CacheOutputStream::Stderr,
+                });
+                payload.line = Some(line);
+                (item_id, tool)
+            }
+            QuickCleanEvent::OutputTruncated {
+                item_id,
+                tool,
+                stream,
+            } => {
+                payload.kind = CacheProgressKind::OutputTruncated;
+                payload.stream = Some(match stream {
+                    OutputStream::Stdout => CacheOutputStream::Stdout,
+                    OutputStream::Stderr => CacheOutputStream::Stderr,
+                });
+                (item_id, tool)
+            }
+            QuickCleanEvent::Finished {
+                item_id,
+                tool,
+                succeeded,
+            } => {
+                payload.kind = CacheProgressKind::Finished;
+                payload.succeeded = Some(succeeded);
+                (item_id, tool)
+            }
+            QuickCleanEvent::Skipped {
+                item_id,
+                tool,
+                reason,
+            } => {
+                payload.kind = CacheProgressKind::Skipped;
+                payload.reason = Some(reason);
+                (item_id, tool)
+            }
+        };
+        let id = item_id.as_str();
+        if !self.chosen.contains(id) || self.completed.contains(id) {
+            return None;
+        }
+        if matches!(
+            payload.kind,
+            CacheProgressKind::Finished | CacheProgressKind::Skipped
+        ) {
+            self.completed.insert(id.to_owned());
+        }
+        payload.item_id = Some(id.to_owned());
+        payload.tool = Some(tool.rule_id().split('.').next().unwrap_or("").to_owned());
+        payload.completed = self.completed.len();
+        Some(payload)
+    }
+}
+
 /// A tool Quick Clean didn't run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -194,6 +382,88 @@ pub struct QuickCleanSkip {
     pub tool: String,
     /// Why, for display.
     pub reason: String,
+}
+
+/// An exact native command shown for review. Display only; never interpreted as shell text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCleanCommand {
+    /// Canonical trusted executable.
+    pub binary: String,
+    /// Arguments passed directly to the executable.
+    pub args: Vec<String>,
+    /// Cache location variables added to the sanitized environment.
+    pub env: Vec<CacheCleanEnv>,
+}
+
+/// A cache-location variable in the sanitized native environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCleanEnv {
+    /// Variable name.
+    pub name: String,
+    /// Located cache folder or other scoped value.
+    pub value: String,
+}
+
+/// A tool and the modes the core planner currently permits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCleanTool {
+    /// Core's human-readable cache name.
+    pub name: String,
+    /// Classified cache item ID.
+    pub item_id: String,
+    /// Tool name.
+    pub tool: String,
+    /// Located cache folder.
+    pub cache: String,
+    /// Estimated reclaimable bytes.
+    pub bytes: u64,
+    /// Prune command, when supported.
+    pub prune: Option<CacheCleanCommand>,
+    /// Wipe command, when supported.
+    pub wipe: Option<CacheCleanCommand>,
+    /// Core planner's safety notes.
+    pub notes: Vec<String>,
+}
+
+/// The native Quick Clean preview. Unsupported or protected caches remain skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCachePreview {
+    /// Runnable tools.
+    pub tools: Vec<CacheCleanTool>,
+    /// Tools left alone and the core planner's reasons.
+    pub skipped: Vec<CacheCleanSkip>,
+}
+
+/// A cache omitted by the native planner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCleanSkip {
+    /// Core's human-readable cache name.
+    pub name: String,
+    /// Tool name.
+    pub tool: String,
+    /// Located path, if known.
+    pub path: Option<String>,
+    /// Estimate from classification, when available.
+    pub bytes: Option<u64>,
+    /// Core planner reason.
+    pub reason: String,
+}
+
+/// One explicitly selected mode and the command the human reviewed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCleanChoice {
+    /// Cache item ID.
+    pub item_id: String,
+    /// Either `prune` or `wipe`; checked against the fresh core plan.
+    pub mode: String,
+    /// The exact command previously shown for this mode.
+    pub command: CacheCleanCommand,
 }
 
 /// The machine and user plans are bound to.
@@ -258,8 +528,8 @@ pub fn needs_elevated_confirmation(tier: Tier, action: &Action) -> bool {
         )
 }
 
-/// D-28 for desktop plans: an actionable tier and a delete or quarantine its tier allows (no
-/// tool or Git action, which `scull clean` doesn't run either). `Some(reason)` when not.
+/// Desktop plans allow tier-compatible deletes/quarantines and eligible S1 linked-worktree
+/// removal. Tool commands use Quick Clean. `Some(reason)` when ineligible.
 fn ineligible(c: &Candidate) -> Option<&'static str> {
     if !c.tier.is_actionable() {
         return Some("protected: never cleaned");
@@ -273,6 +543,13 @@ fn ineligible(c: &Candidate) -> Option<&'static str> {
         }
         Action::Delete | Action::Quarantine => {
             Some("its tier, reasons and action disagree; left alone")
+        }
+        Action::GitWorktreeRemove
+            if c.is_consistent()
+                && c.tier == Tier::S1
+                && c.rule.id == scull_git::WORKTREE_RULE_ID =>
+        {
+            None
         }
         Action::ToolCommand { .. } => Some("cleaned by Quick Clean or not run by scull"),
         _ => Some("not executed from the desktop in this build"),
@@ -401,7 +678,7 @@ impl CleanupDesk {
         let (scan, basis) = session.last_scan_basis().ok_or_else(|| {
             ScullError::new(
                 ErrorKind::Usage,
-                "there is no complete scan to plan from yet: scan first",
+                "there is no complete scan under the current settings: scan again to plan a cleanup",
             )
         })?;
         // A cancelled scan is partial: what it didn't reach isn't known (nor is what it did
@@ -526,8 +803,8 @@ impl CleanupDesk {
                 return Err(ScullError::new(
                     ErrorKind::PlanInvalidated,
                     format!(
-                        "plan {id} was made from an earlier scan than the app's last one; \
-                         review a new plan. Nothing was changed."
+                        "plan {id} no longer matches the current scan or settings; \
+                         scan again and review a new plan. Nothing was changed."
                     ),
                 ));
             }
@@ -609,7 +886,13 @@ impl CleanupDesk {
                     method: ApprovalMethod::Desktop,
                     started_at: now,
                 },
-            )?
+            )
+            .map_err(|mut error| {
+                if error.kind == ErrorKind::PlanInvalidated {
+                    error.message.push_str(". Run Scan again, then review a new cleanup plan. No items from this plan were cleaned.");
+                }
+                error
+            })?
             .with_quarantine(QuarantineSettings::from_config(&basis.config.quarantine))
             .with_trash(self.trash_locations());
         let engine = session.engine_for(basis.config.clone(), &basis.roots)?;
@@ -708,17 +991,18 @@ impl CleanupDesk {
         })
     }
 
-    /// Quick Clean the caches of the candidates `chosen` (IDs of package-cache candidates):
-    /// each tool's own command, found only in trusted locations and run in a private sandbox
-    /// (QC-01…04), as one audited operation. Orphaned caches (D-36) are never removed from
-    /// here (each needs its own confirmation: `scull clean caches`).
-    pub fn quick_clean(
+    fn cache_clean_context(
         &self,
         session: &Session,
-        chosen: &[String],
-        now: i64,
-    ) -> Result<DesktopQuickClean, ScullError> {
-        self.check_not_elevated()?;
+    ) -> Result<
+        (
+            QuickClean,
+            scull_engine::CachesReport,
+            scull_detectors::caches::CacheScan,
+            u64,
+        ),
+        ScullError,
+    > {
         let setup = session.setup();
         let home = setup
             .home
@@ -749,8 +1033,188 @@ impl CleanupDesk {
 
         let mut opts = QuickCleanOptions::new((setup.env)("PATH").unwrap_or_default());
         opts.excluded_roots = config.scan.roots.clone();
+        if let Some(scan) = session.last_scan() {
+            opts.excluded_roots
+                .extend(scan.roots.iter().map(FsPath::to_path_buf));
+        }
         opts.sandbox_base = Some(sandbox_base(session)?);
         let qc = QuickClean::new(opts, Arc::new(Native)).with_elevation(elevation());
+        Ok((qc, caches, located, watermark))
+    }
+
+    /// Preview both supported modes using the core planner and its actual location scoping.
+    pub fn quick_clean_plan(&self, session: &Session) -> Result<DesktopCachePreview, ScullError> {
+        let (qc, caches, located, _) = self.cache_clean_context(session)?;
+        let probe = NativeActivityProbe::capture(Limits::default());
+        let preferred = qc.plan(
+            &located,
+            &caches.candidates,
+            &QuickCleanRequest::default(),
+            &probe,
+        );
+        let wipe = qc.plan(
+            &located,
+            &caches.candidates,
+            &QuickCleanRequest {
+                wipe: CacheTool::ALL.into_iter().collect(),
+                ..QuickCleanRequest::default()
+            },
+            &probe,
+        );
+        let tools = preferred
+            .tools
+            .iter()
+            .map(|t| {
+                let prune = (t.mode.to_string() == "prune")
+                    .then(|| cache_command(&t.binary, &t.args, &t.env));
+                let wipe = if t.mode.to_string() == "wipe" {
+                    Some(cache_command(&t.binary, &t.args, &t.env))
+                } else {
+                    wipe.tools
+                        .iter()
+                        .find(|w| w.item_id == t.item_id && w.mode.to_string() == "wipe")
+                        .map(|t| cache_command(&t.binary, &t.args, &t.env))
+                };
+                CacheCleanTool {
+                    name: t.tool.artifact().to_owned(),
+                    item_id: t.item_id.as_str().to_owned(),
+                    tool: t.tool.rule_id().split('.').next().unwrap_or("").to_owned(),
+                    cache: FsPath::from_path(&t.cache).as_str().to_owned(),
+                    bytes: t.reclaimable_bytes,
+                    prune,
+                    wipe,
+                    notes: t.notes.clone(),
+                }
+            })
+            .collect();
+        let skipped = preferred
+            .skipped
+            .iter()
+            .map(|s| CacheCleanSkip {
+                name: s.tool.artifact().to_owned(),
+                tool: s.tool.rule_id().split('.').next().unwrap_or("").to_owned(),
+                path: s
+                    .path
+                    .as_ref()
+                    .map(|p| FsPath::from_path(p).as_str().to_owned()),
+                bytes: caches
+                    .candidates
+                    .iter()
+                    .find(|c| {
+                        s.path.as_ref().is_some_and(|p| c.path.to_path_buf() == *p)
+                            && c.rule.id == s.tool.rule_id()
+                    })
+                    .map(|c| c.sizes.reclaimable.bytes),
+                reason: s.reason.to_string(),
+            })
+            .collect();
+        Ok(DesktopCachePreview { tools, skipped })
+    }
+
+    /// Quick Clean the caches of the candidates `chosen` (IDs of package-cache candidates):
+    /// each tool's own command, found only in trusted locations and run in a private sandbox
+    /// (QC-01…04), as one audited operation. Orphaned caches (D-36) are never removed from
+    /// here (each needs its own confirmation: `scull clean caches`).
+    pub fn quick_clean(
+        &self,
+        session: &Session,
+        chosen: &[String],
+        now: i64,
+    ) -> Result<DesktopQuickClean, ScullError> {
+        self.quick_clean_requested(session, chosen, &[], None, now, None)
+    }
+
+    /// Quick Clean with live, operation-scoped output; the cleanup policy is unchanged.
+    pub fn quick_clean_with_progress(
+        &self,
+        session: &Session,
+        chosen: &[String],
+        op_id: &OpId,
+        now: i64,
+        progress: &(dyn Fn(DesktopCacheProgress) + Send + Sync),
+    ) -> Result<DesktopQuickClean, ScullError> {
+        let state = Mutex::new(CacheProgress::new(op_id, chosen));
+        progress(
+            state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .current
+                .clone(),
+        );
+        self.quick_clean_requested(session, chosen, &[], None, now, Some((&state, progress)))
+    }
+
+    /// Run only the chosen cache IDs and modes, after checking the reviewed commands still
+    /// match a fresh safe plan. Execution uses the same audited runner as Overview.
+    pub fn quick_clean_run(
+        &self,
+        session: &Session,
+        choices: &[CacheCleanChoice],
+        now: i64,
+    ) -> Result<DesktopQuickClean, ScullError> {
+        self.quick_clean_run_requested(session, choices, now, None)
+    }
+
+    /// Run the exact reviewed commands with live, operation-scoped output.
+    pub fn quick_clean_run_with_progress(
+        &self,
+        session: &Session,
+        choices: &[CacheCleanChoice],
+        op_id: &OpId,
+        now: i64,
+        progress: &(dyn Fn(DesktopCacheProgress) + Send + Sync),
+    ) -> Result<DesktopQuickClean, ScullError> {
+        let chosen: Vec<_> = choices.iter().map(|c| c.item_id.clone()).collect();
+        let state = Mutex::new(CacheProgress::new(op_id, &chosen));
+        progress(
+            state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .current
+                .clone(),
+        );
+        self.quick_clean_run_requested(session, choices, now, Some((&state, progress)))
+    }
+
+    fn quick_clean_run_requested(
+        &self,
+        session: &Session,
+        choices: &[CacheCleanChoice],
+        now: i64,
+        progress: Option<CacheProgressSink<'_>>,
+    ) -> Result<DesktopQuickClean, ScullError> {
+        if choices.is_empty() {
+            return Err(ScullError::new(ErrorKind::Usage, "nothing was chosen"));
+        }
+        let mut seen = BTreeSet::new();
+        for c in choices {
+            if !matches!(c.mode.as_str(), "prune" | "wipe") || !seen.insert(&c.item_id) {
+                return Err(ScullError::new(
+                    ErrorKind::Usage,
+                    "invalid or repeated cache choice",
+                ));
+            }
+        }
+        let chosen: Vec<String> = choices.iter().map(|c| c.item_id.clone()).collect();
+        let wipe: Vec<String> = choices
+            .iter()
+            .filter(|c| c.mode == "wipe")
+            .map(|c| c.item_id.clone())
+            .collect();
+        self.quick_clean_requested(session, &chosen, &wipe, Some(choices), now, progress)
+    }
+
+    fn quick_clean_requested(
+        &self,
+        session: &Session,
+        chosen: &[String],
+        wipe: &[String],
+        reviewed: Option<&[CacheCleanChoice]>,
+        now: i64,
+        progress: Option<CacheProgressSink<'_>>,
+    ) -> Result<DesktopQuickClean, ScullError> {
+        self.check_not_elevated()?;
+        let (qc, caches, located, watermark) = self.cache_clean_context(session)?;
         // The chips the human left ticked; every other tool is unticked (never run).
         let chosen: BTreeSet<&str> = chosen.iter().map(String::as_str).collect();
         let ticked_rules: BTreeSet<String> = caches
@@ -765,9 +1229,87 @@ impl CleanupDesk {
                 request.unticked.insert(tool);
             }
         }
+        for tool in CacheTool::ALL {
+            if caches.candidates.iter().any(|c| {
+                c.rule.id == tool.rule_id() && wipe.iter().any(|id| id.as_str() == c.id.as_str())
+            }) {
+                request.wipe.insert(tool);
+            }
+        }
         let probe = NativeActivityProbe::capture(Limits::default());
         let mut plan = qc.plan(&located, &caches.candidates, &request, &probe);
+        // A tool can have several cache locations: selection is by exact item, never by rule.
+        plan.tools.retain(|t| chosen.contains(t.item_id.as_str()));
         plan.orphaned.clear();
+        if let Some(reviewed) = reviewed {
+            for choice in reviewed {
+                let unchanged = plan.tools.iter().any(|t| {
+                    t.item_id.as_str() == choice.item_id
+                        && t.mode.to_string() == choice.mode
+                        && cache_command(&t.binary, &t.args, &t.env) == choice.command
+                });
+                if !unchanged {
+                    let reason = plan
+                        .skipped
+                        .iter()
+                        .map(|s| s.reason.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(ScullError::new(
+                        ErrorKind::PlanInvalidated,
+                        format!(
+                            "the selected cache or command changed; refresh the preview before cleaning. Nothing was changed. {reason}"
+                        ),
+                    ));
+                }
+            }
+        }
+        let emit = |event| {
+            if let Some((state, callback)) = progress {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(mut event) = state.event(event) {
+                    if event.kind == CacheProgressKind::Started {
+                        event.command = plan
+                            .tools
+                            .iter()
+                            .find(|t| Some(t.item_id.as_str()) == event.item_id.as_deref())
+                            .map(|t| {
+                                std::iter::once(t.binary.as_os_str())
+                                    .chain(t.args.iter().map(|a| a.as_os_str()))
+                                    .map(|part| escape_line(&part.to_string_lossy()))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            });
+                    }
+                    callback(event);
+                }
+            }
+        };
+        for candidate in &caches.candidates {
+            if chosen.contains(candidate.id.as_str())
+                && !plan.tools.iter().any(|t| t.item_id == candidate.id)
+                && let Some(tool) = CacheTool::ALL
+                    .into_iter()
+                    .find(|t| t.rule_id() == candidate.rule.id)
+            {
+                let reason = plan
+                    .skipped
+                    .iter()
+                    .find(|s| {
+                        s.tool == tool
+                            && s.path
+                                .as_ref()
+                                .is_none_or(|p| *p == candidate.path.to_path_buf())
+                    })
+                    .map(|s| s.reason.to_string())
+                    .unwrap_or_else(|| "cache is no longer eligible".to_owned());
+                emit(QuickCleanEvent::Skipped {
+                    item_id: candidate.id.clone(),
+                    tool,
+                    reason,
+                });
+            }
+        }
         let skipped: Vec<QuickCleanSkip> = plan
             .skipped
             .iter()
@@ -817,7 +1359,7 @@ impl CleanupDesk {
             },
         )?;
         let fresh = NativeActivityProbe::capture(Limits::default());
-        let ran = match qc.run(&mut op, &plan, &fresh, &CancelToken::new()) {
+        let ran = match qc.run_with_progress(&mut op, &plan, &fresh, &CancelToken::new(), &emit) {
             Ok(r) => r,
             Err(e) => {
                 let _ = op.finish(OperationEnd::Cancelled, scull_engine::now_unix());
@@ -850,12 +1392,77 @@ impl CleanupDesk {
                     tool: r.tool.rule_id().split('.').next().unwrap_or("").to_owned(),
                     succeeded: r.succeeded() && matches!(r.ended, Ended::Exited { .. }),
                     cache_bytes_freed: r.cache_bytes_freed().and_then(|b| i64::try_from(b).ok()),
+                    explanation: quick_clean_explanation(r),
                 })
                 .collect(),
-            skipped,
+            skipped: ran
+                .skipped
+                .iter()
+                .filter(|s| !request.unticked.contains(&s.tool))
+                .map(|s| QuickCleanSkip {
+                    tool: s.tool.rule_id().split('.').next().unwrap_or("").to_owned(),
+                    reason: s.reason.to_string(),
+                })
+                .collect(),
             predicted_bytes: plan.total_reclaimable(),
             measured_delta_bytes: ran.measured_delta_bytes,
         })
+    }
+}
+
+fn quick_clean_explanation(result: &ToolResult) -> Option<String> {
+    if result.succeeded() {
+        return result.explanation.clone();
+    }
+    let status = match &result.ended {
+        Ended::Exited(Some(code)) => format!("Exited with status {code}"),
+        Ended::Exited(None) => "Terminated without an exit status".into(),
+        Ended::TimedOut(_) => "Timed out".into(),
+        Ended::Cancelled => "Cancelled".into(),
+        Ended::SpawnFailed(reason) => format!("Could not start: {}", escape_line(reason)),
+    };
+    let output = if result.stderr.is_empty() {
+        &result.stdout
+    } else {
+        &result.stderr
+    };
+    let mut explanation = if output.is_empty() {
+        status
+    } else {
+        format!("{status}: {}", output.lines.join("\n"))
+    };
+    let truncated = explanation.len() > 2048;
+    if truncated {
+        let mut end = 2048;
+        while !explanation.is_char_boundary(end) {
+            end -= 1;
+        }
+        explanation.truncate(end);
+    }
+    if truncated || output.truncated {
+        explanation.push_str(" [output truncated]");
+    }
+    Some(explanation)
+}
+
+fn cache_command(
+    binary: &std::path::Path,
+    args: &[std::ffi::OsString],
+    env: &[(String, std::ffi::OsString)],
+) -> CacheCleanCommand {
+    CacheCleanCommand {
+        binary: binary.to_string_lossy().into_owned(),
+        args: args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+        env: env
+            .iter()
+            .map(|(k, v)| CacheCleanEnv {
+                name: k.clone(),
+                value: v.to_string_lossy().into_owned(),
+            })
+            .collect(),
     }
 }
 
@@ -912,11 +1519,16 @@ fn desktop_plan(
 }
 
 fn run_item(p: &PlanItem, r: &ItemReport) -> RunItem {
-    let reason = r.reason_code().map(str::to_owned);
+    let reason = match &r.outcome {
+        ItemOutcome::Refused(e) if p.action == Action::GitWorktreeRemove => Some(e.message.clone()),
+        ItemOutcome::WorktreeRemovalFailed { reason } => Some(reason.clone()),
+        _ => r.reason_code().map(str::to_owned),
+    };
     let (outcome, freed, moved) = match &r.outcome {
         ItemOutcome::Deleted(_) if r.succeeded() => {
             (RunItemOutcome::Deleted, p.reclaimable_bytes, 0)
         }
+        ItemOutcome::WorktreeRemoved { freed_bytes } => (RunItemOutcome::Deleted, *freed_bytes, 0),
         ItemOutcome::Quarantined(q) => (RunItemOutcome::Quarantined, 0, q.bytes),
         ItemOutcome::Trashed(_) => (RunItemOutcome::Trashed, 0, p.reclaimable_bytes),
         _ => (RunItemOutcome::Skipped, 0, 0),
@@ -959,4 +1571,150 @@ pub fn has_database(session: &Session) -> bool {
         .data_dir
         .as_deref()
         .is_some_and(|d| history_db_path(d).is_file())
+}
+
+#[cfg(test)]
+mod failure_output_tests {
+    use super::*;
+    use scull_cleaner::quickclean::{CapturedOutput, CleanMode};
+    use std::time::Duration;
+
+    #[test]
+    fn cache_progress_counts_selected_terminal_events_once() {
+        let first = ItemId::derive(scull_core::FileIdentity::new(1, 1), b"first");
+        let second = ItemId::derive(scull_core::FileIdentity::new(1, 2), b"second");
+        let other = ItemId::derive(scull_core::FileIdentity::new(1, 3), b"unticked");
+        let chosen = vec![
+            first.as_str().to_owned(),
+            second.as_str().to_owned(),
+            first.as_str().to_owned(),
+        ];
+        let mut state = CacheProgress::new(&OpId::parse("cleanup-1").unwrap(), &chosen);
+        assert_eq!(state.current.total, 2);
+        assert_eq!(state.current.completed, 0);
+        let start = state
+            .event(QuickCleanEvent::Started {
+                item_id: first.clone(),
+                tool: CacheTool::Bun,
+            })
+            .unwrap();
+        assert_eq!(start.completed, 0);
+        assert_eq!(start.item_id.as_deref(), Some(first.as_str()));
+        let output = state
+            .event(QuickCleanEvent::Output {
+                item_id: first.clone(),
+                tool: CacheTool::Bun,
+                stream: OutputStream::Stderr,
+                line: "escaped\\x1btext".into(),
+            })
+            .unwrap();
+        let json = serde_json::to_value(&output).unwrap();
+        assert_eq!(json["op_id"], "cleanup-1");
+        assert_eq!(json["kind"], "output");
+        assert_eq!(json["stream"], "stderr");
+        assert!(json.get("reason").is_none());
+        assert_eq!(output.completed, 0);
+        let truncated = state
+            .event(QuickCleanEvent::OutputTruncated {
+                item_id: first.clone(),
+                tool: CacheTool::Bun,
+                stream: OutputStream::Stdout,
+            })
+            .unwrap();
+        assert_eq!(truncated.kind, CacheProgressKind::OutputTruncated);
+        assert_eq!(truncated.stream, Some(CacheOutputStream::Stdout));
+        assert!(truncated.line.is_none());
+        assert_eq!(truncated.completed, 0);
+        let finished = state
+            .event(QuickCleanEvent::Finished {
+                item_id: first.clone(),
+                tool: CacheTool::Bun,
+                succeeded: false,
+            })
+            .unwrap();
+        assert_eq!(finished.completed, 1);
+        assert_eq!(finished.succeeded, Some(false));
+        assert!(
+            state
+                .event(QuickCleanEvent::Finished {
+                    item_id: first.clone(),
+                    tool: CacheTool::Bun,
+                    succeeded: true
+                })
+                .is_none()
+        );
+        assert!(
+            state
+                .event(QuickCleanEvent::Started {
+                    item_id: other,
+                    tool: CacheTool::Bun
+                })
+                .is_none()
+        );
+        let skipped = state
+            .event(QuickCleanEvent::Skipped {
+                item_id: second.clone(),
+                tool: CacheTool::Bun,
+                reason: "in use".into(),
+            })
+            .unwrap();
+        assert_eq!(skipped.completed, 2);
+        assert_eq!(skipped.total, 2);
+        assert_eq!(skipped.reason.as_deref(), Some("in use"));
+        assert!(skipped.succeeded.is_none());
+        assert!(
+            state
+                .event(QuickCleanEvent::Skipped {
+                    item_id: second,
+                    tool: CacheTool::Bun,
+                    reason: "duplicate".into()
+                })
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_tools_explain_exit_and_capped_escaped_output() {
+        let mut result = ToolResult {
+            tool: CacheTool::Bun,
+            cache: PathBuf::from("/cache"),
+            binary: PathBuf::from("/bin/bun"),
+            args: vec![],
+            mode: CleanMode::Wipe,
+            ended: Ended::Exited(Some(1)),
+            stdout: CapturedOutput::default(),
+            stderr: CapturedOutput {
+                lines: vec!["\\x1b[31mfailed".repeat(1000)],
+                truncated: true,
+            },
+            elapsed: Duration::ZERO,
+            free_before: None,
+            free_after: None,
+            size_before: None,
+            size_after: None,
+            explanation: None,
+        };
+        let failure = quick_clean_explanation(&result).expect("failure details");
+        assert!(failure.starts_with("Exited with status 1:"), "{failure}");
+        assert!(failure.contains("\\x1b[31mfailed"));
+        assert!(failure.ends_with("[output truncated]"));
+        assert!(failure.len() < 2200);
+        result.stderr.lines = vec!["文".repeat(1000)];
+        let failure = quick_clean_explanation(&result).unwrap();
+        assert!(failure.ends_with("[output truncated]") && failure.len() < 2200);
+        result.stderr = CapturedOutput::default();
+        result.stdout.lines = vec!["stdout failure".into()];
+        assert!(
+            quick_clean_explanation(&result)
+                .unwrap()
+                .contains("stdout failure")
+        );
+        result.ended = Ended::Exited(Some(0));
+        result.explanation = Some("Referenced files kept".into());
+        assert_eq!(quick_clean_explanation(&result), result.explanation);
+        result.ended = Ended::SpawnFailed("bad\u{001b}binary".into());
+        let failure = quick_clean_explanation(&result).unwrap();
+        assert!(failure.contains("bad\\x1bbinary"), "{failure}");
+        assert!(!failure.contains('\u{001b}'));
+    }
 }

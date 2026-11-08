@@ -402,6 +402,65 @@ impl GitRunner {
         status::parse_status(&out).map_err(GitError::Parse)
     }
 
+    /// Whether index flags hide tracked-file changes from Git's usual clean checks.
+    /// Refuse these entries before removal instead of changing the user's index flags.
+    pub fn index_has_hidden_entries(&self, worktree: &Path) -> Result<bool, GitError> {
+        let repo = repo_dir(worktree)?;
+        let mut tree = OsString::from("--work-tree=");
+        tree.push(&repo);
+        let out = self.run_ok(
+            Some(&repo),
+            &[],
+            &[tree, "ls-files".into(), "-v".into(), "-z".into()],
+            "ls-files",
+        )?;
+        let mut hidden = false;
+        for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            if record.len() < 3 || record[1] != b' ' {
+                return Err(GitError::Parse(
+                    "malformed ls-files index flag record".into(),
+                ));
+            }
+            hidden |= record[0].is_ascii_lowercase() || record[0] == b'S';
+        }
+        Ok(hidden)
+    }
+
+    /// Prepare the hardened, fixed `git worktree remove -- <absolute path>` command.
+    /// This only builds a command; the audited Executor owns spawning it and revalidation.
+    /// No force, pruning, branch deletion or caller-supplied arguments are accepted.
+    pub fn prepare_worktree_removal(&self, worktree: &Path) -> Result<Command, GitError> {
+        let path = repo_dir(worktree)?;
+        let repo = crate::discover(&path).map_err(|e| GitError::Parse(e.to_string()))?;
+        let linked = repo
+            .worktrees
+            .iter()
+            .find(|w| {
+                w.path.to_path_buf() == path
+                    && w.kind == crate::WorktreeKind::Linked
+                    && !w.lock.is_locked()
+                    && w.prunable.is_none()
+            })
+            .ok_or_else(|| {
+                GitError::InvalidArgument(
+                    "only an existing, unlocked, exactly registered linked worktree can be removed"
+                        .into(),
+                )
+            })?;
+        let common = repo.common_dir.to_path_buf();
+        let extra = self.filter_overrides(&path)?;
+        let mut git_dir = OsString::from("--git-dir=");
+        git_dir.push(&common);
+        let args = [
+            git_dir,
+            "worktree".into(),
+            "remove".into(),
+            "--".into(),
+            linked.path.to_path_buf().into_os_string(),
+        ];
+        Ok(self.command(Some(&common), &extra, &args))
+    }
+
     /// Resolves `rev` (e.g. `HEAD`, `main`, `HEAD^{commit}`) in `repo`; `None` when it doesn't
     /// resolve.
     pub fn rev_parse(&self, repo: &Path, rev: &str) -> Result<Option<ObjectId>, GitError> {

@@ -68,7 +68,7 @@
 //! Spawned by absolute path with [`std::process::Command`] (no shell), structured arguments,
 //! null stdin, a timeout ([`QuickCleanOptions::timeout`]; the process is killed when it
 //! expires or the operation is cancelled) and capped output. Working directory: an empty
-//! private folder, so no project configuration (`.npmrc`, `.yarnrc.yml`, `package.json`) in
+//! private folder (Bun gets a generated, dependency-free package context), so no project configuration (`.npmrc`, `.yarnrc.yml`, `package.json`) in
 //! the user's current directory applies (T-23, FX-QC-07). There are no positional operands,
 //! only fixed words and option values that are absolute paths, so no `--` separator is
 //! needed (an option value can't be mistaken for an option).
@@ -200,7 +200,7 @@
 
 mod audit;
 mod output;
-mod process;
+pub(crate) mod process;
 mod resolve;
 mod shim;
 
@@ -749,6 +749,67 @@ pub struct ToolResult {
     pub explanation: Option<String>,
 }
 
+/// The pipe that produced a tool's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    /// Standard output.
+    Stdout,
+    /// Standard error.
+    Stderr,
+}
+
+/// Live tool progress. Output is escaped like [`CapturedOutput`], with at most 256 lines
+/// per stream. This live event limit is independent of the final capture's byte limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuickCleanEvent {
+    /// Revalidation passed and the tool is being started.
+    Started {
+        /// Approved plan item.
+        item_id: ItemId,
+        /// Tool being started.
+        tool: CacheTool,
+    },
+    /// A complete escaped line, or the final partial line at pipe close or truncation.
+    Output {
+        /// Approved plan item.
+        item_id: ItemId,
+        /// Tool producing output.
+        tool: CacheTool,
+        /// Output pipe.
+        stream: OutputStream,
+        /// Escaped text without its line terminator.
+        line: String,
+    },
+    /// The stream exceeded its live line budget or captured byte limit. Emitted once per
+    /// stream; final capture continues up to its byte limit and the pipe is always drained.
+    OutputTruncated {
+        /// Approved plan item.
+        item_id: ItemId,
+        /// Tool producing output.
+        tool: CacheTool,
+        /// Output pipe.
+        stream: OutputStream,
+    },
+    /// Emitted only after the result's audit row was recorded.
+    Finished {
+        /// Approved plan item.
+        item_id: ItemId,
+        /// Finished tool.
+        tool: CacheTool,
+        /// Whether the tool exited with status zero.
+        succeeded: bool,
+    },
+    /// An approved tool was not run; planning skips are not emitted again.
+    Skipped {
+        /// Approved plan item.
+        item_id: ItemId,
+        /// Tool left unstarted.
+        tool: CacheTool,
+        /// Why the tool could not run.
+        reason: String,
+    },
+}
+
 impl ToolResult {
     /// Whether the tool exited with status 0.
     pub fn succeeded(&self) -> bool {
@@ -971,6 +1032,12 @@ impl QuickClean {
                 (n.node, Some(n.script), Some(n.shim))
             }
             Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
+            Lookup::LauncherAlias(p) => {
+                return Err(SkipReason::Refused(format!(
+                    "{} is a version-manager launcher; add the actual tool executable to PATH before cleaning",
+                    p.display()
+                )));
+            }
             Lookup::NotFound => {
                 return Err(SkipReason::NotInstalled {
                     manual_removal: c.path.clone(),
@@ -1106,6 +1173,12 @@ impl QuickClean {
         match self.trusted.find(tool.binary()) {
             Lookup::NotFound => {}
             Lookup::ShellShimOnly(p) => return Err(SkipReason::ShellShimOnly(p)),
+            Lookup::LauncherAlias(p) => {
+                return Err(SkipReason::Refused(format!(
+                    "{} is a version-manager launcher; add the actual tool executable to PATH before cleaning",
+                    p.display()
+                )));
+            }
             Lookup::Found(b) | Lookup::NodeScript(NodeScript { shim: b, .. }) => {
                 return Err(SkipReason::Changed(format!(
                     "`{}` is installed now ({}): use its own command",
@@ -1321,6 +1394,19 @@ impl QuickClean {
         probe: &dyn ActivityProbe,
         cancel: &CancelToken,
     ) -> Result<QuickCleanReport, ScullError> {
+        self.run_with_progress(op, plan, probe, cancel, &|_| {})
+    }
+
+    /// Like [`Self::run`], with live events on the calling thread. The callback should return
+    /// promptly so process cancellation and timeout checks remain responsive.
+    pub fn run_with_progress(
+        &self,
+        op: &mut Operation<'_>,
+        plan: &QuickCleanPlan,
+        probe: &dyn ActivityProbe,
+        cancel: &CancelToken,
+        progress: &(dyn Fn(QuickCleanEvent) + Send + Sync),
+    ) -> Result<QuickCleanReport, ScullError> {
         let mut report = QuickCleanReport {
             results: Vec::new(),
             skipped: plan.skipped.clone(),
@@ -1363,7 +1449,12 @@ impl QuickClean {
             report.skipped.push(SkippedTool {
                 tool: t.tool,
                 path: Some(t.cache.clone()),
-                reason,
+                reason: reason.clone(),
+            });
+            progress(QuickCleanEvent::Skipped {
+                item_id: t.item.item_id.clone(),
+                tool: t.tool,
+                reason: reason.to_string(),
             });
             Ok(())
         };
@@ -1391,9 +1482,29 @@ impl QuickClean {
                 not_started(&mut report, &mut tally, op, t, SkipReason::Cancelled)?;
                 continue;
             }
+            let bun_context = if t.tool == CacheTool::Bun {
+                match sb.bun_context() {
+                    Ok(context) => Some(context),
+                    Err(error) => {
+                        not_started(
+                            &mut report,
+                            &mut tally,
+                            op,
+                            t,
+                            SkipReason::Sandbox(error.to_string()),
+                        )?;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let cwd = bun_context
+                .as_ref()
+                .map_or(sb.cwd.as_path(), |context| context.path());
             if let Err(reason) = self
                 .revalidate(t, probe)
-                .and_then(|()| self.scoped(t.tool, &t.location, Some(&sb.cwd)))
+                .and_then(|()| self.scoped(t.tool, &t.location, Some(cwd)))
             {
                 not_started(&mut report, &mut tally, op, t, reason)?;
                 continue;
@@ -1406,15 +1517,36 @@ impl QuickClean {
                 binary: t.binary.clone(),
                 args: t.args.clone(),
             });
-            let ran: Ran = process::run(&Spec {
-                binary: &t.binary,
-                args: &t.args,
-                env: &env,
-                cwd: &sb.cwd,
-                timeout: self.opts.timeout,
-                max_output: self.opts.max_output,
-                cancel,
+            progress(QuickCleanEvent::Started {
+                item_id: t.item.item_id.clone(),
+                tool: t.tool,
             });
+            let ran: Ran = process::run_with_output(
+                &Spec {
+                    binary: &t.binary,
+                    args: &t.args,
+                    env: &env,
+                    cwd,
+                    timeout: self.opts.timeout,
+                    max_output: self.opts.max_output,
+                    cancel,
+                },
+                &mut |event| match event {
+                    process::OutputEvent::Line(stream, line) => progress(QuickCleanEvent::Output {
+                        item_id: t.item.item_id.clone(),
+                        tool: t.tool,
+                        stream,
+                        line,
+                    }),
+                    process::OutputEvent::Truncated(stream) => {
+                        progress(QuickCleanEvent::OutputTruncated {
+                            item_id: t.item.item_id.clone(),
+                            tool: t.tool,
+                            stream,
+                        })
+                    }
+                },
+            );
             let size_after = self.measure(&t.cache);
             let free_after = free_space(&t.anchor).ok();
             let mut result = ToolResult {
@@ -1436,8 +1568,13 @@ impl QuickClean {
             result.explanation = pnpm_explanation(&result);
             let (rec, done) = audit::tool_record(t.item.item_id.clone(), &result, now_unix());
             tally.add(&predicted(t), &[], done);
-            report.results.push(result);
             op.record(&rec)?;
+            progress(QuickCleanEvent::Finished {
+                item_id: t.item.item_id.clone(),
+                tool: t.tool,
+                succeeded: result.succeeded(),
+            });
+            report.results.push(result);
         }
         report.measured_delta_bytes = op
             .measure_after(baseline, &tally)

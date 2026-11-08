@@ -1,3 +1,4 @@
+import { reactive } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -6,7 +7,8 @@ import { BRIDGE_KEY, type CachesReport } from '../../bridge';
 import { createMockBridge, MOCK_DATA } from '../../bridge/mock';
 import { routes } from '../../navigation';
 import { until } from '../../test/until';
-import { createMockCacheActions, createPendingCacheActions, designPreview, previewFrom, MOCK_BINARIES, PENDING_REASON } from './bridge';
+import { createMockCacheActions, createTauriCacheActions, designPreview, previewFrom, MOCK_BINARIES } from './bridge';
+import * as cacheBridge from './bridge';
 import {
   commandLine,
   defaultMode,
@@ -76,12 +78,38 @@ describe('Quick Clean preview', () => {
     expect(defaultMode(bun)).toBe('wipe');
   });
 
-  it('inside Tauri: planned from the report, but not runnable yet', async () => {
-    const a = createPendingCacheActions();
-    const p = await a.plan(s1Report());
-    expect(p.unavailable).toBe(PENDING_REASON);
-    expect(p.tools[0]!.binary).toBeNull();
-    await expect(a.run(p, [])).rejects.toThrow(/quick_clean_run/);
+  it('inside Tauri: uses native commands, selected modes and measured outcomes', async () => {
+    const prune = { binary: '/trusted/npm', args: ['cache', 'verify'], env: [{ name: 'npm_config_cache', value: '/fake/cache' }] };
+    const wipe = { ...prune, args: ['cache', 'clean', '--force'] };
+    const calls: { command: string; args?: Record<string, unknown> }[] = [];
+    const native = {
+      tools: [{ item_id: 'cache-1', tool: 'npm', name: 'npm cache', cache: '/fake/cache', bytes: 4096, prune, wipe, notes: [] }],
+      skipped: [{ tool: 'pip', name: 'pip cache', path: '/fake/pip', bytes: 100, reason: 'not supported yet' }],
+    };
+    let answer: unknown = native;
+    const actions = createTauriCacheActions({
+      invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ command, args });
+        return answer as T;
+      },
+      listen: async () => () => undefined,
+    });
+    const preview = reactive(await actions.plan(s1Report()));
+    expect(actions.kind).toBe('tauri');
+    expect(preview.unavailable).toBeNull();
+    expect(commandLine(preview.tools[0]!, 'prune')).toBe('npm_config_cache=/fake/cache /trusted/npm cache verify');
+    expect(skipText(preview.skipped[0]!.reason)).toBe('not supported yet');
+    answer = { operation_id: 'op-1', tools: [{ item_id: 'cache-1', tool: 'npm', succeeded: true, cache_bytes_freed: 1024 }], skipped: [] };
+    const result = await actions.run(preview, [{ item_id: 'cache-1', mode: 'wipe' }]);
+    expect(calls).toEqual([
+      { command: 'quick_clean_plan', args: undefined },
+      { command: 'quick_clean_run', args: { choices: [{ item_id: 'cache-1', mode: 'wipe', command: wipe }] } },
+    ]);
+    expect(result[0]).toMatchObject({ ok: true, freed_bytes: 1024, error: null });
+    answer = { operation_id: 'op-2', tools: [], skipped: [{ tool: 'npm', reason: 'in use' }] };
+    expect((await actions.run(preview, [{ item_id: 'cache-1', mode: 'prune' }]))[0]).toMatchObject({ ok: false, error: 'in use', freed_bytes: 0 });
+    await expect(actions.run(preview, [{ item_id: 'unknown', mode: 'prune' }])).rejects.toThrow(/unavailable/);
+    await expect(actions.run({ ...preview }, [{ item_id: 'cache-1', mode: 'wipe' }])).rejects.toThrow(/Refresh/);
   });
 });
 
@@ -143,6 +171,50 @@ async function mountAt(path: string) {
 }
 
 describe('caches screen', () => {
+  it('does not claim zero cache bytes while live completion is awaiting the measured result', async () => {
+    const preview = { ...designPreview().preview, tools: [designPreview().preview.tools[0]!], skipped: [] };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const factory = vi.spyOn(cacheBridge, 'cacheActionsFor').mockReturnValue({
+      kind: 'tauri', plan: async () => preview,
+      run: async (_preview, _choices, _progress, event) => {
+        event?.({ op_id: 'fixture', kind: 'finished', item_id: 'demo-npm', tool: 'npm', succeeded: true, completed: 1, total: 1 });
+        await gate;
+        return [{ tool: 'npm', item_id: 'demo-npm', ok: true, freed_bytes: 0, explanation: null, error: null }];
+      },
+    });
+    const w = await mountAt('/caches');
+    try {
+      await w.get('[data-testid="start"]').trigger('click');
+      await w.get('[data-testid="confirm-action"]').trigger('click');
+      await flushPromises();
+      expect(w.get('[data-testid="row-size"]').text()).toBe('6.1 GiB');
+      expect(w.get('[data-testid="row-state"]').text()).toBe('completed ✓');
+      release(); await flushPromises();
+    } finally { release(); w.unmount(); factory.mockRestore(); }
+  });
+  it('retains a successfully pruned cache when nothing was freed and refreshes it for another mode', async () => {
+    const fresh = () => ({ ...designPreview().preview, tools: [designPreview().preview.tools[0]!], skipped: [] });
+    const plan = vi.fn(async () => fresh());
+    const factory = vi.spyOn(cacheBridge, 'cacheActionsFor').mockReturnValue({
+      kind: 'tauri', plan,
+      run: async () => [{ tool: 'npm', item_id: 'demo-npm', ok: true, freed_bytes: 0, explanation: null, error: null }],
+    });
+    const w = await mountAt('/caches');
+    try {
+      await w.get('[data-testid="start"]').trigger('click');
+      await w.get('[data-testid="confirm-action"]').trigger('click');
+      await flushPromises();
+      expect(w.get('[data-testid="row-size"]').text()).toBe('6.1 GiB');
+      expect(w.get('[data-testid="main-footer"]').text()).toContain('0 B freed');
+      await w.get('[data-testid="start"]').trigger('click');
+      await flushPromises();
+      expect(plan).toHaveBeenCalledTimes(2);
+      expect(w.get('input[aria-label="Include npm"]').attributes('disabled')).toBeUndefined();
+      expect(w.get('[data-testid="row-size"]').text()).toBe('6.1 GiB');
+      expect(w.get('[data-testid="start"]').attributes('disabled')).toBeUndefined();
+    } finally { w.unmount(); factory.mockRestore(); }
+  });
   it('shows the real report: the S2 npm cache skipped, nothing to clean', async () => {
     const w = await mountAt('/caches');
     expect(w.findAll('[data-testid="cache-row"]')).toHaveLength(0);
@@ -153,7 +225,7 @@ describe('caches screen', () => {
 
   it('runs the design selection sequentially to the done state (08b)', async () => {
     const w = await mountAt('/caches?demo=design');
-    expect(w.get('[data-testid="start"]').text()).toBe('Clean 4 caches · 14.9 GiB');
+    expect(w.get('[data-testid="start"]').text()).toBe('Clean caches');
     expect(w.get('[data-testid="row-cmd"]').text()).toContain('/opt/homebrew/bin/npm cache verify');
     // The simulated run maps wall-clock time to progress (650 ms per tool), so on a loaded
     // machine one late timer can carry it past a whole row before the test looks (#290). The
@@ -163,16 +235,17 @@ describe('caches screen', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       await w.get('[data-testid="start"]').trigger('click');
+      await w.get('[data-testid="confirm-action"]').trigger('click');
       await until(() => states() === 'cleaning… | queued | queued | queued', root);
       // Halfway through the second tool.
       vi.setSystemTime(Date.now() + runDuration(4) * 0.375);
       await until(() => states() === 'cleaned ✓ | cleaning… | queued | queued', root);
       vi.setSystemTime(Date.now() + runDuration(4));
-      await until(() => w.get('[data-testid="done"]').text().includes('+14.9 GiB'), root);
+      await until(() => w.get('[data-testid="main-footer"]').text().includes('14.4 GiB freed'), root);
     } finally {
       vi.useRealTimers();
     }
-    expect(w.get('[data-testid="done"]').text()).toContain('freed from 4 caches');
+    expect(w.get('[data-testid="main-footer"]').text()).toContain('14.4 GiB freed');
     expect(w.findAll('[data-testid="row-state"]').map((s) => s.text())).toEqual(['cleaned ✓', 'cleaned ✓', 'cleaned ✓', 'cleaned ✓']);
   });
 
@@ -184,6 +257,6 @@ describe('caches screen', () => {
     expect(w.get('[data-testid="orphan-confirm"]').text()).toContain('Not undoable');
     await w.get('[data-testid="orphan-confirm"] .btn-ink').trigger('click');
     expect((w.get('input[aria-label="Include Playwright browsers"]').element as HTMLInputElement).checked).toBe(true);
-    expect(w.get('[data-testid="start"]').text()).toBe('Clean 5 caches · 16.8 GiB');
+    expect(w.get('[data-testid="start"]').text()).toBe('Clean caches');
   });
 });

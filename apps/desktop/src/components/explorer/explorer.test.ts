@@ -360,10 +360,10 @@ describe('explorer screen', () => {
   it('shows the drives root, drills down with breadcrumbs and goes back up (design 07 / 07b)', async () => {
     const { wrapper: w } = await mountAt('/explorer?demo=design');
     await vi.waitFor(() => expect(tiles(w)).toHaveLength(2));
-    expect(w.get('[data-testid="subtitle"]').text()).toContain('2 drives scanned');
+    expect(w.get('[data-testid="subtitle"]').text()).toContain('Explore scanned folders');
     expect(tiles(w).map((t) => t.attributes('aria-label'))).toEqual(['Open drive Dev SSD · external, 262.8 GiB', 'Open drive Macintosh HD · internal, 186.0 GiB']);
     expect(w.get('[data-testid="up"]').attributes('disabled')).toBeDefined();
-    expect(w.get('[data-testid="detail-name"]').text()).toBe('This Mac · 2 drives');
+    expect(w.find('aside').exists()).toBe(false);
     expect(w.get('[data-testid="unscanned"]').text()).toContain('Backup (Time Machine) · never scanned');
 
     await tile(w, 'drive:/').trigger('click');
@@ -371,8 +371,7 @@ describe('explorer screen', () => {
     await vi.waitFor(() => expect(tiles(w)).toHaveLength(5));
     expect(w.findAll('[data-testid="crumb"]').map((c) => c.text())).toEqual(['This Mac', 'Macintosh HD', 'code']);
     expect(w.get('[data-testid="here"]').text()).toBe('104.7 GiB · 5 items');
-    expect(w.get('[data-testid="detail-path"]').text()).toBe('Macintosh HD/code');
-    expect(w.findAll('[data-testid="largest"]')).toHaveLength(5);
+    expect(w.find('aside').exists()).toBe(false);
     expect(w.find('[data-testid="unscanned"]').exists()).toBe(false);
 
     await w.findAll('[data-testid="crumb"]')[1]!.trigger('click');
@@ -398,14 +397,16 @@ describe('explorer screen', () => {
     await flushPromises();
     expect(w.find('[data-testid="detail-message"]').exists()).toBe(false);
 
-    // Clicking again deselects; the aside goes back to the folder.
+    // Clicking again closes the detail pane.
     await tile(w, '/Users/ada/code/rust-svc#rest').trigger('click');
-    await vi.waitFor(() => expect(w.get('[data-testid="detail-kind"]').text()).toBe('This folder'));
+    await vi.waitFor(() => expect(w.find('aside').exists()).toBe(false));
     w.unmount();
   });
 
   it('adds what can go to the cleanup through the action stub', async () => {
     const { wrapper: w } = await mountAt('/explorer?demo=design&at=Macintosh HD/.cache');
+    await vi.waitFor(() => expect(w.find('[data-testid="inspect-folder"]').exists()).toBe(true));
+    await w.get('[data-testid="inspect-folder"]').trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="detail-action"]').text()).toBe('Add to cleanup'));
     await w.get('[data-testid="detail-action"]').trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="detail-message"]').text()).toBe('6 items added to Cleanup Review.'));
@@ -416,6 +417,8 @@ describe('explorer screen', () => {
     const bridge = { ...createMockBridge(), kind: 'tauri' as const };
     core.report = designExplorerReport();
     const { wrapper: w } = await mountAt('/explorer?at=Macintosh HD/.cache', bridge);
+    await vi.waitFor(() => expect(w.find('[data-testid="inspect-folder"]').exists()).toBe(true));
+    await w.get('[data-testid="inspect-folder"]').trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="detail-action"]').text()).toBe('Add to cleanup'));
     await w.get('[data-testid="detail-action"]').trigger('click');
     await vi.waitFor(() => expect(w.get('[data-testid="detail-message"]').text()).toContain('Phase 2 plan bridge'));

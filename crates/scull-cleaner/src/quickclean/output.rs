@@ -6,6 +6,41 @@
 
 use std::fmt::Write as _;
 
+/// Keeps incomplete lines as bytes so UTF-8 characters split between reads survive intact.
+#[derive(Default)]
+pub(crate) struct OutputLines {
+    pending: Vec<u8>,
+}
+
+impl OutputLines {
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        let mut lines = Vec::new();
+        for part in bytes.split_inclusive(|b| *b == b'\n') {
+            self.pending.extend_from_slice(part);
+            if self.pending.last() == Some(&b'\n') {
+                self.pending.pop();
+                lines.push(self.take_line());
+            }
+        }
+        lines
+    }
+
+    pub fn finish(&mut self) -> Option<String> {
+        (!self.pending.is_empty())
+            .then(|| self.take_line())
+            .filter(|line| !line.is_empty())
+    }
+
+    fn take_line(&mut self) -> String {
+        if self.pending.last() == Some(&b'\r') {
+            self.pending.pop();
+        }
+        let line = escape_line(&String::from_utf8_lossy(&self.pending));
+        self.pending.clear();
+        line
+    }
+}
+
 /// Captured output of one stream: escaped lines, capped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapturedOutput {
@@ -85,6 +120,37 @@ pub fn escape_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_lines_preserve_split_utf8_and_escape_controls() {
+        let mut lines = OutputLines::default();
+        assert!(lines.push(b"a\xe2").is_empty());
+        assert_eq!(lines.push(b"\x82\xac\x1b[2J\r\n\xe2\x80"), ["a€\\x1b[2J"]);
+        assert!(lines.push(b"\xaeend").is_empty());
+        assert_eq!(lines.finish(), Some("\\u{202e}end".into()));
+        assert_eq!(lines.finish(), None);
+    }
+
+    #[test]
+    fn incremental_output_matches_capture_at_every_read_boundary() {
+        for bytes in [
+            b"\n\nfinal\r".as_slice(),
+            b"a\xe2\x82\xac\x1b[2J\r\n\xe2\x80\xaeend",
+            b"a\xffb\n\r",
+            b"\r",
+            b"",
+        ] {
+            for size in 1..=bytes.len().max(1) {
+                let mut pending = OutputLines::default();
+                let mut lines = Vec::new();
+                for chunk in bytes.chunks(size) {
+                    lines.extend(pending.push(chunk));
+                }
+                lines.extend(pending.finish());
+                assert_eq!(lines, CapturedOutput::from_bytes(bytes, false).lines);
+            }
+        }
+    }
 
     #[test]
     fn lines_are_split_and_escaped() {

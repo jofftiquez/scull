@@ -71,7 +71,7 @@ test('empty answers block Continue and setup can be deferred without scanning', 
   await page.getByTestId('skip').click();
   await expect(page).toHaveURL(/#\/$/);
   expect(await page.evaluate(() => localStorage.getItem('scull.onboarding.setup'))).toBeNull();
-  await expect(page.getByTestId('header')).toContainText('not scanned');
+  await expect(page.getByTestId('header')).toContainText('Scan');
 });
 
 test('keyboard navigation moves focus to each question at the minimum window size', async ({ page, shot }) => {

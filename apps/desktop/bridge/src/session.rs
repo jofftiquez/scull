@@ -203,6 +203,15 @@ impl Session {
         crate::settings::settings_view(self)
     }
 
+    /// Save one desktop-editable setting to this session's config file.
+    pub fn save_setting(&self, key: &str, value: &serde_json::Value) -> Result<(), ScullError> {
+        self.resolved_config()?;
+        let path = self.setup.config_file.as_deref().ok_or_else(|| {
+            ScullError::new(ErrorKind::Config, "the config file location is not known")
+        })?;
+        scull_platform::config::save_setting(path, key, value, self.setup.home.as_deref())
+    }
+
     fn register(&self, op: &OpId) -> Result<(CancelToken, OpGuard<'_>), ScullError> {
         let mut ops = lock(&self.ops);
         if ops.contains_key(op.as_str()) {
@@ -378,7 +387,10 @@ impl Session {
     /// The last scan (see [`Self::last_scan`]) with its roots, configuration and watermark,
     /// read together.
     pub(crate) fn last_scan_basis(&self) -> Option<(Arc<ScanReport>, ScanBasis)> {
-        lock(&self.last_scan).clone()
+        let current = self.config().ok()?;
+        lock(&self.last_scan)
+            .clone()
+            .filter(|(_, basis)| basis.config == current)
     }
 
     /// An engine for executing or revalidating under `roots` (no history recording).

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ActionBar from '../shell/ActionBar.vue';
+import ActionFooter from '../shell/ActionFooter.vue';
 // Project details (design 06 right column): totals, what's inside by tier, how it was found,
 // and "Clean regenerable" with its fill animation and the success toast (06b).
 import { computed } from 'vue';
@@ -20,13 +22,8 @@ const props = defineProps<{
 }>();
 defineEmits<{ clean: []; neverSuggest: []; reveal: [] }>();
 
-const cleaningThis = computed(() => props.clean.phase === 'cleaning' && props.clean.root === props.project.root);
 const s0 = computed(() => regenerable(props.project));
 const rows = computed(() => inside(props.project));
-const fill = computed(() => (cleaningThis.value ? Math.round((1 - (1 - props.clean.fraction) ** 3) * 100) : 0));
-const label = computed(() =>
-  cleaningThis.value ? 'Cleaning…' : s0.value > 0 ? `Clean regenerable · ${formatBytes(s0.value)}` : 'Nothing regenerable to clean',
-);
 const busy = computed(() => props.clean.phase === 'cleaning');
 const found = computed(() => {
   const p = props.project;
@@ -86,31 +83,10 @@ const found = computed(() => {
 
     <p class="m-0 text-caption text-text-secondary">{{ found }}</p>
 
-    <button
-      type="button"
-      class="clean-btn relative min-h-12 overflow-hidden rounded-button-lg border-0 font-[inherit] font-semibold"
-      :class="s0 > 0 && !busy ? 'cursor-pointer bg-ink text-on-ink' : 'bg-surface-raised text-text-tertiary'"
-      :disabled="s0 === 0 || busy"
-      data-testid="clean"
-      @click="$emit('clean')"
-    >
-      <span class="clean-fill absolute inset-y-0 left-0 rounded-button-lg" :style="{ width: `${fill}%` }"></span>
-      <span class="relative" :class="cleaningThis ? 'text-ink' : ''">{{ label }}</span>
-    </button>
-    <div class="flex gap-2">
-      <button type="button" class="btn-line" @click="$emit('neverSuggest')">Never suggest</button>
-      <button type="button" class="btn-line" @click="$emit('reveal')">{{ revealLabel }}</button>
-    </div>
     <p v-if="note" class="m-0 text-caption text-text-secondary" role="status">{{ note }}</p>
-
-    <div v-if="toast" role="status" class="toast flex items-center gap-3 rounded-chip bg-ink px-4 py-3 text-on-ink" data-testid="toast">
-      <svg width="26" height="26" viewBox="0 0 88 88" aria-hidden="true" class="flex-none">
-        <circle cx="44" cy="44" r="40" fill="var(--color-tier-s0)" />
-        <path class="check" d="M28 45 l11 11 l21 -23" fill="none" stroke="var(--color-on-fill)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-      <span class="flex-1 text-label">{{ toast.text }}</span>
-      <span class="font-mono text-label text-on-ink-violet">+{{ formatBytes(toast.bytes) }}</span>
-    </div>
+    <ActionFooter panel="aside" aria-label="Project actions">
+      <ActionBar :summary="`${project.name} · ${formatBytes(s0)} regenerable`" label="Review cleanup" :busy="busy" :disabled="s0 === 0" data-testid="clean" @action="$emit('clean')" />
+    </ActionFooter>
   </section>
 </template>
 

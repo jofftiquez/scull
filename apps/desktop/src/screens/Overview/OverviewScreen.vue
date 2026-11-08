@@ -27,9 +27,7 @@ import { candidatesOn, chosenDrive, driveChoice, driveContext, driveForecast, dr
 import { ALERT_DAYS } from '../../components/overview/forecast';
 import { quickCleanTools, type Phase, type QuickCleanResult } from '../../components/overview/quickClean';
 import { reclaimSummary } from '../../components/overview/summary';
-import { formatBytes } from '../../lib/format';
-import { cancelScan, core, rescan } from '../../state/core';
-import { shell } from '../../state/shell';
+import { core, rescan } from '../../state/core';
 import { needsOnboarding } from '../../components/onboarding/model';
 
 const bridge = useOverviewBridge();
@@ -76,13 +74,6 @@ const qc = ref<{ phase: Phase; cleaned: string[]; freed: number; result: QuickCl
 });
 const cleaned = computed(() => new Set(qc.value.cleaned));
 const tools = computed(() => quickCleanTools(candidatesOn(caches.value?.candidates ?? [], drive.value, drives.value)));
-watch(
-  () => qc.value.phase,
-  (ph, was) => {
-    if (ph === 'done' && was !== 'done') shell.wink += 1;
-  },
-);
-
 const forecast = computed(() => driveForecast(drive.value, drives.value, core.forecasts, qc.value.freed));
 watch(drive, () => (selected.value = null));
 const center = computed(() => {
@@ -94,9 +85,6 @@ const center = computed(() => {
 });
 
 const regenerable = computed(() => model.value?.byTier.S0.reclaimable ?? 0);
-const rescanLabel = computed(() =>
-  scanningView.value ? `Scanning ${Math.round(sweep.progress.value * 100)}%` : 'Rescan',
-);
 
 function findItem(id: string): WheelItem | null {
   for (const c of model.value?.categories ?? []) {
@@ -132,10 +120,6 @@ function clear() {
   filter.value = 'all';
 }
 
-function showRegenerable() {
-  filter.value = 'S0';
-  selected.value = null;
-}
 
 async function startScan() {
   if (scanningView.value) return;
@@ -167,6 +151,10 @@ function followRunningScan() {
     expected,
   );
 }
+
+watch(() => core.scanning, (running) => {
+  if (running && !sweep.sweeping.value) followRunningScan();
+});
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') clear();
@@ -201,48 +189,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
-  <ScreenLayout aside-label="Details">
-    <template #actions>
-      <button
-        type="button"
-        class="inline-flex min-h-11 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
-        data-testid="show-regenerable"
-        @click="showRegenerable"
-      >
-        Show regenerable · {{ formatBytes(regenerable) }}
-      </button>
-      <button
-        v-if="core.scanning"
-        type="button"
-        class="inline-flex min-h-11 cursor-pointer items-center rounded-button border-0 bg-transparent px-3.5 text-label text-text-strong-muted hover:text-ink"
-        @click="cancelScan"
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        :disabled="scanningView"
-        class="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-button border border-border bg-surface px-3.5 text-label font-medium text-ink disabled:cursor-progress"
-        data-testid="rescan"
-        @click="startScan"
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          aria-hidden="true"
-          :style="scanningView ? 'animation: scull-spin 800ms linear infinite' : undefined"
-        >
-          <path d="M20 11a8 8 0 1 0-2.3 5.7" />
-          <path d="M20 5v6h-6" />
-        </svg>
-        <span class="tabular-nums">{{ rescanLabel }}</span>
-      </button>
-    </template>
+  <ScreenLayout :loading="preparing && !core.scanning" loading-label="Preparing storage overview…" :scan-busy="scanningView" aside-label="Details" :detail-open="!!selected" @close-details="selected = null">
     <h1 class="sr-only">Overview</h1>
 
     <section
@@ -263,9 +210,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         @select="onSelect"
       />
       <TierToolbar v-model="filter" @clear="clear" />
-      <span class="text-center font-mono text-caption text-text-hint">
-        click a segment to inspect · shift-click adds it to cleanup · esc clears
-      </span>
       <span class="sr-only" role="status" data-testid="announce">{{ announcement }}</span>
       <span v-if="cleanupBasket.size > 0" class="font-mono text-caption text-text-tertiary" data-testid="basket">
         {{ cleanupBasket.size }} item{{ cleanupBasket.size === 1 ? '' : 's' }} marked for cleanup

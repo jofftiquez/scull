@@ -2,13 +2,22 @@ import { describe, expect, it } from 'vitest';
 import type { WorktreeReport } from '../../bridge';
 import { MOCK_DATA } from '../../bridge/mock';
 import { DESIGN_WORKTREES } from '../../bridge/worktreesMock';
-import { branchOf, canRemove, checksOf, filterCounts, isAgent, matches, metaLine, repoOf, sortBySize, verdictLine, verdictOf } from './worktrees';
+import { branchOf, canRemove, checksOf, filterCounts, isAgent, matches, metaLine, removalBlock, repoOf, sortBySize, verdictLine, verdictOf } from './worktrees';
 
 const byBranch = (b: string) => DESIGN_WORKTREES.find((w) => branchOf(w) === b)!;
 const recorded = MOCK_DATA.worktrees.worktrees.filter((w) => !DESIGN_WORKTREES.includes(w));
 const status = (w: WorktreeReport) => Object.fromEntries(checksOf(w).map((c) => [c.label.replace(/ into .*/, ' into'), c.status]));
 
 describe('worktree verdicts', () => {
+  it('explains the actual removal block and the next step without weakening the gate', () => {
+    const removable = byBranch('agent/refactor-cart-12');
+    expect(removalBlock(removable)).toBeNull();
+    expect(removalBlock({ ...removable, kind: 'main' })?.title).toBe('Main working tree');
+    expect(removalBlock({ ...removable, inside_roots: false })?.detail).toContain('scan folders');
+    expect(removalBlock(byBranch('fix/payments-hotfix'))?.detail).toContain('push');
+    expect(removalBlock(byBranch('agent/perf-probe-22'))?.detail).toContain('locked');
+    expect(canRemove(byBranch('fix/payments-hotfix'))).toBe(false);
+  });
   it('follow the core tier; removal only where D-28 allows a Git action', () => {
     expect(verdictOf(byBranch('agent/refactor-cart-12'))).toBe('removable');
     expect(verdictLine(byBranch('agent/refactor-cart-12'))).toBe('Removable · S1');

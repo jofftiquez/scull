@@ -137,9 +137,15 @@ fn home_dir() -> Option<PathBuf> {
 /// * virtual filesystems are left out; so are local and removable volumes known to be smaller
 ///   than `min_bytes` (EFI and recovery partitions);
 /// * a volume mounted in several places is shown once, at its shortest mount point;
+/// * known macOS auxiliary mounts are hidden when the system root is shown;
 /// * the volume holding `home` comes first, then the other scanned drives, then the ones scull
 ///   doesn't scan (backup, network), each group by mount point.
 pub fn select_drives(vols: &[VolumeFacts], home: Option<&Path>, min_bytes: u64) -> Vec<Drive> {
+    let has_system_root = vols.iter().any(|v| {
+        v.kind == DriveKind::Local
+            && v.mount_point == Path::new("/")
+            && v.total_bytes.is_none_or(|t| t >= min_bytes)
+    });
     let mut kept: Vec<&VolumeFacts> = Vec::new();
     for v in vols {
         if v.kind == DriveKind::Virtual {
@@ -147,6 +153,26 @@ pub fn select_drives(vols: &[VolumeFacts], home: Option<&Path>, min_bytes: u64) 
         }
         let small = v.total_bytes.is_some_and(|t| t < min_bytes);
         if small && v.kind.scan_policy() == ScanPolicy::Scan {
+            continue;
+        }
+        // macOS auxiliary mounts belong to the system installation, not separate user drives.
+        if has_system_root
+            && v.kind == DriveKind::Local
+            && v.mount_point.parent() == Some(Path::new("/System/Volumes"))
+            && matches!(
+                v.mount_point.file_name().and_then(|name| name.to_str()),
+                Some(
+                    "Data"
+                        | "Preboot"
+                        | "Update"
+                        | "VM"
+                        | "Recovery"
+                        | "xarts"
+                        | "iSCPreboot"
+                        | "Hardware"
+                )
+            )
+        {
             continue;
         }
         let same = v
@@ -295,6 +321,84 @@ mod tests {
         let d = select_drives(&vols, None, GIB);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].mount_point, "/");
+    }
+
+    #[test]
+    fn macos_system_volumes_shown_once_as_system() {
+        let mut vols = vec![vol("/", Some(1), DriveKind::Local, Some(500 * GIB))];
+        for (i, name) in [
+            "Data",
+            "Preboot",
+            "Update",
+            "VM",
+            "Recovery",
+            "xarts",
+            "iSCPreboot",
+            "Hardware",
+        ]
+        .iter()
+        .enumerate()
+        {
+            vols.push(vol(
+                &format!("/System/Volumes/{name}"),
+                Some(i as u64 + 2),
+                DriveKind::Local,
+                Some(500 * GIB),
+            ));
+        }
+
+        for home in ["/Users/ada", "/System/Volumes/Data/Users/ada"] {
+            let d = select_drives(&vols, Some(Path::new(home)), GIB);
+            assert_eq!(d.len(), 1);
+            assert_eq!(d[0].mount_point, "/");
+            assert_eq!(d[0].label, "System");
+            assert!(d[0].holds_home);
+            assert_eq!(d[0].total_bytes, Some(500 * GIB));
+        }
+    }
+
+    #[test]
+    fn equal_size_independent_and_special_mounts_stay_visible() {
+        let mounts = [
+            ("/", DriveKind::Local),
+            ("/Volumes/Preboot", DriveKind::Removable),
+            ("/Volumes/Other", DriveKind::Local),
+            ("/System/Volumes/Projects", DriveKind::Local),
+            ("/System/Volumes/Data/External", DriveKind::Local),
+            (
+                "/Library/Developer/CoreSimulator/Volumes/iOS_23E254a",
+                DriveKind::Local,
+            ),
+            ("/System/Volumes/VM", DriveKind::Network),
+            ("/System/Volumes/Preboot", DriveKind::Backup),
+        ];
+        let vols: Vec<_> = mounts
+            .iter()
+            .enumerate()
+            .map(|(i, (mount, kind))| vol(mount, Some(i as u64 + 1), *kind, Some(500 * GIB)))
+            .collect();
+        let d = select_drives(&vols, None, GIB);
+        assert_eq!(d.len(), mounts.len());
+        for (mount, _) in mounts {
+            assert!(d.iter().any(|drive| drive.mount_point == mount));
+        }
+    }
+
+    #[test]
+    fn macos_data_mount_kept_without_system_root() {
+        let vols = [vol(
+            "/System/Volumes/Data",
+            Some(2),
+            DriveKind::Local,
+            Some(500 * GIB),
+        )];
+        let d = select_drives(
+            &vols,
+            Some(Path::new("/System/Volumes/Data/Users/ada")),
+            GIB,
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].holds_home);
     }
 
     #[test]

@@ -55,10 +55,13 @@ export const OPEN_REQUEST_EVENT = 'scull://open-request';
 
 /** The cleanup commands (P3-EXEC-01; main window only). */
 export const CLEANUP_COMMANDS = {
+  executionBusy: 'execution_busy',
   prepare: 'prepare_desktop_plan',
   execute: 'execute_desktop_plan',
   restore: 'restore_quarantined',
   quickClean: 'quick_clean',
+  quickCleanPlan: 'quick_clean_plan',
+  quickCleanRun: 'quick_clean_run',
 } as const;
 
 const RUN_OUTCOME: Record<RunItemOutcome, ItemOutcomeKind> = {
@@ -253,7 +256,7 @@ export interface TauriPlanOptions {
   pollMs?: number;
 }
 
-export function createTauriPlanBridge(opts: TauriPlanOptions = {}): PlanBridge {
+function buildTauriPlanBridge(opts: TauriPlanOptions = {}): PlanBridge {
   const t = opts.transport ?? realTransport;
   const pollMs = opts.pollMs ?? STATUS_POLL_MS;
   const call = async <T>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -278,7 +281,7 @@ export function createTauriPlanBridge(opts: TauriPlanOptions = {}): PlanBridge {
           planId: req.plan_id,
           contentHash: req.hash,
           items: req.items,
-          typedCount: null,
+          typedCount: req.typed_count ?? null,
         }),
       );
       for (const outcome of r.items) o.onEvent?.({ kind: 'item_finished', outcome });
@@ -365,4 +368,17 @@ export function createTauriPlanBridge(opts: TauriPlanOptions = {}): PlanBridge {
       };
     },
   };
+}
+
+// Hot updates replace methods on the object screens already hold, including command arguments.
+const liveBridges: { bridge: PlanBridge; options: TauriPlanOptions }[] = import.meta.hot?.data.liveBridges ?? [];
+for (const entry of liveBridges) Object.assign(entry.bridge, buildTauriPlanBridge(entry.options));
+export function createTauriPlanBridge(options: TauriPlanOptions = {}): PlanBridge {
+  const bridge = buildTauriPlanBridge(options);
+  if (import.meta.hot) liveBridges.push({ bridge, options });
+  return bridge;
+}
+if (import.meta.hot) {
+  import.meta.hot.accept();
+  import.meta.hot.dispose((data) => { data.liveBridges = liveBridges; });
 }

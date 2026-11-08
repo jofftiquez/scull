@@ -37,6 +37,34 @@ afterEach(() => {
 });
 
 describe('Cleanup Review (desktop plan)', () => {
+  it('scopes a project review and reloads the full scan when its query is cleared', async () => {
+    const w = await mountAt('/cleanup?project=/Users/ada/code/rust-svc');
+    expect(w.findAll('input[aria-label^="Include "]')).toHaveLength(1);
+    expect(w.get('input[aria-label^="Include "]').attributes('aria-label')).toBe('Include ~/code/rust-svc/target');
+    await w.vm.$router.push('/cleanup');
+    await settle();
+    expect(w.findAll('input[aria-label^="Include "]')).toHaveLength(6);
+    expect(w.get('[data-testid="plan-line"]').text()).toContain('from the last scan');
+    w.unmount();
+  });
+  it('requires the selected irreversible S1 item count before execution', async () => {
+    const base = createMockPlanBridge();
+    const plan = await base.preparePlan({});
+    plan.items = [{ ...plan.items[0]!, candidate: { ...plan.items[0]!.candidate, tier: 'S1', action: { type: 'git_worktree_remove' } } }];
+    const executePlan = vi.fn().mockRejectedValue(new Error('test stops before execution'));
+    const w = await mountAt('/cleanup', { ...base, preparePlan: async () => plan, executePlan });
+    await w.get('input[type="checkbox"]').setValue(true);
+    await w.get('[data-testid="confirm"]').trigger('click');
+    expect(w.get('[data-testid="confirm-action"]').attributes('disabled')).toBeDefined();
+    await w.get('input[aria-label="Confirm irreversible item count"]').setValue('2');
+    expect(w.get('[data-testid="confirm-action"]').attributes('disabled')).toBeDefined();
+    await w.get('input[aria-label="Confirm irreversible item count"]').setValue('1');
+    await w.get('[data-testid="confirm-action"]').trigger('click');
+    await flushPromises();
+    expect(executePlan).toHaveBeenCalledOnce();
+    expect(executePlan.mock.calls[0]![0].typed_count).toBe(1);
+    w.unmount();
+  });
   it('shows the plan with S0 preselected, S1/S2 unticked, S3 left out and unselectable', async () => {
     const w = await mountAt('/cleanup');
     const boxes = w.findAll<HTMLInputElement>('input[type="checkbox"][aria-label^="Include "]');
@@ -52,14 +80,14 @@ describe('Cleanup Review (desktop plan)', () => {
     expect(w.text()).toContain('Protected · never offered');
     expect(w.text()).toContain('~/code/vault/target');
     expect(w.find('input[aria-label="Include ~/code/vault/target"]').exists()).toBe(false);
-    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 4 items');
-    expect(w.text()).toContain('Clean 4 items · 38.6 GiB predicted');
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Review cleanup');
+    expect(w.text()).toContain('4 selected · 38.6 GiB predicted');
   });
 
   it('ticking an S2 item adds a quarantine to the plan', async () => {
     const w = await mountAt('/cleanup');
     await w.get('input[aria-label="Include ~/code/ml-lab/.venv"]').setValue(true);
-    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 4 · quarantine 1');
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Review cleanup');
     expect(w.text()).toContain('9.8 GiB');
   });
 
@@ -78,6 +106,7 @@ describe('Cleanup Review (desktop plan)', () => {
     const exec = vi.spyOn(plans, 'executePlan');
     const w = await mountAt('/cleanup', plans);
     await w.get('[data-testid="confirm"]').trigger('click');
+    await w.get('[data-testid="confirm-action"]').trigger('click');
     await flushPromises();
     expect(exec).toHaveBeenCalledOnce();
     expect(exec.mock.calls[0]![0].items).toHaveLength(4);
@@ -86,8 +115,8 @@ describe('Cleanup Review (desktop plan)', () => {
       expect(w.find('[data-testid="done"]').exists()).toBe(true);
     }, { timeout: 10000, interval: 25 });
     expect(w.text()).toContain('freed');
-    expect(w.text()).toContain('98% of the 38.6 GiB predicted');
-    expect(w.get('[data-testid="confirm"]').text()).toBe('Done');
+    expect(w.text()).toContain('37.9 GiB freed');
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Review again');
   });
 
   it('inside Tauri (no plan commands yet) it shows why there is nothing to review', async () => {
@@ -118,7 +147,7 @@ describe('Cleanup Review (plan from the Overview basket)', () => {
     expect(rowIds(w)).toEqual(['design-nm', 'design-target', 'design-npm']);
     expect(w.get('[data-testid="plan-line"]').text()).toContain('from 3 items marked on the Overview');
     // S0 preselected, the S1 cache offered unticked; no scan-wide extras.
-    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 2 items');
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Review cleanup');
     expect(w.text()).not.toContain('Protected · never offered');
     expect(w.text()).not.toContain('Skipped at re-check');
   });
@@ -141,6 +170,7 @@ describe('Cleanup Review (plan from the Overview basket)', () => {
     const exec = vi.spyOn(plans, 'executePlan');
     const w = await mountAt('/cleanup', plans);
     await w.get('[data-testid="confirm"]').trigger('click');
+    await w.get('[data-testid="confirm-action"]').trigger('click');
     await vi.waitFor(async () => {
       await flushPromises();
       expect(w.find('[data-testid="done"]').exists()).toBe(true);
@@ -160,7 +190,7 @@ describe('Cleanup Review (plan from the Overview basket)', () => {
     await settle();
     expect(prepare).toHaveBeenLastCalledWith({});
     expect(cleanupBasket.size).toBe(0);
-    expect(w.get('[data-testid="confirm"]').text()).toBe('Delete 4 items');
+    expect(w.get('[data-testid="confirm"]').text()).toBe('Review cleanup');
   });
 });
 
