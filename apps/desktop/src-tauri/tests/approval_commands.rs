@@ -266,8 +266,20 @@ fn worktree_confirmation_count_survives_the_frontend_invoke_payload() {
         );
         assert!(worktree.join("README.md").is_file());
     }
+    // Execution re-checks activity with the real OS probe (no seam, by design). Where this
+    // runner can't verify it, the right count must still be accepted and fail closed.
+    let probe =
+        scull_safety::NativeActivityProbe::capture(scull_platform::activity::Limits::default());
+    let verifiable =
+        scull_safety::check_in_use(&worktree, &[], &probe).in_use == scull_safety::Tri::No;
     args["typedCount"] = json!(1);
     let result = invoke(&w, "execute_desktop_plan", args).unwrap();
+    if !verifiable {
+        assert_eq!(result["items"][0]["outcome"], "skipped", "{result}");
+        assert!(worktree.join("README.md").is_file());
+        eprintln!("PARTIAL: native worktree activity could not be verified; removal skipped");
+        return;
+    }
     assert_eq!(result["items"][0]["outcome"], "deleted", "{result}");
     assert!(!worktree.exists());
     git(&["show-ref", "--verify", "refs/heads/feature"]);
