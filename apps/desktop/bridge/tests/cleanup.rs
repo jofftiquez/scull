@@ -963,8 +963,15 @@ fn explicitly_scanned_project_roots_are_not_trusted_cache_tool_locations() {
     )));
     let desk = CleanupDesk::new();
     let before = desk.quick_clean_plan(&session).unwrap();
+    // The preview uses the real OS probe: on a runner where some of the user's processes
+    // can't be inspected, the located npm is skipped as "could not check whether it is in
+    // use" instead of offered. Either way it is found, never "not installed".
     assert!(
-        before.tools.iter().any(|tool| tool.tool == "npm"),
+        before.tools.iter().any(|tool| tool.tool == "npm")
+            || before
+                .skipped
+                .iter()
+                .any(|skip| skip.tool == "npm" && !skip.reason.contains("not installed")),
         "{before:#?}"
     );
     session

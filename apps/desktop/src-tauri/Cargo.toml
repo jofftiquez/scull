@@ -53,6 +53,7 @@ tauri = { version = "2", features = ["test"] }
 scull-mcp = { path = "../../../crates/scull-mcp" }
 scull-storage = { path = "../../../crates/scull-storage" }
 scull-engine = { path = "../../../crates/scull-engine" }
+scull-safety = { path = "../../../crates/scull-safety" }
 tempfile = "3"
 
 [build-dependencies]

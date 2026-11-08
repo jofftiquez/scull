@@ -180,17 +180,24 @@ fn worktree_confirmation_count_survives_the_frontend_invoke_payload() {
 
     let data = root.join("data");
     let machine_id = scull_platform::machine_id(&data).unwrap();
-    let session = Arc::new(Session::new(Setup {
-        home: Some(root.join("home")),
-        config_file: None,
-        data_dir: Some(data.clone()),
-        env: Arc::new(|_| None),
-        record_history: true,
-        git: true,
-        detect_synced_roots: false,
-        allow_network_roots: true,
-        in_use: true,
-    }));
+    let session = Arc::new(
+        Session::new(Setup {
+            home: Some(root.join("home")),
+            config_file: None,
+            data_dir: Some(data.clone()),
+            env: Arc::new(|_| None),
+            record_history: true,
+            git: true,
+            detect_synced_roots: false,
+            allow_network_roots: true,
+            in_use: false,
+        })
+        // Nothing holds this fresh tree; the real probe turns it S2 on a runner where some of
+        // the user's processes can't be inspected (what this test checks is the confirmation).
+        .with_in_use_source(scull_engine::InUseSource::Probe(Arc::new(
+            scull_engine::FixedInUse(scull_safety::Tri::No),
+        ))),
+    );
     session
         .scan(
             &scull_desktop_bridge::OpId::parse("ipc-worktree").unwrap(),
