@@ -294,13 +294,14 @@ fn scan_human_json_ndjson_and_history() {
         "Reclaimable",
         "Allocated",
         "Logical",
-        "Confidence",
         "S3 protected",
         "Totals by tier:",
         "Nothing was changed",
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
+    // Confidence is summarized once (`estimate_note`), not a column (#138).
+    assert!(!out.contains("Confidence"), "{out}");
     // Paths are shown relative to the single root, with the OS separator.
     let app_target = Path::new("app").join("target");
     assert!(out.contains(&*app_target.to_string_lossy()), "{out}");
