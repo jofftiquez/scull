@@ -51,7 +51,9 @@ foreach ($pair in $Tests) {
     $package, $test = $pair.Split('/', 2)
     # The test executable cargo already built (same profile and features as `cargo test`).
     $exe = $null
-    cargo test -p $package --test $test --locked --no-run --message-format=json | ForEach-Object {
+    # scull-cli's full-only tests need its `full` feature (#142), as in CI's `cargo test`.
+    $features = if ($package -eq 'scull-cli') { @('--features', 'full') } else { @() }
+    cargo test -p $package @features --test $test --locked --no-run --message-format=json | ForEach-Object {
         $m = $null
         try { $m = $_ | ConvertFrom-Json } catch { }
         if ($m -and $m.reason -eq 'compiler-artifact' -and $m.target.name -eq $test -and $m.profile.test -and $m.executable) {

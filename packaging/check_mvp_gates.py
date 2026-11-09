@@ -122,7 +122,10 @@ SKIP_LINE = re.compile(r"^SKIPPED (\S+?):?(?:\s|$)", re.M)
 
 def run_group(package: str, target: list[str], fns: list[str], nightly: bool) -> tuple[dict[str, str], str]:
     """Run `fns` of one test target; returns ({fn: ok|FAILED|ignored|skipped|not run}, output)."""
-    cmd = ["cargo", "test", "--locked", "-p", package, *target, "--"]
+    # scull-cli's tests of full-only commands are compiled out without `full` (#142), which
+    # would make them pass vacuously.
+    features = ["--features", "full"] if package == "scull-cli" else []
+    cmd = ["cargo", "test", "--locked", "-p", package, *features, *target, "--"]
     if nightly:
         cmd += ["--include-ignored", "--test-threads=1"]
     cmd += fns
@@ -175,7 +178,8 @@ def check_fixtures(allow_skips: bool, report: Path | None) -> None:
     os_letter = this_os()
     # FX-OUT/FX-DATA and the CLI tests drive the real `scull` binary (target/debug/scull);
     # `cargo test -p scull-fixtures` alone does not build it.
-    subprocess.run(["cargo", "build", "--locked", "-p", "scull-cli"], cwd=ROOT, check=True)
+    # The released command set (#142: the slim build is the source default).
+    subprocess.run(["cargo", "build", "--locked", "-p", "scull-cli", "--features", "full"], cwd=ROOT, check=True)
     registry = load_registry()
     mvp = [f for f in registry if f["gate"] == "MVP"]
     print(f"MVP fixture gate on {platform.system()} ({os_letter}): {len(mvp)} MVP fixtures registered")

@@ -96,7 +96,7 @@ jobs:
       - name: scull-cli pulls in no Tauri/webview crates
         run: python3 packaging/check_inspect_only.py deps
       - name: Build the release binary
-        run: cargo build -p scull-cli --release --locked
+        run: cargo build -p scull-cli --release --features full --locked
       - name: No destructive command or MCP tool is wired (alpha is inspect-only)
         run: python3 packaging/check_inspect_only.py binary target/release/scull
 
@@ -120,7 +120,7 @@ jobs:
       - name: Self-test the gate
         run: python3 packaging/test_check_mvp_gates.py
       - name: Build the release binary
-        run: cargo build -p scull-cli --release --locked
+        run: cargo build -p scull-cli --release --features full --locked
       - name: Destructive commands are present and gated as designed (release binary)
         run: python3 packaging/check_mvp_gates.py binary target/release/scull
 

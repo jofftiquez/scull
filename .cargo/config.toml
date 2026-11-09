@@ -3,3 +3,10 @@
 # (thin LTO, codegen-units = 1, stripped) under the name dist expects.
 [profile.dist]
 inherits = "release"
+
+# The full test run CI does (#142: the slim CLI is the default build, so tests of the full-only
+# commands, and the fixtures that drive them through the binary, need `scull-cli/full`):
+#   cargo test-all       cargo clippy-all
+[alias]
+test-all = "test --workspace --features scull-cli/full"
+clippy-all = "clippy --workspace --all-targets --features scull-cli/full -- -D warnings"

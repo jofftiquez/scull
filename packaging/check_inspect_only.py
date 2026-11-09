@@ -117,7 +117,7 @@ def fail(msg: str) -> None:
 
 def check_deps() -> None:
     cmd = [
-        "cargo", "tree", "-p", "scull-cli", "--locked",
+        "cargo", "tree", "-p", "scull-cli", "--locked", "--features", "full",
         "-e", "normal,build", "--target", "all", "--prefix", "none", "--format", "{p}",
     ]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout

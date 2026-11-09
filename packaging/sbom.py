@@ -47,7 +47,9 @@ def dist_targets() -> list[str]:
 
 def cargo_metadata(target: str) -> dict:
     out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", target],
+        # The released binary's graph: releases build scull-cli with `full` (#142).
+        ["cargo", "metadata", "--format-version", "1", "--locked", "--features", "scull-cli/full",
+         "--filter-platform", target],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout
     return json.loads(out)

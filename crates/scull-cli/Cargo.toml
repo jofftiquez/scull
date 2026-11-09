@@ -48,11 +48,11 @@ jsonschema = { version = "0.60", default-features = false }
 toml_edit = "0.25"
 
 [features]
-default = ["full"]
-# Every command. Without it (`--no-default-features`) the binary has the personal-MVP commands
-# only (scan, worktrees, caches, clean, history, restore, init, doctor, plus the hidden
-# projects, large-files, rules and completions) and links no scull-mcp, scull-ask,
-# scull-proactive or scull-insights (#142).
+# The default build is the personal MVP (#142): scan, worktrees, caches, clean, history,
+# restore, init, doctor (plus the hidden projects, large-files, rules and completions), linking
+# no scull-mcp, scull-ask or scull-insights. `full` adds every other command; CI, the release
+# gates and release builds (`[package.metadata.dist]` below) enable it.
+default = []
 full = ["dep:scull-mcp", "dep:scull-ask", "dep:scull-proactive", "dep:scull-insights"]
 
 [dev-dependencies]
@@ -79,3 +79,5 @@ harness = false
 # crate ships a binary; config lives in dist-workspace.toml.
 [package.metadata.dist]
 dist = true
+# Releases ship every command (#142: the slim set is the source default).
+features = ["full"]

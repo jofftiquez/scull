@@ -17,7 +17,8 @@ Thanks for helping. scull deletes files, so safety comes before everything else.
 
 - Every change is tied to a GitHub issue. Branch name: `issue-<number>-<slug>`.
 - PR title `[KEY] summary`; body starts with `Closes #<n>`.
-- Before pushing: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+- Before pushing: `cargo fmt --check`, `cargo clippy-all`, `cargo test-all` (aliases in
+  `.cargo/config.toml`: the whole workspace with `scull-cli/full`, as CI runs it).
 - CI must be green on macOS, Linux and Windows.
 - Issues close only with an `## Evidence` comment. Screenshots are attached to the
   comment with `gh issue comment --attach` (`scripts/evidence/post.py`); never commit them.

@@ -5,8 +5,8 @@ Workflow: `.github/workflows/ci.yml`.
 | Job | Runs on | What |
 |---|---|---|
 | `rustfmt` | Linux | `cargo fmt --all --check` |
-| `test (<os>)` | macOS, Linux, Windows on PRs; Linux on pushes to `main` | `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`, `cargo doc -D warnings` (Linux) |
-| `slim CLI build` | Linux | The personal-MVP binary (`cargo build -p scull-cli --no-default-features`, #142): clippy, its tests, and a check that it links no `scull-ask`, `scull-mcp` or `scull-insights` (`scull-proactive` stays: the Executor's headroom reserve uses it). |
+| `test (<os>)` | macOS, Linux, Windows on PRs; Linux on pushes to `main` | `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`, `cargo doc -D warnings` (Linux), all with `--features scull-cli/full` (every command; #142) |
+| `slim CLI build` | Linux | The personal-MVP binary, the default build (`cargo build -p scull-cli`, #142): clippy, its tests, and a check that it links no `scull-ask`, `scull-mcp` or `scull-insights` (`scull-proactive` stays: the Executor's headroom reserve uses it). |
 | `CI ok` | Linux | Passes only if every job above passed. |
 | `cargo-deny` (`policy.yml`) | Linux | Licenses (permissive only, no copyleft), RustSec advisories (same DB as cargo-audit), yanked crates, sources. Config: `deny.toml`. Also weekly. |
 | `platform-boundary` (`policy.yml`) | Linux | `scripts/ci/platform_boundary.py`: no `std::os::unix/windows`, `libc`, `windows-sys`, Apple frameworks or `extern "C"` outside `crates/scull-platform` (PLT-11). Test code and `crates/scull-fixtures` are exempt. Self-tested first. |
