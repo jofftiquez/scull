@@ -91,6 +91,42 @@ fn invoke_from(
     .map(|b| b.deserialize::<Value>().unwrap())
 }
 
+/// The app commands in build.rs's manifest (the ACL), as Tauri command names.
+fn manifest_commands() -> std::collections::BTreeSet<String> {
+    let build =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("build.rs")).unwrap();
+    let start = build.find("const COMMANDS").unwrap();
+    let end = start + build[start..].find("];").unwrap();
+    build[start..end]
+        .lines()
+        .filter_map(|l| l.split('"').nth(1).map(str::to_owned))
+        .collect()
+}
+
+/// `every_command()` covers the whole manifest, so a new command can't skip the refusal checks.
+#[test]
+fn every_command_covers_the_manifest() {
+    let listed: std::collections::BTreeSet<String> = every_command()
+        .into_iter()
+        .map(|(c, _)| c.to_owned())
+        .collect();
+    assert_eq!(listed, manifest_commands());
+}
+
+/// One window, `main`: the only one the capability grants (a second window would get no
+/// command; this keeps it that way on purpose).
+#[test]
+fn the_app_has_one_window_main() {
+    let conf: Value = serde_json::from_str(
+        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let windows = conf["app"]["windows"].as_array().unwrap();
+    assert_eq!(windows.len(), 1, "{windows:?}");
+    assert_eq!(windows[0]["label"], "main");
+}
+
 /// Every command is the main window's own: another window and any remote page are refused
 /// before the command runs. From the main window the cleanup commands reach the core: with no
 /// scan yet there is nothing to plan, and nothing is changed.
@@ -114,7 +150,12 @@ fn commands_are_the_main_windows_only() {
     }
     let e = invoke(&main, "prepare_desktop_plan", json!({"items": null})).unwrap_err();
     assert_eq!(e["kind"], "usage", "no scan yet: {e}");
-    let e = invoke(&main, "execute_desktop_plan", every_command()[5].1.clone()).unwrap_err();
+    let execute = every_command()
+        .into_iter()
+        .find(|(c, _)| *c == "execute_desktop_plan")
+        .unwrap()
+        .1;
+    let e = invoke(&main, "execute_desktop_plan", execute).unwrap_err();
     assert!(!e.to_string().contains("not allowed"), "{e}");
 }
 

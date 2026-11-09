@@ -37,10 +37,8 @@ serde_json = "1.0.154"
 tauri = { version = "2", features = [] }
 
 [dev-dependencies]
-# The mock runtime for the Tauri command tests (tests/approval_commands.rs).
+# The mock runtime for the Tauri command tests (tests/commands.rs).
 tauri = { version = "2", features = ["test"] }
-scull-mcp = { path = "../../../crates/scull-mcp" }
-scull-storage = { path = "../../../crates/scull-storage" }
 scull-engine = { path = "../../../crates/scull-engine" }
 scull-safety = { path = "../../../crates/scull-safety" }
 tempfile = "3"
