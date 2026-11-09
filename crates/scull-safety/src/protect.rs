@@ -46,6 +46,7 @@
 //! |---|---|---|
 //! | all | the home directory | homes under a protected tree (e.g. Fedora Silverblue's `/var/home`) |
 //! | macOS | `~/Library/Caches`, `~/Library/Developer/Xcode/DerivedData` | package and build caches (Quick Clean) |
+//! | macOS | `~/Library/pnpm/store`, **itself included** (`allowed_self`, #139) | pnpm's store, cleaned only with `pnpm store prune`; the rest of `~/Library/pnpm` stays protected |
 //! | macOS | `~/Library/CloudStorage`, `~/Library/Mobile Documents` | synced folders: S2 via `cloud_sync`, not S3 |
 //! | macOS | `/private/var/folders`, `/private/tmp` | per-user temp directories |
 //!
@@ -143,6 +144,10 @@ pub struct DefaultProtection {
     pub protected: Vec<ProtectedPath>,
     /// Carve-outs: built-in subtree roots don't apply strictly inside these.
     pub allowed: Vec<PathBuf>,
+    /// Carve-outs that also cover the directory itself (#139): a tool-owned cache directory
+    /// inside a protected area that is cleaned only with the tool's own command. Each is also
+    /// in [`DefaultProtection::allowed`] for what is inside it.
+    pub allowed_self: Vec<PathBuf>,
 }
 
 /// Credential directories under home, protected with their contents.
@@ -246,6 +251,12 @@ pub fn default_protected(
                 d.protected
                     .push(ProtectedPath::exact(lib.join("CloudStorage")));
                 d.allowed.push(lib.join("Caches"));
+                // pnpm's default macOS store (#139): cleaned only with `pnpm store prune`. The
+                // store itself is reachable; the rest of ~/Library/pnpm (global packages,
+                // pnpm-managed Node versions) stays protected.
+                let pnpm_store = lib.join("pnpm").join("store");
+                d.allowed.push(pnpm_store.clone());
+                d.allowed_self.push(pnpm_store);
                 d.allowed
                     .push(lib.join("Developer").join("Xcode").join("DerivedData"));
                 d.allowed.push(lib.join("CloudStorage"));
@@ -329,6 +340,7 @@ pub struct Unresolved {
 pub struct ProtectedSet {
     roots: HashMap<FileIdentity, Vec<Root>>,
     allowed: HashMap<FileIdentity, PathBuf>,
+    allowed_self: HashMap<FileIdentity, PathBuf>,
     exclusions: HashMap<FileIdentity, PathBuf>,
     /// Resolved paths of roots and exclusions, for the "inside the candidate" check.
     inner: Vec<(PathBuf, Root, bool /* exclusion */)>,
@@ -418,6 +430,13 @@ impl ProtectedSet {
             if let Some(r) = self.resolve_or_record(platform, a) {
                 for id in r.identities {
                     self.allowed.insert(id, a.clone());
+                }
+            }
+        }
+        for a in &defaults.allowed_self {
+            if let Some(r) = self.resolve_or_record(platform, a) {
+                for id in r.identities {
+                    self.allowed_self.insert(id, a.clone());
                 }
             }
         }
@@ -551,9 +570,16 @@ impl ProtectedSet {
             out.root(&chain[0]);
         }
 
-        // Nearest carve-out strictly above the candidate.
-        let carve =
-            (1..chain.len()).find(|&d| ids[d].is_some_and(|id| self.allowed.contains_key(&id)));
+        // Nearest carve-out strictly above the candidate, or the candidate itself when it is a
+        // self-inclusive carve-out (#139).
+        let carve = if ids
+            .first()
+            .is_some_and(|id| id.is_some_and(|id| self.allowed_self.contains_key(&id)))
+        {
+            Some(0)
+        } else {
+            (1..chain.len()).find(|&d| ids[d].is_some_and(|id| self.allowed.contains_key(&id)))
+        };
 
         for (depth, id) in ids.iter().enumerate() {
             let Some(id) = id else { continue };
@@ -737,10 +763,13 @@ mod tests {
         for a in [
             "/Users/u/Library/Caches",
             "/Users/u/Library/Developer/Xcode/DerivedData",
+            "/Users/u/Library/pnpm/store",
             "/private/var/folders",
         ] {
             assert!(d.allowed.contains(&PathBuf::from(a)), "{a}");
         }
+        // #139: only pnpm's store is carved out, not the rest of ~/Library/pnpm.
+        assert!(!d.allowed.contains(&PathBuf::from("/Users/u/Library/pnpm")));
     }
 
     #[test]

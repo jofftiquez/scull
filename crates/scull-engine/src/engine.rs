@@ -23,6 +23,7 @@ use scull_core::{
     Action, Candidate, Category, ErrorKind, Evidence, FileIdentity, FsPath, ItemId, ReasonCode,
     ScullError, Sizes, Tier, TierBreakdown, TierReason,
 };
+use scull_detectors::caches::CacheTool;
 use scull_detectors::{
     CacheEnv, CallerSignals, ConfigReader, DetectContext, Detectors, MAX_CONFIG_BYTES,
     locate_caches,
@@ -33,7 +34,9 @@ use scull_git::{
     worktree_candidate,
 };
 use scull_platform::activity::Limits;
-use scull_platform::{Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo, VolumeKind};
+use scull_platform::{
+    EntryKind, Platform, ScanPolicy, SyncedRoot, SyncedRoots, VolumeInfo, VolumeKind,
+};
 use scull_safety::{
     ActivityWindow, GitTracking, MtimeSample, NativeActivityProbe, ProtectedSet, Regen,
     Signals as RubricSignals, Tri, classify, recent_activity,
@@ -936,7 +939,11 @@ impl Engine {
                     .map(|s| (*s).to_owned())
                     .collect();
                 let answer = ask(&probe, &path, &[], &processes);
-                let sig = post.signals(&path, summary.as_ref(), answer);
+                let mut sig = post.signals(&path, summary.as_ref(), answer);
+                let platform = self.platform.as_ref();
+                if let Some(owned) = tool_owned_repos(c.tool, &path, platform) {
+                    sig.protect.exempt_tool_repos(owned);
+                }
                 let mut cand = c.into_candidate(&sig.caller, summary.as_ref());
                 let estimate = summary.as_ref().map(|s| self.estimate(s));
                 finish_candidate(&mut cand, sig, summary.as_ref(), estimate);
@@ -1077,9 +1084,29 @@ struct Protect {
     /// Raises beyond the rubric rows: minimum tiers, nested repositories, completeness,
     /// unresolved protection entries.
     raises: Vec<TierReason>,
+    /// Git repositories inside the item (each also raised to S3 in `raises`).
+    nested_repos: Vec<PathBuf>,
+}
+
+/// The S3 reason for a Git repository inside an item.
+fn nested_repo_message(repo: &Path) -> String {
+    format!("contains a Git repository at {}", repo.display())
 }
 
 impl Protect {
+    /// #139: drop the nested-repository raises for the repositories `tool_owned` accepts (a
+    /// package tool's own Git folder, e.g. uv's `git-v0`). Only for caches that are cleaned
+    /// exclusively with the tool's own command ([`tool_owned_repos`]): the tool manages those
+    /// repositories, and they hold no unique work. Every other repository still raises S3, and
+    /// every other signal is untouched.
+    fn exempt_tool_repos(&mut self, tool_owned: impl Fn(&Path) -> bool) {
+        for repo in self.nested_repos.iter().filter(|r| tool_owned(r)) {
+            let msg = nested_repo_message(repo);
+            self.raises
+                .retain(|r| !(r.code == ReasonCode::GitTracked && r.message == msg));
+        }
+    }
+
     /// Every reason this protection implies: the PRD §8.3 rubric rows for the boolean signals
     /// (the very reasons the rubric gives a detector-built candidate, so re-applying them to
     /// one is a no-op) plus the engine's own raises. Git tracking, in-use and recent activity
@@ -1448,8 +1475,9 @@ impl<'a> Post<'a> {
                 p.raises.push(TierReason::new(
                     Tier::S3,
                     ReasonCode::GitTracked,
-                    format!("contains a Git repository at {}", g.display()),
+                    nested_repo_message(g),
                 ));
+                p.nested_repos.push(g.clone());
             }
         }
         p
@@ -1533,6 +1561,33 @@ fn merge_evidence(into: &mut Vec<Evidence>, from: &[Evidence]) {
 /// **The** protection step: fold the engine-side protection signals into a candidate with
 /// [`Candidate::raise`] (tier only goes up, action constrained to it). Every candidate the
 /// engine emits goes through here: artifacts, shared target directories, caches, worktrees.
+/// Which "repositories" inside a cache belong to the tool itself (#139), for the tools whose
+/// cache is cleaned only with their own command (`uv cache prune` / `uv cache clean`; the
+/// detector never gives a uv cache a delete or quarantine action):
+///
+/// * uv's Git cache, `git-v0` (clones in `db`, checkouts in `checkouts`);
+/// * uv's marker files: an **empty** regular `.git` file (uv writes one into buckets such as
+///   `sdists-v9` so Git doesn't treat the cache as part of an enclosing repository). A real
+///   `.git` file points to a Git directory (`gitdir: …`), so an empty one holds no history.
+fn tool_owned_repos<'a>(
+    tool: CacheTool,
+    cache: &Path,
+    platform: &'a dyn Platform,
+) -> Option<impl Fn(&Path) -> bool + 'a> {
+    match tool {
+        CacheTool::Uv => {
+            let git = cache.join("git-v0");
+            Some(move |repo: &Path| {
+                is_within(repo, &git)
+                    || platform
+                        .metadata(&repo.join(".git"))
+                        .is_ok_and(|m| m.kind == EntryKind::File && m.logical_size == 0)
+            })
+        }
+        _ => None,
+    }
+}
+
 fn apply_protection(c: &mut Candidate, p: &Protect) {
     merge_evidence(&mut c.evidence, &p.evidence);
     for r in p.reasons() {
