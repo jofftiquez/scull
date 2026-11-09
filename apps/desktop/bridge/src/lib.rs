@@ -6,77 +6,39 @@
 //!
 //! | Command | Here | Returns |
 //! |---|---|---|
-//! | `app_info` | [`app_info`] | [`AppInfo`] |
-//! | `drives` | [`drives()`] | `Vec<`[`Drive`]`>` |
-//! | `scan` | [`Session::scan`] | [`ScanReport`], with [`ProgressEvent`]s |
-//! | `cancel_operation` | [`Session::cancel`] | `bool` |
-//! | `projects` | [`Session::projects`] | [`ProjectsView`] (last scan) |
-//! | `worktrees` | [`Session::worktrees`] | [`WorktreesView`] (last scan) |
-//! | `caches` | [`Session::caches`] | [`CachesReport`], with [`ProgressEvent`]s |
-//! | `status` | [`Session::status`] | [`DesktopStatus`] |
-//! | `capabilities` | [`Session::capabilities`] | [`CapabilitiesReport`] |
-//! | `history` | [`Session::history`] | [`HistoryView`] (read-only) |
 //! | `settings` | [`Session::settings`] | [`SettingsView`] (read-only) |
-//! | `free_space_history` | [`Session::free_space_history`] | [`FreeSpaceHistory`] |
-//! | `rollup_history` | [`Session::rollup_history`] | [`RollupHistory`] |
-//! | `regrowth` | [`Session::regrowth`] | [`RegrowthHistory`] |
-//! | `footprint_history` | [`Session::footprint_history`] | [`FootprintHistory`] |
-//! | `forecasts` | [`Session::forecasts`] | [`ForecastsView`] (one forecast source, PRO-01) |
-//! | `weekly_digest` | [`Session::weekly_digest`] | [`DigestView`] |
-//! | `monitor_status` | [`Monitor::status`] | [`MonitorStatus`] |
-//! | `configure_monitor` | [`Monitor::configure`] | [`MonitorStatus`] |
-//! | `pause_monitor` | [`Monitor::pause`] | [`MonitorStatus`] |
-//! | `send_digest_now` | [`Monitor::digest_now`] | [`DigestView`] |
-//!
-//! The menu bar widget's window logic (where it opens, which main-window routes it may show)
-//! is in [`menubar`]; its data is `status` (free space, review plan, alerts), `drives`,
-//! `caches`, `worktrees` and `free_space_history`.
-//!
-//! Tray monitoring and the weekly digest are in [`monitor`]: a [`Monitor`] the tray app ticks
-//! from a background thread, which reads free space, history and recorded alerts and decides
-//! the notifications (never a cleanup). Its settings and memory are app state, sent by the
-//! main window (`configure_monitor`); nothing here writes a file.
+//! | `scan` | [`Session::scan`] | [`ScanReport`], with [`ProgressEvent`]s |
+//! | `caches` | [`Session::caches`] | [`CachesReport`], with [`ProgressEvent`]s |
+//! | `cancel_operation` | [`Session::cancel`] | `bool` |
+//! | `prepare_desktop_plan` | [`CleanupDesk::prepare`] | [`DesktopPlan`] |
+//! | `execute_desktop_plan` | [`CleanupDesk::execute`] | [`DesktopRun`] |
+//! | `execution_busy` | [`cleanup::execution_busy`] | `bool` |
 //!
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
 //!
-//! # Read-only by construction (SAFE-10)
+//! # Deletion only through the core Executor (SAFE-10)
 //!
-//! Nothing here can delete, move or modify a file. The crate doesn't depend on
-//! `scull-cleaner` (the only deleter) and doesn't enable `scull-platform`'s `delete` feature;
-//! `tests/safe10.rs` fails the build if either changes. Cleanups reach the Executor through a
-//! plan and a human approval, never through the desktop bridge.
+//! Nothing here deletes, moves or modifies a file directly. The cleanup commands
+//! ([`CleanupDesk`], P3-EXEC-01) run the plan the human confirmed through `scull-cleaner`'s
+//! Executor (execution lock, revalidation of every item, D-28 actions, audit); `cleanup` is the
+//! only module that uses `scull-cleaner`, and the crate never enables `scull-platform`'s
+//! `delete` feature. `tests/safe10.rs` fails the build if any of that changes.
 
 // Forbidden at the root, so no local allow can lift it (SAFE-10; tests/safe10.rs).
 #![forbid(unsafe_code)]
 
-pub mod approvals;
 pub mod cleanup;
 pub mod db;
-pub mod drives;
-pub mod forecasts;
-pub mod history;
-pub mod insights;
-pub mod menubar;
-pub mod monitor;
 pub mod schemas;
 pub mod session;
 pub mod settings;
 pub mod views;
 
-pub use approvals::{
-    AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
-    ApprovalDesk,
-};
 pub use cleanup::{
     CacheCleanChoice, CacheOutputStream, CacheProgressKind, CleanupDesk, DesktopCachePreview,
     DesktopCacheProgress, DesktopPlan, DesktopQuickClean, DesktopRestore, DesktopRun,
 };
-pub use drives::{Drive, DriveKind, ScanPolicy, VolumeFacts, drives, select_drives};
-pub use forecasts::ForecastsView;
-pub use history::HistoryView;
-pub use insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
-pub use monitor::{DigestView, Monitor, MonitorConfig, MonitorSnapshot, MonitorStatus};
 pub use scull_core::ScullError;
 pub use scull_engine::{CachesReport, ScanReport, now_unix};
 pub use session::{Session, Setup};

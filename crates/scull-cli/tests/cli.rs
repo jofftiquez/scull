@@ -32,25 +32,32 @@ fn error_schema_validator() -> jsonschema::Validator {
     jsonschema::validator_for(&generated).expect("schema compiles")
 }
 
-const ALL_COMMANDS: [&str; 20] = [
+/// The personal-MVP commands shown in `--help` (#142).
+const VISIBLE_COMMANDS: [&str; 8] = [
     "scan",
-    "projects",
     "worktrees",
     "caches",
     "clean",
-    "large-files",
     "history",
     "restore",
+    "init",
+    "doctor",
+];
+
+/// Commands hidden from the command list but still available (named in the help footer).
+const HIDDEN_COMMANDS: [&str; 14] = [
+    "projects",
+    "large-files",
     "approve",
     "rules",
-    "init",
     "status",
     "check",
     "insights",
     "agent",
     "schedule",
+    "headroom",
     "data",
-    "doctor",
+    "ask",
     "mcp",
     "completions",
 ];
@@ -61,12 +68,21 @@ fn help_lists_every_command() {
         let o = scull(&[flag]);
         assert_eq!(o.status.code(), Some(0), "{flag}");
         let out = stdout(&o);
-        for cmd in ALL_COMMANDS {
+        let listed = |cmd: &str| {
+            out.lines()
+                .any(|l| l.starts_with("  ") && l.trim_start().starts_with(&format!("{cmd} ")))
+        };
+        for cmd in VISIBLE_COMMANDS {
+            assert!(listed(cmd), "{flag}: `{cmd}` missing from help:\n{out}");
+        }
+        for cmd in HIDDEN_COMMANDS {
+            assert!(!listed(cmd), "{flag}: `{cmd}` should be hidden:\n{out}");
             assert!(
-                out.lines()
-                    .any(|l| l.trim_start().starts_with(&format!("{cmd} "))),
-                "{flag}: `{cmd}` missing from help:\n{out}"
+                out.contains(cmd),
+                "{flag}: `{cmd}` not named in the footer:\n{out}"
             );
+            let o = scull(&[cmd, "--help"]);
+            assert_eq!(o.status.code(), Some(0), "hidden `{cmd}` still runs");
         }
         for global in [
             "--json",

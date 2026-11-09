@@ -6,7 +6,7 @@ use crate::output::bytes::{confidence_label, format_bytes};
 use crate::output::escape::escape_for_terminal;
 use crate::output::style::{Style, tier_text};
 use crate::output::table::{Align, Cell, Table};
-use scull_core::{Action, Candidate, FsPath, SizeKind, Tier};
+use scull_core::{Action, Candidate, Confidence, FsPath, SizeKind, Tier};
 use scull_engine::{Issue, SignalUnavailable, Totals};
 use std::path::Path;
 
@@ -43,15 +43,16 @@ pub fn display_path(path: &FsPath, base: Option<&Path>) -> String {
     }
 }
 
-/// The candidate table: tier, sizes (labeled), confidence, artifact, path, why. Paths inside
-/// `base` are shown relative to it.
+/// The candidate table: tier, sizes (labeled), artifact, path, why. Paths inside `base` are
+/// shown relative to it. Confidence is per filesystem rather than per row in practice (APFS
+/// clones/snapshots make every item low), so it is summarized once by [`estimate_note`] and
+/// kept per item in machine output.
 pub fn candidates_table(cands: &[Candidate], base: Option<&Path>, color: bool) -> String {
     let mut t = Table::new([
         ("Tier", Align::Left),
         Table::size_column(SizeKind::Reclaimable),
         Table::size_column(SizeKind::Allocated),
         Table::size_column(SizeKind::Logical),
-        ("Confidence", Align::Left),
         ("Artifact", Align::Left),
         ("Path", Align::Left),
         ("Why", Align::Left),
@@ -62,13 +63,35 @@ pub fn candidates_table(cands: &[Candidate], base: Option<&Path>, color: bool) -
             Cell::bytes(c.sizes.reclaimable.bytes),
             Cell::bytes(c.sizes.allocated),
             Cell::bytes(c.sizes.logical),
-            Cell::text(confidence_label(c.sizes.reclaimable.confidence)),
             Cell::text(&c.artifact),
             Cell::path(&display_path(&c.path, base)),
             Cell::text(deciding_reason(c)),
         ]);
     }
     t.render(color)
+}
+
+/// One note when some reclaimable sizes are less than certain (PHY-01: the estimate is
+/// disclosed), or nothing when every estimate is high confidence.
+pub fn estimate_note<'a>(cands: impl IntoIterator<Item = &'a Candidate>) -> String {
+    let (mut total, mut uncertain) = (0usize, 0usize);
+    let mut worst = Confidence::High;
+    for c in cands {
+        total += 1;
+        let conf = c.sizes.reclaimable.confidence;
+        if conf != Confidence::High {
+            uncertain += 1;
+            worst = worst.max(conf);
+        }
+    }
+    if uncertain == 0 {
+        return String::new();
+    }
+    format!(
+        "\nReclaimable sizes are estimates: {uncertain} of {total} item(s) have {} confidence \
+         (shared blocks, clones or snapshots can mean less is freed). Per-item confidence: --json.\n",
+        confidence_label(worst)
+    )
 }
 
 /// Totals per tier (items and labeled sizes), plus a total row.

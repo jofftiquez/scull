@@ -139,7 +139,7 @@ pub enum WorktreeRecord {
 }
 
 /// Run `scull worktrees`.
-pub fn run(args: &RootArgs, ui: &Ui) -> Result<(), ScullError> {
+pub fn run(args: &RootArgs, all: bool, ui: &Ui) -> Result<(), ScullError> {
     let mut loaded = pipeline::load_config(&args.roots)?;
     loaded.allow_network_roots = args.allow_network_roots;
     let roots = pipeline::roots(&loaded, args.allow_broad_roots)?;
@@ -202,7 +202,10 @@ pub fn run(args: &RootArgs, ui: &Ui) -> Result<(), ScullError> {
                     )
                 })
         }
-        Format::Human => write_text(out, &render_list(&report, &registrations, ui.color_out)),
+        Format::Human => write_text(
+            out,
+            &render_list(&report, &registrations, ui.color_out, all),
+        ),
     };
     res.or_else(ignore_broken_pipe)
         .map_err(|e| ScullError::from_io(&e))?;
@@ -385,7 +388,14 @@ fn deciding_reason(w: &WorktreeReport) -> String {
 }
 
 /// The `scull worktrees` table, plus the TTL registrations under the roots.
-pub fn render_list(r: &WorktreesReport, registrations: &[TtlRegistration], color: bool) -> String {
+/// The human list. Without `all`, only linked worktrees (the removable kind) are listed and
+/// main/bare entries are counted in one line (#140).
+pub fn render_list(
+    r: &WorktreesReport,
+    registrations: &[TtlRegistration],
+    color: bool,
+    all: bool,
+) -> String {
     let mut out = String::new();
     if r.cancelled {
         out.push_str("CANCELLED: the walk was stopped before worktrees were analysed\n\n");
@@ -396,8 +406,16 @@ pub fn render_list(r: &WorktreesReport, registrations: &[TtlRegistration], color
             escape_for_terminal(one.as_str())
         ));
     }
+    let shown: Vec<&WorktreeReport> = r
+        .worktrees
+        .iter()
+        .filter(|w| all || w.kind == WorktreeKind::Linked)
+        .collect();
+    let hidden = r.worktrees.len() - shown.len();
     if r.worktrees.is_empty() {
         out.push_str("No Git worktrees found.\n");
+    } else if shown.is_empty() {
+        out.push_str("No linked worktrees found.\n");
     } else {
         let base = match r.roots.as_slice() {
             [one] => Some(one.to_path_buf()),
@@ -412,7 +430,7 @@ pub fn render_list(r: &WorktreesReport, registrations: &[TtlRegistration], color
             ("Path", Align::Left),
             ("Why", Align::Left),
         ]);
-        for w in &r.worktrees {
+        for w in &shown {
             t.push(vec![
                 Cell::tier(w.decision.tier),
                 Cell::text(kind_label(w.kind)),
@@ -427,6 +445,13 @@ pub fn render_list(r: &WorktreesReport, registrations: &[TtlRegistration], color
             ]);
         }
         out.push_str(&t.render(color));
+    }
+    if hidden > 0 {
+        out.push_str(&format!(
+            "\n{hidden} main or bare working tree(s) not listed: they are never removable \
+             (add --all to show them). Branches are never deleted.\n"
+        ));
+    } else if !shown.is_empty() {
         out.push_str("\nMain and bare entries are never removable; branches are never deleted.\n");
     }
     if !r.problems.is_empty() {

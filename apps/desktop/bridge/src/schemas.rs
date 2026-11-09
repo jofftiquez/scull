@@ -5,22 +5,15 @@
 //! `tests/schemas.rs` fails when the committed files are stale. Regenerate them with
 //! `SCULL_UPDATE_SCHEMAS=1 cargo test -p scull-desktop-bridge --test schemas`.
 
-use crate::approvals::{
-    AgentApprovalRequest, AgentApproved, AgentDenied, AgentPlanStatus, AgentRequests, AgentRevoked,
-};
+use crate::AppInfo;
 use crate::cleanup::{
     CacheCleanChoice, DesktopCachePreview, DesktopCacheProgress, DesktopPlan, DesktopQuickClean,
     DesktopRestore, DesktopRun,
 };
-use crate::forecasts::ForecastsView;
-use crate::history::HistoryView;
-use crate::insights::{FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory};
-use crate::monitor::{DigestView, MonitorConfig, MonitorSnapshot, MonitorStatus};
 use crate::settings::SettingsView;
 use crate::views::{
     CapabilitiesReport, DesktopStatus, ProgressEvent, ProjectsView, ScanParams, WorktreesView,
 };
-use crate::{AppInfo, Drive};
 use schemars::JsonSchema;
 use scull_core::ScullError;
 use scull_engine::{CachesReport, ScanReport};
@@ -30,7 +23,6 @@ use scull_engine::{CachesReport, ScanReport};
 pub fn all() -> Vec<(&'static str, serde_json::Value)> {
     vec![
         ("app-info", schema::<AppInfo>("app-info", "AppInfo")),
-        ("drives", schema::<Vec<Drive>>("drives", "Drives")),
         (
             "scan-params",
             schema::<ScanParams>("scan-params", "ScanParams"),
@@ -60,70 +52,9 @@ pub fn all() -> Vec<(&'static str, serde_json::Value)> {
             "capabilities",
             schema::<CapabilitiesReport>("capabilities", "CapabilitiesReport"),
         ),
-        ("history", schema::<HistoryView>("history", "HistoryView")),
         (
             "settings",
             schema::<SettingsView>("settings", "SettingsView"),
-        ),
-        (
-            "free-space-history",
-            schema::<FreeSpaceHistory>("free-space-history", "FreeSpaceHistory"),
-        ),
-        (
-            "rollup-history",
-            schema::<RollupHistory>("rollup-history", "RollupHistory"),
-        ),
-        (
-            "regrowth",
-            schema::<RegrowthHistory>("regrowth", "RegrowthHistory"),
-        ),
-        (
-            "footprint-history",
-            schema::<FootprintHistory>("footprint-history", "FootprintHistory"),
-        ),
-        (
-            "forecasts",
-            schema::<ForecastsView>("forecasts", "ForecastsView"),
-        ),
-        (
-            "weekly-digest",
-            schema::<DigestView>("weekly-digest", "DigestView"),
-        ),
-        (
-            "monitor-status",
-            schema::<MonitorStatus>("monitor-status", "MonitorStatus"),
-        ),
-        (
-            "monitor-config",
-            schema::<MonitorConfig>("monitor-config", "MonitorConfig"),
-        ),
-        (
-            "monitor-snapshot",
-            schema::<MonitorSnapshot>("monitor-snapshot", "MonitorSnapshot"),
-        ),
-        (
-            "agent-requests",
-            schema::<AgentRequests>("agent-requests", "AgentRequests"),
-        ),
-        (
-            "agent-approval-request",
-            schema::<AgentApprovalRequest>("agent-approval-request", "AgentApprovalRequest"),
-        ),
-        (
-            "agent-approved",
-            schema::<AgentApproved>("agent-approved", "AgentApproved"),
-        ),
-        (
-            "agent-denied",
-            schema::<AgentDenied>("agent-denied", "AgentDenied"),
-        ),
-        (
-            "agent-revoked",
-            schema::<AgentRevoked>("agent-revoked", "AgentRevoked"),
-        ),
-        (
-            "agent-plan-status",
-            schema::<AgentPlanStatus>("agent-plan-status", "AgentPlanStatus"),
         ),
         (
             "desktop-plan",

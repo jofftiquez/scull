@@ -8,28 +8,7 @@
 //
 // The bridge is read-only by design (SAFE-10): it has no call that deletes, moves or modifies
 // a file. Cleanups go through the core Executor behind a reviewed plan, never through here.
-import type {
-  AppInfo,
-  CachesReport,
-  CapabilitiesReport,
-  DesktopStatus,
-  DigestView,
-  Drive,
-  FootprintHistory,
-  ForecastsView,
-  FreeSpaceHistory,
-  HistoryView,
-  MonitorStatus,
-  ProgressEvent,
-  ProjectsView,
-  RegrowthHistory,
-  RollupHistory,
-  ScanParams,
-  ScanReport,
-  ScullError,
-  SettingsView,
-  WorktreesView,
-} from './generated';
+import type { CachesReport, ProgressEvent, ScanParams, ScanReport, ScullError, SettingsView } from './generated';
 
 export type * from './generated';
 
@@ -73,68 +52,20 @@ export function toBridgeError(e: unknown): BridgeError {
 
 export interface ScullBridge {
   readonly kind: 'tauri' | 'mock';
-  appInfo(): Promise<AppInfo>;
-  /** Mounted volumes worth showing: the home drive first, then other scanned drives, then
-   * the ones scull does not scan (backup, network), each once. */
-  drives(): Promise<Drive[]>;
+  /** Effective configuration with the origin of every value, built-in protection and scull's
+   * own data (read-only). */
+  settings(): Promise<SettingsView>;
   /** Scan and classify (read-only). Roots default to `scan.roots` from the config. */
   scan(params: ScanParams, opts?: OperationOptions): Promise<ScanReport>;
-  /** Projects of the last complete scan (empty before the first). */
-  projects(): Promise<ProjectsView>;
-  /** Git worktrees of the last complete scan. */
-  worktrees(): Promise<WorktreesView>;
-  /** Package-manager caches (Quick Clean candidates). */
+  /** Package-manager caches (read-only). */
   caches(opts?: OperationOptions): Promise<CachesReport>;
-  /** Last recorded scan and free-space samples. */
-  status(): Promise<DesktopStatus>;
-  /** What this machine and build can observe. */
-  capabilities(): Promise<CapabilitiesReport>;
-  /** Recorded cleanup operations with their audit logs, newest first (read-only: restoring
-   * is not a bridge call, see components/history/bridge.ts). */
-  history(): Promise<HistoryView>;
-  /** Effective configuration with the origin of every value, built-in protection and scull's
-   * own data (read-only: changing a setting is not a bridge call, see
-   * components/settings/bridge.ts). */
-  settings(): Promise<SettingsView>;
-  /** Free-space samples of one volume since `since` (Unix seconds). The volume defaults to
-   * the home folder's, then `/`, then the most recently sampled one. Read-only. */
-  freeSpaceHistory(since: number, volumeId?: string): Promise<FreeSpaceHistory>;
-  /** Bytes per category per usable scan since `since`. Read-only. */
-  rollupHistory(since: number): Promise<RollupHistory>;
-  /** Artifacts that came back since `since`. Read-only. */
-  regrowth(since: number): Promise<RegrowthHistory>;
-  /** scull's own footprint samples since `since`. Read-only. */
-  footprintHistory(since: number): Promise<FootprintHistory>;
-  /** The last 7 days in a few lines (INS-04): Insights "This week" and the digest
-   * notification's text. Read-only. */
-  weeklyDigest(): Promise<DigestView>;
-  /** Every sampled volume's disk-full forecast (PRO-01), the one source of days left for the
-   * Insights tile, the Overview alert and the menu bar widget (src/lib/forecast.ts). Read-only. */
-  forecasts(): Promise<ForecastsView>;
-  /** What tray monitoring is doing: settings, pause, last/next check and digest. Read-only
-   * (changing it is src/monitor/control.ts, app state only). */
-  monitorStatus(): Promise<MonitorStatus>;
 }
 
 /** Bridge methods and the Tauri command each calls (also used by the parity test). */
 export const COMMANDS = {
-  appInfo: 'app_info',
-  drives: 'drives',
-  scan: 'scan',
-  projects: 'projects',
-  worktrees: 'worktrees',
-  caches: 'caches',
-  status: 'status',
-  capabilities: 'capabilities',
-  history: 'history',
   settings: 'settings',
-  freeSpaceHistory: 'free_space_history',
-  rollupHistory: 'rollup_history',
-  regrowth: 'regrowth',
-  footprintHistory: 'footprint_history',
-  weeklyDigest: 'weekly_digest',
-  forecasts: 'forecasts',
-  monitorStatus: 'monitor_status',
+  scan: 'scan',
+  caches: 'caches',
 } as const satisfies Record<Exclude<keyof ScullBridge, 'kind'>, string>;
 
 /** The Tauri command that cancels an operation. */

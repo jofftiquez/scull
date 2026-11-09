@@ -294,13 +294,14 @@ fn scan_human_json_ndjson_and_history() {
         "Reclaimable",
         "Allocated",
         "Logical",
-        "Confidence",
         "S3 protected",
         "Totals by tier:",
         "Nothing was changed",
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
+    // Confidence is summarized once (`estimate_note`), not a column (#138).
+    assert!(!out.contains("Confidence"), "{out}");
     // Paths are shown relative to the single root, with the OS separator.
     let app_target = Path::new("app").join("target");
     assert!(out.contains(&*app_target.to_string_lossy()), "{out}");
@@ -415,11 +416,25 @@ fn worktrees_and_worktree_inspect() {
     let fx = tree(true);
     let env = Env::elsewhere();
     let r = root(&fx);
+    // Default: linked worktrees only; the main tree is counted, not listed (#140).
     let o = env.run(&["worktrees", "--root", &r]);
     ok(&o);
     let out = stdout(&o);
+    assert!(out.contains("linked") && out.contains("feature"), "{out}");
     assert!(
-        out.contains("main") && out.contains("linked") && out.contains("feature"),
+        !out.contains("main working tree of the repository"),
+        "{out}"
+    );
+    assert!(
+        out.contains("1 main or bare working tree(s) not listed"),
+        "{out}"
+    );
+    assert!(out.contains("--all"), "{out}");
+    let o = env.run(&["worktrees", "--all", "--root", &r]);
+    ok(&o);
+    let out = stdout(&o);
+    assert!(
+        out.contains("main working tree of the repository") && out.contains("linked"),
         "{out}"
     );
     assert!(out.contains("never removable"), "{out}");
@@ -629,6 +644,11 @@ fn broad_and_missing_roots_are_refused() {
     let o = env.run(&["scan"]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(stderr(&o).contains("no scan roots"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("scull init"),
+        "names the fix (#141): {}",
+        stderr(&o)
+    );
     // A root that doesn't exist.
     let missing = fx.root().join("nope");
     let o = env.run(&["scan", &missing.to_string_lossy(), "--json"]);

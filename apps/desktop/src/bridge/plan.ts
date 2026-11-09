@@ -1,20 +1,14 @@
-// Plan bridge: the calls the Cleanup Review and Git Worktrees screens need to prepare, approve
-// and execute a cleanup plan.
+// Plan bridge: prepare and execute the desktop's own cleanup plan.
 //
-// SAFE-10: desktop plans execute through the audited native Executor. Agent requests use
-// the approval broker; an agent executes its own approved plan. The browser mock simulates
-// outcomes without touching files. The unavailable bridge rejects mutations explicitly.
+// SAFE-10: desktop plans execute through the audited native Executor. The browser mock
+// simulates outcomes without touching files.
 //
 // The payload types below are LOCAL and provisional: they mirror the core's plan model (PRD
 // §10.2, §10.4, §13.3) and reuse the generated `Candidate` for every preview field. When the
 // core exposes plans over the bridge, replace them with the generated types.
 //
 // This is deliberately a separate interface from `ScullBridge`, which stays read-only.
-import type { InjectionKey } from 'vue';
-import { inject } from 'vue';
 import type { Candidate, ItemId, ScullBridge, Tier } from './types';
-import { BridgeError } from './types';
-import { useBridge } from './index';
 import { createMockPlanBridge } from './planMock';
 import { createTauriPlanBridge } from './tauriPlans';
 
@@ -80,26 +74,6 @@ export interface PlanPreview {
   estimate_notes: string[];
 }
 
-/** An agent's request waiting for the human (PRD §13.3). */
-export interface ApprovalRequest {
-  plan: PlanPreview;
-  /** Short code the human types to approve. Shown only here, for display: the core keeps the
-   *  challenge and checks the typed code; the agent never sees it. */
-  code: string;
-}
-
-/** An agent plan waiting for the human (the pending-requests notice). */
-export interface AgentRequestSummary {
-  plan_id: string;
-  hash: string;
-  created_at: string;
-  expires_at: string;
-  item_count: number;
-  reclaimable_bytes: number;
-  /** Client name as reported by the MCP client, when recorded. */
-  client?: string;
-}
-
 export type ItemOutcomeKind = 'deleted' | 'quarantined' | 'trashed' | 'removed' | 'skipped';
 
 export interface ItemOutcome {
@@ -127,117 +101,28 @@ export type ExecutionEvent =
   | { kind: 'item_started'; item_id: ItemId }
   | { kind: 'item_finished'; outcome: ItemOutcome };
 
-/** Events about an agent plan after it was shown (from the core's approval broker). */
-export type ApprovalEvent =
-  /** Approved elsewhere (e.g. `scull approve` in a terminal) while the dialog was open. */
-  | { kind: 'approved'; at: string; channel: string }
-  /** Denied elsewhere, or closed after too many wrong codes. */
-  | { kind: 'denied'; at: string }
-  /** The approval was revoked elsewhere (e.g. `scull approve --revoke`). */
-  | { kind: 'revoked'; at: string }
-  | { kind: 'expired'; at: string }
-  | { kind: 'agent_started'; at: string }
-  | { kind: 'item_started'; item_id: ItemId }
-  | { kind: 'item_finished'; outcome: ItemOutcome }
-  | { kind: 'finished'; result: ExecutionResult }
-  /** D-34: any target of an MCP plan changed, so the whole plan is void. */
-  | { kind: 'invalidated'; item_id: ItemId; reason: string; at: string };
-
 export interface ExecuteOptions {
   onEvent?: (e: ExecutionEvent) => void;
   signal?: AbortSignal;
 }
 
 export interface PlanBridge {
-  readonly kind: 'mock' | 'tauri' | 'unavailable';
-  /** Build a desktop plan from the last scan, or from just `items` of it (the Overview basket);
-   *  S3 items are never planned. Dry run: nothing changes. */
+  readonly kind: 'mock' | 'tauri';
+  /** Build a desktop plan from the last scan, or from just `items` of it; S3 items are never
+   *  planned. Dry run: nothing changes. */
   preparePlan(req: { items?: ItemId[] }): Promise<PlanPreview>;
   /** Execute the selected items of a reviewed plan through the core Executor. */
   executePlan(req: { plan_id: string; hash: string; items: ItemId[]; typed_count?: number }, opts?: ExecuteOptions): Promise<ExecutionResult>;
-  /** AI agent plans waiting for the human, newest first. */
-  approvalRequests(): Promise<AgentRequestSummary[]>;
-  /** Open the agent request for a plan ID (MCP), or null when there is none. Each call starts
-   *  a fresh challenge (a new code). */
-  approvalRequest(planId: string): Promise<ApprovalRequest | null>;
-  /** Record the human's approval (single use, bound to the hash). */
-  approvePlan(req: { plan_id: string; hash: string; code: string }): Promise<{ approved_at: string }>;
-  denyPlan(req: { plan_id: string }): Promise<{ denied_at: string }>;
-  /** Take an approval back before the agent used it. */
-  revokeApproval(req: { plan_id: string }): Promise<{ revoked_at: string }>;
-  /** Subscribe to broker events for a plan. Returns the unsubscribe function. */
-  watchApproval(planId: string, onEvent: (e: ApprovalEvent) => void): () => void;
-  /** `scull://approve/<plan-id>` links (Tauri): `onOpen` gets the plan ID of the link the app
-   *  was opened with, and of each later one. Returns the unsubscribe function. */
-  onOpenRequest(onOpen: (planId: string) => void): () => void;
-}
-
-/** Explicit failure bridge for unsupported integrations and test fixtures. */
-export function createUnavailablePlanBridge(): PlanBridge {
-  const no = (): never => {
-    throw new BridgeError({
-      kind: 'unsupported_platform',
-      message: 'Cleanup plans are not connected to the core yet; nothing was changed.',
-    });
-  };
-  return {
-    kind: 'unavailable',
-    preparePlan: async () => no(),
-    executePlan: async () => no(),
-    approvalRequests: async () => [],
-    approvalRequest: async () => no(),
-    approvePlan: async () => no(),
-    denyPlan: async () => no(),
-    revokeApproval: async () => no(),
-    watchApproval: () => () => undefined,
-    onOpenRequest: () => () => undefined,
-  };
 }
 
 const forBridge = new WeakMap<ScullBridge, PlanBridge>();
-
-/** Whether the page asked the mock to announce its agent request (`?agent=request`: the
- *  notification, design 12b; development and E2E). */
-export function wantsAgentRequest(w: unknown = globalThis): boolean {
-  const loc = (w as { location?: { search?: string; hash?: string } } | undefined)?.location;
-  if (!loc) return false;
-  const q = `${loc.search ?? ''}&${(loc.hash ?? '').split('?')[1] ?? ''}`;
-  return /(^|[?&])agent=request(&|$)/.test(q);
-}
 
 /** The plan bridge that goes with a core bridge (mock with mock, Tauri with Tauri). */
 export function planBridgeFor(bridge: ScullBridge): PlanBridge {
   let p = forBridge.get(bridge);
   if (!p) {
-    p =
-      bridge.kind === 'mock'
-        ? createMockPlanBridge({ latencyMs: 120, announceAgentRequest: wantsAgentRequest() })
-        : createTauriPlanBridge();
+    p = bridge.kind === 'mock' ? createMockPlanBridge({ latencyMs: 120 }) : createTauriPlanBridge();
     forBridge.set(bridge, p);
-    // Development and E2E builds only (`VITE_SCULL_E2E=1`, apps/desktop/e2e/run.sh): lets
-    // screenshot scripts and E2E tests drive the mock (e.g. a target changing). A normal
-    // `vite build` drops this branch.
-    if (p.kind === 'mock' && (import.meta.env.DEV || import.meta.env.VITE_SCULL_E2E === '1')) {
-      (globalThis as { __scullMockPlans?: PlanBridge }).__scullMockPlans = p;
-    }
   }
   return p;
-}
-
-/** Where a `scull://approve/<plan-id>` link takes the window: Cleanup Review on that request,
- *  or nowhere while an agent request is already open there (so repeated links can't pull the
- *  human away from a review; the notification offers the other request). */
-export function openRequestRoute(
-  current: { path: string; query: Record<string, unknown> },
-  planId: string,
-): { path: string; query: { request: string } } | null {
-  if (current.path === '/cleanup' && typeof current.query.request === 'string') return null;
-  return { path: '/cleanup', query: { request: planId } };
-}
-
-export const PLAN_BRIDGE_KEY: InjectionKey<PlanBridge> = Symbol('scull-plan-bridge');
-
-/** The provided plan bridge (tests), else the one that goes with the app's core bridge. */
-export function usePlanBridge(): PlanBridge {
-  return inject(PLAN_BRIDGE_KEY, null) ?? planBridgeFor(useBridge());
 }
