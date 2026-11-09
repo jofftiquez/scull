@@ -416,11 +416,25 @@ fn worktrees_and_worktree_inspect() {
     let fx = tree(true);
     let env = Env::elsewhere();
     let r = root(&fx);
+    // Default: linked worktrees only; the main tree is counted, not listed (#140).
     let o = env.run(&["worktrees", "--root", &r]);
     ok(&o);
     let out = stdout(&o);
+    assert!(out.contains("linked") && out.contains("feature"), "{out}");
     assert!(
-        out.contains("main") && out.contains("linked") && out.contains("feature"),
+        !out.contains("main working tree of the repository"),
+        "{out}"
+    );
+    assert!(
+        out.contains("1 main or bare working tree(s) not listed"),
+        "{out}"
+    );
+    assert!(out.contains("--all"), "{out}");
+    let o = env.run(&["worktrees", "--all", "--root", &r]);
+    ok(&o);
+    let out = stdout(&o);
+    assert!(
+        out.contains("main working tree of the repository") && out.contains("linked"),
         "{out}"
     );
     assert!(out.contains("never removable"), "{out}");

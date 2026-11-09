@@ -100,8 +100,9 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         } => crate::cmd::projects::inspect(path, roots, ui)?,
         Command::Worktrees {
             roots,
+            all,
             action: None,
-        } => crate::cmd::worktrees::run(roots, ui)?,
+        } => crate::cmd::worktrees::run(roots, *all, ui)?,
         Command::Worktrees {
             action: Some(WorktreesAction::Inspect { path }),
             ..

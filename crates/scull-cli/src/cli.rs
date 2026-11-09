@@ -144,6 +144,10 @@ pub enum Command {
         /// Scan roots (default: `scan.roots` from the config).
         #[command(flatten)]
         roots: RootArgs,
+        /// Also list main and bare working trees (never removable). Machine output always
+        /// includes them.
+        #[arg(long)]
+        all: bool,
         /// Optional subcommand.
         #[command(subcommand)]
         action: Option<WorktreesAction>,
