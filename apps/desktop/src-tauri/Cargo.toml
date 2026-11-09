@@ -34,24 +34,11 @@ scull-core = { path = "../../../crates/scull-core" }
 scull-platform = { path = "../../../crates/scull-platform" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# tray-icon: the menu bar / tray widget (P4-UI-01; src/tray.rs).
-tauri = { version = "2", features = ["tray-icon"] }
-# Native folder chooser without tauri-plugin-dialog's forbidden filesystem-plugin dependency.
-rfd = { version = "0.17.2", default-features = false, features = ["gtk3", "common-controls-v6"] }
-# OS notifications for tray monitoring and the weekly digest (P5-PRO-01; src/monitor.rs). Used
-# from Rust only: no window gets the notification permission.
-tauri-plugin-notification = "2"
-# `scull://approve/<plan-id>` links (P4-MCP-02): they only bring the app forward on Cleanup
-# Review for that plan. Single instance so a link reaches the running app on Windows and Linux
-# (on Linux through D-Bus: the same zbus 5 as tauri-plugin-notification, see deny.toml).
-tauri-plugin-deep-link = "2"
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri = { version = "2", features = [] }
 
 [dev-dependencies]
-# The mock runtime for the Tauri command tests (tests/approval_commands.rs).
+# The mock runtime for the Tauri command tests (tests/commands.rs).
 tauri = { version = "2", features = ["test"] }
-scull-mcp = { path = "../../../crates/scull-mcp" }
-scull-storage = { path = "../../../crates/scull-storage" }
 scull-engine = { path = "../../../crates/scull-engine" }
 scull-safety = { path = "../../../crates/scull-safety" }
 tempfile = "3"

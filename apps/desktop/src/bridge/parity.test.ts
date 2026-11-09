@@ -76,25 +76,9 @@ describe('mock bridge answers in the real shapes', () => {
   const b = createMockBridge();
 
   it('every call validates', async () => {
-    expectValid('app-info', await b.appInfo());
-    expectValid('drives', await b.drives());
     expectValid('scan-report', await b.scan({}));
-    expectValid('projects', await b.projects());
-    expectValid('worktrees', await b.worktrees());
     expectValid('caches-report', await b.caches());
-    expectValid('status', await b.status());
-    expectValid('capabilities', await b.capabilities());
-    expectValid('history', await b.history());
     expectValid('settings', await b.settings());
-    const since = Date.now() / 1000 - 30 * 86_400;
-    expectValid('free-space-history', await b.freeSpaceHistory(since));
-    expectValid('free-space-history', await b.freeSpaceHistory(since, '/Volumes/Other'));
-    expectValid('rollup-history', await b.rollupHistory(since));
-    expectValid('regrowth', await b.regrowth(since));
-    expectValid('footprint-history', await b.footprintHistory(since));
-    expectValid('weekly-digest', await b.weeklyDigest());
-    expectValid('forecasts', await b.forecasts());
-    expectValid('monitor-status', await b.monitorStatus());
   });
 
   it('streams progress events that validate, tagged with one operation ID', async () => {

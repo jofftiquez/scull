@@ -1,11 +1,9 @@
-// Mock plan bridge: illustrative plans from the design (03 Cleanup Review, 12 MCP approval)
+// Mock plan bridge: an illustrative desktop plan from the design (03 Cleanup Review)
 // built from real `Candidate` shapes, with simulated execution. Touches nothing on disk; the
 // "execution" is timers. Used in a plain browser, in tests and for screenshots.
 import type { Action, Candidate, Category, Confidence, Evidence, ItemId, ReasonCode, Tier } from './types';
 import { BridgeError } from './types';
 import type {
-  ApprovalEvent,
-  ApprovalRequest,
   ExecuteOptions,
   ExecutionResult,
   ItemOutcome,
@@ -23,14 +21,8 @@ export interface MockPlanOptions {
   latencyMs?: number;
   /** Time per executed item in ms (design: 700). */
   stepMs?: number;
-  /** Delay between approval and the agent starting to run the plan (design: 2600). */
-  agentDelayMs?: number;
   /** Clock, injectable for tests. */
   now?: () => number;
-  /** List the pending agent request in `approvalRequests` (the notification). Off by default so
-   *  the notification doesn't cover other screens in development and E2E; the app turns it on
-   *  with `?agent=request` (src/bridge/plan.ts). Opening the request by its ID always works. */
-  announceAgentRequest?: boolean;
 }
 
 interface CandSpec {
@@ -168,69 +160,6 @@ function desktopItems(now: number): PlanItem[] {
   ];
 }
 
-/** Design 12: what Claude Code asked for. */
-function agentItems(now: number): PlanItem[] {
-  const c = (s: CandSpec) => mockCandidate(s, now);
-  return [
-    {
-      candidate: c({
-        id: ids(11), path: `${HOME}/code/shop-api/node_modules`, artifact: 'Installed npm dependencies', rule: 'node.node_modules',
-        project: ['shop-api', 'node', `${HOME}/code/shop-api`], markers: ['package.json'], locks: ['package-lock.json'],
-        idleDays: 3, tier: 'S0', action: 'delete', gib: 12.4,
-        reasons: [['regenerable', 'Dependencies pinned by package-lock.json: npm ci reinstalls them']],
-        regen: ['npm ci', 60, true],
-      }),
-    },
-    {
-      candidate: c({
-        id: ids(12), path: `${HOME}/code/shop-api/.turbo`, artifact: 'Turborepo build cache', rule: 'node.turbo',
-        project: ['shop-api', 'node', `${HOME}/code/shop-api`], markers: ['turbo.json'], locks: ['package-lock.json'],
-        tier: 'S0', action: 'delete', gib: 1.9,
-        reasons: [['regenerable', 'Build cache: refilled on the next turbo run']],
-        regen: ['Refilled on the next turbo run', 30],
-      }),
-      note: 'build cache',
-    },
-    {
-      candidate: c({
-        id: ids(13), path: `${HOME}/code/.worktrees/shop-api`, artifact: 'Artifacts inside merged worktrees', rule: 'git.worktree_artifacts',
-        notes: ['Markers + lockfiles in each'], tier: 'S0', action: 'delete', gib: 4.8,
-        reasons: [['regenerable', 'agent/fix-auth-91, -92, -94 · merged · worktrees kept']],
-        regen: ['Rebuild inside the worktree if you use it again', null],
-      }),
-      label: '3 worktree artifact folders',
-      members: 3,
-      note: 'agent/fix-auth-91, -92, -94 · merged',
-    },
-    {
-      candidate: c({
-        id: ids(14), path: `${HOME}/code/kart-game/Library`, artifact: 'Unity import cache', rule: 'unity.library',
-        project: ['kart-game', 'unity', `${HOME}/code/kart-game`], markers: ['ProjectSettings/'],
-        idleDays: 21, tier: 'S1', action: 'quarantine', gib: 8.2,
-        reasons: [['costly_to_regenerate', 'Unity re-imports every asset: about 25 min']],
-        regen: ['Unity re-import', 1500],
-      }),
-    },
-    {
-      candidate: c({
-        id: ids(15), path: `${HOME}/code/ml-lab/.venv`, artifact: 'Python virtual environment', rule: 'python.venv',
-        project: ['ml-lab', 'python', `${HOME}/code/ml-lab`], markers: ['pyproject.toml'],
-        idleDays: 40, tier: 'S2', action: 'quarantine', gib: 9.8, confidence: 'medium',
-        reasons: [['no_lockfile', 'No lockfile: may not be reproducible']],
-        regen: [null, null],
-      }),
-      note: 'no lockfile, may not be reproducible',
-    },
-  ];
-}
-
-/** The ID of the mock agent request (design 12). */
-export const MOCK_AGENT_PLAN_ID = '9c41e07b';
-
-/** Wrong codes the core accepts before it closes a request (scull_mcp::approval::MAX_CODE_ATTEMPTS). */
-export const MOCK_MAX_CODE_ATTEMPTS = 3;
-
-/** Extra candidates other screens can ask a plan for (e.g. a worktree removal). */
 const extraCandidates = new Map<ItemId, PlanItem>();
 
 /** Register candidates the mock may put in a plan when asked by ID (Git Worktrees). */
@@ -247,69 +176,14 @@ export function registerScanCandidates(candidates: readonly Candidate[]): void {
   for (const c of candidates) scanCandidates.set(c.id, { candidate: structuredClone(c) });
 }
 
-type AgentStatus = 'pending' | 'approved' | 'running' | 'done' | 'denied' | 'revoked' | 'void' | 'expired';
-
-export interface MockPlanBridge extends PlanBridge {
-  /** Simulate a target of a plan changing on disk (D-34: an MCP plan is voided). */
-  simulateTargetChanged(planId: string, itemId?: ItemId): void;
-}
-
-export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge {
+export function createMockPlanBridge(opts: MockPlanOptions = {}): PlanBridge {
   const latency = opts.latencyMs ?? 0;
   const stepMs = opts.stepMs ?? 700;
-  const agentDelay = opts.agentDelayMs ?? 2600;
   const now = opts.now ?? (() => Date.now());
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const iso = (ms: number) => new Date(ms).toISOString();
   let planSeq = 0;
   const plans = new Map<string, PlanPreview>();
-
-  const agent = {
-    status: 'pending' as AgentStatus,
-    listeners: new Set<(e: ApprovalEvent) => void>(),
-    timers: [] as ReturnType<typeof setTimeout>[],
-    request: null as ApprovalRequest | null,
-    /** Wrong codes so far (like the core: MAX_CODE_ATTEMPTS closes the request). */
-    wrong: 0,
-  };
-  const emit = (e: ApprovalEvent) => agent.listeners.forEach((l) => l(structuredClone(e)));
-
-  function agentRequest(): ApprovalRequest {
-    if (agent.request) return agent.request;
-    const t = now();
-    const nowSecs = Math.floor(t / 1000);
-    const plan: PlanPreview = {
-      plan_id: MOCK_AGENT_PLAN_ID,
-      hash: '9c41e07b5d2a18f3',
-      created_at: iso(t - 78_000),
-      expires_at: iso(t - 78_000 + 15 * 60_000),
-      source: {
-        kind: 'mcp',
-        client: 'Claude Code',
-        initials: 'CC',
-        tool: 'prepare_cleanup',
-        pid: 51022,
-        command: 'claude',
-        cwd: `${HOME}/code/shop-api`,
-        note: 'Freeing space before the e2e run. These are build outputs and two old environments I found on this machine.',
-      },
-      items: agentItems(nowSecs),
-      skipped: [],
-      left_out: [
-        {
-          label: 'worktree agent/fix-auth-93',
-          tier: 'S3',
-          reason: 'Claude Code asked for it · 2 uncommitted files · protected work is never offered',
-        },
-      ],
-      estimate_notes: [],
-    };
-    plans.set(plan.plan_id, plan);
-    agent.request = { plan, code: 'K7Q-4MP' };
-    return agent.request;
-  }
-
-  const normalize = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   function outcomeFor(it: PlanItem, ratio = 0.982): ItemOutcome {
     const c = it.candidate;
@@ -334,37 +208,6 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       finished_at: iso(now()),
     };
   }
-
-  function runAgent() {
-    const req = agentRequest();
-    const later = (ms: number, fn: () => void) => agent.timers.push(setTimeout(fn, ms));
-    later(agentDelay, () => {
-      if (agent.status !== 'approved') return;
-      agent.status = 'running';
-      emit({ kind: 'agent_started', at: iso(now()) });
-      const outcomes: ItemOutcome[] = [];
-      req.plan.items.forEach((it, k) => {
-        later(k * stepMs, () => emit({ kind: 'item_started', item_id: it.candidate.id }));
-        later((k + 1) * stepMs, () => {
-          const o = outcomeFor(it);
-          outcomes.push(o);
-          emit({ kind: 'item_finished', outcome: o });
-        });
-      });
-      later(req.plan.items.length * stepMs + 300, () => {
-        agent.status = 'done';
-        emit({ kind: 'finished', result: resultOf(req.plan.plan_id, req.plan.items, outcomes) });
-      });
-    });
-  }
-
-  const requirePending = (planId: string) => {
-    if (planId !== MOCK_AGENT_PLAN_ID) throw new BridgeError({ kind: 'not_found', message: `no plan ${planId}` });
-    const exp = Date.parse(agentRequest().plan.expires_at);
-    if (now() >= exp) agent.status = 'expired';
-    if (agent.status === 'expired') throw new BridgeError({ kind: 'plan_expired', message: 'the plan expired' });
-    if (agent.status === 'void') throw new BridgeError({ kind: 'plan_invalidated', message: 'a target changed' });
-  };
 
   return {
     kind: 'mock',
@@ -445,95 +288,6 @@ export function createMockPlanBridge(opts: MockPlanOptions = {}): MockPlanBridge
       }
       await wait(Math.max(latency, stepMs > 0 ? 400 : 0));
       return resultOf(plan.plan_id, chosen, outcomes);
-    },
-
-    async approvalRequests() {
-      await wait(latency);
-      if (!opts.announceAgentRequest) return [];
-      const r = agentRequest();
-      if (agent.status !== 'pending' || now() >= Date.parse(r.plan.expires_at)) return [];
-      return [
-        {
-          plan_id: r.plan.plan_id,
-          hash: r.plan.hash,
-          created_at: r.plan.created_at,
-          expires_at: r.plan.expires_at,
-          item_count: r.plan.items.length,
-          reclaimable_bytes: r.plan.items.reduce((a, i) => a + i.candidate.sizes.reclaimable.bytes, 0),
-          ...(r.plan.source.kind === 'mcp' && r.plan.source.client ? { client: r.plan.source.client } : {}),
-        },
-      ];
-    },
-
-    async approvalRequest(planId) {
-      await wait(latency);
-      if (planId !== MOCK_AGENT_PLAN_ID) return null;
-      return structuredClone(agentRequest());
-    },
-
-    async approvePlan(req) {
-      requirePending(req.plan_id);
-      const r = agentRequest();
-      if (agent.status !== 'pending') throw new BridgeError({ kind: 'usage', message: `plan is ${agent.status}` });
-      if (req.hash !== r.plan.hash) throw new BridgeError({ kind: 'plan_tampered', message: 'fingerprint mismatch' });
-      if (normalize(req.code) !== normalize(r.code)) {
-        agent.wrong += 1;
-        if (agent.wrong < MOCK_MAX_CODE_ATTEMPTS) {
-          const left = MOCK_MAX_CODE_ATTEMPTS - agent.wrong;
-          throw new BridgeError({
-            kind: 'safety_blocked',
-            message: `the confirmation code does not match; nothing was approved (${left} ${left === 1 ? 'try' : 'tries'} left)`,
-          });
-        }
-        agent.status = 'denied';
-        emit({ kind: 'denied', at: iso(now()) });
-        throw new BridgeError({
-          kind: 'safety_blocked',
-          message: `the confirmation code was wrong ${MOCK_MAX_CODE_ATTEMPTS} times; nothing was approved and this request is closed. The agent has to prepare a new plan.`,
-        });
-      }
-      agent.status = 'approved';
-      runAgent();
-      return { approved_at: iso(now()) };
-    },
-
-    async denyPlan(req) {
-      requirePending(req.plan_id);
-      if (agent.status !== 'pending') throw new BridgeError({ kind: 'usage', message: `plan is ${agent.status}` });
-      agent.status = 'denied';
-      return { denied_at: iso(now()) };
-    },
-
-    async revokeApproval(req) {
-      requirePending(req.plan_id);
-      if (agent.status !== 'approved') throw new BridgeError({ kind: 'usage', message: 'already started' });
-      agent.status = 'revoked';
-      agent.timers.forEach(clearTimeout);
-      agent.timers = [];
-      return { revoked_at: iso(now()) };
-    },
-
-    watchApproval(_planId, onEvent) {
-      agent.listeners.add(onEvent);
-      return () => agent.listeners.delete(onEvent);
-    },
-
-    // No links in a browser.
-    onOpenRequest: () => () => undefined,
-
-    simulateTargetChanged(planId, itemId) {
-      if (planId !== MOCK_AGENT_PLAN_ID) return;
-      if (agent.status !== 'pending' && agent.status !== 'approved') return;
-      agent.status = 'void';
-      agent.timers.forEach(clearTimeout);
-      agent.timers = [];
-      const id = itemId ?? agentRequest().plan.items[0]!.candidate.id;
-      emit({
-        kind: 'invalidated',
-        item_id: id,
-        reason: 'Changed 40 s ago: npm install wrote 214 files · plan no longer matches the disk',
-        at: iso(now()),
-      });
     },
   };
 }
