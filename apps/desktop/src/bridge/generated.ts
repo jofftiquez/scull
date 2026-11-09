@@ -2,6 +2,20 @@
 // Do not edit by hand.
 
 /**
+ * Which bridge implementation answered.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "BridgeKind".
+ */
+export type BridgeKind = "tauri" | "mock";
+/**
+ * Operating system family.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Os".
+ */
+export type Os = "macos" | "windows" | "linux" | "unknown";
+/**
  * The action proposed for a candidate.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -246,36 +260,6 @@ export type RegenerationCost =
  */
 export type Confidence = "high" | "medium" | "low" | "unknown";
 /**
- * What happened to one item when the agent executed the plan.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentItemOutcome".
- */
-export type AgentItemOutcome =
-  "removed" | "quarantined" | "moved_to_trash" | "tool_run" | "partial" | "failed" | "refused" | "skipped" | "unknown";
-/**
- * Where an agent plan stands, as the desktop shows it.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentPlanState".
- */
-export type AgentPlanState =
-  "awaiting_approval" | "denied" | "approved" | "running" | "executed" | "voided" | "expired" | "revoked";
-/**
- * Which bridge implementation answered.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "BridgeKind".
- */
-export type BridgeKind = "tauri" | "mock";
-/**
- * Operating system family.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Os".
- */
-export type Os = "macos" | "windows" | "linux" | "unknown";
-/**
  * Kinds of [`Issue`].
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -338,25 +322,6 @@ export type CacheOutputStream = "stdout" | "stderr";
  */
 export type RunItemOutcome = "deleted" | "quarantined" | "trashed" | "skipped";
 /**
- * What kind of storage a volume is (mirrors [`VolumeKind`]).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DriveKind".
- */
-export type DriveKind = "local" | "removable" | "network" | "virtual" | "backup";
-/**
- * Whether scull scans a volume (D-22).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ScanPolicy".
- */
-export type ScanPolicy = "scan" | "off_by_default" | "never";
-/**
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Drives".
- */
-export type Drives = Drive[];
-/**
  * What went wrong, as a stable machine code. Serialized as the snake_case string returned by
  * [`ErrorKind::as_str`]. See [`ExitCode`] for the exit code of each kind.
  *
@@ -379,94 +344,6 @@ export type ErrorKind =
   | "partial_failure"
   | "unsupported_platform"
   | "internal";
-/**
- * Whether the history database answered.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "HistoryRead".
- */
-export type HistoryRead = "ok" | "no_database" | "unavailable";
-/**
- * How much to trust a forecast. Ordered: `Unknown < Low < Medium < High`.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ForecastConfidence".
- */
-export type ForecastConfidence = "unknown" | "low" | "medium" | "high";
-/**
- * What the forecast concluded.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ForecastState".
- */
-export type ForecastState = "not_enough_history" | "not_filling" | "filling" | "below_reserve";
-/**
- * The outcome of one plan item.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ItemOutcome".
- */
-export type ItemOutcome =
-  | "removed"
-  | "quarantined"
-  | "moved_to_trash"
-  | "tool_run"
-  | "partial"
-  | "failed"
-  | "refused"
-  | "skipped"
-  | "restored"
-  | "purged";
-/**
- * What an operation did, for the timeline's icon and wording.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "OperationKind".
- */
-export type OperationKind = "cleanup" | "quick_clean" | "worktrees" | "agent";
-/**
- * Kind of an audit log line, for its colour.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AuditLineKind".
- */
-export type AuditLineKind = "approval" | "check" | "action" | "measured" | "warning";
-/**
- * How an operation ended.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "OperationStatus".
- */
-export type OperationStatus =
-  "completed" | "completed_with_errors" | "failed" | "cancelled" | "interrupted" | "running";
-/**
- * Whether there is history to show.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "HistoryReadState".
- */
-export type HistoryReadState = "ok" | "no_database" | "unavailable";
-/**
- * How urgent an alert is. Ordered: `Info < Warning < Critical`.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Severity".
- */
-export type Severity = "info" | "warning" | "critical";
-/**
- * What an alert is about.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AlertKind".
- */
-export type AlertKind =
-  | "disk_full_forecast"
-  | "low_space"
-  | "stale"
-  | "worktree_ttl_expired"
-  | "budget_exceeded"
-  | "growth_spike"
-  | "free_space_drop";
 /**
  * Which stage an operation is in.
  *
@@ -892,6 +769,27 @@ export type Origin =
       source: "cli";
     };
 /**
+ * What an alert is about.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "AlertKind".
+ */
+export type AlertKind =
+  | "disk_full_forecast"
+  | "low_space"
+  | "stale"
+  | "worktree_ttl_expired"
+  | "budget_exceeded"
+  | "growth_spike"
+  | "free_space_drop";
+/**
+ * How urgent an alert is. Ordered: `Info < Warning < Critical`.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "Severity".
+ */
+export type Severity = "info" | "warning" | "critical";
+/**
  * Whether there is a scan to show.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
@@ -903,12 +801,6 @@ export type StatusState = "ok" | "no_scan" | "no_database" | "unavailable";
  * Every payload of the desktop bridge, by type name.
  */
 export interface BridgePayloads {
-  AgentApprovalRequest: AgentApprovalRequest;
-  AgentApproved: AgentApproved;
-  AgentDenied: AgentDenied;
-  AgentPlanStatus: AgentPlanStatus;
-  AgentRequests: AgentRequests;
-  AgentRevoked: AgentRevoked;
   AppInfo: AppInfo;
   CacheCleanChoice: CacheCleanChoice;
   CachesReport: CachesReport;
@@ -919,83 +811,114 @@ export interface BridgePayloads {
   DesktopQuickClean: DesktopQuickClean;
   DesktopRestore: DesktopRestore;
   DesktopRun: DesktopRun;
-  Drives: Drives;
   ScullError: ScullError;
-  FootprintHistory: FootprintHistory;
-  ForecastsView: ForecastsView;
-  FreeSpaceHistory: FreeSpaceHistory;
-  HistoryView: HistoryView;
-  MonitorConfig: MonitorConfig;
-  MonitorSnapshot: MonitorSnapshot;
-  MonitorStatus: MonitorStatus;
   ProgressEvent: ProgressEvent;
   ProjectsView: ProjectsView;
-  RegrowthHistory: RegrowthHistory;
-  RollupHistory: RollupHistory;
   ScanParams: ScanParams;
   ScanReport: ScanReport;
   SettingsView: SettingsView;
   DesktopStatus: DesktopStatus;
-  DigestView: DigestView;
   WorktreesView: WorktreesView;
 }
 /**
- * An agent plan opened for approval: the plan exactly as the broker verified it, and the
- * code to show.
+ * Which bridge answers, and about what (`app_info` command).
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentApprovalRequest".
+ * via the `definition` "AppInfo".
  */
-export interface AgentApprovalRequest {
+export interface AppInfo {
+  bridge: BridgeKind;
+  os: Os;
   /**
-   * Wrong codes still accepted before this opening closes.
+   * scull version of the core.
    */
-  attempts_left: number;
-  /**
-   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
-   * **unverified**, display only). `None` when unknown.
-   */
-  client?: string | null;
-  /**
-   * The confirmation code, `ABC-DEF`, **for display only**: the human reads it here and types
-   * it back. It is valid for this opening of the dialog only and never leaves this machine.
-   */
-  code: string;
-  /**
-   * Content hash (send it back with the approval).
-   */
-  content_hash: string;
-  /**
-   * When the agent prepared it (Unix seconds).
-   */
-  created_at: number;
-  /**
-   * When it expires unapproved; an approval lapses at the same time (Unix seconds).
-   */
-  expires_at: number;
-  /**
-   * Every item, in plan order.
-   */
-  items: AgentPlanItem[];
-  /**
-   * Plan ID.
-   */
-  plan_id: string;
+  version: string;
 }
 /**
- * One item of an agent plan as the human reviews it.
+ * One explicitly selected mode and the command the human reviewed.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentPlanItem".
+ * via the `definition` "CacheCleanChoice".
  */
-export interface AgentPlanItem {
-  candidate: Candidate;
+export interface CacheCleanChoice {
+  command: CacheCleanCommand;
   /**
-   * `true`: evidence, reasons, flags and sizes come from this app's last scan, which found
-   * the same item (same ID, identity, path, tier, action and rule). `false`: only what the
-   * plan recorded is known; flags are unknown (never "no") and there is no evidence to show.
+   * Cache item ID.
    */
-  from_last_scan: boolean;
+  item_id: string;
+  /**
+   * Either `prune` or `wipe`; checked against the fresh core plan.
+   */
+  mode: string;
+}
+/**
+ * An exact native command shown for review. Display only; never interpreted as shell text.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanCommand".
+ */
+export interface CacheCleanCommand {
+  /**
+   * Arguments passed directly to the executable.
+   */
+  args: string[];
+  /**
+   * Canonical trusted executable.
+   */
+  binary: string;
+  /**
+   * Cache location variables added to the sanitized environment.
+   */
+  env: CacheCleanEnv[];
+}
+/**
+ * A cache-location variable in the sanitized native environment.
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CacheCleanEnv".
+ */
+export interface CacheCleanEnv {
+  /**
+   * Variable name.
+   */
+  name: string;
+  /**
+   * Located cache folder or other scoped value.
+   */
+  value: string;
+}
+/**
+ * Result of locating package-manager caches (`scull caches`).
+ *
+ * This interface was referenced by `BridgePayloads`'s JSON-Schema
+ * via the `definition` "CachesReport".
+ */
+export interface CachesReport {
+  /**
+   * `true` when the user cancelled while sizing.
+   */
+  cancelled: boolean;
+  /**
+   * One candidate per cache found (category `package_cache`).
+   */
+  candidates: Candidate[];
+  /**
+   * Places that could not be read.
+   */
+  issues: Issue[];
+  /**
+   * Unix time (seconds) of the measurement.
+   */
+  measured_at: number;
+  /**
+   * Tools whose cache location was refused (QC-05); nothing of them is offered.
+   */
+  refused: RefusedCacheReport[];
+  /**
+   * Signals this run could not observe.
+   */
+  signals_unavailable: SignalUnavailable[];
+  totals: Totals;
 }
 /**
  * A detected item with a risk tier and evidence. This is the unit the preview shows, plans
@@ -1170,309 +1093,6 @@ export interface Reclaimable {
    * this item will not free while the other links remain.
    */
   shared_bytes?: number;
-}
-/**
- * The human approved the plan.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentApproved".
- */
-export interface AgentApproved {
-  /**
-   * When the unused approval lapses (Unix seconds).
-   */
-  approval_expires_at: number;
-  /**
-   * When (Unix seconds).
-   */
-  approved_at: number;
-  /**
-   * Plan ID.
-   */
-  plan_id: string;
-}
-/**
- * The human denied the plan.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentDenied".
- */
-export interface AgentDenied {
-  /**
-   * When (Unix seconds).
-   */
-  denied_at: number;
-  /**
-   * Plan ID.
-   */
-  plan_id: string;
-}
-/**
- * The status of an agent plan. Contains no code and nothing that can approve anything.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentPlanStatus".
- */
-export interface AgentPlanStatus {
-  /**
-   * When it was approved.
-   */
-  approved_at?: number | null;
-  /**
-   * How it was approved: `terminal` or `desktop`.
-   */
-  channel?: string | null;
-  /**
-   * How, when denied: `denied` (the human said no) or `wrong_code` (typed wrong too often).
-   */
-  denial_reason?: string | null;
-  /**
-   * When a human denied it.
-   */
-  denied_at?: number | null;
-  /**
-   * The execution, once the agent started it.
-   */
-  operation?: AgentOperation | null;
-  /**
-   * When the plan expires (Unix seconds).
-   */
-  plan_expires_at: number;
-  /**
-   * Plan ID.
-   */
-  plan_id: string;
-  state: AgentPlanState;
-  /**
-   * When the approval was used (executed, voided or revoked).
-   */
-  used_at?: number | null;
-}
-/**
- * The agent's execution of the plan, as recorded by the Executor.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentOperation".
- */
-export interface AgentOperation {
-  /**
-   * When it finished (Unix seconds); `None` while running.
-   */
-  finished_at?: number | null;
-  /**
-   * Bytes freed (sum of the items).
-   */
-  freed_bytes: number;
-  /**
-   * Item outcomes recorded so far, in order.
-   */
-  items: AgentItemResult[];
-  /**
-   * Free space after minus before, when measured.
-   */
-  measured_delta_bytes?: number | null;
-  /**
-   * Bytes moved aside.
-   */
-  moved_bytes: number;
-  /**
-   * Bytes the plan predicted.
-   */
-  predicted_bytes: number;
-  /**
-   * When it started (Unix seconds).
-   */
-  started_at: number;
-}
-/**
- * One recorded item outcome of the agent's execution.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentItemResult".
- */
-export interface AgentItemResult {
-  /**
-   * Bytes freed.
-   */
-  freed_bytes: number;
-  /**
-   * Plan item.
-   */
-  item_id: string;
-  /**
-   * Bytes moved aside (quarantine, Trash).
-   */
-  moved_bytes: number;
-  outcome: AgentItemOutcome;
-  /**
-   * Stable reason code (skipped, refused, failed).
-   */
-  reason?: string | null;
-}
-/**
- * Agent plans waiting for the human, newest first.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentRequests".
- */
-export interface AgentRequests {
-  /**
-   * The requests (empty without a database or machine ID).
-   */
-  requests: AgentRequest[];
-}
-/**
- * An agent plan waiting for the human, for the pending-requests notice.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentRequest".
- */
-export interface AgentRequest {
-  /**
-   * The MCP client the plan came through, as it named itself (`name version`; sanitized,
-   * **unverified**, display only). `None` when unknown.
-   */
-  client?: string | null;
-  /**
-   * Content hash the approval will be bound to.
-   */
-  content_hash: string;
-  /**
-   * When the agent prepared it (Unix seconds).
-   */
-  created_at: number;
-  /**
-   * When it expires unapproved (Unix seconds).
-   */
-  expires_at: number;
-  /**
-   * Items in the plan.
-   */
-  item_count: number;
-  /**
-   * Plan ID (open it with `open_approval_request`).
-   */
-  plan_id: string;
-  /**
-   * Bytes the plan predicts it frees.
-   */
-  reclaimable_bytes: number;
-}
-/**
- * The human revoked the approval before the agent used it.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AgentRevoked".
- */
-export interface AgentRevoked {
-  /**
-   * Plan ID.
-   */
-  plan_id: string;
-  /**
-   * When (Unix seconds).
-   */
-  revoked_at: number;
-}
-/**
- * Which bridge answers, and about what (`app_info` command).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AppInfo".
- */
-export interface AppInfo {
-  bridge: BridgeKind;
-  os: Os;
-  /**
-   * scull version of the core.
-   */
-  version: string;
-}
-/**
- * One explicitly selected mode and the command the human reviewed.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CacheCleanChoice".
- */
-export interface CacheCleanChoice {
-  command: CacheCleanCommand;
-  /**
-   * Cache item ID.
-   */
-  item_id: string;
-  /**
-   * Either `prune` or `wipe`; checked against the fresh core plan.
-   */
-  mode: string;
-}
-/**
- * An exact native command shown for review. Display only; never interpreted as shell text.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CacheCleanCommand".
- */
-export interface CacheCleanCommand {
-  /**
-   * Arguments passed directly to the executable.
-   */
-  args: string[];
-  /**
-   * Canonical trusted executable.
-   */
-  binary: string;
-  /**
-   * Cache location variables added to the sanitized environment.
-   */
-  env: CacheCleanEnv[];
-}
-/**
- * A cache-location variable in the sanitized native environment.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CacheCleanEnv".
- */
-export interface CacheCleanEnv {
-  /**
-   * Variable name.
-   */
-  name: string;
-  /**
-   * Located cache folder or other scoped value.
-   */
-  value: string;
-}
-/**
- * Result of locating package-manager caches (`scull caches`).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CachesReport".
- */
-export interface CachesReport {
-  /**
-   * `true` when the user cancelled while sizing.
-   */
-  cancelled: boolean;
-  /**
-   * One candidate per cache found (category `package_cache`).
-   */
-  candidates: Candidate[];
-  /**
-   * Places that could not be read.
-   */
-  issues: Issue[];
-  /**
-   * Unix time (seconds) of the measurement.
-   */
-  measured_at: number;
-  /**
-   * Tools whose cache location was refused (QC-05); nothing of them is offered.
-   */
-  refused: RefusedCacheReport[];
-  /**
-   * Signals this run could not observe.
-   */
-  signals_unavailable: SignalUnavailable[];
-  totals: Totals;
 }
 /**
  * Something the scan could not read or did not descend into.
@@ -1996,36 +1616,6 @@ export interface RunItem {
   reason?: string | null;
 }
 /**
- * One volume in the drives widget. Unknown sizes are `null`, never 0.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Drive".
- */
-export interface Drive {
-  /**
-   * Bytes available to the current user, when known.
-   */
-  free_bytes?: number | null;
-  /**
-   * The volume holding the user's home folder (listed first).
-   */
-  holds_home: boolean;
-  kind: DriveKind;
-  /**
-   * Short display name.
-   */
-  label: string;
-  /**
-   * Where it is mounted (`/`, `/Volumes/Dev SSD`, `C:\`).
-   */
-  mount_point: string;
-  scan_policy: ScanPolicy;
-  /**
-   * Size in bytes, when known.
-   */
-  total_bytes?: number | null;
-}
-/**
  * A serializable error: kind, human message and optional context.
  *
  * ```
@@ -2054,561 +1644,6 @@ export interface ScullError {
    * The path involved, if any.
    */
   path?: FsPath | null;
-}
-/**
- * `footprint_history`: scull's own footprint over time ("What scull knows").
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "FootprintHistory".
- */
-export interface FootprintHistory {
-  /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * Raw free-space samples are kept this many days, then downsampled (INS-02).
-   */
-  raw_retention_days: number;
-  /**
-   * Samples at or after `since`, oldest first.
-   */
-  samples: FootprintSampleView[];
-  /**
-   * Start of the window (Unix seconds).
-   */
-  since: number;
-  state: HistoryRead;
-}
-/**
- * scull's own disk use at one moment (DATA-05).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "FootprintSampleView".
- */
-export interface FootprintSampleView {
-  /**
-   * When it was measured (Unix seconds).
-   */
-  at: number;
-  /**
-   * Migration backups.
-   */
-  backup_bytes: number;
-  /**
-   * Damaged databases set aside.
-   */
-  damaged_bytes: number;
-  /**
-   * The database file.
-   */
-  database_bytes: number;
-  /**
-   * Sum of the parts.
-   */
-  total_bytes: number;
-  /**
-   * The `-wal` and `-shm` files.
-   */
-  wal_bytes: number;
-}
-/**
- * `forecasts`: every sampled volume's forecast.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ForecastsView".
- */
-export interface ForecastsView {
-  /**
-   * Forecasts are shown as alerts within this many days (`[proactive] alert_days`).
-   */
-  alert_days: number;
-  /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * One per sampled volume, sorted by volume ID.
-   */
-  forecasts: Forecast[];
-  /**
-   * When they were computed (Unix seconds).
-   */
-  now: number;
-  /**
-   * The reserve every forecast counts down to (bytes; `[proactive] reserve_gib`).
-   */
-  reserve_bytes: number;
-  state: HistoryRead;
-}
-/**
- * The forecast of one volume.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Forecast".
- */
-export interface Forecast {
-  /**
-   * When the latest sample in the window was taken (Unix seconds).
-   */
-  as_of?: number | null;
-  confidence: ForecastConfidence;
-  /**
-   * Days from `now` until free space drops below the reserve (`Filling`; 0 for
-   * `BelowReserve`).
-   */
-  days_until_threshold?: number | null;
-  /**
-   * Free space lost per day by the trend (negative when free space grows). Present once
-   * there is enough history.
-   */
-  fill_bytes_per_day?: number | null;
-  /**
-   * Latest free space, plus releases recorded after that sample (bytes).
-   */
-  free_bytes?: number | null;
-  /**
-   * Steps levelled out of the trend: known releases plus detected cleanups and one-off
-   * drops.
-   */
-  jumps_ignored: number;
-  /**
-   * Residual spread relative to the change the trend explains over the span (lower is
-   * steadier).
-   */
-  noise_ratio?: number | null;
-  /**
-   * Transient outliers dropped.
-   */
-  outliers_ignored: number;
-  /**
-   * The reserve the forecast counts down to (bytes).
-   */
-  reserve_bytes: number;
-  /**
-   * Samples fitted (after dropping outliers).
-   */
-  samples_used: number;
-  /**
-   * Seconds between the first and the latest sample in the window.
-   */
-  span_secs: number;
-  state: ForecastState;
-  /**
-   * When free space is forecast to drop below the reserve (Unix seconds).
-   */
-  threshold_at?: number | null;
-  /**
-   * Volume size at the latest sample (bytes).
-   */
-  total_bytes?: number | null;
-  /**
-   * Volume identifier, as recorded in history (mount point or volume GUID path).
-   */
-  volume_id: string;
-}
-/**
- * `free_space_history`: one volume's free-space samples (INS-01), oldest first.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "FreeSpaceHistory".
- */
-export interface FreeSpaceHistory {
-  /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * Samples at or after `since`, oldest first.
-   */
-  samples: VolumeSampleView[];
-  /**
-   * Start of the window (Unix seconds).
-   */
-  since: number;
-  state: HistoryRead;
-  /**
-   * The volume the samples belong to (`None` when nothing was ever sampled).
-   */
-  volume_id?: string | null;
-}
-/**
- * One volume's latest free-space sample from history.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "VolumeSampleView".
- */
-export interface VolumeSampleView {
-  /**
-   * Bytes available to the user.
-   */
-  free_bytes: number;
-  /**
-   * When it was sampled (Unix seconds).
-   */
-  sampled_at: number;
-  /**
-   * Volume size in bytes.
-   */
-  total_bytes: number;
-  /**
-   * Volume identifier (mount point or volume GUID path).
-   */
-  volume_id: string;
-}
-/**
- * `history`: every recorded operation, newest first.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "HistoryView".
- */
-export interface HistoryView {
-  /**
-   * Whether this build of the core can read operations and their audit chain (always
-   * `true` since the Phase 2 audit API; `false` only from a build without it, whose list
-   * is empty by construction).
-   */
-  audit_api: boolean;
-  /**
-   * Why it couldn't be, when it couldn't.
-   */
-  detail?: string | null;
-  /**
-   * When this report was produced (Unix seconds).
-   */
-  now: number;
-  /**
-   * Operations, newest first.
-   */
-  operations: HistoryOperation[];
-  state: HistoryReadState;
-}
-/**
- * One recorded operation.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "HistoryOperation".
- */
-export interface HistoryOperation {
-  /**
-   * The agent that prepared the plan (agent operations).
-   */
-  agent?: string | null;
-  /**
-   * Who approved it (`you`, or the agent that prepared it and `you`).
-   */
-  approver: string;
-  chain: ChainCheck;
-  /**
-   * Why the measured delta differs from the prediction (codes, e.g. `local_snapshot`).
-   */
-  delta_explanations: string[];
-  /**
-   * Finish (Unix seconds), `None` while running.
-   */
-  finished_at?: number | null;
-  /**
-   * Items, in plan order.
-   */
-  items: HistoryItem[];
-  kind: OperationKind;
-  /**
-   * Audit log, in chain order.
-   */
-  log: AuditLine[];
-  /**
-   * Measured change in free space (bytes; may be negative or missing).
-   */
-  measured_delta_bytes?: number | null;
-  /**
-   * Where it was approved (`desktop`, `cli`, `desktop_dialog`).
-   */
-  method: string;
-  /**
-   * Operation identifier.
-   */
-  operation_id: string;
-  /**
-   * Where it was started from (`Cleanup Review`, `Overview`, ...), when known.
-   */
-  origin?: string | null;
-  /**
-   * The approved plan it executed.
-   */
-  plan_id: string;
-  /**
-   * Bytes the plan predicted.
-   */
-  predicted_bytes: number;
-  /**
-   * Start (Unix seconds).
-   */
-  started_at: number;
-  status: OperationStatus;
-  /**
-   * The plan's one-line description, when it has one.
-   */
-  summary?: string | null;
-}
-/**
- * Result of verifying an operation's hash chain.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "ChainCheck".
- */
-export interface ChainCheck {
-  /**
-   * No tampering or damage found.
-   */
-  intact: boolean;
-  /**
-   * What was wrong, when something was.
-   */
-  problems: string[];
-  /**
-   * Chain rows checked.
-   */
-  rows: number;
-}
-/**
- * One item of an operation.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "HistoryItem".
- */
-export interface HistoryItem {
-  /**
-   * Planned action (`delete`, `quarantine`, `trash`, `tool`, `worktree_remove`).
-   */
-  action: string;
-  /**
-   * Bytes freed (deleted or tool-cleaned).
-   */
-  freed_bytes?: number | null;
-  /**
-   * The plan item's identifier.
-   */
-  item_id: string;
-  /**
-   * Short label when the path alone doesn't say it (e.g. `pnpm store (pruned)`).
-   */
-  label?: string | null;
-  /**
-   * Bytes moved (quarantine or Trash).
-   */
-  moved_bytes?: number | null;
-  outcome: ItemOutcome;
-  /**
-   * The path the plan named (or the tool's cache for Quick Clean).
-   */
-  path: string;
-  /**
-   * Bytes the plan predicted.
-   */
-  predicted_bytes: number;
-  /**
-   * Reason code for failed, refused, skipped or partial outcomes.
-   */
-  reason?: string | null;
-  /**
-   * For quarantined items: when the quarantine retention ends (Unix seconds).
-   */
-  restorable_until?: number | null;
-  /**
-   * For restored items: where it went back to (the original path, or a
-   * `<name>.scull-restored-<n>` sibling when the original was taken; never overwritten).
-   */
-  restored_to?: string | null;
-  /**
-   * Safety tier at planning time.
-   */
-  tier?: Tier | null;
-}
-/**
- * One line of an operation's audit log, rendered from its chain rows.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AuditLine".
- */
-export interface AuditLine {
-  /**
-   * When (Unix seconds).
-   */
-  at: number;
-  kind: AuditLineKind;
-  /**
-   * Text, e.g. `plan 7f3a·c21e approved · desktop`.
-   */
-  text: string;
-}
-/**
- * `configure_monitor`'s argument: the user's settings and, on the first call after start,
- * the memory the app kept from its previous run.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "MonitorConfig".
- */
-export interface MonitorConfig {
-  /**
-   * Memory from the previous run; ignored after the first `configure_monitor`, so a
-   * settings change never rewinds what was already notified.
-   */
-  memory?: MonitorMemory | null;
-  settings?: MonitorSettings;
-}
-/**
- * What the monitor remembers between checks. Plain data: the app keeps it across restarts so
- * a restart doesn't repeat yesterday's notifications.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "MonitorMemory".
- */
-export interface MonitorMemory {
-  /**
-   * When the digest was found turned on without having been sent (its first slot is the
-   * next one after this).
-   */
-  digest_since?: number | null;
-  /**
-   * When the last check ran.
-   */
-  last_check?: number | null;
-  /**
-   * When the last digest was sent.
-   */
-  last_digest?: number | null;
-  /**
-   * Notified alerts by key.
-   */
-  notified?: {
-    [k: string]: Notified | undefined;
-  };
-}
-/**
- * One alert the monitor notified.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Notified".
- */
-export interface Notified {
-  /**
-   * When it was notified.
-   */
-  at: number;
-  severity: Severity;
-}
-/**
- * What the user chose for tray monitoring. Every field has a default, so a partial JSON
- * object (or `{}`) is valid; [`MonitorSettings::normalized`] clamps out-of-range values.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "MonitorSettings".
- */
-export interface MonitorSettings {
-  /**
-   * Days ahead a disk-full forecast alerts (overrides `[proactive] alert_days` for the
-   * tray's own forecast; `None`: the configured value).
-   */
-  alert_days?: number | null;
-  /**
-   * Notify about alerts at all (the digest has its own switch).
-   */
-  alerts?: boolean;
-  /**
-   * Seconds before the same alert (same key and severity) is notified again
-   * ([`MIN_COOLDOWN_SECS`]..=[`MAX_COOLDOWN_SECS`]). A worse severity notifies at once.
-   */
-  cooldown_secs?: number;
-  digest?: DigestSchedule;
-  /**
-   * Seconds between two checks ([`MIN_INTERVAL_SECS`]..=[`MAX_INTERVAL_SECS`]).
-   */
-  interval_secs?: number;
-  min_severity?: Severity;
-  /**
-   * Alert kinds that never notify (e.g. growth spikes when "Sudden growth" is off).
-   */
-  muted_kinds?: AlertKind[];
-  /**
-   * Subjects that never notify: a volume, category or folder; a folder also mutes
-   * everything below it.
-   */
-  muted_subjects?: string[];
-  /**
-   * Nothing is notified before this time (Unix seconds); `None`: not paused.
-   */
-  paused_until?: number | null;
-}
-/**
- * When the weekly digest is sent, in the user's local time.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DigestSchedule".
- */
-export interface DigestSchedule {
-  /**
-   * Whether the digest is sent at all. **Off by default** (opt-in, INS-04).
-   */
-  enabled?: boolean;
-  /**
-   * Hour of the day, `0..=23`.
-   */
-  hour?: number;
-  /**
-   * The user's offset from UTC in seconds (east positive), as the app's clock reports it.
-   */
-  utc_offset_secs?: number;
-  /**
-   * Day of the week, `0` = Monday … `6` = Sunday.
-   */
-  weekday?: number;
-}
-/**
- * What the main window keeps between runs ([`MONITOR_EVENT`]'s payload).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "MonitorSnapshot".
- */
-export interface MonitorSnapshot {
-  memory: MonitorMemory;
-  settings: MonitorSettings;
-}
-/**
- * `monitor_status`: what the monitor is doing.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "MonitorStatus".
- */
-export interface MonitorStatus {
-  /**
-   * Whether the main window sent its settings yet.
-   */
-  configured: boolean;
-  /**
-   * When the last check ran.
-   */
-  last_check?: number | null;
-  /**
-   * When the last digest was sent.
-   */
-  last_digest?: number | null;
-  /**
-   * When the next check is due.
-   */
-  next_check: number;
-  /**
-   * When the next digest goes out (`None`: the digest is off).
-   */
-  next_digest?: number | null;
-  /**
-   * Alerts currently remembered as notified.
-   */
-  notified: number;
-  /**
-   * Whether notifications are paused now.
-   */
-  paused: boolean;
-  settings: MonitorSettings;
 }
 /**
  * The `scull://progress` event.
@@ -2712,123 +1747,6 @@ export interface ProjectSummary {
    * Allocated size of the whole project directory, when measured.
    */
   total_allocated?: number | null;
-}
-/**
- * `regrowth`: every regrowth event in the window, oldest first.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "RegrowthHistory".
- */
-export interface RegrowthHistory {
-  /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * Events, oldest first.
-   */
-  events: RegrowthEventView[];
-  /**
-   * Start of the window (Unix seconds).
-   */
-  since: number;
-  state: HistoryRead;
-}
-/**
- * An artifact that came back after it had gone (INS-03).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "RegrowthEventView".
- */
-export interface RegrowthEventView {
-  /**
-   * Artifact type, e.g. "npm dependencies".
-   */
-  artifact: string;
-  category: Category;
-  /**
-   * When it was marked gone.
-   */
-  disappeared_at: number;
-  path: FsPath;
-  /**
-   * Last sighting of the item that went (Unix seconds).
-   */
-  previous_last_seen_at: number;
-  /**
-   * When it was seen again.
-   */
-  reappeared_at: number;
-  /**
-   * The same object came back (e.g. restored), not a rebuild.
-   */
-  same_item: boolean;
-}
-/**
- * `rollup_history`: bytes per category per usable scan (INS-02 growth, the mix chart).
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "RollupHistory".
- */
-export interface RollupHistory {
-  /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * Categories with at least one non-zero point, in [`CATEGORIES`] order.
-   */
-  series: CategorySeries[];
-  /**
-   * Start of the window (Unix seconds).
-   */
-  since: number;
-  state: HistoryRead;
-}
-/**
- * One category's bytes per usable scan.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "CategorySeries".
- */
-export interface CategorySeries {
-  category: Category;
-  /**
-   * One point per usable scan in the window (zero when the scan found none), oldest first.
-   */
-  points: RollupPointView[];
-}
-/**
- * One point of a category series: the category's bytes in one scan.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "RollupPointView".
- */
-export interface RollupPointView {
-  /**
-   * Allocated (on-disk) bytes.
-   */
-  allocated_bytes: number;
-  /**
-   * Scan finish time (Unix seconds).
-   */
-  at: number;
-  /**
-   * Candidates.
-   */
-  items: number;
-  /**
-   * Logical bytes.
-   */
-  logical_bytes: number;
-  /**
-   * Reclaimable bytes.
-   */
-  reclaimable_bytes: number;
-  /**
-   * The scan.
-   */
-  scan_id: string;
 }
 /**
  * `scan` parameters.
@@ -3828,177 +2746,26 @@ export interface ReviewPlanView {
   review_command: string;
 }
 /**
- * `weekly_digest`: the digest of the last 7 days, read from the history database.
+ * One volume's latest free-space sample from history.
  *
  * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DigestView".
+ * via the `definition` "VolumeSampleView".
  */
-export interface DigestView {
+export interface VolumeSampleView {
   /**
-   * Why it didn't, when it didn't.
-   */
-  detail?: string | null;
-  /**
-   * The digest (also without a database: it then says there is no history).
-   */
-  digest?: WeeklyDigest | null;
-  state: HistoryRead;
-}
-/**
- * The weekly digest.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "WeeklyDigest".
- */
-export interface WeeklyDigest {
-  alerts: AlertCounts;
-  /**
-   * Cleanups with measured results this week.
-   */
-  cleanups: number;
-  /**
-   * When it was computed (Unix seconds).
-   */
-  generated_at: number;
-  /**
-   * Sum of the growth of everything that grew.
-   */
-  grown_bytes: number;
-  /**
-   * Whether there is any recorded history in the week (free-space samples or tracked
-   * items). Without it the digest only says so.
-   */
-  has_history: boolean;
-  /**
-   * One plain sentence per fact, most important first (the notification body is the first
-   * three).
-   */
-  lines: string[];
-  /**
-   * Net change of all tracked bytes over the week (negative after cleanups).
-   */
-  net_bytes: number;
-  /**
-   * Bytes the ready-to-review plan would reclaim, when one is current.
-   */
-  reclaimable_bytes?: number | null;
-  /**
-   * Bytes measured as freed by cleanups this week.
-   */
-  reclaimed_bytes: number;
-  /**
-   * Items in that plan.
-   */
-  review_items?: number | null;
-  /**
-   * Start of the week it covers (`generated_at` − 7 days).
-   */
-  since: number;
-  /**
-   * The notification title ([`DIGEST_TITLE`]).
-   */
-  title: string;
-  /**
-   * The projects (or, without projects, categories) that grew most, at most
-   * [`DIGEST_GROWERS`].
-   */
-  top_growers: Grower[];
-  /**
-   * Free space per volume: the preferred volume (the home folder's) first, then those below
-   * their reserve, then by days left, then by how much free space shrank this week.
-   */
-  volumes: DigestVolume[];
-}
-/**
- * Alerts by severity.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "AlertCounts".
- */
-export interface AlertCounts {
-  /**
-   * Critical.
-   */
-  critical: number;
-  /**
-   * Info.
-   */
-  info: number;
-  /**
-   * Warning.
-   */
-  warning: number;
-}
-/**
- * One category or project that grew.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "Grower".
- */
-export interface Grower {
-  /**
-   * The project's ecosystem, when every one of its items agrees.
-   */
-  ecosystem?: string | null;
-  /**
-   * Bytes now.
-   */
-  end_bytes: number;
-  /**
-   * `end_bytes - start_bytes` (always positive here).
-   */
-  growth_bytes: number;
-  /**
-   * Category (snake_case, e.g. `project_artifact`) or project root path.
-   */
-  key: string;
-  /**
-   * Display name: the category key, or the project folder name.
-   */
-  label: string;
-  /**
-   * Share of [`GrowthWindow::grown_bytes`] (0..=1).
-   */
-  share_of_growth: number;
-  /**
-   * Bytes at the window start.
-   */
-  start_bytes: number;
-}
-/**
- * One volume in the digest.
- *
- * This interface was referenced by `BridgePayloads`'s JSON-Schema
- * via the `definition` "DigestVolume".
- */
-export interface DigestVolume {
-  /**
-   * Whether it is already below the reserve.
-   */
-  below_reserve: boolean;
-  /**
-   * Change of free space over the week (negative: it shrank).
-   */
-  change_bytes: number;
-  /**
-   * Whole days until the reserve, when a forecast with at least medium confidence says
-   * the volume is filling.
-   */
-  days_left?: number | null;
-  /**
-   * Bytes free at the latest sample.
+   * Bytes available to the user.
    */
   free_bytes: number;
   /**
-   * The forecast's reserve (bytes).
+   * When it was sampled (Unix seconds).
    */
-  reserve_bytes: number;
+  sampled_at: number;
   /**
-   * Volume size.
+   * Volume size in bytes.
    */
   total_bytes: number;
   /**
-   * Volume identifier (mount point).
+   * Volume identifier (mount point or volume GUID path).
    */
   volume_id: string;
 }

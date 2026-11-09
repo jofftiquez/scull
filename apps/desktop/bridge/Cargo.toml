@@ -27,10 +27,6 @@ scull-git.workspace = true
 scull-safety.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
-scull-insights.workspace = true
-# The approval broker (P4-MCP-02). Read-only by construction: never depends on scull-cleaner
-# (SAFE-10, checked by its own test and tests/safe10.rs here).
-scull-mcp.workspace = true
 # The core Executor (P3-EXEC-01): reached only from src/cleanup.rs, through its public API
 # (execute_plan, restore, QuickClean::run). PRD SAFE-10: deletion only through the Executor;
 # no desktop source deletes directly (tests/safe10.rs).

@@ -1574,8 +1574,6 @@ dependencies = [
  "scull-engine",
  "scull-fixtures",
  "scull-git",
- "scull-insights",
- "scull-mcp",
  "scull-platform",
  "scull-proactive",
  "scull-safety",
