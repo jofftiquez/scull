@@ -140,10 +140,7 @@ fn frontend_and_app_name_the_same_commands() {
     let settings = rust_commands(&read("src-tauri/src/settings_write.rs"));
     assert_eq!(
         settings,
-        ts_table(
-            &read("src/bridge/tauri.ts"),
-            "SETTINGS_COMMANDS"
-        )
+        ts_table(&read("src/bridge/tauri.ts"), "SETTINGS_COMMANDS")
     );
     all.extend(settings.iter().map(|c| format!("settings_write::{c}")));
     all.extend(onboarding.iter().map(|c| format!("onboarding::{c}")));
@@ -219,10 +216,7 @@ fn approval_commands_are_granted_to_the_main_window_only() {
         "ONBOARDING_COMMANDS",
     ));
     let menubar = granted("src-tauri/capabilities/menubar.json");
-    main_only.extend(ts_table(
-        &read("src/bridge/tauri.ts"),
-        "SETTINGS_COMMANDS",
-    ));
+    main_only.extend(ts_table(&read("src/bridge/tauri.ts"), "SETTINGS_COMMANDS"));
     assert!(
         menubar.is_disjoint(&main_only),
         "the menu bar widget must not approve or clean: {menubar:?}"
