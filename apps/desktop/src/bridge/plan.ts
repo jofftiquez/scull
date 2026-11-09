@@ -10,11 +10,8 @@
 // core exposes plans over the bridge, replace them with the generated types.
 //
 // This is deliberately a separate interface from `ScullBridge`, which stays read-only.
-import type { InjectionKey } from 'vue';
-import { inject } from 'vue';
 import type { Candidate, ItemId, ScullBridge, Tier } from './types';
 import { BridgeError } from './types';
-import { useBridge } from './index';
 import { createMockPlanBridge } from './planMock';
 import { createTauriPlanBridge } from './tauriPlans';
 
@@ -233,11 +230,4 @@ export function openRequestRoute(
 ): { path: string; query: { request: string } } | null {
   if (current.path === '/cleanup' && typeof current.query.request === 'string') return null;
   return { path: '/cleanup', query: { request: planId } };
-}
-
-export const PLAN_BRIDGE_KEY: InjectionKey<PlanBridge> = Symbol('scull-plan-bridge');
-
-/** The provided plan bridge (tests), else the one that goes with the app's core bridge. */
-export function usePlanBridge(): PlanBridge {
-  return inject(PLAN_BRIDGE_KEY, null) ?? planBridgeFor(useBridge());
 }

@@ -1,6 +1,4 @@
 // Picks the bridge: Tauri's when the page runs inside the app, the mock otherwise.
-import type { InjectionKey } from 'vue';
-import { inject } from 'vue';
 import { createMockBridge } from './mock';
 import { createTauriBridge } from './tauri';
 import type { ScullBridge } from './types';
@@ -25,13 +23,4 @@ export function selectBridge(w: unknown = globalThis): ScullBridge {
   return insideTauri(w)
     ? createTauriBridge()
     : createMockBridge({ latencyMs: 120, progressMs: 250, firstRun: wantsFirstRun(w) });
-}
-
-export const BRIDGE_KEY: InjectionKey<ScullBridge> = Symbol('scull-bridge');
-
-/** The bridge provided by the app root. */
-export function useBridge(): ScullBridge {
-  const b = inject(BRIDGE_KEY);
-  if (!b) throw new Error('no ScullBridge provided');
-  return b;
 }

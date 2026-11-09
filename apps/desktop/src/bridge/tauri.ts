@@ -181,3 +181,12 @@ export function createTauriMonitorControl(t: TauriTransport = realTransport): Mo
     onSnapshot: (handler: (s: MonitorSnapshot) => void) => t.listen<MonitorSnapshot>(MONITOR_EVENT, handler),
   };
 }
+
+/**
+ * The settings writer's command (apps/desktop/src-tauri/src/settings_write.rs). The React MVP
+ * has no settings screen yet; the table stays so the Rust/TS command parity tests cover it until
+ * the command set is trimmed (#144).
+ */
+export const SETTINGS_COMMANDS = {
+  save: 'save_setting',
+} as const;
