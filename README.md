@@ -57,7 +57,7 @@ design/   interactive design reference (open design/html/index.html)
 
 ```bash
 cargo build          # the everyday CLI: scan, worktrees, caches, clean, history, restore, init, doctor
-cargo test-all       # every test, as CI runs them (alias in .cargo/config.toml)
+cargo test --workspace --features scull-cli/full   # every test, as CI runs them
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`.
