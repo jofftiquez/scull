@@ -442,24 +442,24 @@ fn dry_run_plans_and_changes_nothing() {
     let o = env.clean(&["--item", "/nope/not-a-candidate"]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
 
-    // The human preview: table, details, plan line, next step.
-    let o = env.clean(&[
-        "--item",
-        env.root().join(TARGET).to_str().unwrap(),
-        "--output",
-        "plan2.json",
-    ]);
+    // The human preview: table, plan line, next step; per-item details only with -v (#138).
+    let target = env.root().join(TARGET);
+    let o = env.clean(&["--item", target.to_str().unwrap(), "--output", "plan2.json"]);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let text = stdout(&o);
     for want in [
         "Cleanup plan (dry run): nothing has been changed.",
-        "Details:",
-        "evidence",
-        "regen",
-        "flags",
+        "add -v",
         "bound to this machine and user",
         "To execute: scull clean --plan",
     ] {
+        assert!(text.contains(want), "missing {want:?} in:\n{text}");
+    }
+    assert!(!text.contains("Details:"), "details need -v:\n{text}");
+    let o = env.clean(&["-v", "--item", target.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let text = stdout(&o);
+    for want in ["Details:", "evidence", "regen", "flags"] {
         assert!(text.contains(want), "missing {want:?} in:\n{text}");
     }
     env.check(&[]);

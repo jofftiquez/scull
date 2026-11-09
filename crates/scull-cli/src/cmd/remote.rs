@@ -460,6 +460,7 @@ pub fn render_remote(host: &str, doc: &Value, color: bool) -> Result<String, Scu
         Style::Bold.paint("Totals by tier:", color)
     ));
     out.push_str(&render::totals_table(&totals, color));
+    out.push_str(&render::estimate_note(artifacts.iter().chain(&worktrees)));
     out.push('\n');
     out.push_str(&format!(
         "Paths are on {host_shown}. Read-only preview: nothing was changed or recorded on either \

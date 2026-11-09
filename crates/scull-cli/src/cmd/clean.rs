@@ -53,7 +53,7 @@
 
 use super::exec::{self, ALLOW_PERMANENT_FLAG, Who};
 use super::pipeline::{self, CancelBridge, Loaded};
-use super::render::{action_label, display_path, signals_section};
+use super::render::{action_label, display_path, estimate_note, signals_section};
 use super::{emit_machine, emit_text, json_name};
 use crate::cancel;
 use crate::cli::CleanArgs;
@@ -1140,7 +1140,7 @@ fn emit_preview(r: &CleanPlanReport, ui: &Ui) -> Result<(), ScullError> {
     if ui.format.is_machine() {
         emit_machine(ui.format, CLEAN_PLAN_SCHEMA, "plan", r)
     } else {
-        emit_text(&render_preview(r, ui.color_out))
+        emit_text(&render_preview(r, ui.color_out, ui.verbosity > 0))
     }
 }
 
@@ -1230,8 +1230,9 @@ fn regeneration_text(c: &Candidate) -> String {
     format!("{how} ({cost})")
 }
 
-/// The human preview.
-pub fn render_preview(r: &CleanPlanReport, color: bool) -> String {
+/// The human preview: the plan table and totals; per-item details only when `details`
+/// (`-v`), with notes that apply to every item printed once instead of under each item.
+pub fn render_preview(r: &CleanPlanReport, color: bool, details: bool) -> String {
     let mut out = String::new();
     let base = (r.roots.len() == 1).then(|| r.roots[0].to_path_buf());
     let base = base.as_deref();
@@ -1288,10 +1289,25 @@ pub fn render_preview(r: &CleanPlanReport, color: bool) -> String {
             ]);
         }
         out.push_str(&t.render(color));
-        out.push_str(&format!("\n{}\n", Style::Bold.paint("Details:", color)));
-        for (n, p) in r.items.iter().enumerate() {
-            out.push_str(&render_item(n + 1, p));
+        if details {
+            let cands: Vec<&Candidate> = r.items.iter().map(|p| &p.candidate).collect();
+            let common = common_evidence(&cands);
+            out.push_str(&format!("\n{}\n", Style::Bold.paint("Details:", color)));
+            if !common.is_empty() {
+                out.push_str("  Applies to every item:\n");
+                for note in &common {
+                    out.push_str(&format!("       {}\n", escape_for_terminal(note)));
+                }
+            }
+            for (n, p) in r.items.iter().enumerate() {
+                out.push_str(&render_item(n + 1, p, &common));
+            }
+        } else {
+            out.push_str(
+                "\nWhy each item is safe, its evidence and how to regenerate it: add -v.\n",
+            );
         }
+        out.push_str(&estimate_note(r.items.iter().map(|p| &p.candidate)));
     }
 
     if !r.dropped.is_empty() {
@@ -1388,7 +1404,23 @@ pub fn render_preview(r: &CleanPlanReport, color: bool) -> String {
     out
 }
 
-fn render_item(n: usize, p: &PreviewItem) -> String {
+/// Evidence lines shared by every item (e.g. "200 processes of other users could not be
+/// inspected"): run-wide facts, shown once. Empty for a single item.
+fn common_evidence(cands: &[&Candidate]) -> BTreeSet<String> {
+    let notes =
+        |c: &Candidate| -> BTreeSet<String> { c.evidence.iter().map(evidence_text).collect() };
+    let [first, rest @ ..] = cands else {
+        return BTreeSet::new();
+    };
+    if rest.is_empty() {
+        return BTreeSet::new();
+    }
+    rest.iter().fold(notes(first), |acc, c| {
+        acc.intersection(&notes(c)).cloned().collect()
+    })
+}
+
+fn render_item(n: usize, p: &PreviewItem, common: &BTreeSet<String>) -> String {
     let c = &p.candidate;
     let mut out = format!("  {n}. {}\n", escape_for_terminal(c.path.as_str()));
     let mut line = |label: &str, value: &str| {
@@ -1436,8 +1468,13 @@ fn render_item(n: usize, p: &PreviewItem) -> String {
     if c.reasons.is_empty() {
         line("tier", &tier_text(c.tier));
     }
-    for (i, e) in c.evidence.iter().enumerate() {
-        line(if i == 0 { "evidence" } else { "" }, &evidence_text(e));
+    let own = c
+        .evidence
+        .iter()
+        .map(evidence_text)
+        .filter(|t| !common.contains(t));
+    for (i, text) in own.enumerate() {
+        line(if i == 0 { "evidence" } else { "" }, &text);
     }
     line("regen", &regeneration_text(c));
     line(
@@ -1892,6 +1929,31 @@ pub fn render_run(r: &CleanRunReport, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evidence_shared_by_every_item_is_shown_once() {
+        let mut c: Candidate = serde_json::from_str(include_str!(
+            "../../../../schemas/v1/examples/candidate.json"
+        ))
+        .expect("example candidate");
+        let shared = Evidence::Note {
+            text: "process cwd: 3 processes of other users could not be inspected".into(),
+        };
+        let lock = |p: &str| Evidence::Lockfile {
+            path: FsPath::from(p),
+        };
+        c.evidence = vec![shared.clone(), lock("/a/package-lock.json")];
+        let mut d = c.clone();
+        d.evidence = vec![lock("/b/package-lock.json"), shared.clone()];
+        let common = common_evidence(&[&c, &d]);
+        assert_eq!(
+            common.into_iter().collect::<Vec<_>>(),
+            [evidence_text(&shared)]
+        );
+        // A single item keeps all its evidence under the item.
+        assert!(common_evidence(&[&c]).is_empty());
+        assert!(common_evidence(&[]).is_empty());
+    }
 
     #[test]
     fn utc_datetime_is_civil() {

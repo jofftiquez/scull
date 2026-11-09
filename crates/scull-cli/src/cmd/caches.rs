@@ -254,6 +254,7 @@ pub fn render(r: &CachesReport, color: bool) -> String {
             Style::Bold.paint("Totals by tier:", color)
         ));
         out.push_str(&render::totals_table(&r.totals, color));
+        out.push_str(&render::estimate_note(&r.candidates));
     }
     if !r.refused.is_empty() {
         out.push_str(&format!(
