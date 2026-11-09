@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
+import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 // Tauri expects a fixed dev port and a relative base for the bundled app.
@@ -9,7 +9,7 @@ import tailwindcss from '@tailwindcss/vite';
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [vue(), tailwindcss()],
+  plugins: [react(), tailwindcss()],
   base: './',
   clearScreen: false,
   server: {
@@ -32,9 +32,9 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
-    // Screen tests mount the whole app with animated mocks; on a loaded machine (parallel
-    // builds, CI runners) 5 s is too tight. Tests must still wait on conditions, never sleeps.
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
+    // Mock-bridge tests replay timed progress; on a loaded machine 5 s is too tight. Tests
+    // must still wait on conditions, never sleeps.
     testTimeout: 20000,
     setupFiles: ['src/test/setup.ts'],
   },

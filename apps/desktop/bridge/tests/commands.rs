@@ -141,7 +141,7 @@ fn frontend_and_app_name_the_same_commands() {
     assert_eq!(
         settings,
         ts_table(
-            &read("src/components/settings/bridge.ts"),
+            &read("src/bridge/tauri.ts"),
             "SETTINGS_COMMANDS"
         )
     );
@@ -220,7 +220,7 @@ fn approval_commands_are_granted_to_the_main_window_only() {
     ));
     let menubar = granted("src-tauri/capabilities/menubar.json");
     main_only.extend(ts_table(
-        &read("src/components/settings/bridge.ts"),
+        &read("src/bridge/tauri.ts"),
         "SETTINGS_COMMANDS",
     ));
     assert!(

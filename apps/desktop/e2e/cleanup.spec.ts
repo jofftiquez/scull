@@ -1,115 +1,43 @@
-// Overview tier filter + selection → add to cleanup → Cleanup Review → confirm → done (mock).
-// Design 01 (wheel) and 03 / 03b (review). The mock "cleans" with timers; nothing is deleted.
-import type { Page } from '@playwright/test';
-import { clickSegment, expect, open, test } from './fixtures';
+// The desktop MVP flow (#144) on the mock bridge: folders → scan → review → confirm → clean,
+// and the caches view (the typed confirmation is unit-tested: src/lib/plan.test.ts). Nothing on disk
+// changes (the mock bridge), and requests outside the app fail the test (fixtures.ts).
+import { expect, test } from './fixtures';
 
-/** The Overview with the design's machine, once its first scan (and the radar sweep) is done. */
-async function overviewReady(page: Page) {
-  await open(page, '/?scenario=design');
-  const rescan = page.getByTestId('rescan');
-  await expect(rescan).toHaveText(/Scan/);
-  await expect(rescan).toBeEnabled();
-  await expect(page.locator('[data-kind="item"]')).toHaveCount(16);
-}
+test('scan, review, confirm and clean', async ({ page, shot }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Folders to scan' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Scan folders' })).toContainText('~/code');
+  await shot('01-folders');
 
-const opacity = (page: Page, tier: string) =>
-  page.locator(`[data-kind="item"][data-tier="${tier}"]`).first().getAttribute('opacity').then(Number);
+  await page.getByRole('button', { name: 'Scan', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review the cleanup' })).toBeVisible();
 
-test('filter the wheel, add items to cleanup, review and confirm the plan', async ({ page, shot }) => {
-  await overviewReady(page);
-  await shot('cleanup-1-overview');
+  // S0 is preselected; S1/S2 start unticked; S3 is never offered (left out).
+  const s0 = page.locator('section').filter({ hasText: 'regenerable, selected' });
+  await expect(s0.getByRole('checkbox').first()).toBeChecked();
+  for (const opt of ['costly to recreate, opt in', 'uncertain, opt in per item']) {
+    const card = page.locator('section').filter({ hasText: opt });
+    if ((await card.count()) === 0) continue;
+    for (const box of await card.getByRole('checkbox').all()) await expect(box).not.toBeChecked();
+  }
+  await shot('02-review');
 
-  // Tier filter: only Regenerable (S0) stays at full strength.
-  const tools = page.getByRole('toolbar', { name: 'Wheel tools' });
-  await tools.getByRole('button', { name: 'Regenerable' }).click();
-  await expect(tools.getByRole('button', { name: 'Regenerable' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(tools.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
-  await expect.poll(() => opacity(page, 'S1')).toBeLessThan(0.5);
-  expect(await opacity(page, 'S0')).toBe(1);
+  const go = page.getByRole('button', { name: /^(Delete|Quarantine) / });
+  await go.click();
+  const dialog = page.getByRole('dialog', { name: 'Clean these items?' });
+  await expect(dialog).toBeVisible();
+  await shot('03-confirm');
+  await dialog.getByRole('button', { name: 'Clean', exact: true }).click();
 
-  // Select an S0 segment with the mouse: the detail card explains it and offers the action.
-  const s0 = page.locator('[data-kind="item"][data-tier="S0"]');
-  await clickSegment(page, s0.first());
-  await expect(s0.first()).toHaveAttribute('aria-pressed', 'true');
-  const detail = page.getByTestId('selected');
-  await expect(detail.getByTestId('badge')).toHaveText('Regenerable');
-  await expect(page.getByTestId('detail-action')).toHaveText('Add to cleanup');
-  await shot('cleanup-2-filtered-and-selected');
-
-  await page.getByTestId('detail-action').click();
-  await expect(page.getByTestId('announce')).toContainText('to cleanup');
-  await expect(page.getByTestId('basket')).toHaveText('1 item marked for cleanup');
-
-  // Shift-click adds another segment without changing the selection.
-  await clickSegment(page, s0.nth(1), { shift: true });
-  await expect(page.getByTestId('basket')).toHaveText('2 items marked for cleanup');
-  await expect(s0.first()).toHaveAttribute('aria-pressed', 'true');
-
-  // Protected items are never added (S3).
-  await tools.getByRole('button', { name: 'All' }).click();
-  await clickSegment(page, page.locator('[data-kind="item"][data-tier="S3"]').first(), { shift: true });
-  await expect(page.getByTestId('announce')).toContainText('is protected; scull never cleans it.');
-  await expect(page.getByTestId('basket')).toHaveText('2 items marked for cleanup');
-  await shot('cleanup-3-marked');
-
-  const marked = [await s0.first().getAttribute('data-seg'), await s0.nth(1).getAttribute('data-seg')];
-
-  // Cleanup Review plans exactly the marked items (#283); nothing changes until the user confirms.
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /Cleanup Review/ }).click();
-  await expect(page).toHaveURL(/#\/cleanup$/);
-  const confirm = page.getByTestId('confirm');
-  await expect(confirm).toBeEnabled();
-  await expect(page.getByTestId('plan-line')).toContainText('from 2 items marked on the Overview');
-  const plan = page.getByRole('region', { name: 'Plan items' });
-  await expect(plan.locator('[data-item]')).toHaveCount(2);
-  expect(await plan.locator('[data-item]').evaluateAll((rows) => rows.map((r) => r.getAttribute('data-item')))).toEqual(marked);
-  // Both are Regenerable, so both are preselected; the refused S3 item is not in the plan.
-  await expect(plan.getByRole('checkbox', { checked: true })).toHaveCount(2);
-  await expect(confirm).toHaveText('Review cleanup');
-  await expect(plan.getByText('Protected · never offered')).toHaveCount(0);
-  await shot('cleanup-4-review');
-
-  // Narrow the plan by one item, then confirm.
-  const before = await page.getByTestId('main-footer').textContent();
-  await plan.getByRole('checkbox', { checked: true }).first().uncheck();
-  await expect(page.getByTestId('main-footer')).not.toHaveText(before ?? '');
-  await confirm.click();
-  await page.getByTestId('confirm-action').click();
-  await expect(page.getByTestId('toolbar-tasks')).toBeVisible();
-  await shot('cleanup-5-running', { settle: false, show: confirm });
-
-  const done = page.getByTestId('done');
-  await expect(done).toBeVisible();
-  await expect(done).toContainText('freed');
-  await expect(done).toContainText('items completed');
-  await shot('cleanup-6-done', { show: done });
-
-  await page.getByTestId('main-footer').getByRole('link', { name: 'Overview', exact: true }).click();
-  await expect(page).toHaveURL(/#\/$/);
-  // The cleaned item left the basket; the unticked one is still marked.
-  await expect(page.getByTestId('basket')).toHaveText('1 item marked for cleanup');
+  await expect(page.getByRole('heading', { name: 'Done' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /item\(s\) cleaned/ })).toBeVisible();
+  await shot('04-done');
 });
 
-test('with nothing marked, Cleanup Review plans from the whole last scan', async ({ page, shot }) => {
-  await overviewReady(page);
-  await expect(page.getByTestId('basket')).toHaveCount(0);
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: /Cleanup Review/ }).click();
-  await expect(page.getByTestId('confirm')).toBeEnabled();
-  await expect(page.getByTestId('plan-line')).toContainText('from the last scan');
-  const plan = page.getByRole('region', { name: 'Plan items' });
-  // S0 is preselected; protected items are listed but can never be selected.
-  await expect(plan.getByRole('checkbox', { checked: true }).first()).toBeVisible();
-  await expect(plan.getByText('Protected · never offered')).toBeVisible();
-  await shot('cleanup-7-review-from-scan');
-});
-
-test('Escape clears the selection and the filter', async ({ page }) => {
-  await overviewReady(page);
-  const tools = page.getByRole('toolbar', { name: 'Wheel tools' });
-  await tools.getByRole('button', { name: 'Costly' }).click();
-  await clickSegment(page, page.locator('[data-kind="item"][data-tier="S1"]').first());
-  await expect(page.getByTestId('selected').getByTestId('badge')).toHaveText('Costly');
-  await page.keyboard.press('Escape');
-  await expect(tools.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('aside')).toHaveCount(0);
+test('caches view lists caches, largest first', async ({ page, shot }) => {
+  await page.goto('/');
+  await page.getByRole('tab', { name: 'Caches' }).click();
+  await expect(page.getByRole('heading', { name: 'Package caches' })).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
+  await shot('06-caches');
 });

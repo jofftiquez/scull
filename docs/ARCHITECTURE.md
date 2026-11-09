@@ -239,7 +239,7 @@ Schema details live in the migrations under `crates/scull-storage/` (#53).
   `mcp.prepare_per_minute`), it changes nothing and awaits the user's own `scull approve
   <plan-id>`; scull itself prints its ID and that command after the answer. The model can never
   approve or run a cleanup.
-- **Desktop** (`apps/desktop`, Phase 3): Tauri 2 + Vue 3. The Rust side is a thin bridge to
+- **Desktop** (`apps/desktop`, Phase 3): Tauri 2 + React (restarted in #144; the Vue app is tagged `desktop-v0`). The Rust side is a thin bridge to
   these crates and never deletes directly.
 
 ## 7. Testing strategy

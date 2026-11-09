@@ -500,7 +500,7 @@ pub fn approve_link_plan(url: &str) -> Option<String> {
 
 /// Bring the window forward on Cleanup Review for the plan of each approve link in `urls`.
 /// Each plan brings the window forward once; later links to it only tell the window (which
-/// doesn't leave a request the human has open, see `src/App.vue`).
+/// doesn't leave a request the human has open, see `src/CleanFlow.tsx`).
 fn open_links<R: Runtime>(app: &AppHandle<R>, urls: impl IntoIterator<Item = String>) {
     let mut focus = false;
     for plan in urls.into_iter().filter_map(|u| approve_link_plan(&u)) {

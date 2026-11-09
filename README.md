@@ -41,12 +41,12 @@ S0 items are deleted after you confirm (rebuilding is the undo). S1 and S2 items
 
 ## Layout
 
-One Rust engine shared by a CLI (`scull`), a Tauri 2 + Vue 3 desktop app, and an MCP server.
+One Rust engine shared by a CLI (`scull`), a Tauri 2 + React desktop app, and an MCP server.
 
 ```text
 crates/   scull-core, -platform, -scanner, -detectors, -git, -safety, -engine,
           -cleaner, -storage, -proactive, -insights, -ask, -cli, -mcp, -fixtures
-apps/     desktop (Tauri 2 + Vue 3, Phase 3)
+apps/     desktop (Tauri 2 + React)
 rules/    declarative detector rules (data only)
 schemas/  JSON Schemas for CLI/MCP output and plan files
 docs/     PRD, decisions, threat model, fixture matrix; user guides in docs/user/

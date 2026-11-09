@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createMockBridge } from './mock';
 import { createUnavailablePlanBridge, openRequestRoute, planBridgeFor, wantsAgentRequest } from './plan';
 import { createMockPlanBridge, MOCK_AGENT_PLAN_ID, registerScanCandidates } from './planMock';
-import { DESIGN_CANDIDATES } from '../components/overview/designScenario';
+import { DESIGN_CANDIDATES } from './designScenario';
 import { BridgeError } from './types';
-import { actionAllowed } from '../components/review/plan';
+import { actionAllowed } from '../lib/plan';
 
 describe('plan bridge stubs', () => {
   it('goes with the core bridge: mock with mock, the core (approvals, cleanups) with Tauri', () => {
