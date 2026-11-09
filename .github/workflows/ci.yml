@@ -92,14 +92,42 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
 
+  # #142: the slim personal-MVP build (`--no-default-features`): it builds, its tests pass, and
+  # it links none of the crates only the full command set needs. (scull-proactive stays: the
+  # Executor's headroom reserve in scull-cleaner uses it.)
+  slim:
+    name: slim CLI build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+      - name: clippy (slim)
+        run: cargo clippy -p scull-cli --no-default-features --all-targets --locked -- -D warnings
+      - name: test (slim)
+        run: |
+          cargo build -p scull-cli --no-default-features --locked
+          cargo test -p scull-cli --no-default-features --locked --no-fail-fast
+      - name: no full-only crates linked
+        run: |
+          if cargo tree -p scull-cli --no-default-features -e normal,build --locked \
+              | grep -E 'scull-(ask|mcp|insights) '; then
+            echo "the slim build links a crate only the full command set needs" >&2
+            exit 1
+          fi
+
   # Single stable check name for branch protection: "CI ok".
   ok:
     name: CI ok
     if: always()
-    needs: [fmt, test]
+    needs: [fmt, test, slim]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
         run: |
-          echo 'fmt: ${{ needs.fmt.result }}  test: ${{ needs.test.result }}'
-          test '${{ needs.fmt.result }}' = success && test '${{ needs.test.result }}' = success
+          echo 'fmt: ${{ needs.fmt.result }}  test: ${{ needs.test.result }}  slim: ${{ needs.slim.result }}'
+          test '${{ needs.fmt.result }}' = success && test '${{ needs.test.result }}' = success && test '${{ needs.slim.result }}' = success

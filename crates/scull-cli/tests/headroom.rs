@@ -2,6 +2,8 @@
 //! and `SCULL_TEST_SANDBOX` at a fresh temp dir: the reserve is only ever created and released
 //! there. The config keeps 1 GiB free (`[proactive] reserve_gib = 1`) so the check fits CI
 //! runners; the reserve is the 256 MiB minimum.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::Value;

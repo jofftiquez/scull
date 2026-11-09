@@ -5,9 +5,9 @@
 //! `` `scull scan` is not implemented yet (tracked in #56) ``.
 
 use crate::cancel;
-use crate::cli::{
-    CleanAction, Cli, Command, DataAction, McpAction, ProjectsAction, RulesAction, WorktreesAction,
-};
+use crate::cli::{CleanAction, Cli, Command, ProjectsAction, RulesAction, WorktreesAction};
+#[cfg(feature = "full")]
+use crate::cli::{DataAction, McpAction};
 use crate::output::Ui;
 use clap::CommandFactory;
 use scull_core::{ErrorKind, ScullError};
@@ -41,18 +41,28 @@ pub fn planned_for(cmd: &Command) -> Option<Planned> {
         },
         Command::LargeFiles { .. } => None,
         Command::History(_) | Command::Restore(_) => None,
+        #[cfg(feature = "full")]
         Command::Approve { .. } => None,
         Command::Rules { .. } => None,
         Command::Init(_) => None,
+        #[cfg(feature = "full")]
         Command::Status { .. } => None,
+        #[cfg(feature = "full")]
         Command::Check(_) => None,
+        #[cfg(feature = "full")]
         Command::Insights { .. } => None,
+        #[cfg(feature = "full")]
         Command::Agent { .. } => None,
+        #[cfg(feature = "full")]
         Command::Schedule { .. } => None,
+        #[cfg(feature = "full")]
         Command::Data { .. } => None,
+        #[cfg(feature = "full")]
         Command::Headroom { .. } => None,
         Command::Doctor(_) => None,
+        #[cfg(feature = "full")]
         Command::Ask(_) => None,
+        #[cfg(feature = "full")]
         Command::Mcp {
             action: McpAction::Serve { .. },
         } => None,
@@ -124,7 +134,9 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             min_size,
             top,
         } => crate::large_files::run(path, *min_size, *top, ui)?,
+        #[cfg(feature = "full")]
         Command::Status { short } => crate::cmd::status::run(ui, *short)?,
+        #[cfg(feature = "full")]
         Command::Approve {
             plan_id,
             revoke,
@@ -133,6 +145,7 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             Some(id) => crate::cmd::approve::run_revoke(id, ui)?,
             None => crate::cmd::approve::run(plan_id.as_deref(), *run, ui)?,
         },
+        #[cfg(feature = "full")]
         Command::Check(args) => crate::cmd::check::run(args, ui)?,
         Command::Init(args) => crate::cmd::init::run(ui, args)?,
         Command::Rules {
@@ -144,15 +157,19 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
         Command::Rules {
             action: RulesAction::Test { paths, init },
         } => crate::cmd::rules_test::run(ui, paths, *init)?,
+        #[cfg(feature = "full")]
         Command::Mcp {
             action: McpAction::Serve { allow_destructive },
         } => crate::cmd::mcp::serve(*allow_destructive, ui)?,
+        #[cfg(feature = "full")]
         Command::Data {
             action: DataAction::Show,
         } => crate::cmd::data::run_show(ui)?,
+        #[cfg(feature = "full")]
         Command::Data {
             action: DataAction::Export { format, out },
         } => crate::cmd::data::run_export(ui, *format, out.as_deref())?,
+        #[cfg(feature = "full")]
         Command::Data {
             action:
                 DataAction::Purge {
@@ -172,10 +189,15 @@ pub fn run(cli: Cli, ui: &Ui) -> Result<(), ScullError> {
             };
             crate::cmd::data::run_purge(ui, &opts, *confirm)?;
         }
+        #[cfg(feature = "full")]
         Command::Agent { action } => crate::cmd::agent::run(action, ui)?,
+        #[cfg(feature = "full")]
         Command::Ask(args) => crate::cmd::ask::run(args, ui)?,
+        #[cfg(feature = "full")]
         Command::Schedule { action } => crate::cmd::schedule::run(action, ui)?,
+        #[cfg(feature = "full")]
         Command::Headroom { action } => crate::cmd::headroom::run(action, ui)?,
+        #[cfg(feature = "full")]
         Command::Insights { since, action } => {
             crate::cmd::insights::run(*since, action.as_ref(), ui)?;
         }
@@ -216,7 +238,37 @@ mod tests {
         planned_for(&cli.command)
     }
 
+    /// The slim build (#142): the MVP commands parse; the full-only ones don't exist.
+    #[cfg(not(feature = "full"))]
+    #[test]
+    fn the_slim_build_has_only_the_mvp_commands() {
+        for kept in [
+            &["scan", "."][..],
+            &["worktrees"],
+            &["caches"],
+            &["clean", "--dry-run"],
+            &["history"],
+            &["restore", "op_1"],
+            &["init", "--yes"],
+            &["doctor"],
+        ] {
+            assert_eq!(planned_of(kept), None, "{kept:?}");
+        }
+        for gone in [
+            "status", "check", "insights", "agent", "schedule", "headroom", "data", "ask", "mcp",
+            "approve",
+        ] {
+            let e = Cli::try_parse_from(["scull", gone]).unwrap_err();
+            assert_eq!(
+                e.kind(),
+                clap::error::ErrorKind::InvalidSubcommand,
+                "{gone}"
+            );
+        }
+    }
+
     /// No command is a stub in this build; the stub machinery stays for future commands.
+    #[cfg(feature = "full")]
     #[test]
     fn no_command_is_planned_and_stubs_name_their_issue() {
         let p = Planned {

@@ -4,6 +4,8 @@
 //!
 //! Every run points `HOME`, `USERPROFILE` and `SCULL_HOME` at a fresh temp dir; the only file a
 //! run may create is the `--out` report inside it.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};

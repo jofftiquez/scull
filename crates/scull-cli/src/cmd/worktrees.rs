@@ -25,10 +25,27 @@ use crate::output::{Format, Ui};
 use schemars::JsonSchema;
 use scull_core::{ErrorKind, FsPath, ScullError};
 use scull_engine::now_unix;
+#[cfg(feature = "full")]
 use scull_engine::paths::{canon, is_within};
 use scull_engine::{ScanRequest, SignalUnavailable, WorktreeProblemReport, WorktreeReport};
 use scull_git::{HeadState, LockState, MergeStatus, Observed, WorktreeKind};
+#[cfg(feature = "full")]
 use scull_mcp::registry::{Registry, Source, human_duration, parse_ttl};
+
+/// The slim build (#142) has no TTL registry: nothing is registered, so nothing is shown.
+#[cfg(not(feature = "full"))]
+fn human_duration(secs: u64) -> String {
+    format!("{secs} s")
+}
+
+/// Who registered a TTL (the slim build never reads any; see `scull_mcp::registry::Source`).
+#[cfg(not(feature = "full"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// `scull worktrees register`.
+    Cli,
+}
 use serde::Serialize;
 use std::io::{self, Write};
 use std::path::Path;
@@ -215,6 +232,17 @@ pub fn run(args: &RootArgs, all: bool, ui: &Ui) -> Result<(), ScullError> {
     Ok(())
 }
 
+#[cfg(not(feature = "full"))]
+fn registrations_under(
+    _roots: &[FsPath],
+    _worktrees: &[WorktreeReport],
+    _now: i64,
+    _ui: &Ui,
+) -> Vec<TtlRegistration> {
+    Vec::new()
+}
+
+#[cfg(feature = "full")]
 /// The registrations whose worktree lies under one of `roots` (read-only; a missing registry
 /// is empty, an unreadable one is a warning).
 fn registrations_under(
@@ -253,6 +281,16 @@ fn registrations_under(
         .collect()
 }
 
+/// `scull worktrees register` needs the TTL registry, which the slim build (#142) leaves out.
+#[cfg(not(feature = "full"))]
+pub fn register(_path: &Path, _ttl: &str, _ui: &Ui) -> Result<(), ScullError> {
+    Err(ScullError::new(
+        ErrorKind::Usage,
+        "`scull worktrees register` is not in this slim build; build scull with the `full` feature",
+    ))
+}
+
+#[cfg(feature = "full")]
 /// Run `scull worktrees register <path> --ttl <duration>`: check that `path` is a linked Git
 /// worktree and record its TTL. Never touches the worktree.
 pub fn register(path: &Path, ttl: &str, ui: &Ui) -> Result<(), ScullError> {

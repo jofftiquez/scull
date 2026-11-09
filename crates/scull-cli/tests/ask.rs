@@ -2,7 +2,8 @@
 //! `--show-request` sends nothing, consent is required before the first request and recorded
 //! without the key, the answer is printed escaped, the tools read are listed on stderr, and
 //! nothing on disk changes. No real API is ever called.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_fixtures::{Fixture, InvariantInputs};

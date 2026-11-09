@@ -5,7 +5,8 @@
 //! `CLAUDE_CONFIG_DIR` removed) and `SCULL_HOME` inside the same tree. After each test the
 //! fixture invariants run: the canary beside the tree is untouched and nothing in the tree
 //! changed except the files the command is expected to write.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_fixtures::{Fixture, InvariantInputs};

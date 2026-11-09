@@ -1,6 +1,8 @@
 //! `scull insights`, `insights export` and `insights purge` end to end (P4-INS-01). Every run
 //! points `SCULL_HOME` at a fresh temp dir; the history is seeded through `scull-storage`
 //! (`scull_insights::fixtures`), describing paths that do not exist.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use scull_storage::{DefaultPermissions, Store};
 use serde_json::Value;

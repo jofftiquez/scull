@@ -3,7 +3,8 @@
 //! `SCULL_HOME`; the fixture invariants prove the worktree and the canary are untouched: a
 //! registration is metadata in scull's data folder, and an expired TTL is only a review
 //! suggestion.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_fixtures::{Fixture, InvariantInputs};

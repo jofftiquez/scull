@@ -1,7 +1,8 @@
 //! `scull mcp serve` end to end over real stdio (P1-MCP-01): opt-in enablement, the privacy
 //! disclosure on first start, a JSON-RPC session (initialize → tools/list → tools/call), a
 //! refused out-of-allowlist call, and nothing on disk changes.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_fixtures::{Fixture, InvariantInputs};

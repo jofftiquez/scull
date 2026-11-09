@@ -1,5 +1,7 @@
 //! `scull status [--short]` end to end (P1-CLI-04). Every run points `SCULL_HOME` at a fresh
 //! temp dir; the database is seeded through `scull-storage`.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use scull_core::{Category, FsPath, ScanId, Tier};
 use scull_storage::{

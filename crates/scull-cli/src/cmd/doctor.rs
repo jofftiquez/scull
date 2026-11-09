@@ -284,7 +284,13 @@ pub struct ConfigValue {
 /// `scull doctor` (`--report`: [`super::doctor_report`]).
 pub fn run(args: &DoctorArgs, ui: &Ui) -> Result<(), ScullError> {
     if args.report {
+        #[cfg(feature = "full")]
         return super::doctor_report::run(args, ui);
+        #[cfg(not(feature = "full"))]
+        return Err(ScullError::new(
+            scull_core::ErrorKind::Usage,
+            "`scull doctor --report` is not in this slim build; build scull with the `full` feature",
+        ));
     }
     let report = collect();
     if ui.format.is_machine() {
