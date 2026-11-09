@@ -98,7 +98,8 @@ pub fn roots(loaded: &Loaded, allow_broad: bool) -> Result<Vec<PathBuf>, ScullEr
         if roots.is_empty() {
             ScullError::new(
                 ErrorKind::Usage,
-                "no scan roots: pass a directory to scan, or set scan.roots in the config file",
+                "no scan roots: run `scull init` to pick your project folders, or pass one \
+                 (`scull scan <folder>`, `scull clean --root <folder>`)",
             )
         } else {
             e

@@ -629,6 +629,11 @@ fn broad_and_missing_roots_are_refused() {
     let o = env.run(&["scan"]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(stderr(&o).contains("no scan roots"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("scull init"),
+        "names the fix (#141): {}",
+        stderr(&o)
+    );
     // A root that doesn't exist.
     let missing = fx.root().join("nope");
     let o = env.run(&["scan", &missing.to_string_lossy(), "--json"]);

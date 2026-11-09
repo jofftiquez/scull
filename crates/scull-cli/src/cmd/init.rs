@@ -54,7 +54,8 @@ pub const PRIORITIES: [&str; 3] = ["free-space", "tidy", "understand"];
 /// Answers to "How cautious should scull be?".
 pub const CAUTION: [&str; 3] = ["cautious", "balanced", "expert"];
 
-/// Folders under the home directory that often hold projects (ONB-01).
+/// Folders under the home directory, or under `~/Documents` (common on macOS), that often
+/// hold projects (ONB-01).
 const PROJECT_FOLDERS: &[&str] = &[
     "code",
     "Code",
@@ -66,8 +67,12 @@ const PROJECT_FOLDERS: &[&str] = &[
     "work",
     "repos",
     "git",
+    "GitHub",
     "workspace",
 ];
+
+/// Where [`PROJECT_FOLDERS`] are looked for, relative to the home directory.
+const PROJECT_PARENTS: &[&str] = &["", "Documents"];
 
 /// AI clients and the config folder that reveals each (ONB-01).
 const AI_CLIENTS: &[(&str, &str)] = &[
@@ -417,15 +422,22 @@ pub fn detect(home: &Path, path_env: &OsStr, cache_env: Option<&CacheEnv>) -> De
         })
         .collect();
     let mut project_folders: Vec<String> = Vec::new();
-    for f in PROJECT_FOLDERS {
-        let p = home.join(f);
-        // Case-insensitive filesystems report `code` and `Code` as the same folder.
-        if p.is_dir()
-            && !project_folders
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(&format!("~/{f}")))
-        {
-            project_folders.push(format!("~/{f}"));
+    for parent in PROJECT_PARENTS {
+        for f in PROJECT_FOLDERS {
+            let rel = if parent.is_empty() {
+                (*f).to_owned()
+            } else {
+                format!("{parent}/{f}")
+            };
+            let shown = format!("~/{rel}");
+            // Case-insensitive filesystems report `code` and `Code` as the same folder.
+            if home.join(&rel).is_dir()
+                && !project_folders
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(&shown))
+            {
+                project_folders.push(shown);
+            }
         }
     }
     let ai_clients = AI_CLIENTS
@@ -980,7 +992,7 @@ mod tests {
         for b in ["cargo", "node"] {
             std::fs::write(bin.join(format!("{b}{exe}")), "").expect("bin file");
         }
-        for d in ["Projects", "code", ".claude", ".npm"] {
+        for d in ["Projects", "code", "Documents/workspace", ".claude", ".npm"] {
             std::fs::create_dir_all(home.join(d)).expect("dir");
         }
         let path = std::env::join_paths([bin, PathBuf::from("relative/bin")]).expect("path");
@@ -1069,6 +1081,10 @@ mod tests {
         assert_eq!(ids, ["rust", "node"]);
         assert!(det.project_folders.contains(&"~/Projects".to_owned()));
         assert!(det.project_folders.contains(&"~/code".to_owned()));
+        assert!(
+            det.project_folders
+                .contains(&"~/Documents/workspace".to_owned())
+        );
         assert_eq!(det.ai_clients, ["claude-code"]);
         let node = &det.toolchains[1];
         assert_eq!(node.caches.len(), 1, "~/.npm");
@@ -1087,7 +1103,11 @@ mod tests {
             s.asked
         );
         assert_eq!(p.builds, ["rust", "web"]);
-        assert_eq!(p.roots.len(), 2);
+        assert_eq!(
+            p.roots.len(),
+            3,
+            "~/Projects, ~/code, ~/Documents/workspace"
+        );
         assert_eq!(p.agents, "sometimes", "AI client detected");
         assert_eq!(p.priority, "understand");
         assert_eq!(p.caution, "balanced");
