@@ -1,6 +1,6 @@
 [package]
 name = "scull-desktop-bridge"
-description = "The desktop app's read-only bridge to the scull core (no Tauri, no WebKit)."
+description = "The desktop app's bridge to the scull core (no Tauri, no WebKit)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Read-only by construction (SAFE-10): never depends on scull-cleaner, and never enables
+# SAFE-10: deletes only through scull-cleaner's Executor (src/cleanup.rs), and never enables
 # scull-platform's `delete` feature. Checked by tests/safe10.rs (main workspace, every OS) and by
 # apps/desktop/src-tauri/tests/safe10.rs (`cargo tree` of the app crate).
 #

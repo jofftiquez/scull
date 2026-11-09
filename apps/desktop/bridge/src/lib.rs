@@ -17,12 +17,13 @@
 //! Every error is a [`ScullError`] (the same JSON as the CLI's `scull/error@1` payload).
 //! Payload schemas: [`schemas::all`], committed in `apps/desktop/schemas/`.
 //!
-//! # Read-only by construction (SAFE-10)
+//! # Deletion only through the core Executor (SAFE-10)
 //!
-//! Nothing here can delete, move or modify a file. The crate doesn't depend on
-//! `scull-cleaner` (the only deleter) and doesn't enable `scull-platform`'s `delete` feature;
-//! `tests/safe10.rs` fails the build if either changes. Cleanups reach the Executor through a
-//! plan and a human approval, never through the desktop bridge.
+//! Nothing here deletes, moves or modifies a file directly. The cleanup commands
+//! ([`CleanupDesk`], P3-EXEC-01) run the plan the human confirmed through `scull-cleaner`'s
+//! Executor (execution lock, revalidation of every item, D-28 actions, audit); `cleanup` is the
+//! only module that uses `scull-cleaner`, and the crate never enables `scull-platform`'s
+//! `delete` feature. `tests/safe10.rs` fails the build if any of that changes.
 
 // Forbidden at the root, so no local allow can lift it (SAFE-10; tests/safe10.rs).
 #![forbid(unsafe_code)]
