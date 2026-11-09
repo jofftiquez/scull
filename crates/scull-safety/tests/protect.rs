@@ -378,6 +378,7 @@ fn carve_outs_only_relax_built_in_roots() {
             scope: Scope::Subtree,
         }],
         allowed: vec![sys.join("cache")],
+        allowed_self: vec![],
     };
     let mut set = ProtectedSet::new();
     set.add_defaults(&Native, &defaults);
@@ -392,6 +393,84 @@ fn carve_outs_only_relax_built_in_roots() {
     assert!(
         check(&set, &sys.join("cache").join("pkg")).in_protected_root,
         "user protection is never carved out"
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// #139: a self-inclusive carve-out (pnpm's store in `~/Library`) makes the directory itself
+/// and its contents reachable; its parent, its siblings and the rest of the protected root stay
+/// protected, and user protection still wins.
+#[test]
+fn self_inclusive_carve_out_covers_only_that_directory() {
+    let mut fx = Fixture::new().unwrap();
+    fx.dir("lib/pnpm/store/v10/files")
+        .unwrap()
+        .dir("lib/pnpm/global/5/node_modules")
+        .unwrap()
+        .dir("lib/prefs")
+        .unwrap();
+    fx.checkpoint().unwrap();
+    let lib = fx.path("lib").unwrap();
+    let store = lib.join("pnpm").join("store");
+    let defaults = DefaultProtection {
+        protected: vec![ProtectedPath {
+            path: lib.clone(),
+            scope: Scope::Subtree,
+        }],
+        allowed: vec![store.clone()],
+        allowed_self: vec![store.clone()],
+    };
+    let mut set = ProtectedSet::new();
+    set.add_defaults(&Native, &defaults);
+    assert!(!check(&set, &store).is_protected(), "the store itself");
+    assert!(!check(&set, &store.join("v10").join("files")).is_protected());
+    for kept in [
+        lib.join("pnpm"),
+        lib.join("pnpm")
+            .join("global")
+            .join("5")
+            .join("node_modules"),
+        lib.join("prefs"),
+    ] {
+        assert!(check(&set, &kept).in_protected_root, "{}", kept.display());
+    }
+
+    set.protect(&Native, &store, Scope::Subtree, Source::User);
+    assert!(
+        check(&set, &store).in_protected_root,
+        "user protection is never carved out"
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
+/// #139 review: a self-inclusive carve-out at a path that is a link never relaxes protection
+/// for the link's target (the target stays inside the protected root).
+#[test]
+fn self_inclusive_carve_out_ignores_a_link_at_that_path() {
+    let mut fx = Fixture::new().unwrap();
+    fx.dir("lib/secret/keys").unwrap().dir("lib/pnpm").unwrap();
+    let outcome = fx.symlink("lib/pnpm/store", "../secret").unwrap();
+    fx.checkpoint().unwrap();
+    if let LinkOutcome::Skipped(why) = outcome {
+        eprintln!("symlinks unavailable: {why}");
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    }
+    let lib = fx.path("lib").unwrap();
+    let store = lib.join("pnpm").join("store");
+    let defaults = DefaultProtection {
+        protected: vec![ProtectedPath {
+            path: lib.clone(),
+            scope: Scope::Subtree,
+        }],
+        allowed: vec![],
+        allowed_self: vec![store],
+    };
+    let mut set = ProtectedSet::new();
+    set.add_defaults(&Native, &defaults);
+    assert!(
+        check(&set, &lib.join("secret")).in_protected_root,
+        "link target"
     );
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }

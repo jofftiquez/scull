@@ -541,6 +541,82 @@ fn caches_are_located_sized_and_classified() {
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 
+/// #139: Git repositories inside uv's own Git cache (`git-v0`: clones in `db`,
+/// checkouts in `checkouts`) and uv's empty `.git` marker files don't make the uv cache S3
+/// (uv manages them, and only `uv cache prune/clean` ever touches them); a real repository or
+/// a non-empty `.git` pointer anywhere else in the cache still does.
+#[cfg(unix)]
+#[test]
+fn uv_checkouts_are_not_nested_user_repositories() {
+    let nested = |extra_repo: Option<(&str, &str)>| {
+        let mut fx = Fixture::new().unwrap();
+        fx.file_of_size("home/.cache/uv/wheels-v5/pypi/x.whl", 4096)
+            .unwrap()
+            .file(
+                "home/.cache/uv/git-v0/checkouts/0a1b/2c3d/.git/HEAD",
+                "ref: x\n",
+            )
+            .unwrap()
+            .file("home/.cache/uv/git-v0/checkouts/0a1b/2c3d/setup.py", "\n")
+            .unwrap()
+            // uv's database clone of the same repository (`git-v0/db/<hash>/.git`).
+            .file(
+                "home/.cache/uv/git-v0/db/0a1b/.git/HEAD",
+                "ref: refs/heads/main\n",
+            )
+            .unwrap()
+            // uv's marker: an empty `.git` file in a bucket (not a repository).
+            .file("home/.cache/uv/sdists-v9/.git", "")
+            .unwrap();
+        if let Some((rel, contents)) = extra_repo {
+            fx.file(format!("home/.cache/uv/{rel}"), contents).unwrap();
+        }
+        fx.checkpoint().unwrap();
+        let home = fx.root().join("home");
+        let os = scull_detectors::rules::Platform::current().unwrap();
+        let env = CacheEnv::with_vars(&home, os, std::iter::empty::<(&str, String)>());
+        let e = engine(Some(Tri::No), false, Config::default());
+        let r = e.caches(&env, 0, &CancelToken::new(), |_| {});
+        let uv = r
+            .candidates
+            .iter()
+            .find(|c| c.rule.id == "uv.cache")
+            .unwrap_or_else(|| panic!("uv cache located: {:#?}", r.candidates))
+            .clone();
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        uv
+    };
+    let repo_reason = |c: &Candidate| {
+        c.reasons
+            .iter()
+            .any(|r| r.code == ReasonCode::GitTracked && r.message.contains("Git repository"))
+    };
+
+    let only_checkouts = nested(None);
+    assert!(!repo_reason(&only_checkouts), "{only_checkouts:#?}");
+    assert!(only_checkouts.tier < Tier::S3, "{only_checkouts:#?}");
+    assert!(
+        matches!(only_checkouts.action, Action::ToolCommand { .. }),
+        "{only_checkouts:#?}"
+    );
+
+    // A real repository anywhere else in the cache still protects it…
+    let elsewhere = nested(Some(("archive-v0/mine/.git/HEAD", "ref: x\n")));
+    assert!(repo_reason(&elsewhere), "{elsewhere:#?}");
+    assert_eq!(elsewhere.tier, Tier::S3, "{elsewhere:#?}");
+    // …and so does a non-empty `.git` file (a worktree or submodule pointer).
+    let pointer = nested(Some((
+        "archive-v0/wt/.git",
+        "gitdir: /somewhere/.git/worktrees/wt\n",
+    )));
+    assert!(repo_reason(&pointer), "{pointer:#?}");
+    assert_eq!(pointer.tier, Tier::S3, "{pointer:#?}");
+    // …and so does a real repository inside a bucket that carries uv's empty marker.
+    let in_marked = nested(Some(("sdists-v9/mine/.git/HEAD", "ref: x\n")));
+    assert!(repo_reason(&in_marked), "{in_marked:#?}");
+    assert_eq!(in_marked.tier, Tier::S3, "{in_marked:#?}");
+}
+
 #[test]
 fn native_in_use_probe_classifies_protectively() {
     let fx = mixed(false);
