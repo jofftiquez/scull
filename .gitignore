@@ -17,3 +17,6 @@ __pycache__/
 
 # Generated, thread-specific orb portal links
 .amp/portals/
+
+# Private planning docs (plans/specs) stay outside git
+docs/superpowers/
