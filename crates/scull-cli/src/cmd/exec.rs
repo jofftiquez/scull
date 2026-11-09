@@ -26,11 +26,10 @@
 //! * Elevated runs are refused unless `--allow-root` ([`check_not_elevated`], SAFE-14).
 
 use crate::output::Ui;
-use scull_cleaner::trash::TrashLocations;
 use scull_cleaner::{Executor, LockOptions, QuarantineSettings};
-use scull_core::config::{QuarantineConfig, TEST_SANDBOX_ENV};
-use scull_core::{Action, ErrorKind, OperationId, PlanId, Restorability, ScullError, Tier};
-use scull_platform::{AppDirs, Elevation, current_user, is_elevated, machine_id};
+use scull_core::config::QuarantineConfig;
+use scull_core::{ErrorKind, ScullError};
+use scull_platform::{AppDirs, Elevation, is_elevated};
 use scull_storage::Store;
 use std::io::{self, BufRead, IsTerminal, Write};
 
@@ -44,14 +43,8 @@ pub const ALLOW_ROOT_FLAG: &str = "--allow-root";
 /// The flag that stands in for the typed elevated confirmation without a terminal (CLI-03).
 pub const ALLOW_PERMANENT_FLAG: &str = "--allow-permanent";
 
-/// The machine and user a plan is bound to (SAFE-11, PRD §10.4).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Who {
-    /// This installation's machine ID (`scull_platform::machine_id`).
-    pub machine_id: String,
-    /// The account scull runs as (`scull_platform::current_user`).
-    pub user: String,
-}
+/// The machine and user a plan is bound to (SAFE-11, PRD §10.4): the shared flow's binding.
+pub use scull_cleaner::flow::Binding as Who;
 
 /// scull's per-user directories (`SCULL_HOME` overrides them).
 pub fn dirs() -> Result<AppDirs, ScullError> {
@@ -60,20 +53,7 @@ pub fn dirs() -> Result<AppDirs, ScullError> {
 
 /// This machine's ID (created on first use) and the current user.
 pub fn who() -> Result<Who, ScullError> {
-    let dirs = dirs()?;
-    let machine_id = machine_id(&dirs.data).map_err(|e| {
-        ScullError::new(
-            ErrorKind::Io,
-            format!("cannot read or create this machine's ID: {e}"),
-        )
-    })?;
-    let user = current_user().map_err(|e| {
-        ScullError::new(
-            ErrorKind::Io,
-            format!("cannot tell which account scull runs as: {e}"),
-        )
-    })?;
-    Ok(Who { machine_id, user })
+    Who::current(&dirs()?.data)
 }
 
 /// Whether this process runs elevated, honoring [`ASSUME_ELEVATED_ENV`].
@@ -111,17 +91,7 @@ pub fn check_not_elevated(
     ))
 }
 
-/// SAFE-07: whether an item at `tier` with `action` needs the elevated confirmation (typing
-/// the count, or `--allow-permanent` without a terminal): S1/S2 items whose action can't be
-/// undone by scull. S0 deletes take the standard confirmation (D-3); quarantine and Trash are
-/// restorable; S3 items are never executed.
-pub fn needs_elevated_confirmation(tier: Tier, action: &Action) -> bool {
-    matches!(tier, Tier::S1 | Tier::S2)
-        && matches!(
-            action.restorability(),
-            Restorability::Regenerate | Restorability::NotRestorable
-        )
-}
+pub use scull_cleaner::flow::needs_elevated_confirmation;
 
 /// Whether prompts can be shown and answered: a human format, and stdin and stderr are
 /// terminals. Without one, nothing destructive runs without `--confirm` (CLI-03).
@@ -175,31 +145,7 @@ pub fn prompt_typed(prompt: &str, expected: &str) -> Result<bool, ScullError> {
     ask_typed(&mut input, &mut err, prompt, expected).map_err(|e| ScullError::from_io(&e))
 }
 
-/// A fresh ID suffix: Unix seconds then 64 random bits, in hex (sorts roughly by time).
-pub fn new_id_suffix(now_unix: i64) -> String {
-    use std::hash::{BuildHasher, RandomState};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let random = RandomState::new().hash_one((nanos, n, std::process::id()));
-    format!("{:x}{random:016x}", u64::try_from(now_unix).unwrap_or(0))
-}
-
-/// A new plan ID.
-pub fn new_plan_id(now_unix: i64) -> Result<PlanId, ScullError> {
-    PlanId::from_suffix(&new_id_suffix(now_unix))
-        .map_err(|e| ScullError::new(ErrorKind::Internal, e))
-}
-
-/// A new operation ID.
-pub fn new_operation_id(now_unix: i64) -> Result<OperationId, ScullError> {
-    OperationId::from_suffix(&new_id_suffix(now_unix))
-        .map_err(|e| ScullError::new(ErrorKind::Internal, e))
-}
+pub use scull_cleaner::flow::{new_id_suffix, new_operation_id, new_plan_id};
 
 /// The quarantine settings of a run (P2-EXEC-13): the configured `[quarantine]` base and
 /// per-volume bases (`SCULL_QUARANTINE_BASE` included); nothing configured means the automatic
@@ -208,22 +154,7 @@ pub fn quarantine_settings(config: &QuarantineConfig) -> QuarantineSettings {
     QuarantineSettings::from_config(config)
 }
 
-/// Where the Trash fallback moves an S1/S2 item whose quarantine is impossible (D-3,
-/// P2-EXEC-07): the user's real Trash ([`TrashLocations::from_env`]). Under the test harness
-/// ([`TEST_SANDBOX_ENV`], set by the test fixtures) a Trash inside the sandbox instead
-/// (`<sandbox>/Trash` and the sandbox as the volume's top directory), never the real one.
-pub fn trash_locations() -> TrashLocations {
-    match std::env::var_os(TEST_SANDBOX_ENV).filter(|v| !v.is_empty()) {
-        Some(sandbox) => {
-            let sandbox = std::path::PathBuf::from(sandbox);
-            TrashLocations {
-                home: Some(sandbox.join("Trash")),
-                topdir: Some(sandbox),
-            }
-        }
-        None => TrashLocations::from_env(),
-    }
-}
+pub use scull_cleaner::flow::trash_locations;
 
 /// An Executor holding the current user's execution lock (SAFE-09); fails at once with
 /// `lock_held` (exit 6) when another operation runs.
@@ -231,12 +162,10 @@ pub fn lock() -> Result<Executor, ScullError> {
     Executor::acquire(&LockOptions::for_current_user()?)
 }
 
-/// [`lock`], then reconcile every operation a crash interrupted with the disk before anything
-/// else runs (SAFE-19, `Executor::recover`: never resumes a deletion or move, only records
-/// what the disk shows). Recovered operations are reported on stderr.
+/// The execution lock, then every operation a crash interrupted reconciled with the disk
+/// ([`scull_cleaner::flow::lock_and_recover`]); recovered operations are reported on stderr.
 pub fn lock_and_recover(store: &mut Store, ui: &Ui) -> Result<Executor, ScullError> {
-    let executor = lock()?;
-    let report = executor.recover(store, scull_engine::now_unix())?;
+    let (executor, report) = scull_cleaner::flow::lock_and_recover(store)?;
     if !ui.quiet {
         for op in &report.operations {
             let _ = writeln!(
@@ -261,6 +190,7 @@ pub fn open_store() -> Result<Store, ScullError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scull_core::{Action, Tier};
 
     #[test]
     fn elevated_confirmation_covers_unrestorable_s1_s2_only() {
