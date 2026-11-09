@@ -49,8 +49,6 @@ toml_edit = "0.25"
 proptest.workspace = true
 scull-fixtures.workspace = true
 scull-insights = { workspace = true, features = ["fixtures"] }
-# The desktop bridge, for the cross-surface forecast test (tests/forecast_surfaces.rs) only.
-scull-desktop-bridge = { path = "../../apps/desktop/bridge" }
 # Tests only: seed quarantine manifest rows (no public writer before #71) and a newer schema.
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 tempfile = "3"
