@@ -207,6 +207,7 @@ pub fn render(r: &ScanReport, color: bool) -> String {
     out.push('\n');
     out.push_str(&render::reclaim_line(&r.totals));
     out.push('\n');
+    out.push_str(&render::estimate_note(&r.candidates));
     out.push_str(&render::signals_section(&r.signals_unavailable, color));
     if !r.config_warnings.is_empty() {
         out.push_str(&format!(
