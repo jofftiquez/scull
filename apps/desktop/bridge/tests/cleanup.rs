@@ -117,8 +117,19 @@ impl Env {
             .to_owned()
     }
 
+    /// The operations recorded in scull's history database (none when it doesn't exist).
+    fn recorded(&self) -> Vec<scull_storage::OperationRecord> {
+        if !scull_engine::history_db_path(&self.data).is_file() {
+            return Vec::new();
+        }
+        scull_engine::open_history(&self.data)
+            .unwrap()
+            .operations(0)
+            .unwrap()
+    }
+
     fn operations(&self) -> usize {
-        self.session.history(now_unix()).operations.len()
+        self.recorded().len()
     }
 }
 
@@ -257,13 +268,12 @@ fn cleanup_review_runs_exactly_the_chosen_items_through_the_executor() {
         e.fx.root().join("vault/target").exists(),
         "S3: never planned"
     );
-    let history = e.session.history(now_unix());
-    let op = history
-        .operations
-        .iter()
-        .find(|o| o.operation_id == run.operation_id)
+    let op = e
+        .recorded()
+        .into_iter()
+        .find(|o| o.operation_id.as_str() == run.operation_id)
         .unwrap();
-    assert_eq!(op.method, "desktop");
+    assert_eq!(op.method.as_str(), "desktop");
     assert_eq!(op.approver, "tester");
     let _ = modules;
 

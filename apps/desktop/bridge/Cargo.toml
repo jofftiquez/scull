@@ -1,6 +1,6 @@
 [package]
 name = "scull-desktop-bridge"
-description = "The desktop app's read-only bridge to the scull core (no Tauri, no WebKit)."
+description = "The desktop app's bridge to the scull core (no Tauri, no WebKit)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Read-only by construction (SAFE-10): never depends on scull-cleaner, and never enables
+# SAFE-10: deletes only through scull-cleaner's Executor (src/cleanup.rs), and never enables
 # scull-platform's `delete` feature. Checked by tests/safe10.rs (main workspace, every OS) and by
 # apps/desktop/src-tauri/tests/safe10.rs (`cargo tree` of the app crate).
 #
@@ -27,10 +27,6 @@ scull-git.workspace = true
 scull-safety.workspace = true
 scull-storage.workspace = true
 scull-proactive.workspace = true
-scull-insights.workspace = true
-# The approval broker (P4-MCP-02). Read-only by construction: never depends on scull-cleaner
-# (SAFE-10, checked by its own test and tests/safe10.rs here).
-scull-mcp.workspace = true
 # The core Executor (P3-EXEC-01): reached only from src/cleanup.rs, through its public API
 # (execute_plan, restore, QuickClean::run). PRD SAFE-10: deletion only through the Executor;
 # no desktop source deletes directly (tests/safe10.rs).

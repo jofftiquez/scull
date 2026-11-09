@@ -43,12 +43,6 @@ describe('recorded real payloads (fixtures)', () => {
     'caches-report': 'caches-report',
     status: 'status',
     capabilities: 'capabilities',
-    'free-space-history': 'free-space-history',
-    'rollup-history': 'rollup-history',
-    regrowth: 'regrowth',
-    'footprint-history': 'footprint-history',
-    'weekly-digest': 'weekly-digest',
-    forecasts: 'forecasts',
   };
   for (const file of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
     const stem = file.replace(/\.json$/, '');

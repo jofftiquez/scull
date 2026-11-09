@@ -4,9 +4,6 @@
 //! a read-only [`Engine`] per operation, keeps the last scan for the Projects and Worktrees
 //! screens, and tracks running operations so the UI can cancel them.
 
-use crate::insights::{
-    self, FootprintHistory, FreeSpaceHistory, RegrowthHistory, RollupHistory, Source,
-};
 use crate::views::{
     CapabilitiesReport, DesktopStatus, GitInfo, HistoryState, LastScan, OpId, ProgressEvent,
     ProjectsView, RECENT_ALERTS_SECS, ReviewPlanView, ScanParams, StatusState, VolumeSampleView,
@@ -503,59 +500,6 @@ impl Session {
                 session_scan,
             ),
         }
-    }
-
-    /// Recorded cleanup operations, newest first, with their audit logs (History screen).
-    /// Read-only: never creates, migrates or writes the database ([`crate::history`]).
-    pub fn history(&self, now: i64) -> crate::history::HistoryView {
-        crate::history::read_history(self.setup.data_dir.as_deref(), now)
-    }
-
-    /// The history database for a read, never created or migrated here: a missing one is
-    /// [`Source::Missing`].
-    pub(crate) fn history_source(&self) -> Source {
-        let Some(data) = &self.setup.data_dir else {
-            return Source::Missing;
-        };
-        if !history_db_path(data).is_file() {
-            return Source::Missing;
-        }
-        match open_history(data) {
-            Ok(s) => Source::Store(s),
-            Err(e) => Source::Failed(e.to_string()),
-        }
-    }
-
-    /// Free-space samples of one volume since `since` (Insights forecast). `volume_id`
-    /// defaults to the home folder's volume, then `/`, then the most recently sampled one.
-    pub fn free_space_history(&self, since: i64, volume_id: Option<&str>) -> FreeSpaceHistory {
-        let home_volume = self
-            .setup
-            .home
-            .as_deref()
-            .and_then(|h| scull_platform::volume_of(h).ok())
-            .map(|v| v.mount_point.to_string_lossy().into_owned());
-        insights::free_space_history(
-            &self.history_source(),
-            since,
-            volume_id,
-            home_volume.as_deref(),
-        )
-    }
-
-    /// Bytes per category per usable scan since `since` (Insights growth and mix).
-    pub fn rollup_history(&self, since: i64) -> RollupHistory {
-        insights::rollup_history(&self.history_source(), since)
-    }
-
-    /// Artifacts that came back since `since` (Insights regrowth).
-    pub fn regrowth(&self, since: i64) -> RegrowthHistory {
-        insights::regrowth(&self.history_source(), since)
-    }
-
-    /// scull's own footprint samples since `since` ("What scull knows").
-    pub fn footprint_history(&self, since: i64) -> FootprintHistory {
-        insights::footprint_history(&self.history_source(), since)
     }
 
     /// What this machine and build can observe (a doctor-like summary for Settings and the
