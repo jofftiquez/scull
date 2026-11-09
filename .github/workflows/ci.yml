@@ -64,7 +64,7 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v tmux >/dev/null || brew install tmux
       - name: clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --features scull-cli/full --locked -- -D warnings
       - name: test
         env:
           # Linux: the measured free-space tests (scull-cleaner tests/measure.rs) run strict on a
@@ -73,7 +73,7 @@ jobs:
           # falling back to the shared volume. Ignored nightly fixtures are unaffected.
           SCULL_FIXTURES_ALLOW_SUDO: ${{ runner.os == 'Linux' && '1' || '' }}
           SCULL_FIXTURES_REQUIRE_PRIVILEGED: ${{ runner.os == 'Linux' && '1' || '' }}
-        run: cargo test --workspace --locked --no-fail-fast
+        run: cargo test --workspace --features scull-cli/full --locked --no-fail-fast
       # The runners are elevated: scull refuses destructive MCP tools and `scull approve` there
       # (SAFE-14), so those tests skip themselves, and `clean`/`restore` tests add
       # `--allow-root`. Run them again as a standard user, where they must take the normal
@@ -90,10 +90,10 @@ jobs:
         if: runner.os == 'Linux'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --locked
+        run: cargo doc --workspace --no-deps --features scull-cli/full --locked
 
-  # #142: the slim personal-MVP build (`--no-default-features`): it builds, its tests pass, and
-  # it links none of the crates only the full command set needs. (scull-proactive stays: the
+  # #142: the slim personal-MVP build (the default; `--no-default-features` keeps it explicit):
+  # it builds, its tests pass, and it links none of the crates only the full command set needs. (scull-proactive stays: the
   # Executor's headroom reserve in scull-cleaner uses it.)
   slim:
     name: slim CLI build

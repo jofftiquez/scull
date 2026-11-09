@@ -56,15 +56,15 @@ design/   interactive design reference (open design/html/index.html)
 ## Building
 
 ```bash
-cargo build
-cargo test
+cargo build          # the everyday CLI: scan, worktrees, caches, clean, history, restore, init, doctor
+cargo test --workspace --features scull-cli/full   # every test, as CI runs them
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`.
 
-`cargo build -p scull-cli --no-default-features` builds a slim `scull` with just the everyday
-commands (`scan`, `worktrees`, `caches`, `clean`, `history`, `restore`, `init`, `doctor`) and
-without the MCP server, `scull ask` and insights; the default build has every command.
+The default build is the slim personal-MVP `scull`, without the MCP server, `scull ask`,
+insights and the other extra commands. `cargo build -p scull-cli --features full` builds every
+command; release binaries are built that way.
 
 ## Privacy
 
