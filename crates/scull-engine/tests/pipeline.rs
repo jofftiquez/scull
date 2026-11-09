@@ -611,6 +611,10 @@ fn uv_checkouts_are_not_nested_user_repositories() {
     )));
     assert!(repo_reason(&pointer), "{pointer:#?}");
     assert_eq!(pointer.tier, Tier::S3, "{pointer:#?}");
+    // …and so does a real repository inside a bucket that carries uv's empty marker.
+    let in_marked = nested(Some(("sdists-v9/mine/.git/HEAD", "ref: x\n")));
+    assert!(repo_reason(&in_marked), "{in_marked:#?}");
+    assert_eq!(in_marked.tier, Tier::S3, "{in_marked:#?}");
 }
 
 #[test]

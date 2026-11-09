@@ -443,6 +443,38 @@ fn self_inclusive_carve_out_covers_only_that_directory() {
     fx.check_invariants(&InvariantInputs::new()).assert_ok();
 }
 
+/// #139 review: a self-inclusive carve-out at a path that is a link never relaxes protection
+/// for the link's target (the target stays inside the protected root).
+#[test]
+fn self_inclusive_carve_out_ignores_a_link_at_that_path() {
+    let mut fx = Fixture::new().unwrap();
+    fx.dir("lib/secret/keys").unwrap().dir("lib/pnpm").unwrap();
+    let outcome = fx.symlink("lib/pnpm/store", "../secret").unwrap();
+    fx.checkpoint().unwrap();
+    if let LinkOutcome::Skipped(why) = outcome {
+        eprintln!("symlinks unavailable: {why}");
+        fx.check_invariants(&InvariantInputs::new()).assert_ok();
+        return;
+    }
+    let lib = fx.path("lib").unwrap();
+    let store = lib.join("pnpm").join("store");
+    let defaults = DefaultProtection {
+        protected: vec![ProtectedPath {
+            path: lib.clone(),
+            scope: Scope::Subtree,
+        }],
+        allowed: vec![],
+        allowed_self: vec![store],
+    };
+    let mut set = ProtectedSet::new();
+    set.add_defaults(&Native, &defaults);
+    assert!(
+        check(&set, &lib.join("secret")).in_protected_root,
+        "link target"
+    );
+    fx.check_invariants(&InvariantInputs::new()).assert_ok();
+}
+
 /// CFG-03: a repository's `.scull.toml` adds protection (protect, exclude) by identity.
 #[test]
 fn repo_policy_adds_protection() {

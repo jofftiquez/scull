@@ -433,11 +433,14 @@ impl ProtectedSet {
                 }
             }
         }
+        // Self-inclusive carve-outs count only for a real directory at that path: a link there
+        // (one identity for the link, one for its target) never relaxes protection for
+        // whatever it points to (#139 review). Such a store simply stays protected.
         for a in &defaults.allowed_self {
-            if let Some(r) = self.resolve_or_record(platform, a) {
-                for id in r.identities {
-                    self.allowed_self.insert(id, a.clone());
-                }
+            if let Some(r) = self.resolve_or_record(platform, a)
+                && let [id] = r.identities.as_slice()
+            {
+                self.allowed_self.insert(*id, a.clone());
             }
         }
     }
