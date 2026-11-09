@@ -15,6 +15,10 @@ Output:
   \"error\": {\"kind\", \"message\", ...}}. Terminal output escapes control and bidirectional
   characters in names and flags suspicious names.
 
+More commands (hidden to keep this list short; `scull <command> --help` works for each):
+  projects, large-files, approve, rules, status, check, insights, agent, schedule, headroom,
+  data, ask, mcp, completions
+
 Exit codes:
   0    success
   1    general error (including commands not implemented yet in this build)
@@ -130,6 +134,7 @@ pub enum Command {
     Scan(ScanArgs),
 
     /// List detected projects, or inspect one.
+    #[command(hide = true)]
     Projects {
         /// Scan roots (default: `scan.roots` from the config).
         #[command(flatten)]
@@ -157,6 +162,7 @@ pub enum Command {
 
     /// List large files under a path (inspect only; never cleaned).
     #[command(name = "large-files")]
+    #[command(hide = true)]
     LargeFiles {
         /// Directory to inspect.
         path: PathBuf,
@@ -180,6 +186,7 @@ pub enum Command {
 
     /// Approve a cleanup plan an AI agent prepared through MCP, or revoke an approval before
     /// the agent uses it (interactive terminal only).
+    #[command(hide = true)]
     Approve {
         /// Plan ID to approve; omit to list the agent plans awaiting approval (and the approved
         /// ones not yet run).
@@ -195,6 +202,7 @@ pub enum Command {
     },
 
     /// List or validate detection rules.
+    #[command(hide = true)]
     Rules {
         /// Subcommand.
         #[command(subcommand)]
@@ -205,6 +213,7 @@ pub enum Command {
     Init(InitArgs),
 
     /// Cached one-line status, e.g. for shell prompts.
+    #[command(hide = true)]
     Status {
         /// Print a short single-line summary.
         #[arg(long)]
@@ -212,9 +221,11 @@ pub enum Command {
     },
 
     /// Light scan plus forecast and alerts (run by the OS scheduler).
+    #[command(hide = true)]
     Check(CheckArgs),
 
     /// Local trends and insights from scull's own history (read-only).
+    #[command(hide = true)]
     Insights {
         /// Start of the report window: a duration back from now (7d, 30d, 12w, 48h) or a UTC
         /// date (2026-10-01). Default: 30 days.
@@ -226,6 +237,7 @@ pub enum Command {
     },
 
     /// Set up an AI client (MCP config and guidance), with consent.
+    #[command(hide = true)]
     Agent {
         /// Subcommand.
         #[command(subcommand)]
@@ -233,6 +245,7 @@ pub enum Command {
     },
 
     /// Register or remove periodic checks with launchd, systemd or Task Scheduler.
+    #[command(hide = true)]
     Schedule {
         /// Subcommand.
         #[command(subcommand)]
@@ -241,6 +254,7 @@ pub enum Command {
 
     /// Emergency headroom: a reserve file scull releases on command when the disk is full
     /// (off by default).
+    #[command(hide = true)]
     Headroom {
         /// Subcommand.
         #[command(subcommand)]
@@ -248,6 +262,7 @@ pub enum Command {
     },
 
     /// Inspect, export or delete everything scull has recorded locally.
+    #[command(hide = true)]
     Data {
         /// Subcommand.
         #[command(subcommand)]
@@ -260,9 +275,11 @@ pub enum Command {
     /// Ask a question about your developer storage (optional assistant, off by default; bring
     /// your own model).
     #[command(after_long_help = crate::cmd::ask::AFTER_HELP)]
+    #[command(hide = true)]
     Ask(AskArgs),
 
     /// Model Context Protocol server for AI agents.
+    #[command(hide = true)]
     Mcp {
         /// Subcommand.
         #[command(subcommand)]
@@ -270,6 +287,7 @@ pub enum Command {
     },
 
     /// Generate a shell completion script on stdout.
+    #[command(hide = true)]
     Completions {
         /// Target shell.
         #[arg(value_enum)]
