@@ -1,54 +1,20 @@
 //! Tauri build script: embeds tauri.conf.json, the capabilities and the icons.
 //!
 //! The app manifest puts every app command under the ACL, so a window can call only what its
-//! capability grants (`allow-<command>`): `capabilities/default.json` grants everything to the
-//! main window, `capabilities/menubar.json` everything but the approval and cleanup commands to
-//! the menu bar widget (P4-MCP-02, P3-EXEC-01). `bridge/tests/commands.rs` checks these lists against `src/lib.rs`.
+//! capability grants (`allow-<command>`): `capabilities/default.json` grants them to the main
+//! window, the app's only window. `bridge/tests/commands.rs` checks these lists against
+//! `src/lib.rs`.
 
-/// Every app command registered in `src/lib.rs` (`run`).
+/// Every app command registered in `src/lib.rs` (`handler`).
 const COMMANDS: &[&str] = &[
-    "app_info",
-    "drives",
+    "settings",
     "scan",
     "caches",
     "cancel_operation",
-    "projects",
-    "worktrees",
-    "status",
-    "capabilities",
-    "history",
-    "settings",
-    "save_setting",
-    "free_space_history",
-    "rollup_history",
-    "regrowth",
-    "footprint_history",
-    "forecasts",
-    "weekly_digest",
-    "monitor_status",
-    "configure_monitor",
-    "pause_monitor",
-    "send_digest_now",
-    "open_main_window",
-    "hide_menu_bar",
-    // Approving an AI agent's plan: the main window only.
-    "approval_requests",
-    "open_approval_request",
-    "approve_agent_plan",
-    "deny_agent_plan",
-    "revoke_agent_approval",
-    "agent_plan_status",
-    "take_deep_link",
-    // Cleaning through the core Executor (P3-EXEC-01): the main window only.
+    // Cleaning through the core Executor (P3-EXEC-01).
     "prepare_desktop_plan",
     "execute_desktop_plan",
     "execution_busy",
-    "restore_quarantined",
-    "quick_clean",
-    "quick_clean_plan",
-    "quick_clean_run",
-    "onboarding_context",
-    "pick_project_folders",
 ];
 
 fn main() {

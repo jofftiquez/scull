@@ -123,7 +123,11 @@ fn capabilities_grant_no_filesystem_access() {
     // Tauri core permissions, and scull's own app commands (their names are checked against
     // mutating words in bridge/tests/commands.rs); never a plugin's.
     let own = app_command_permissions();
-    assert!(own.len() > 20, "{own:?}");
+    // The manifest parsed (the MVP set has 7 commands, #144).
+    assert!(
+        own.iter().any(|o| o == "allow-execute-desktop-plan"),
+        "{own:?}"
+    );
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut n = 0;
     for e in std::fs::read_dir(dir).unwrap().flatten() {

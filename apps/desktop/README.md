@@ -6,7 +6,8 @@ come from `design/tokens.json` (ink + magenta duotone, no shadows, DM Sans and D
 The MVP is one flow, **pick folders → scan → review → confirm → clean → result**, plus a
 read-only **Caches** view. Everything else from `desktop-v0` (Overview, Explorer, Insights,
 History, Projects and Worktrees screens, onboarding survey, agent approval, settings) is out of
-scope for now. The tray and the Rust command set are trimmed in the next step of #144.
+scope for now. The Tauri shell has 7 commands, one window and no tray, notifications or deep
+links. Unused bridge modules are removed next (#144, stage 3).
 
 **The desktop deletes only through the core Executor (SAFE-10).** Cleaning runs reviewed plans
 through `scull_cleaner::Executor` (`bridge/src/cleanup.rs`), the same engine as `scull clean`: the
@@ -83,20 +84,9 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 
 | Method | Command | Returns |
 |---|---|---|
-| `appInfo()` | `app_info` | `AppInfo` |
-| `drives()` | `drives` | `Drive[]` (sidebar widget) |
 | `scan(params, {onProgress, signal})` | `scan` | `ScanReport` (the CLI's `scull/scan@1` payload) |
-| `projects()` / `worktrees()` | `projects` / `worktrees` | the last complete scan, in the shape of `scull projects/worktrees --json` |
 | `caches({onProgress, signal})` | `caches` | `CachesReport` (`scull caches`) |
-| `status()` | `status` | `DesktopStatus`: last recorded scan and free-space samples |
-| `capabilities()` | `capabilities` | `CapabilitiesReport`: signals, Git, elevation, history (doctor-like) |
-| `freeSpaceHistory(since, volumeId?)` | `free_space_history` | `FreeSpaceHistory`: one volume's free-space samples (Insights forecast) |
-| `rollupHistory(since)` | `rollup_history` | `RollupHistory`: bytes per category per usable scan (growth, mix) |
-| `regrowth(since)` | `regrowth` | `RegrowthHistory`: artifacts that came back after they had gone |
-| `footprintHistory(since)` | `footprint_history` | `FootprintHistory`: scull's own disk use ("What scull knows") |
-| `forecasts()` | `forecasts` | `ForecastsView`: every sampled volume's disk-full forecast, the one source of days left (`docs/FORECAST.md`) |
-| `weeklyDigest()` | `weekly_digest` | `DigestView`: the last 7 days in a few lines (Insights "This week", the digest notification) |
-| `monitorStatus()` | `monitor_status` | `MonitorStatus`: tray monitoring's settings, pause, last and next check and digest |
+| `settings()` | `settings` | `SettingsView`: effective configuration with origins (the scan roots) |
 | (abort) | `cancel_operation` | `bool` |
 
 - **Progress.** Long operations get a fresh operation ID. The core emits `scull://progress`
@@ -111,8 +101,7 @@ calls the read-only `scull-engine` pipeline (D-29, the same one the CLI and MCP 
 - **Config and history.** Configuration loads like the CLI's: `config.toml` in scull's config
   directory, then `SCULL_*` environment variables. Scan roots default to `scan.roots`, and
   broad roots need `allow_broad_roots` (CFG-04). Scans are recorded in the same history
-  database as the CLI's. `status` and the four history reads never create the database; a
-  missing one reads `no_database`.
+  database as the CLI's.
 
 **Types come from Rust.** `scull-desktop-bridge::schemas::all()` writes `schemas/*.schema.json`,
 and `scripts/gen-types.mjs` compiles them into `src/bridge/generated.ts`. Tests keep the chain
@@ -125,8 +114,8 @@ honest:
   validate against those schemas.
 - `src/bridge/parity.test.ts` checks that `generated.ts` is current, and that the mock's answers
   and recorded fixtures validate against the same schemas (ajv).
-- `bridge/tests/commands.rs` checks that the Rust commands, the registered handler and the
-  frontend's `COMMANDS` table name the same commands.
+- `bridge/tests/commands.rs` checks that the Rust commands, the one registered handler, build.rs's
+  app manifest, the main window's capability and the frontend's tables name the same 7 commands.
 
 To change a payload:
 
@@ -155,6 +144,9 @@ pnpm --filter @scull/desktop types
   `cargo tree -e features,normal,build --target all` must show no `scull-cleaner`, no `delete`
   feature, and no fs/shell/process/http plugin. It also checks that every capability permission
   is a `core:` one.
+- `src-tauri/tests/commands.rs` runs the commands through Tauri's IPC on the real capabilities:
+  another window and any remote origin are refused before a command runs, and the typed
+  confirmation count survives the frontend's invoke payload.
 - The command surface is read-only: no command name suggests a mutation
   (`bridge/tests/commands.rs`), the frontend's `ScullBridge` has no mutating call (vitest), and
   eslint keeps `@tauri-apps/api` out of everything but `src/bridge/tauri.ts`.
