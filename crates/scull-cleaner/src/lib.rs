@@ -105,6 +105,7 @@ macro_rules! bare_api {
 
 mod execution;
 mod executor;
+pub mod flow;
 pub mod headroom;
 pub mod journal;
 mod lock;

@@ -64,27 +64,20 @@ use crate::output::json::SchemaId;
 use crate::output::style::{Style, tier_text};
 use crate::output::table::{Align, Cell, Table};
 use schemars::JsonSchema;
-use scull_cleaner::measure::{
-    ItemExecution, MeasureOptions, PlatformFreeSpace, Tally, VolumeMeter,
-};
-use scull_cleaner::{
-    DEFAULT_RETENTION_SECS, DOCKER_UNSUPPORTED, ExecutionReport, ItemOutcome, ItemReport,
-    PlanContext, RemoveOutcome, Revalidation, Skip, TOOL_NATIVE_UNSUPPORTED, is_docker_command,
-    is_quick_clean_tool,
-};
+use scull_cleaner::flow;
+use scull_cleaner::{DEFAULT_RETENTION_SECS, ExecutionReport, ItemOutcome, RemoveOutcome, Skip};
 use scull_core::{
-    Action, Candidate, Category, ContentHash, DropReason, ErrorKind, Evidence, FsPath, ItemId,
-    OperationId, Plan, PlanId, PlanItem, PlanOrigin, PlanParams, RegenerationCost, Restorability,
-    ScanId, ScullError, Sizes, Tier, action_allowed_for, narrow,
+    Action, Candidate, ContentHash, DropReason, ErrorKind, Evidence, FsPath, ItemId, OperationId,
+    Plan, PlanId, PlanItem, PlanOrigin, RegenerationCost, Restorability, ScanId, ScullError, Sizes,
+    Tier, narrow,
 };
 use scull_engine::{Engine, ScanReport, ScanRequest, SignalUnavailable, now_unix};
 use scull_scanner::ActionReclaim;
-use scull_storage::{ApprovalMethod, OperationEnd, OperationStart, Store};
+use scull_storage::{ApprovalMethod, Store};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Schema of the plan and review previews (`--json`).
 pub const CLEAN_PLAN_SCHEMA: SchemaId = SchemaId::new("clean-plan", 1);
@@ -180,26 +173,7 @@ pub struct DroppedItem {
     pub message: String,
 }
 
-/// Why a candidate is not in the plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ExcludeReason {
-    /// S3: never cleaned.
-    Protected,
-    /// No action at its tier (inspect only).
-    NoAction,
-    /// A package cache: `scull clean caches` cleans it with its own tool.
-    PackageCache,
-    /// An action this build's `scull clean` does not execute (Git worktree operations,
-    /// tool-native ML removal such as `ollama rm`).
-    NotSupported,
-    /// S1: opt in with `--include-s1` or `--item`.
-    OptInS1,
-    /// S2: only planned when named with `--item`.
-    PerItemS2,
-    /// `--item` was given and this item was not named.
-    NotSelected,
-}
+pub use scull_cleaner::flow::ExcludeReason;
 
 /// A candidate left out of the plan.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -434,29 +408,14 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
     }
     let cwd = std::env::current_dir().map_err(|e| ScullError::from_io(&e))?;
     let selection = select(&scan.candidates, args.include_s1, &args.items, &cwd)?;
-    let now = now_unix();
-    let plan = if selection.items.is_empty() {
-        None
-    } else {
-        let items = selection
-            .items
-            .iter()
-            .map(|c| PlanItem::from_candidate(c))
-            .collect::<Result<Vec<_>, _>>()?;
-        Some(Plan::new(
-            PlanParams {
-                id: exec::new_plan_id(now)?,
-                scan_id: scan.scan_id.clone(),
-                created_unix: now,
-                ttl_secs: None,
-                machine_id: who.machine_id.clone(),
-                user: who.user.clone(),
-                origin: PlanOrigin::Cli,
-                operations_watermark: Some(watermark),
-            },
-            items,
-        )?)
-    };
+    let plan = flow::new_plan(
+        &scan.scan_id,
+        &selection.items,
+        &who,
+        PlanOrigin::Cli,
+        watermark,
+        now_unix(),
+    )?;
     let mut plan_file = None;
     if let Some(p) = &plan {
         store.insert_plan(p)?;
@@ -501,7 +460,7 @@ fn plan_cmd(args: &CleanArgs, ui: &Ui) -> Result<(), ScullError> {
         return Ok(());
     }
     let elevated = elevated_gate(&report, args.allow_permanent, true)?;
-    let sizes = sizes_by_id(&scan.candidates);
+    let sizes = flow::sizes_by_id(&scan.candidates);
     let run = execute(
         &plan,
         &loaded,
@@ -613,7 +572,7 @@ fn plan_file_cmd(file: &Path, args: &CleanArgs, ui: &Ui) -> Result<(), ScullErro
     if confirmed == Confirmed::Flag && !ui.format.is_machine() {
         emit_preview(&report, ui)?;
     }
-    let sizes = sizes_by_id(&scan.candidates);
+    let sizes = flow::sizes_by_id(&scan.candidates);
     let run = execute(
         &plan, &loaded, &who, &roots, &engine, &mut store, &sizes, confirmed, elevated, ui,
     )?;
@@ -675,71 +634,10 @@ pub struct Selection<'a> {
     pub excluded: Vec<ExcludedItem>,
 }
 
-/// Why `c` can never be in a `scull clean` plan, if it can't.
-fn ineligible(c: &Candidate) -> Option<(ExcludeReason, String)> {
-    if !c.tier.is_actionable() {
-        return Some((
-            ExcludeReason::Protected,
-            format!("protected ({}): never cleaned", tier_text(c.tier)),
-        ));
-    }
-    match &c.action {
-        Action::None => Some((
-            ExcludeReason::NoAction,
-            "no cleanup action at this tier (inspect only)".into(),
-        )),
-        Action::ToolCommand { tool, .. }
-            if c.category == Category::PackageCache && is_quick_clean_tool(tool) =>
-        {
-            Some((
-                ExcludeReason::PackageCache,
-                format!("package cache: `scull clean caches` cleans it with {tool}'s own command"),
-            ))
-        }
-        // `docker builder prune` / `docker image prune` (P5-DET-03): Docker is read-only.
-        a @ Action::ToolCommand { .. } if is_docker_command(a) => {
-            Some((ExcludeReason::NotSupported, DOCKER_UNSUPPORTED.to_owned()))
-        }
-        // A long-tail tool cache (P5-DET-05, e.g. `ccache --clear`): Quick Clean doesn't run
-        // its command in this build, and `scull clean` never does.
-        Action::ToolCommand { tool, .. } if c.category == Category::PackageCache => Some((
-            ExcludeReason::NotSupported,
-            format!(
-                "package cache: Quick Clean does not run `{}` in this build yet, and `scull \
-                 clean` never runs tool commands",
-                escape_for_terminal(tool)
-            ),
-        )),
-        // E.g. `ollama rm` for Ollama models (P4-DET-01): no trusted-tool runner allow-lists it.
-        Action::ToolCommand { tool, .. } => Some((
-            ExcludeReason::NotSupported,
-            format!(
-                "{TOOL_NATIVE_UNSUPPORTED} (`{}` is never run by scull)",
-                escape_for_terminal(tool)
-            ),
-        )),
-        Action::Delete | Action::Quarantine
-            if c.is_consistent() && action_allowed_for(c.tier, &c.action) =>
-        {
-            None
-        }
-        Action::Delete | Action::Quarantine => Some((
-            ExcludeReason::Protected,
-            "its tier, reasons and action disagree; left alone".into(),
-        )),
-        other => Some((
-            ExcludeReason::NotSupported,
-            format!(
-                "`{}` is not executed by `scull clean` in this build",
-                action_label(other)
-            ),
-        )),
-    }
-}
-
-/// Select what to plan (PRD §8.2): S0 by default, S1 with `include_s1`, or exactly the
-/// `wanted` items (ID or path, the only way to plan S2). An unknown `wanted` entry is a usage
-/// error; one that can't be planned is refused (`SafetyBlocked`).
+/// Select what to plan (PRD §8.2) with the shared rules ([`flow::select`]): S0 by default,
+/// S1 with `include_s1`, or exactly the `wanted` items (ID or path, the only way to plan S2).
+/// An unknown `wanted` entry is a usage error; one that can't be planned is refused
+/// (`SafetyBlocked`).
 pub fn select<'a>(
     cands: &'a [Candidate],
     include_s1: bool,
@@ -761,52 +659,38 @@ pub fn select<'a>(
                 ),
             ));
         };
-        if let Some((_, why)) = ineligible(c) {
+        if let Some((_, why)) = flow::ineligible(c) {
             return Err(ScullError::new(
                 ErrorKind::SafetyBlocked,
-                format!("--item {}: can't be planned: {why}", escape_for_terminal(w)),
+                format!(
+                    "--item {}: can't be planned: {}",
+                    escape_for_terminal(w),
+                    escape_for_terminal(&why)
+                ),
             )
             .with_item(c.id.clone())
             .with_path(c.path.clone()));
         }
         picked.insert(&c.id);
     }
-    let mut sel = Selection {
-        items: Vec::new(),
-        excluded: Vec::new(),
-    };
-    for c in cands {
-        let reason = match ineligible(c) {
-            Some(r) => Some(r),
-            None if !wanted.is_empty() => (!picked.contains(&c.id))
-                .then(|| (ExcludeReason::NotSelected, "not named with --item".into())),
-            None => match c.tier {
-                Tier::S0 => None,
-                Tier::S1 if include_s1 => None,
-                Tier::S1 => Some((
-                    ExcludeReason::OptInS1,
-                    "costly to recreate (S1): opt in with --include-s1 or --item".into(),
-                )),
-                _ => Some((
-                    ExcludeReason::PerItemS2,
-                    "uncertain (S2): never preselected; name it with --item to plan it".into(),
-                )),
-            },
-        };
-        match reason {
-            None => sel.items.push(c),
-            Some((reason, message)) => sel.excluded.push(ExcludedItem {
+    let shared = flow::select(cands, include_s1, (!wanted.is_empty()).then_some(&picked));
+    Ok(Selection {
+        items: shared.items,
+        excluded: shared
+            .excluded
+            .into_iter()
+            .map(|(c, reason, message)| ExcludedItem {
                 item_id: c.id.clone(),
                 path: c.path.clone(),
                 tier: c.tier,
                 action: c.action.clone(),
                 reclaimable_bytes: c.sizes.reclaimable.bytes,
                 reason,
-                message,
-            }),
-        }
-    }
-    Ok(sel)
+                // Escaped here too, so `--json` output is unchanged (SAFE-17; review of #151).
+                message: escape_for_terminal(&message).into_owned(),
+            })
+            .collect(),
+    })
 }
 
 fn scan(
@@ -1500,11 +1384,8 @@ fn render_item(n: usize, p: &PreviewItem, common: &BTreeSet<String>) -> String {
 // Execution
 // ---------------------------------------------------------------------------------------------
 
-fn sizes_by_id(cands: &[Candidate]) -> BTreeMap<ItemId, Sizes> {
-    cands.iter().map(|c| (c.id.clone(), c.sizes)).collect()
-}
-
-/// Lock, record the operation, execute every item with revalidation, measure, finish.
+/// Lock, then execute the reviewed plan through the shared flow ([`flow::execute`]): record
+/// the operation, execute every item with revalidation, measure, finish.
 #[allow(clippy::too_many_arguments)]
 fn execute(
     plan: &Plan,
@@ -1519,113 +1400,44 @@ fn execute(
     ui: &Ui,
 ) -> Result<CleanRunReport, ScullError> {
     let executor = exec::lock_and_recover(store, ui)?;
-    let started_at = now_unix();
-    let operation_id = exec::new_operation_id(started_at)?;
-    let mut op = executor
-        .begin_operation(
-            store,
-            plan,
-            &OperationStart {
-                operation_id: operation_id.clone(),
-                plan_id: plan.id().clone(),
-                content_hash: plan.content_hash().clone(),
-                approver: who.user.clone(),
-                // `--confirm` without a prompt, or `y` at the prompt on a terminal.
-                method: match confirmed {
-                    Confirmed::Flag => ApprovalMethod::CliFlag,
-                    Confirmed::Prompt => ApprovalMethod::CliInteractive,
-                },
-                started_at,
-            },
-        )?
-        // One measurement: the CLI's own meter below (with resampling for delayed frees) is what
-        // the report shows and what `finish_measured` records (I-5).
-        .without_measurement()
-        // The configured quarantine location (P2-EXEC-13), and the Trash where quarantine is
-        // impossible (D-3: quarantine → Trash → blocked, never deleted).
-        .with_quarantine(exec::quarantine_settings(&loaded.config.quarantine))
-        .with_trash(exec::trash_locations());
-    let predicted = |i: &PlanItem| {
-        ActionReclaim::for_action(
-            &sizes.get(&i.item_id).copied().unwrap_or_default(),
-            &i.action,
-        )
-    };
-    let predicted_freed: u64 = plan.items().iter().map(|i| predicted(i).freed_now).sum();
-    let mut options = MeasureOptions::default();
-    if predicted_freed <= options.resolution {
-        // Waiting for delayed frees can't resolve a difference this small.
-        options = options.with_resampling(Duration::ZERO, Duration::ZERO);
-    }
-    let meter = VolumeMeter::new(PlatformFreeSpace, options);
-    let baseline = meter.before(roots);
-    let revalidation = Revalidation::new(engine, roots);
     if ui.progress {
         ui.progress(&format!("executing {} item(s)...", plan.items().len()));
     }
     let bridge = CancelBridge::start();
-    let ctx = PlanContext {
-        now_unix: now_unix(),
-        machine_id: &who.machine_id,
-        user: &who.user,
-    };
-    let result = executor.execute_plan(plan, &ctx, &revalidation, Some(&mut op), bridge.token());
-    drop(bridge);
-    let report = match result {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = op.finish(OperationEnd::Cancelled, now_unix());
-            return Err(e);
-        }
-    };
-    let mut tally = Tally::new();
-    for (item, r) in plan.items().iter().zip(&report.items) {
-        tally.add(&predicted(item), &[], item_execution(r));
-    }
-    let delta = meter.after(baseline, &tally);
-    let finished_at = now_unix();
-    op.finish_measured(
-        if report.cancelled {
-            OperationEnd::Cancelled
-        } else {
-            OperationEnd::Normal
+    let run = flow::execute(
+        &executor,
+        store,
+        flow::ExecuteParams {
+            plan,
+            who,
+            // `--confirm` without a prompt, or `y` at the prompt on a terminal.
+            method: match confirmed {
+                Confirmed::Flag => ApprovalMethod::CliFlag,
+                Confirmed::Prompt => ApprovalMethod::CliInteractive,
+            },
+            roots,
+            engine,
+            // The configured quarantine location (P2-EXEC-13), and the Trash where quarantine
+            // is impossible (D-3: quarantine → Trash → blocked, never deleted).
+            quarantine: exec::quarantine_settings(&loaded.config.quarantine),
+            trash: exec::trash_locations(),
+            sizes,
         },
-        finished_at,
-        delta.measured_delta_bytes(),
-    )?;
+        bridge.token(),
+    );
+    drop(bridge);
+    let run = run?;
     Ok(run_report(
         plan,
-        &report,
-        operation_id,
+        &run.report,
+        run.operation_id,
         who,
         confirmed,
         elevated,
-        started_at,
-        finished_at,
-        &delta,
+        run.started_at,
+        run.finished_at,
+        &run.delta,
     ))
-}
-
-fn item_execution(r: &ItemReport) -> ItemExecution {
-    match &r.outcome {
-        ItemOutcome::Deleted(w) if w.outcome == RemoveOutcome::Complete => ItemExecution::Done {
-            removed: w.removed.allocated_bytes,
-            moved: 0,
-        },
-        ItemOutcome::Deleted(w) => ItemExecution::Partial {
-            removed: w.removed.allocated_bytes,
-            moved: 0,
-        },
-        ItemOutcome::Quarantined(q) => ItemExecution::Done {
-            removed: 0,
-            moved: q.bytes,
-        },
-        ItemOutcome::Trashed(t) => ItemExecution::Done {
-            removed: 0,
-            moved: t.moved_bytes(),
-        },
-        _ => ItemExecution::NotExecuted,
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1929,6 +1741,9 @@ pub fn render_run(r: &CleanRunReport, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scull_cleaner::flow::ineligible;
+    use scull_cleaner::{DOCKER_UNSUPPORTED, TOOL_NATIVE_UNSUPPORTED, is_quick_clean_tool};
+    use scull_core::{Action, Category, Tier};
 
     #[test]
     fn evidence_shared_by_every_item_is_shown_once() {
