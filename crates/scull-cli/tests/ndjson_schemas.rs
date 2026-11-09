@@ -10,7 +10,8 @@
 //! things written are scull's own files there (config from `init`, the history database from
 //! `check` and `clean`'s plan, a TTL registration, a `data export`). `schedule`, `agent` and
 //! `clean caches` run with `--dry-run` only; `clean` only plans and nothing is executed.
-
+// Runs the full command set, hidden commands included: full build only (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use clap::CommandFactory;

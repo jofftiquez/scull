@@ -3,6 +3,8 @@
 //! only the paths that stop before any tool runs are exercised (`--dry-run`, refusal without
 //! consent, `disable`/`status` with nothing registered). Applying, with a fake command runner
 //! and an injected unit folder, is covered by the unit tests in `cmd::schedule`.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};

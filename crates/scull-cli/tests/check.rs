@@ -3,6 +3,8 @@
 //!
 //! The seeded volume id is not a real mount point on any OS, so `scull check` reports it as
 //! not connected instead of sampling it, and the forecast uses only the seeded history.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use scull_core::{FsPath, ScanId};
 use scull_storage::{

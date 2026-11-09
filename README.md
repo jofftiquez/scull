@@ -62,6 +62,10 @@ cargo test
 
 The toolchain is pinned in `rust-toolchain.toml`.
 
+`cargo build -p scull-cli --no-default-features` builds a slim `scull` with just the everyday
+commands (`scan`, `worktrees`, `caches`, `clean`, `history`, `restore`, `init`, `doctor`) and
+without the MCP server, `scull ask` and insights; the default build has every command.
+
 ## Privacy
 
 No telemetry. Everything stays on your machine. Two opt-in features are the exceptions: the MCP

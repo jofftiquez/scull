@@ -1,36 +1,51 @@
 //! Implemented commands. Each module builds a serializable report, renders it for people,
 //! and writes it as a versioned JSON document (`--json`) or one NDJSON record (`--ndjson`).
 
+#[cfg(feature = "full")]
 pub mod agent;
+#[cfg(feature = "full")]
 pub mod approve;
+#[cfg(feature = "full")]
 pub mod ask;
+#[cfg(feature = "full")]
 pub mod auto_policy;
 pub mod caches;
+#[cfg(feature = "full")]
 pub mod check;
 pub mod clean;
 pub mod clean_caches;
+#[cfg(feature = "full")]
 pub mod data;
 pub mod doctor;
+#[cfg(feature = "full")]
 pub mod doctor_report;
 pub mod exec;
+#[cfg(feature = "full")]
 pub mod forecast;
+#[cfg(feature = "full")]
 pub mod headroom;
 pub mod history;
 pub mod init;
+#[cfg(feature = "full")]
 pub mod insights;
+#[cfg(feature = "full")]
 pub mod mcp;
+#[cfg(feature = "full")]
 pub mod mcp_runner;
 pub mod pipeline;
 pub mod projects;
 pub mod remote;
 pub mod render;
 pub mod restore;
+#[cfg(feature = "full")]
 pub mod review_plan;
 pub mod rules;
 pub mod rules_test;
 pub mod scan;
+#[cfg(feature = "full")]
 pub mod schedule;
 pub mod schemas;
+#[cfg(feature = "full")]
 pub mod status;
 pub mod worktrees;
 

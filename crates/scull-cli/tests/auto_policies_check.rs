@@ -9,7 +9,8 @@
 //! it is S0) the dry run, the run, the audit and `scull restore` end to end. The in-process
 //! adversarial cases are in `tests/auto_policies.rs`. Every test checks the fixture
 //! invariants.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_core::{

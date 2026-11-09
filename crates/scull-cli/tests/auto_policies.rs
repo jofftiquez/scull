@@ -14,7 +14,8 @@
 //!
 //! Cross-mount items are covered by `scull_proactive::auto`'s selection tests (a mount can't be
 //! created without privileges) and by the quarantine's same-volume rule in `scull-cleaner`.
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_cleaner::{Executor, LockOptions, PlanContext, Revalidation};

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 /// `scull --version`: version plus target triple.
 pub const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("SCULL_TARGET"), ")");
 
+#[cfg(feature = "full")]
 const AFTER_HELP: &str = "\
 Output:
   Data goes to stdout; progress and errors go to stderr. With --json or --ndjson, stdout carries
@@ -18,6 +19,29 @@ Output:
 More commands (hidden to keep this list short; `scull <command> --help` works for each):
   projects, large-files, approve, rules, status, check, insights, agent, schedule, headroom,
   data, ask, mcp, completions
+
+Exit codes:
+  0    success
+  1    general error (including commands not implemented yet in this build)
+  2    usage or configuration error
+  3    completed with partial failures (see report)
+  4    plan rejected (expired, tampered, foreign, or invalidated)
+  5    blocked by safety policy
+  6    execution lock held by another operation
+  130  cancelled by user (Ctrl-C)";
+
+#[cfg(not(feature = "full"))]
+const AFTER_HELP: &str = "\
+Output:
+  Data goes to stdout; progress and errors go to stderr. With --json or --ndjson, stdout carries
+  only JSON with a versioned envelope {\"schema\": \"scull/<name>@<major>\", \"version\", ...} and
+  errors are written to stderr as one JSON line {\"schema\": \"scull/error@1\", \"version\",
+  \"error\": {\"kind\", \"message\", ...}}. Terminal output escapes control and bidirectional
+  characters in names and flags suspicious names.
+
+More commands (hidden to keep this list short; `scull <command> --help` works for each):
+  projects, large-files, rules, completions (this is the slim build: the other commands need the
+  `full` feature)
 
 Exit codes:
   0    success
@@ -191,6 +215,7 @@ pub enum Command {
     /// Approve a cleanup plan an AI agent prepared through MCP, or revoke an approval before
     /// the agent uses it (interactive terminal only).
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Approve {
         /// Plan ID to approve; omit to list the agent plans awaiting approval (and the approved
         /// ones not yet run).
@@ -218,6 +243,7 @@ pub enum Command {
 
     /// Cached one-line status, e.g. for shell prompts.
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Status {
         /// Print a short single-line summary.
         #[arg(long)]
@@ -226,10 +252,12 @@ pub enum Command {
 
     /// Light scan plus forecast and alerts (run by the OS scheduler).
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Check(CheckArgs),
 
     /// Local trends and insights from scull's own history (read-only).
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Insights {
         /// Start of the report window: a duration back from now (7d, 30d, 12w, 48h) or a UTC
         /// date (2026-10-01). Default: 30 days.
@@ -242,6 +270,7 @@ pub enum Command {
 
     /// Set up an AI client (MCP config and guidance), with consent.
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Agent {
         /// Subcommand.
         #[command(subcommand)]
@@ -250,6 +279,7 @@ pub enum Command {
 
     /// Register or remove periodic checks with launchd, systemd or Task Scheduler.
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Schedule {
         /// Subcommand.
         #[command(subcommand)]
@@ -259,6 +289,7 @@ pub enum Command {
     /// Emergency headroom: a reserve file scull releases on command when the disk is full
     /// (off by default).
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Headroom {
         /// Subcommand.
         #[command(subcommand)]
@@ -267,6 +298,7 @@ pub enum Command {
 
     /// Inspect, export or delete everything scull has recorded locally.
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Data {
         /// Subcommand.
         #[command(subcommand)]
@@ -280,10 +312,12 @@ pub enum Command {
     /// your own model).
     #[command(after_long_help = crate::cmd::ask::AFTER_HELP)]
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Ask(AskArgs),
 
     /// Model Context Protocol server for AI agents.
     #[command(hide = true)]
+    #[cfg(feature = "full")]
     Mcp {
         /// Subcommand.
         #[command(subcommand)]
@@ -356,6 +390,7 @@ pub struct DoctorArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "full")]
 /// Arguments for `scull ask`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct AskArgs {
@@ -374,6 +409,7 @@ pub struct AskArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "full")]
 /// Arguments for `scull check`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct CheckArgs {
@@ -549,7 +585,7 @@ pub struct CleanArgs {
     /// With --purge-quarantine: also purge items quarantined more than AGE ago (90m, 12h,
     /// 30d, 2w), even before their retention ends.
     #[arg(long, value_name = "AGE", requires = "purge_quarantine",
-          value_parser = crate::cmd::data::parse_age)]
+          value_parser = parse_age)]
     pub older_than: Option<u64>,
 
     /// With --purge-quarantine: purge every held item, also those whose retention hasn't
@@ -564,7 +600,7 @@ pub struct HistoryArgs {
     /// Show this operation in detail (items, audit chain, quarantine entries).
     pub operation_id: Option<String>,
     /// Only operations started within AGE (90m, 12h, 30d, 2w).
-    #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age, conflicts_with = "operation_id")]
+    #[arg(long, value_name = "AGE", value_parser = parse_age, conflicts_with = "operation_id")]
     pub since: Option<u64>,
     /// Most entries listed under "Refused to AI agents" (newest first; default 50). Without
     /// --since they come from the last 30 days.
@@ -650,6 +686,7 @@ pub enum RulesAction {
     },
 }
 
+#[cfg(feature = "full")]
 /// `scull insights` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum InsightsAction {
@@ -673,6 +710,7 @@ pub enum InsightsAction {
     },
 }
 
+#[cfg(feature = "full")]
 /// Formats for `scull insights export`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ExportFormat {
@@ -682,6 +720,7 @@ pub enum ExportFormat {
     Csv,
 }
 
+#[cfg(feature = "full")]
 /// `scull agent` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
@@ -692,6 +731,7 @@ pub enum AgentAction {
     Uninstall(AgentUninstallArgs),
 }
 
+#[cfg(feature = "full")]
 /// AI clients `scull agent` can configure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AgentClient {
@@ -710,6 +750,7 @@ pub enum AgentClient {
     GeminiCli,
 }
 
+#[cfg(feature = "full")]
 impl AgentClient {
     /// The command-line id, e.g. `claude-code`.
     pub fn id(self) -> &'static str {
@@ -734,6 +775,7 @@ impl AgentClient {
     }
 }
 
+#[cfg(feature = "full")]
 /// Arguments for `scull agent install`.
 #[derive(Debug, Args)]
 pub struct AgentInstallArgs {
@@ -751,6 +793,7 @@ pub struct AgentInstallArgs {
     pub command: String,
 }
 
+#[cfg(feature = "full")]
 /// Arguments for `scull agent uninstall`.
 #[derive(Debug, Args)]
 pub struct AgentUninstallArgs {
@@ -765,6 +808,7 @@ pub struct AgentUninstallArgs {
     pub dry_run: bool,
 }
 
+#[cfg(feature = "full")]
 /// `scull schedule` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ScheduleAction {
@@ -788,6 +832,7 @@ pub enum ScheduleAction {
     Status,
 }
 
+#[cfg(feature = "full")]
 /// `--yes` / `--dry-run` for commands that change your system with consent.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct ConsentArgs {
@@ -799,6 +844,7 @@ pub struct ConsentArgs {
     pub dry_run: bool,
 }
 
+#[cfg(feature = "full")]
 /// `scull headroom` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum HeadroomAction {
@@ -822,6 +868,7 @@ pub enum HeadroomAction {
     },
 }
 
+#[cfg(feature = "full")]
 /// `scull data` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum DataAction {
@@ -849,7 +896,7 @@ pub enum DataAction {
         all: bool,
         /// Delete only migration backups and damaged copies older than AGE (90m, 12h, 30d,
         /// 2w).
-        #[arg(long, value_name = "AGE", value_parser = crate::cmd::data::parse_age)]
+        #[arg(long, value_name = "AGE", value_parser = parse_age)]
         older_than: Option<u64>,
         /// Delete without asking (required without a terminal or with --json/--ndjson).
         #[arg(long)]
@@ -861,6 +908,7 @@ pub enum DataAction {
     },
 }
 
+#[cfg(feature = "full")]
 /// `scull mcp` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum McpAction {
@@ -894,6 +942,31 @@ impl From<CompletionShell> for clap_complete::Shell {
             CompletionShell::Powershell => clap_complete::Shell::PowerShell,
         }
     }
+}
+
+/// Parse `--older-than`: a positive whole number with a unit, `m` (minutes), `h`, `d` or `w`.
+pub fn parse_age(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(s.len().saturating_sub(1));
+    let mult: u64 = match unit {
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        "w" => 7 * 86_400,
+        _ => {
+            return Err(format!(
+                "`{s}`: expected a number and a unit (m, h, d, w), e.g. 30d"
+            ));
+        }
+    };
+    let n: u64 = num
+        .parse()
+        .map_err(|_| format!("`{s}`: expected a number and a unit (m, h, d, w), e.g. 30d"))?;
+    if n == 0 {
+        return Err(format!("`{s}`: the age must be greater than zero"));
+    }
+    n.checked_mul(mult)
+        .ok_or_else(|| format!("`{s}`: too large"))
 }
 
 #[cfg(test)]

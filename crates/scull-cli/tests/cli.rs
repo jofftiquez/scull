@@ -45,7 +45,8 @@ const VISIBLE_COMMANDS: [&str; 8] = [
 ];
 
 /// Commands hidden from the command list but still available (named in the help footer).
-const HIDDEN_COMMANDS: [&str; 14] = [
+#[cfg(feature = "full")]
+const HIDDEN_COMMANDS: &[&str] = &[
     "projects",
     "large-files",
     "approve",
@@ -62,6 +63,10 @@ const HIDDEN_COMMANDS: [&str; 14] = [
     "completions",
 ];
 
+/// The slim build (#142) has only these hidden ones; the rest don't exist there.
+#[cfg(not(feature = "full"))]
+const HIDDEN_COMMANDS: &[&str] = &["projects", "large-files", "rules", "completions"];
+
 #[test]
 fn help_lists_every_command() {
     for flag in ["--help", "-h"] {
@@ -75,7 +80,7 @@ fn help_lists_every_command() {
         for cmd in VISIBLE_COMMANDS {
             assert!(listed(cmd), "{flag}: `{cmd}` missing from help:\n{out}");
         }
-        for cmd in HIDDEN_COMMANDS {
+        for &cmd in HIDDEN_COMMANDS {
             assert!(!listed(cmd), "{flag}: `{cmd}` should be hidden:\n{out}");
             assert!(
                 out.contains(cmd),
@@ -154,10 +159,13 @@ fn json_and_ndjson_conflict_exits_2_with_json_error() {
     }
 }
 
-/// A command's own (runtime) error, not a clap one: `--since` in the future is refused
-/// before anything is opened, so nothing on disk is touched (no command is a stub in this
-/// build).
-const RUNTIME_ERROR: [&str; 3] = ["insights", "--since", "2999-01-01"];
+/// A command's own (runtime) error, not a clap one: a malformed operation ID is refused before
+/// anything is opened, so nothing on disk is touched. An MVP command, so it runs in the slim
+/// build too (#142).
+const RUNTIME_ERROR: [&str; 2] = ["history", "not-an-op"];
+
+/// The stable part of that error's message.
+const RUNTIME_ERROR_TEXT: &str = "not-an-op is not an operation ID";
 
 /// A runtime error is one `scull: error: ...` line on stderr, with stdout empty.
 #[test]
@@ -167,7 +175,7 @@ fn runtime_errors_are_one_prefixed_line_on_stderr() {
     assert!(o.stdout.is_empty(), "stdout must stay empty");
     let err = stderr(&o);
     assert!(err.starts_with("scull: error: "), "{err}");
-    assert!(err.contains("--since is in the future"), "{err}");
+    assert!(err.contains(RUNTIME_ERROR_TEXT), "{err}");
 }
 
 #[test]
@@ -185,7 +193,8 @@ fn runtime_errors_are_json_on_stderr_in_machine_modes() {
         assert_eq!(v["schema"], "scull/error@1");
         assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(v["error"]["kind"], "usage");
-        assert_eq!(v["error"]["message"], "--since is in the future");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.starts_with(RUNTIME_ERROR_TEXT), "{mode}: {msg}");
         let errors: Vec<String> = validator.iter_errors(&v).map(|e| e.to_string()).collect();
         assert!(errors.is_empty(), "{mode}: {errors:?}");
     }
@@ -193,20 +202,16 @@ fn runtime_errors_are_json_on_stderr_in_machine_modes() {
 
 #[test]
 fn quiet_still_reports_errors() {
-    let o = scull(&["insights", "--since", "2999-01-01", "-q"]);
+    let o = scull(&["history", "not-an-op", "-q"]);
     assert_eq!(o.status.code(), Some(2));
-    assert!(stderr(&o).contains("in the future"));
+    assert!(stderr(&o).contains(RUNTIME_ERROR_TEXT));
     // -q and -v are mutually exclusive.
     assert_eq!(
-        scull(&["insights", "--since", "2999-01-01", "-q", "-v"])
-            .status
-            .code(),
+        scull(&["history", "not-an-op", "-q", "-v"]).status.code(),
         Some(2)
     );
     assert_eq!(
-        scull(&["-q", "insights", "--since", "2999-01-01", "-v"])
-            .status
-            .code(),
+        scull(&["-q", "history", "not-an-op", "-v"]).status.code(),
         Some(2)
     );
 }

@@ -1492,30 +1492,7 @@ fn app_dirs() -> Result<AppDirs, ScullError> {
     scull_platform::app_dirs().map_err(|e| ScullError::new(ErrorKind::Config, e.to_string()))
 }
 
-/// Parse `--older-than`: a positive whole number with a unit, `m` (minutes), `h`, `d` or `w`.
-pub fn parse_age(s: &str) -> Result<u64, String> {
-    let s = s.trim();
-    let (num, unit) = s.split_at(s.len().saturating_sub(1));
-    let mult: u64 = match unit {
-        "m" => 60,
-        "h" => 3_600,
-        "d" => 86_400,
-        "w" => 7 * 86_400,
-        _ => {
-            return Err(format!(
-                "`{s}`: expected a number and a unit (m, h, d, w), e.g. 30d"
-            ));
-        }
-    };
-    let n: u64 = num
-        .parse()
-        .map_err(|_| format!("`{s}`: expected a number and a unit (m, h, d, w), e.g. 30d"))?;
-    if n == 0 {
-        return Err(format!("`{s}`: the age must be greater than zero"));
-    }
-    n.checked_mul(mult)
-        .ok_or_else(|| format!("`{s}`: too large"))
-}
+pub use crate::cli::parse_age;
 
 #[cfg(test)]
 mod tests {

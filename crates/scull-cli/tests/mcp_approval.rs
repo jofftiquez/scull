@@ -15,7 +15,8 @@
 //! database, and drives the interactive prompt with scripted input (`cmd::approve::ask`).
 //! Every run uses a `scull-fixtures` tree with `SCULL_HOME` and `HOME` beside it; afterwards
 //! the invariants run (I-1, I-2, I-3, I-8; I-4 and I-5 after the execution).
-
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_core::{ItemId, OperationId, PlanId, Tier};

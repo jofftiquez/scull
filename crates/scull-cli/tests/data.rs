@@ -3,6 +3,8 @@
 //! Every run points `SCULL_HOME` at a fresh temp dir. Purge tests build that home inside a
 //! `scull-fixtures` fixture (the canary directory sits beside it) and check the safety
 //! invariants afterwards: only scull's own files under `data/` may change, the canary never.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 
 use scull_core::{FsPath, ScanId};
 use scull_fixtures::{Fixture, InvariantInputs};

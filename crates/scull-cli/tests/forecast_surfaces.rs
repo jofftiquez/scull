@@ -9,6 +9,8 @@
 //! The config sets a non-default reserve (`[proactive] reserve_gib = 20`), so a surface that
 //! ignored the configured policy would answer 18 days instead of 13. Everything lives under a
 //! temp `SCULL_HOME`; the volume is an imagined path, so `scull check` doesn't sample a real disk.
+// A command outside the personal MVP: tested only in the full build (#142).
+#![cfg(feature = "full")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use scull_storage::{DefaultPermissions, Store, VolumeSample};

@@ -25,12 +25,14 @@ scull-storage.workspace = true
 # `data purge`. Release builds are checked by the MVP gates (packaging/check_mvp_gates.py);
 # the inspect-only gate (packaging/check_inspect_only.py) applies to `-alpha` tags only.
 scull-cleaner.workspace = true
-scull-mcp.workspace = true
+# The crates below are used only by the commands outside the personal MVP (#142): `full`
+# (on by default) compiles them in; `--no-default-features` builds the slim MVP binary.
+scull-mcp = { workspace = true, optional = true }
 # `scull ask` (optional, off by default): the only crate here that talks to a network endpoint.
-scull-ask = { path = "../scull-ask" }
+scull-ask = { path = "../scull-ask", optional = true }
 scull-engine.workspace = true
-scull-proactive.workspace = true
-scull-insights.workspace = true
+scull-proactive = { workspace = true, optional = true }
+scull-insights = { workspace = true, optional = true }
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 schemars.workspace = true
@@ -44,6 +46,14 @@ toml = "1"
 jsonschema = { version = "0.60", default-features = false }
 # Format-preserving edits of client TOML configs (`scull agent install codex`).
 toml_edit = "0.25"
+
+[features]
+default = ["full"]
+# Every command. Without it (`--no-default-features`) the binary has the personal-MVP commands
+# only (scan, worktrees, caches, clean, history, restore, init, doctor, plus the hidden
+# projects, large-files, rules and completions) and links no scull-mcp, scull-ask,
+# scull-proactive or scull-insights (#142).
+full = ["dep:scull-mcp", "dep:scull-ask", "dep:scull-proactive", "dep:scull-insights"]
 
 [dev-dependencies]
 proptest.workspace = true

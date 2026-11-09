@@ -84,10 +84,10 @@ pub fn file_name(id: SchemaId, ndjson: bool) -> String {
 /// NDJSON line schemas of the commands whose `--json` document schema is generated and
 /// checked by that command's own tests (`(file name, schema)`); CLI-01, #247.
 pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
-    use super::{agent, check, doctor, init, insights, rules, schedule, status};
+    use super::{doctor, init, rules};
     use crate::large_files;
     let single = |id: SchemaId, schema: serde_json::Value| (file_name(id, true), schema);
-    vec![
+    let mut out = vec![
         single(
             doctor::DOCTOR_SCHEMA,
             single_record_schema::<doctor::DoctorReport>(doctor::DOCTOR_SCHEMA, "doctor"),
@@ -95,18 +95,6 @@ pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
         single(
             init::INIT_SCHEMA,
             single_record_schema::<init::InitReport>(init::INIT_SCHEMA, "init"),
-        ),
-        single(
-            status::STATUS_SCHEMA,
-            single_record_schema::<status::StatusReport>(status::STATUS_SCHEMA, "status"),
-        ),
-        single(
-            check::CHECK_SCHEMA,
-            single_record_schema::<check::CheckReport>(check::CHECK_SCHEMA, "check"),
-        ),
-        single(
-            schedule::SCHEDULE_SCHEMA,
-            single_record_schema::<schedule::ScheduleReport>(schedule::SCHEDULE_SCHEMA, "schedule"),
         ),
         single(
             rules::RULES_LIST_SCHEMA,
@@ -127,35 +115,56 @@ pub fn line_schemas() -> Vec<(String, serde_json::Value)> {
             ),
         ),
         single(
-            insights::INSIGHTS_SCHEMA,
-            single_record_schema::<scull_insights::InsightsReport>(
-                insights::INSIGHTS_SCHEMA,
-                "insights",
-            ),
-        ),
-        single(
-            agent::AGENT_SCHEMA,
-            single_record_schema::<agent::AgentReport>(agent::AGENT_SCHEMA, "agent"),
-        ),
-        single(
             large_files::LARGE_FILES_SCHEMA,
             ndjson_schema::<large_files::LargeFilesRecord>(large_files::LARGE_FILES_SCHEMA),
         ),
-    ]
-    .into_iter()
-    .chain(phase2_line_schemas())
-    .collect()
+    ];
+    #[cfg(feature = "full")]
+    {
+        use super::{agent, check, insights, schedule, status};
+        out.extend([
+            single(
+                status::STATUS_SCHEMA,
+                single_record_schema::<status::StatusReport>(status::STATUS_SCHEMA, "status"),
+            ),
+            single(
+                check::CHECK_SCHEMA,
+                single_record_schema::<check::CheckReport>(check::CHECK_SCHEMA, "check"),
+            ),
+            single(
+                schedule::SCHEDULE_SCHEMA,
+                single_record_schema::<schedule::ScheduleReport>(
+                    schedule::SCHEDULE_SCHEMA,
+                    "schedule",
+                ),
+            ),
+            single(
+                insights::INSIGHTS_SCHEMA,
+                single_record_schema::<scull_insights::InsightsReport>(
+                    insights::INSIGHTS_SCHEMA,
+                    "insights",
+                ),
+            ),
+            single(
+                agent::AGENT_SCHEMA,
+                single_record_schema::<agent::AgentReport>(agent::AGENT_SCHEMA, "agent"),
+            ),
+        ]);
+    }
+    out.extend(phase2_line_schemas());
+    out
 }
 
 /// Line schemas of the `phase2` commands (`clean`, `clean caches`, `clean --purge-quarantine`,
 /// `history`, `restore`, `data`, `headroom`, `insights purge`): each prints one record whose
 /// `data` is its `--json` payload.
 fn phase2_line_schemas() -> Vec<(String, serde_json::Value)> {
-    use super::{clean, clean_caches, data, headroom, history, insights, restore};
+    use super::{clean, clean_caches, history, restore};
     fn single<T: JsonSchema>(id: SchemaId, kind: &str) -> (String, serde_json::Value) {
         (file_name(id, true), single_record_schema::<T>(id, kind))
     }
-    vec![
+    #[cfg_attr(not(feature = "full"), allow(unused_mut))]
+    let mut out = vec![
         single::<clean::CleanPlanReport>(clean::CLEAN_PLAN_SCHEMA, "plan"),
         single::<clean::CleanRunReport>(clean::CLEAN_RUN_SCHEMA, "run"),
         single::<clean_caches::CleanCachesReport>(clean_caches::CLEAN_CACHES_SCHEMA, "caches"),
@@ -163,12 +172,22 @@ fn phase2_line_schemas() -> Vec<(String, serde_json::Value)> {
         single::<restore::RestoreReport>(restore::RESTORE_SCHEMA, "restore"),
         single::<history::HistoryReport>(history::HISTORY_SCHEMA, "history"),
         single::<history::OperationDetail>(history::HISTORY_OPERATION_SCHEMA, "operation"),
-        single::<data::DataShowReport>(data::DATA_SHOW_SCHEMA, "data"),
-        single::<data::DataExportReport>(data::DATA_EXPORT_SCHEMA, "data"),
-        single::<data::DataPurgeReport>(data::DATA_PURGE_SCHEMA, "data"),
-        single::<headroom::HeadroomReport>(headroom::HEADROOM_SCHEMA, "headroom"),
-        single::<insights::InsightsPurgeReport>(insights::INSIGHTS_PURGE_SCHEMA, "insights_purge"),
-    ]
+    ];
+    #[cfg(feature = "full")]
+    {
+        use super::{data, headroom, insights};
+        out.extend([
+            single::<data::DataShowReport>(data::DATA_SHOW_SCHEMA, "data"),
+            single::<data::DataExportReport>(data::DATA_EXPORT_SCHEMA, "data"),
+            single::<data::DataPurgeReport>(data::DATA_PURGE_SCHEMA, "data"),
+            single::<headroom::HeadroomReport>(headroom::HEADROOM_SCHEMA, "headroom"),
+            single::<insights::InsightsPurgeReport>(
+                insights::INSIGHTS_PURGE_SCHEMA,
+                "insights_purge",
+            ),
+        ]);
+    }
+    out
 }
 
 /// Every committed command schema this module generates: `(file name, schema)`.
@@ -214,6 +233,7 @@ pub fn all() -> Vec<(String, serde_json::Value)> {
         document_schema::<caches::CachesDocument>(caches::CACHES_SCHEMA),
         ndjson_schema::<caches::CachesRecord>(caches::CACHES_SCHEMA),
     );
+    #[cfg(feature = "full")]
     {
         use super::doctor_report::{DOCTOR_REPORT_SCHEMA, ShareableReport};
         add(
