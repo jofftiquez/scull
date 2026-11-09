@@ -686,7 +686,8 @@ pub fn select<'a>(
                 action: c.action.clone(),
                 reclaimable_bytes: c.sizes.reclaimable.bytes,
                 reason,
-                message,
+                // Escaped here too, so `--json` output is unchanged (SAFE-17; review of #151).
+                message: escape_for_terminal(&message).into_owned(),
             })
             .collect(),
     })
